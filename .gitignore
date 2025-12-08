@@ -1,0 +1,11 @@
+/.idea/
+/scripts/docker/m2/
+/python/geobrix/dist/
+/python/geobrix/lib/
+/python/geobrix/src/dblabs_geobrix.egg-info/
+/python/geobrix/spark-warehouse/
+/python/geobrix/build/
+/target/
+/spark-warehouse/
+/artifacts/
+/python/geobrix/artifacts/

@@ -153,7 +153,7 @@ Any issues discovered through the use of this project should be filed as GitHub 
 
 ## Installing & Using GeoBrix
 
-GeoBrix currently offers heavy-weight, distributed APIs, primarily written in Scala for Spark with additional language bindings for PySpark and Spark SQL. See [User Guide](https://github.com/databrickslabs/geobrix/tree/main/user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information on installing and using available readers and functions.
+GeoBrix currently offers heavy-weight, distributed APIs, primarily written in Scala for Spark with additional language bindings for PySpark and Spark SQL. See [User Guide](./user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information on installing and using available readers and functions.
 
 ### Quick Start
 

@@ -1,1 +1,1 @@
-See [User Guide](https://github.com/databrickslabs/geobrix/tree/main/user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information.
+See [User Guide](../user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information.

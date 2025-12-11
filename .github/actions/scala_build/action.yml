@@ -1,0 +1,60 @@
+name: build geobrix scala
+description: build geobrix scala
+inputs:
+  skip_tests:
+    description: 'Skip Scala Tests? true or false'
+    default: 'false'
+runs:
+  using: "composite"
+  steps:
+        - name: Configure JDK
+          uses: actions/setup-java@v5
+          with:
+            java-version: '17'
+            distribution: 'zulu'
+        - name: Configure python interpreter
+          uses: actions/setup-python@v5
+          with:
+            python-version: ${{ matrix.python }}
+            cache: 'pip' # caches dependencies for faster subsequent runs
+        - name: Add packaged GDAL dependencies
+          shell: bash
+          run : |
+            # - update apt
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-backports main universe multiverse restricted"
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates main universe multiverse restricted"
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-security main multiverse restricted universe"
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc) main multiverse restricted universe"
+            sudo add-apt-repository -y "deb https://ppa.launchpadcontent.net/ubuntugis/ubuntugis-unstable/ubuntu noble main"
+            sudo apt-get update -y
+            # - install natives
+            sudo apt-get -o DPkg::Lock::Timeout=-1 install -y unixodbc libcurl3-gnutls libsnappy-dev libopenjp2-7
+            sudo apt-get -o DPkg::Lock::Timeout=-1 install -y libgdal-dev gdal-bin python3-gdal zip unzip
+            # - install pip packages
+            pip install --upgrade pip
+            pip install build wheel pyspark==${{ matrix.spark }} numpy==${{ matrix.numpy }}
+            pip install --no-build-isolation --no-cache-dir --force-reinstall gdal[numpy]==${{ matrix.gdal }}
+            # - add the so files 
+            cp  -n scripts/gdal311/libgdalalljni.so /usr/lib
+        - name: Test and build the scala JAR - skip tests is false
+          if: inputs.skip_tests == 'false'
+          shell: bash
+          run: sudo mvn -q clean install
+        - name: Build the scala JAR - skip tests is true
+          if: inputs.skip_tests == 'true'
+          shell: bash
+          run: sudo mvn -q clean install -DskipTests -Dscoverage.skip
+        - name: Copy build artifacts to local staging
+          shell: bash
+          run: |
+            # add .jar + .so
+            mkdir -p staging/build-artifacts
+            cp target/geobrix*.jar staging/build-artifacts
+            cp scripts/gdal311/libgdalalljni.so staging/build-artifacts
+        - name: Copy user artifacts local staging
+          shell: bash
+          run: |
+            # add user-guide and zipped examples (for now)
+            mkdir -p staging/user-artifacts
+            cp resources/user-guide/*.pdf staging/user-artifacts
+            cp resources/beta-dist/examples.zip staging/user-artifacts

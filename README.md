@@ -1,4 +1,4 @@
-<img src="./images/GeoBriX.png" width="50%" />
+<img src="resources/images/GeoBriX.png" width="50%" />
 
 GeoBrix is a high-performance spatial processing library. Its heavy-weight readers and functions are powered by GDAL, implemented on Apache Spark, and built to run exclusively on the Databricks Runtime (DBR).
 
@@ -8,7 +8,7 @@ Now that product built-in [Spatial SQL Functions](https://docs.databricks.com/aw
 
 With Databricks first having acquired [MosaicML](https://www.databricks.com/company/newsroom/press-releases/databricks-completes-acquisition-mosaicml) and now having made a product line, [Mosaic AI](https://www.databricks.com/product/artificial-intelligence), it has become clear that the DBLabs Mosaic project, sharing the name, needs to be revamped in name as well as any existing Mosaic capabilities that compete with product investments. If this were not the case, we would have simply iterated on DBLabs Mosaic “in-place” keeping the same name for what is now called GeoBrix. DBLabs Mosaic is in maintenance mode. The latest/last version of Mosaic targets DBR 13.3 LTS since product introduced ST functions starting with DBR 14. As such, Mosaic does not have any awareness of advancements in recent runtimes, including product support for spatial sql and types, and will be retired with [DBR 13.3 EoS](https://docs.databricks.com/aws/en/release-notes/runtime/#supported-databricks-runtime-lts-releases) in AUG 2026.
 
-<img src="./images/geobrix_vision.png" width="75%" />
+<img src="resources/images/geobrix_vision.png" width="75%" />
 
 ## Packages
 
@@ -16,19 +16,19 @@ GeoBrix offers heavy-weight packages for Raster, Grid, and Vector that are inten
 
 ### RasterX
 
-<img src="./images/RasterX.png" width="25%" />
+<img src="resources/images/RasterX.png" width="25%" />
 
 Refactor and improvement of Mosaic raster functions. Product does not (yet) support anything built-in specifically for raster, so this is a “fully” gap-filling capability.
 
 ### GridX
 
-<img src="./images/GridX.png" width="25%" />
+<img src="resources/images/GridX.png" width="25%" />
 
 Refactor of Mosaic discrete global grid indexing functions. Focus has been on porting BNG for Great Britain customers.
 
 ### VectorX
 
-<img src="./images/VectorX.png" width="25%" />
+<img src="resources/images/VectorX.png" width="25%" />
 
 Refactor of select DBLabs Mosaic vector functions that augment existing product ST Geospatial Functions. Right now, this only includes a single function to handle updating existing Mosaic geometry data to those supported by product, so that users do not need to install (older) Mosaic in order to get to using the latest spatial features.
 
@@ -54,7 +54,7 @@ We are really only focused on [GeoTiffs](https://gdal.org/en/stable/drivers/rast
 )
 ```
 
-<img src="./images/readers/gdal_reader.png" width="50%" />
+<img src="resources/images/readers/gdal_reader.png" width="50%" />
 
 ### Vector [“ogr”]
 
@@ -89,7 +89,7 @@ This is a named OGR Reader, sets “driverName” → "[ESRI Shapefile](https://
 
 The output will look something like the following, maintaining attribute columns and having 3 columns for geometry: ‘geom_0’, ‘geom_0_srid’, and ‘geom_0_srid_proj’.
 
-<img src="./images/readers/shapefile_reader.png" width="50%" />
+<img src="resources/images/readers/shapefile_reader.png" width="50%" />
 
 ### GeoJSON [“geojson”]
 
@@ -112,7 +112,7 @@ This is a named OGR Reader.
 
 The output will look something like the following, maintaining attribute columns and having 3 columns for geometry: ‘geom_0’, ‘geom_0_srid’, and ‘geom_0_srid_proj’.
 
-<img src="./images/readers/geojson_reader.png" width="50%" />
+<img src="resources/images/readers/geojson_reader.png" width="50%" />
 
 ### GeoPackage [“gpkg”]
 
@@ -128,7 +128,7 @@ This is a named OGR Reader, sets “driverName” → "[GPKG](https://gdal.org/e
 
 The output will look something like the following, maintaining attribute columns and having 3 columns for geometry: ‘shape’, ‘shape_srid’, and ‘shape_srid_proj’.
 
-<img src="./images/readers/gpkg_reader.png" width="50%" />
+<img src="resources/images/readers/gpkg_reader.png" width="50%" />
 
 ### File GeoDatabase [“file_gdb”]
 
@@ -144,7 +144,7 @@ This is a named OGR Reader, sets “driverName” → "[OpenFileGDB](https://gda
 
 The output will look something like the following, maintaining attribute columns and having 3 columns for geometry: ‘SHAPE’, ‘SHAPE_srid’, and ‘SHAPE_srid_proj’. Note: column names are case insensitive.
 
-<img src="./images/readers/filegdb_reader.png" width="50%" />
+<img src="resources/images/readers/filegdb_reader.png" width="50%" />
 
 ## Support
 Please note that all projects in the /databrickslabs github account are provided for your exploration only, and are not formally supported by Databricks with Service Level Agreements (SLAs). They are provided AS-IS and we do not make any guarantees of any kind. Please do not submit a support ticket relating to any issues arising from the use of these projects.
@@ -153,7 +153,7 @@ Any issues discovered through the use of this project should be filed as GitHub 
 
 ## Installing & Using GeoBrix
 
-GeoBrix currently offers heavy-weight, distributed APIs, primarily written in Scala for Spark with additional language bindings for PySpark and Spark SQL. See [User Guide](./user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information on installing and using available readers and functions.
+GeoBrix currently offers heavy-weight, distributed APIs, primarily written in Scala for Spark with additional language bindings for PySpark and Spark SQL. See [User Guide](resources/user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information on installing and using available readers and functions.
 
 ### Quick Start
 
@@ -161,7 +161,7 @@ Cluster Config
 
 GeoBrix requires GDAL natives, which are best installed via an init script on a classic cluster
 
-1. Add the GeoBrix JAR and Shared Object ('*.so') to the Volume - currently these are delivered via artifacts in the the [beta-dist](./beta-dist) directory.
+1. Add the GeoBrix JAR and Shared Object ('*.so') to the Volume - currently these are delivered via artifacts in the the [beta-dist](resources/beta-dist) directory.
 3. Add [geobrix-gdal-init.sh](./scripts/geobrix-gdal-init.sh) to a chosen Databricks Volume; note: prior to copying, modify 'VOL_DIR' to the location of the artifacts in (1).
 3. Add the WHL as a cluster library.
 
@@ -181,7 +181,7 @@ You can quickly list the registered functions with a SQL command.
 show functions like 'gbx_rst_*'
 ```
 
-<img src="./images/quickstart/show_funcs.png" width="25%" />
+<img src="resources/images/quickstart/show_funcs.png" width="25%" />
 
 Describe any registered function for more details.
 
@@ -189,9 +189,9 @@ Describe any registered function for more details.
 %sql describe function extended gbx_rst_boundingbox
 ```
 
-<img src="./images/quickstart/func_descrip.png" width="50%" />
+<img src="resources/images/quickstart/func_descrip.png" width="50%" />
 
-See the included examples in [beta-dist](./beta-dist) directory for more.
+See the included examples in [beta-dist](resources/beta-dist) directory for more.
 
 ### Scala Bindings
 The heavy-weight API is written in Scala with various spark optimizations implemented with best practices, including using Spark Connect to invoke the columnar expressions. The pattern for registering functions is `com.databricks.labs.gbx.<category>.functions` where ‘gbx’ is the convention for GeoBrix in classpaths:

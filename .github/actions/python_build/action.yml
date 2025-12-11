@@ -1,0 +1,41 @@
+name: build geobrix python
+description: build geobrix python
+runs:
+  using: "composite"
+  steps:
+    - name: Configure python interpreter
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python }}
+        cache: 'pip' # caches dependencies for faster subsequent runs
+    - name: Install python dependencies
+      shell: bash
+      run: |
+        # - install pip libs
+        #   note: gdal requires the extra args
+        cd python
+        pip install build wheel pyspark==${{ matrix.spark }} numpy==${{ matrix.numpy }}
+        pip install --no-build-isolation --no-cache-dir --force-reinstall gdal[numpy]==${{ matrix.gdal }}
+        pip install pytest==${{ matrix.pytest }}
+        pip install .
+    - name: Give Python interpreter write access to checkpointing / raster write location
+      shell: bash
+      run: |
+        # does this need to be '/mnt/tmp/raster-checkpoint'?
+        sudo mkdir -p /tmp/raster-checkpoint
+        sudo chmod -R 777 /tmp/raster-checkpoint
+    - name: Copy JAR artifacts to lib
+      shell: bash
+      run: |
+        mkdir -p python/geobrix/lib
+        cp staging/build-artifacts/geobrix*.jar python/geobrix/lib
+    - name: Test and build python package
+      shell: bash
+      run: |
+        # 'pytest' or 'python3 -m unittest'?
+        cd python/geobrix
+        python -m build
+        pytest
+    - name: Copy python artifacts to GH Actions run
+      shell: bash
+      run: cp python/geobrix/dist/*.whl staging/build-artifacts

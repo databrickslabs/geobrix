@@ -9,3 +9,5 @@
 /spark-warehouse/
 /artifacts/
 /python/geobrix/artifacts/
+/python/geobrix/test/vectorx/spark-warehouse/
+/python/geobrix/test/gridx/artifacts/

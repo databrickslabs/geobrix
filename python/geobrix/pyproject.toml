@@ -17,8 +17,9 @@ dependencies = [
     "pyspark>=4.0.0",
 ]
 
+# TODO: change to https://github.com/databrickslabs/geobrix (once public)
 [project.urls]
-Homepage = "https://github.com/databrickslabs/geobrix"
+Homepage = "https://www.databricks.com/learn/labs"
 
 [project.optional-dependencies]
 dev = [

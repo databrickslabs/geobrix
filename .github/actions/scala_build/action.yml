@@ -15,8 +15,9 @@ runs:
         - name: Configure python interpreter
           uses: actions/setup-python@v5
           with:
-            python-version: ${{ matrix.python }}
             cache: 'pip' # caches dependencies for faster subsequent runs
+            cache-dependency-path: '**/pyproject.toml'
+            python-version: ${{ matrix.python }}
         - name: Add packaged GDAL dependencies
           shell: bash
           run : |

@@ -3,12 +3,13 @@ on:
   push:
     branches:
       - "scala/**"
-
+permissions:
+  id-token: write
 jobs:
   build:
     runs-on: ubuntu-24.04
     env:
-      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
       matrix:
         python: [ 3.12.3 ]

@@ -31,7 +31,6 @@ runs:
             sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc) main multiverse restricted universe"
             # - add ubuntugis PPA with GPG key
             sudo apt-get install -y software-properties-common
-            sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 6B827C12C2D425E227EDCA75089EBE08314DF160 || true
             sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable
             sudo apt-get update -y
             # - install natives
@@ -75,7 +74,6 @@ runs:
           shell: bash
           run: |
             # add user-guide and zipped examples (for now)
-            # MLJ: adjust path(s) for GeoBrix repo
             mkdir -p staging/user-artifacts
             cp resources/user-guide/*.pdf staging/user-artifacts 2>/dev/null || true
             cp resources/beta-dist/examples.zip staging/user-artifacts 2>/dev/null || true

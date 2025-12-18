@@ -9,7 +9,7 @@ permissions:
   id-token: write
 jobs:
   build:
-    runs-on: linux-ubuntu-latest
+    runs-on: larger
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:

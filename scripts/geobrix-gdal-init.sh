@@ -26,4 +26,4 @@ pip install --no-cache-dir --force-reinstall GDAL[numpy]=="$(gdal-config --versi
 
 # copy JNI and JAR
 cp $VOL_DIR/libgdalalljni.so /usr/lib/libgdalalljni.so
-cp $VOL_DIR/geobrix-0.1.0-jar-with-dependencies.jar /databricks/jars
+cp $VOL_DIR/geobrix-*-jar-with-dependencies.jar /databricks/jars

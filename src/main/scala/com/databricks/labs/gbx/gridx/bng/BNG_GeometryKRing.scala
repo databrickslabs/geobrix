@@ -6,6 +6,7 @@ import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._
+import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
 case class BNG_GeometryKRing(
@@ -25,20 +26,20 @@ case class BNG_GeometryKRing(
 
 object BNG_GeometryKRing extends WithExpressionInfo {
 
-    def eval(wkb: Array[Byte], resolution: Int, k: Int): Array[String] = {
-        val geometry = JTS.fromWKB(wkb)
-        val result = execute(geometry, resolution, k)
+    def eval(geom: UTF8String, res: Int, k: Int): Array[String] = {
+        val geometry = JTS.fromWKT(geom.toString)
+        val result = execute(geometry, res, k)
         result.toArray
     }
 
-    def eval(wkt: String, resolution: Int, k: Int): Array[String] = {
-        val geometry = JTS.fromWKT(wkt)
-        val result = execute(geometry, resolution, k)
+    def eval(geom: Array[Byte], res: Int, k: Int): Array[String] = {
+        val geometry = JTS.fromWKB(geom)
+        val result = execute(geometry, res, k)
         result.toArray
     }
 
-    def execute(geom: Geometry, resolution: Int, k: Int): Set[String] = {
-        val kRing = BNG.geometryKRing(geom, resolution, k)
+    def execute(geom: Geometry, res: Int, k: Int): Set[String] = {
+        val kRing = BNG.geometryKRing(geom, res, k)
         kRing.map(BNG.format)
     }
 

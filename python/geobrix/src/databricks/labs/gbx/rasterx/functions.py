@@ -201,11 +201,11 @@ def rst_tryopen(tile):
 def rst_updatetype(tile, new_type):
     return f.call_function("gbx_rst_updatetype", tile, new_type)
 
-def rst_worldcoordtoraster(tile, world_x, world_y):
-    return f.call_function("gbx_rst_worldcoordtoraster", tile, world_x, world_y)
+def rst_worldtorastercoord(tile, world_x, world_y):
+    return f.call_function("gbx_rst_worldtorastercoord", tile, world_x, world_y)
 
-def rst_worldcoordtorasterx(tile, world_x, world_y):
-    return f.call_function("gbx_rst_worldcoordtorasterx", tile, world_x, world_y)
+def rst_worldtorastercoordx(tile, world_x, world_y):
+    return f.call_function("gbx_rst_worldtorastercoordx", tile, world_x, world_y)
 
-def rst_worldcoordtorastery(tile, world_x, world_y):
-    return f.call_function("gbx_rst_worldcoordtorastery", tile, world_x, world_y)
+def rst_worldtorastercoordy(tile, world_x, world_y):
+    return f.call_function("gbx_rst_worldtorastercoordy", tile, world_x, world_y)

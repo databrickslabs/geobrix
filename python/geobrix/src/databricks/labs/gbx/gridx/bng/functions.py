@@ -28,8 +28,8 @@ def bng_centroid(cell_id):
 def bng_distance(cell_id1, cell_id2):
     return f.call_function("gbx_bng_distance", cell_id1, cell_id2)
 
-def bng_eastnortasbng(east, north, resolution):
-    return f.call_function("gbx_bng_eastnortasbng", east, north, resolution)
+def bng_eastnorthasbng(east, north, resolution):
+    return f.call_function("gbx_bng_eastnorthasbng", east, north, resolution)
 
 def bng_euclideandistance(cell_id1, cell_id2):
     return f.call_function("gbx_bng_euclideandistance", cell_id1, cell_id2)
@@ -40,14 +40,20 @@ def bng_geometrykloop(geom, resolution, k):
 def bng_geometrykring(geom, resolution, k):
     return f.call_function("gbx_bng_geometrykring", geom, resolution, k)
 
+def bng_kloop(cell_id, k):
+    return f.call_function("gbx_bng_kloop", cell_id, k)
+
+def bng_kring(cell_id, k):
+    return f.call_function("gbx_bng_kring", cell_id, k)
+
 def bng_pointasbng(point, resolution):
     return f.call_function("gbx_bng_pointasbng", point, resolution)
 
 def bng_polyfill(geom, resolution):
     return f.call_function("gbx_bng_polyfill", geom, resolution)
 
-def bng_tessellate(geom, resolution):
-    return f.call_function("gbx_bng_tessellate", geom, resolution)
+def bng_tessellate(geom, resolution, keep_core_geom=True):
+    return f.call_function("gbx_bng_tessellate", geom, resolution, f.lit(keep_core_geom))
 
 # Aggregators
 
@@ -72,5 +78,5 @@ def bng_kloopexplode(cell_id, k):
 def bng_kringexplode(cell_id, k):
     return f.explode(f.call_function("gbx_bng_kringexplode", cell_id, k))
 
-def bng_tessellateexplode(geom, resolution):
-    return f.explode(f.call_function("gbx_bng_tessellateexplode", geom, resolution))
+def bng_tessellateexplode(geom, resolution, keep_core_geom=True):
+    return f.call_function("gbx_bng_tessellateexplode", geom, resolution, f.lit(keep_core_geom))

@@ -261,7 +261,7 @@
                             <resources>
                                 <resource>
                                     <directory>${basedir}/target/</directory>
-                                    <include>*.jar</include>
+                                    <include>*-jar-with-dependencies.jar</include>
                                     <filtering>false</filtering>
                                 </resource>
                             </resources>

@@ -43,7 +43,8 @@ object GDALManager extends Logging {
         this.useCheckpoint = config.useCheckpoint
     }
 
-    def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String): Unit = {
+    def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF"): Unit = {
+        gdal.SetConfigOption("PROJ_LIB", "/usr/share/proj")
         gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "YES")
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
         gdal.SetConfigOption("CPL_TMPDIR", CPL_TMPDIR)
@@ -54,6 +55,9 @@ object GDALManager extends Logging {
         gdal.SetConfigOption("GDAL_CACHEMAX", "512")
         gdal.SetCacheMax(512 * 1024 * 1024)
         gdal.SetConfigOption("GDAL_NUM_THREADS", "4")
+        // Option: Suppress PROJ CRS lookup warnings (non-critical warnings during reprojection)
+        gdal.SetConfigOption("CPL_DEBUG", CPL_DEBUG)
+        //gdal.SetConfigOption("CPL_LOG", "/dev/null")
     }
 
     def loadSharedObjects(sharedObjects: Iterable[String]): Unit = {

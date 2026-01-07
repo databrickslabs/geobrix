@@ -12,3 +12,7 @@
 /python/geobrix/test/vectorx/spark-warehouse/
 /python/geobrix/test/gridx/artifacts/
 /.github-bak/
+/.cursor/
+/metastore_db/
+/claude/
+/derby.log

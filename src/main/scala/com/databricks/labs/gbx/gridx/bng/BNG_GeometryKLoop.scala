@@ -20,12 +20,12 @@ case class BNG_GeometryKLoop(
     override def nullable: Boolean = true
     override def prettyName: String = BNG_GeometryKLoop.name
     override def replacement: Expression = invoke(BNG_GeometryKLoop)
+
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }
 
 object BNG_GeometryKLoop extends WithExpressionInfo {
-
     def eval(geom: UTF8String, res: Int, k: Int): Array[String] = {
         val geometry = JTS.fromWKT(geom.toString)
         val result = execute(geometry, res, k)

@@ -194,7 +194,8 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("RST_SRID should return the spatial reference ID of the raster") {
         val srid = RST_SRID.execute(ds)
-        srid shouldBe 9122
+        // After setting SRS to World_Sinusoidal (ESRI:54008), the SRID reflects the datum (WGS 84)
+        srid shouldBe 6326
     }
 
     test("RST_Subdatasets should return a map of subdatasets" ) {

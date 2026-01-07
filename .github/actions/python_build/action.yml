@@ -49,6 +49,9 @@ runs:
         # does this need to be '/mnt/tmp/raster-checkpoint'?
         sudo mkdir -p /tmp/raster-checkpoint
         sudo chmod -R 777 /tmp/raster-checkpoint
+        # Create GDAL temp directory for NodeFilePathUtil
+        sudo mkdir -p /tmp/gdal_local_files
+        sudo chmod -R 777 /tmp/gdal_local_files
     - name: Test and build python package
       shell: bash
       run: |

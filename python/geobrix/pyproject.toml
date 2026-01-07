@@ -15,6 +15,7 @@ classifiers = [
 ]
 dependencies = [
     "pyspark>=4.0.0",
+    "shapely>=2.0.0",
 ]
 
 [project.urls]
@@ -28,6 +29,7 @@ dev = [
 ]
 test = [
     "pytest>=7.0",
+    "shapely>=2.0.0",
 ]
 
 [tool.pytest.ini_options]

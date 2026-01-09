@@ -54,7 +54,14 @@ object RST_SRID extends WithExpressionInfo {
     def execute(ds: Dataset): Int = {
         val proj = new SpatialReference(ds.GetProjection())
         Try(proj.AutoIdentifyEPSG())
-        Try(proj.GetAttrValue("AUTHORITY", 1).toInt).getOrElse(0)
+        
+        // Try to get the top-level PROJCS/GEOGCS authority code
+        // Returns 0 if no authority is found (e.g., for ESRI projections like ESRI:54008)
+        val authority = Option(proj.GetAuthorityCode(null))
+        authority match {
+            case Some(code) if code.nonEmpty => code.toInt
+            case _                           => 0  // Default to 0 for non-EPSG projections
+        }
     }
 
     override def name: String = "gbx_rst_srid"

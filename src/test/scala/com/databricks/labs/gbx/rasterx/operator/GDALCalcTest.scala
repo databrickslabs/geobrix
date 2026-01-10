@@ -32,7 +32,7 @@ import scala.util.Try
  * Key Fixes Applied:
  * 1. Added gdal.AllRegister() to ensure GDAL drivers are initialized
  * 2. Fixed GDALCalc.scala to use replaceFirst() instead of replace() (prevents filename corruption)
- * 3. Use absolute paths for test resources to ensure reliability
+ * 3. Use getClass.getResource() to load test resources (works in all CI environments)
  */
 class GDALCalcTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -45,9 +45,9 @@ class GDALCalcTest extends AnyFunSuite with BeforeAndAfterAll {
         // Ensure GDAL is fully initialized
         gdal.AllRegister()
         
-        // Load source datasets
-        val tif1Path = "/root/geobrix/src/test/resources/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
-        val tif2Path = "/root/geobrix/src/test/resources/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B02.TIF"
+        // Load source datasets using resource loader (works in all CI environments)
+        val tif1Path = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").getPath
+        val tif2Path = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B02.TIF").getPath
         
         val ds1 = gdal.Open(tif1Path)
         val ds2 = gdal.Open(tif2Path)

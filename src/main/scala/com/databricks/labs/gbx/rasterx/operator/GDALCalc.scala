@@ -39,7 +39,7 @@ object GDALCalc {
     ): (Dataset, Map[String, String]) = {
         require(gdalCalcCommand.startsWith("gdal_calc"), "Not a valid GDAL Calc command.")
         val effectiveCommand = OperatorOptions.appendOptions(gdalCalcCommand, options, ds)
-        val toRun = effectiveCommand.replace("gdal_calc", gdal_calc)
+        val toRun = effectiveCommand.replaceFirst("gdal_calc", gdal_calc)
         val commandRes = SysUtils.runCommand(Seq("python3", "-u") ++ toRun.split(" ").filterNot(_.isEmpty).toSeq)
         val errorMsg = gdal.GetLastErrorMsg
         val result = gdal.Open(resultPath, GA_ReadOnly)

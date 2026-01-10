@@ -11,6 +11,7 @@ import org.scalatest.matchers.should.Matchers._
 class RST_GridEvalTest extends PlanTest with SilentSparkSession {
 
     test("RST_GridEval should evaluate expressions on raster columns") {
+
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._

@@ -14,7 +14,7 @@ class ClipToGeomTest extends AnyFunSuite with BeforeAndAfterAll {
 
     override def beforeAll(): Unit = {
         GDALManager.loadSharedObjects(Iterable.empty[String])
-        GDALManager.configureGDAL("/tmp", "/tmp")
+        GDALManager.configureGDAL("/tmp", "/tmp", logCPL = true, CPL_DEBUG = "OFF")
         gdal.AllRegister()
         val tifPath = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").toString.replace("file:/", "/")
         ds = gdal.Open(tifPath)

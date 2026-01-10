@@ -1,11 +1,17 @@
 package org.apache.spark.sql.test
 
-import org.apache.logging.log4j.{Level, LogManager}
+import com.databricks.labs.gbx.rasterx.{ErrorTokenListener, ProjErrorFilter}
+import org.apache.logging.log4j.Level
 import org.apache.logging.log4j.core.config.Configurator
 
 trait SilentSparkSession extends SharedSparkSession {
 
-    override def createSparkSession: TestSparkSession = {
+  override def beforeAll(): Unit = {
+    super.beforeAll()
+    ErrorTokenListener.install(ProjErrorFilter.TOKEN)
+  }
+
+  override def createSparkSession: TestSparkSession = {
         Configurator.setRootLevel(Level.WARN)
         Configurator.setLevel("org.apache.spark", Level.ERROR)
         Configurator.setLevel("org.sparkproject", Level.ERROR)

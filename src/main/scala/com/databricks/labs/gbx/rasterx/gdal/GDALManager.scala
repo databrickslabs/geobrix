@@ -43,7 +43,8 @@ object GDALManager extends Logging {
         this.useCheckpoint = config.useCheckpoint
     }
 
-    def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF"): Unit = {
+    def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF",
+                      logCPL: Boolean = false): Unit = {
         gdal.SetConfigOption("PROJ_LIB", "/usr/share/proj")
         gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "YES")
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
@@ -51,13 +52,18 @@ object GDALManager extends Logging {
         gdal.SetConfigOption("GDAL_PAM_PROXY_DIR", GDAL_PAM_PROXY_DIR)
         gdal.SetConfigOption("GDAL_PAM_ENABLED", "YES")
         gdal.SetConfigOption("CPL_VSIL_USE_TEMP_FILE_FOR_RANDOM_WRITE", "NO")
-        gdal.SetConfigOption("CPL_LOG", s"$CPL_TMPDIR/gdal.log")
         gdal.SetConfigOption("GDAL_CACHEMAX", "512")
         gdal.SetCacheMax(512 * 1024 * 1024)
         gdal.SetConfigOption("GDAL_NUM_THREADS", "4")
         // Option: Suppress PROJ CRS lookup warnings (non-critical warnings during reprojection)
+        // Note: PROJ "crs not found" warnings cannot be suppressed via PushErrorHandler in Scala
+        // due to GDAL Java bindings limitations. These warnings are non-critical and don't affect functionality.
+        if (logCPL) {
+          gdal.SetConfigOption("CPL_LOG", s"$CPL_TMPDIR/gdal.log")
+        } else {
+          gdal.SetConfigOption("CPL_LOG", "/dev/null")
+        }
         gdal.SetConfigOption("CPL_DEBUG", CPL_DEBUG)
-        //gdal.SetConfigOption("CPL_LOG", "/dev/null")
     }
 
     def loadSharedObjects(sharedObjects: Iterable[String]): Unit = {

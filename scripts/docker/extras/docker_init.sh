@@ -19,7 +19,7 @@ cd /root/geobrix && mvn help:active-profiles
 # see settings.xml for overrides
 echo "\n::: [3] ... maven package - JVM code version? :::\n"
 echo "        $(javac -version)"
-cd /root/geobrix && mvn package -DskipTests
+cd /root/geobrix && mvn clean package -DskipTests
 
 # [4] build python (as needed)
 # - refer to dockerfile for what is already built

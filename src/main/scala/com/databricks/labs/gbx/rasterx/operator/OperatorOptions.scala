@@ -78,6 +78,7 @@ object OperatorOptions {
             case "VRT"                                   => command
             case "PNM" if isCalc                         => s"$command $ofFlag $format"
             case "PNM"                                   => s"$command $ofFlag $format -ot UInt16 -scale -32768 32767 0 65535"
+            case "PNG"                                   => s"$command $ofFlag $format -ot Byte -a_nodata none" // PNG Byte format, strip NoData to avoid tRNS issues
             case "Zarr" if missingGeoRef                 => s"$command $ofFlag $format -to SRC_METHOD=NO_GEOTRANSFORM $cos"
             case f                                       => s"$command $ofFlag $f $cos"
         }

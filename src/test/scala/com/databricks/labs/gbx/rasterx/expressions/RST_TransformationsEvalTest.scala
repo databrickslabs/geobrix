@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.functions
+import com.databricks.labs.gbx.rasterx.{ErrorTokenListener, ProjErrorFilter, functions}
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions.{not => _, _}

@@ -18,3 +18,17 @@
 /derby.log
 /test-logs/
 /ci-logs/
+
+# macOS files
+.DS_Store
+**/.DS_Store
+
+# Python cache and compiled files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Python compiled extensions (but NOT the GDAL library!)
+*.so
+!scripts/gdal311/*.so

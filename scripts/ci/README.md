@@ -2,6 +2,8 @@
 
 **Comprehensive GitHub Actions CI integration for local and remote testing**
 
+> **⭐ Recommended**: For organizations with auto-triggered CI workflows, use `push-and-watch.sh` to push code and automatically monitor the triggered workflow run.
+
 ---
 
 ## 🚀 Quick Start
@@ -25,13 +27,18 @@ This will:
 
 View recent CI runs, status, and available actions.
 
-### 3. Trigger Remote Tests
+### 3. Push and Watch CI (Recommended)
 
+```bash
+./scripts/ci/push-and-watch.sh
+```
+
+**For organizations with auto-triggered CI workflows** - Pushes your code and automatically monitors the triggered workflow run.
+
+**Alternative** (manual trigger):
 ```bash
 ./scripts/ci/trigger-remote-tests.sh
 ```
-
-Push your branch and trigger CI workflow on GitHub Actions.
 
 ---
 
@@ -73,8 +80,43 @@ Push your branch and trigger CI workflow on GitHub Actions.
 
 ---
 
+### `push-and-watch.sh` ⭐
+**Purpose**: Push code and automatically watch the auto-triggered workflow (Recommended)
+
+**Usage**:
+```bash
+./scripts/ci/push-and-watch.sh
+```
+
+**What it does**:
+1. Shows commits to be pushed
+2. Confirms with user
+3. Pushes to remote (triggers CI automatically)
+4. Waits for GitHub to start workflow
+5. Finds the workflow run for your specific commit
+6. Watches it in real-time
+7. Shows final results and next steps
+
+**Best for**: Organizations with auto-triggered CI workflows (push events)
+
+**Output**:
+- Commit preview
+- Push confirmation
+- Workflow run detection
+- Real-time progress updates
+- Final status (success/failure)
+- Next-step commands
+
+**Smart Features**:
+- Matches workflow to your exact commit SHA
+- Handles concurrent runs
+- Gracefully handles delays
+- Interactive confirmations
+
+---
+
 ### `trigger-remote-tests.sh`
-**Purpose**: Push code and trigger CI workflow
+**Purpose**: Push code and manually trigger CI workflow
 
 **Usage**:
 ```bash
@@ -146,7 +188,8 @@ Push your branch and trigger CI workflow on GitHub Actions.
 
 # Commands:
 ./scripts/ci/ci-manager.sh status      # Check CI status
-./scripts/ci/ci-manager.sh trigger     # Trigger new run
+./scripts/ci/ci-manager.sh push        # Push and watch (recommended)
+./scripts/ci/ci-manager.sh trigger     # Manually trigger workflow
 ./scripts/ci/ci-manager.sh watch       # Watch latest run
 ./scripts/ci/ci-manager.sh logs        # Fetch latest logs
 ./scripts/ci/ci-manager.sh help        # Show help
@@ -184,9 +227,12 @@ Your GitHub token needs:
 ```
 scripts/ci/
 ├── README.md                    # This file
+├── QUICKSTART.md                # Quick start guide
 ├── setup-gh-cli.sh             # Installation & setup
+├── authenticate-gh.sh          # Authentication helper
 ├── check-ci-status.sh          # Status dashboard
-├── trigger-remote-tests.sh     # Trigger workflows
+├── push-and-watch.sh           # Push & auto-watch (recommended) ⭐
+├── trigger-remote-tests.sh     # Manual trigger workflows
 ├── watch-ci.sh                 # Real-time monitoring
 ├── fetch-ci-logs.sh            # Log download & analysis
 └── ci-manager.sh               # Master CLI
@@ -211,15 +257,20 @@ ci-logs/                         # Downloaded logs (created by fetch-ci-logs.sh)
 
 ---
 
-### Workflow 2: Trigger and Watch
+### Workflow 2: Push and Watch (Recommended) ⭐
 
 ```bash
-# Trigger CI and watch in real-time
+# Push and automatically watch CI (one command!)
+./scripts/ci/push-and-watch.sh
+```
+
+**Use case**: After committing changes, push and monitor the auto-triggered workflow.
+
+**Alternative** (manual trigger):
+```bash
 ./scripts/ci/trigger-remote-tests.sh
 ./scripts/ci/watch-ci.sh
 ```
-
-**Use case**: After committing changes, run tests and monitor progress.
 
 ---
 
@@ -241,10 +292,10 @@ less ci-logs/ci-run-*.log
 # Run tests locally
 mvn test 2>&1 | tee test-logs/local-$(date +%Y%m%d-%H%M%S).log
 
-# Trigger remote tests
-./scripts/ci/trigger-remote-tests.sh
+# Push and watch remote tests
+./scripts/ci/push-and-watch.sh
 
-# Fetch remote logs
+# Fetch remote logs (after run completes)
 ./scripts/ci/fetch-ci-logs.sh
 
 # Compare
@@ -351,7 +402,10 @@ These scripts work seamlessly with the Docker development environment:
 # Local tests in Docker
 docker exec geobrix-dev /bin/bash -c "cd /root/geobrix && mvn test"
 
-# Remote tests via GitHub Actions
+# Remote tests via GitHub Actions (recommended)
+./scripts/ci/push-and-watch.sh
+
+# Or manually trigger
 ./scripts/ci/trigger-remote-tests.sh
 ```
 
@@ -392,13 +446,12 @@ All scripts use consistent color coding:
 # After changes: Run local tests
 mvn test
 
-# If local tests pass: Push and trigger CI
+# If local tests pass: Commit and push with auto-watch
 git add .
 git commit -m "feat: new feature"
-./scripts/ci/trigger-remote-tests.sh
+./scripts/ci/push-and-watch.sh
 
-# Watch CI run
-./scripts/ci/watch-ci.sh
+# It automatically pushes and watches - done!
 ```
 
 ### Example 2: Investigating CI Failure
@@ -416,8 +469,10 @@ less ci-logs/ci-run-*-errors-*.log
 # View specific test failures
 grep "FAILED" ci-logs/ci-run-*.log | grep "GDALCalcTest"
 
-# Re-run after fix
-./scripts/ci/trigger-remote-tests.sh
+# Fix and re-run
+git add .
+git commit -m "fix: address CI failures"
+./scripts/ci/push-and-watch.sh
 ```
 
 ---

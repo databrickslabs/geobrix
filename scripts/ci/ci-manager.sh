@@ -31,7 +31,8 @@ show_help() {
     echo ""
     echo -e "${CYAN}Commands:${NC}"
     echo -e "  ${GREEN}status${NC}       Check CI status and recent runs"
-    echo -e "  ${GREEN}trigger${NC}      Push and trigger new CI workflow"
+    echo -e "  ${GREEN}push${NC}         Push and auto-watch triggered workflow (recommended)"
+    echo -e "  ${GREEN}trigger${NC}      Push and manually trigger CI workflow"
     echo -e "  ${GREEN}watch${NC}        Watch latest CI run in real-time"
     echo -e "  ${GREEN}logs${NC}         Fetch and analyze CI logs"
     echo -e "  ${GREEN}setup${NC}        Install and configure GitHub CLI"
@@ -39,7 +40,7 @@ show_help() {
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}./scripts/ci/ci-manager.sh status${NC}     # Check CI status"
-    echo -e "  ${YELLOW}./scripts/ci/ci-manager.sh trigger${NC}    # Trigger new run"
+    echo -e "  ${YELLOW}./scripts/ci/ci-manager.sh push${NC}       # Push and watch (most common)"
     echo -e "  ${YELLOW}./scripts/ci/ci-manager.sh watch${NC}      # Watch latest run"
     echo ""
     echo -e "${CYAN}Interactive Mode:${NC}"
@@ -84,13 +85,14 @@ show_menu() {
     echo -e "${CYAN}What would you like to do?${NC}"
     echo ""
     echo -e "  ${GREEN}1)${NC} Check CI status"
-    echo -e "  ${GREEN}2)${NC} Trigger new CI run"
-    echo -e "  ${GREEN}3)${NC} Watch latest CI run"
-    echo -e "  ${GREEN}4)${NC} Fetch CI logs"
-    echo -e "  ${GREEN}5)${NC} Setup GitHub CLI"
-    echo -e "  ${GREEN}6)${NC} Exit"
+    echo -e "  ${GREEN}2)${NC} Push and watch (auto-triggered workflow)"
+    echo -e "  ${GREEN}3)${NC} Trigger new CI run (manual)"
+    echo -e "  ${GREEN}4)${NC} Watch latest CI run"
+    echo -e "  ${GREEN}5)${NC} Fetch CI logs"
+    echo -e "  ${GREEN}6)${NC} Setup GitHub CLI"
+    echo -e "  ${GREEN}7)${NC} Exit"
     echo ""
-    echo -n -e "${YELLOW}Enter choice [1-6]:${NC} "
+    echo -n -e "${YELLOW}Enter choice [1-7]:${NC} "
 }
 
 # Execute command
@@ -104,25 +106,28 @@ execute_command() {
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             "$SCRIPT_DIR/check-ci-status.sh"
             ;;
-        trigger|2)
+        push|2)
+            "$SCRIPT_DIR/push-and-watch.sh"
+            ;;
+        trigger|3)
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo -e "${CYAN}Triggering CI Workflow...${NC}"
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             "$SCRIPT_DIR/trigger-remote-tests.sh"
             ;;
-        watch|3)
+        watch|4)
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo -e "${CYAN}Watching CI Run...${NC}"
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             "$SCRIPT_DIR/watch-ci.sh"
             ;;
-        logs|4)
+        logs|5)
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo -e "${CYAN}Fetching CI Logs...${NC}"
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             "$SCRIPT_DIR/fetch-ci-logs.sh"
             ;;
-        setup|5)
+        setup|6)
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo -e "${CYAN}Setting Up GitHub CLI...${NC}"
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -131,7 +136,7 @@ execute_command() {
         help|h|-h|--help)
             show_help
             ;;
-        exit|6|q|quit)
+        exit|7|q|quit)
             echo -e "${GREEN}👋 Goodbye!${NC}"
             exit 0
             ;;
@@ -161,7 +166,7 @@ main() {
         read -r choice
         echo ""
         
-        if [ "$choice" = "6" ] || [ "$choice" = "q" ] || [ "$choice" = "quit" ]; then
+        if [ "$choice" = "7" ] || [ "$choice" = "q" ] || [ "$choice" = "quit" ]; then
             echo -e "${GREEN}👋 Goodbye!${NC}"
             exit 0
         fi

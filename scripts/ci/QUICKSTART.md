@@ -50,17 +50,22 @@ cd /Users/mjohns/IdeaProjects/geobrix
 
 ---
 
-### Scenario 2: **Trigger CI After Making Changes**
+### Scenario 2: **Push and Watch CI** (Recommended)
 
 ```bash
 # 1. Make your changes and commit
 git add .
 git commit -m "feat: your changes"
 
-# 2. Push and trigger CI
-./scripts/ci/ci-manager.sh trigger
+# 2. Push and automatically watch the triggered CI run
+./scripts/ci/push-and-watch.sh
 
-# 3. Watch the run (optional)
+# That's it! It pushes, finds your workflow run, and watches it.
+```
+
+**Alternative** (for manual workflow triggers):
+```bash
+./scripts/ci/ci-manager.sh trigger
 ./scripts/ci/ci-manager.sh watch
 ```
 
@@ -104,13 +109,14 @@ You'll get a nice menu:
 What would you like to do?
 
   1) Check CI status
-  2) Trigger new CI run
-  3) Watch latest CI run
-  4) Fetch CI logs
-  5) Setup GitHub CLI
-  6) Exit
+  2) Push and watch (auto-triggered workflow)
+  3) Trigger new CI run (manual)
+  4) Watch latest CI run
+  5) Fetch CI logs
+  6) Setup GitHub CLI
+  7) Exit
 
-Enter choice [1-6]:
+Enter choice [1-7]:
 ```
 
 ---
@@ -119,10 +125,13 @@ Enter choice [1-6]:
 
 | Command | What It Does | When To Use |
 |---------|--------------|-------------|
+| `./scripts/ci/push-and-watch.sh` ⭐ | Push & auto-watch | **Most common - after commits** |
 | `./scripts/ci/ci-manager.sh status` | Show CI dashboard | Check if tests are passing |
-| `./scripts/ci/ci-manager.sh trigger` | Push & trigger CI | After committing changes |
-| `./scripts/ci/ci-manager.sh watch` | Watch live | Monitor test progress |
+| `./scripts/ci/ci-manager.sh push` | Same as push-and-watch.sh | Alternative command |
+| `./scripts/ci/ci-manager.sh watch` | Watch existing run | Monitor in-progress tests |
 | `./scripts/ci/ci-manager.sh logs` | Download logs | Debug failures |
+
+**⭐ Recommended**: Use `push-and-watch.sh` for organizations with auto-triggered CI workflows.
 
 ---
 
@@ -186,15 +195,12 @@ on:
 # Run local tests first
 mvn test
 
-# If local tests pass, commit and push
+# If local tests pass, commit
 git add .
 git commit -m "feat: implement new feature"
 
-# Trigger CI
-./scripts/ci/ci-manager.sh trigger
-
-# Watch it run (optional)
-./scripts/ci/ci-manager.sh watch
+# Push and watch CI (one command does it all!)
+./scripts/ci/push-and-watch.sh
 
 # If it passes - celebrate! 🎉
 # If it fails - fetch logs and debug
@@ -216,8 +222,13 @@ alias ci='cd /Users/mjohns/IdeaProjects/geobrix && ./scripts/ci/ci-manager.sh'
 Now you can run from anywhere:
 ```bash
 ci status
-ci trigger
+ci push      # Push and watch
 ci logs
+```
+
+Or create a direct alias for push-and-watch:
+```bash
+alias cipush='cd /Users/mjohns/IdeaProjects/geobrix && ./scripts/ci/push-and-watch.sh'
 ```
 
 ---

@@ -16,3 +16,4 @@
 /metastore_db/
 /claude/
 /derby.log
+/test-logs/

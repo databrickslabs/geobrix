@@ -10,11 +10,12 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Returns the upper left x of the raster. */
+/** Expression that evaluates to the Y coordinate of the upper-left corner of the raster (geotransform). */
 case class RST_UpperLeftY(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
@@ -25,7 +26,7 @@ case class RST_UpperLeftY(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_UpperLeftY extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): Double = eval(row, conf, StringType)
@@ -57,21 +58,5 @@ object RST_UpperLeftY extends WithExpressionInfo {
     override def name: String = "gbx_rst_upperlefty"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_UpperLeftY(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Computes the upper left Y coordinate of tile based on its GeoTransform."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      89.99999847369712
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

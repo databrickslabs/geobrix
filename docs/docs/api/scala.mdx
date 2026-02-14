@@ -1,0 +1,154 @@
+---
+sidebar_position: 2
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import scalaApiExamples from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
+import gridXCompleteSnippet from '!!raw-loader!../../tests/scala/api/GridXCompleteExample.snippet';
+import vectorXCompleteSnippet from '!!raw-loader!../../tests-dbr/scala/api/VectorXCompleteExample.snippet';
+
+# Scala API Reference
+
+GeoBrix is natively written in Scala, providing the most direct and performant access to its functionality.
+
+## Import Patterns
+
+### RasterX
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="RegisterRasterX"
+  language="scala"
+  outputConstant="RegisterRasterX_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="RasterX Import Pattern"
+/>
+
+### GridX (BNG)
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="RegisterGridX"
+  language="scala"
+  outputConstant="RegisterGridX_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="GridX Import Pattern"
+/>
+
+### VectorX
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="RegisterVectorX"
+  language="scala"
+  outputConstant="RegisterVectorX_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="VectorX Import Pattern"
+/>
+
+## RasterX Functions
+
+### Accessor Functions
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="RasterXAccessorFunctions"
+  language="scala"
+  outputConstant="RasterXAccessorFunctions_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="RasterX Accessor Functions"
+/>
+
+### Transformation Functions
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="RasterXTransformationFunctions"
+  language="scala"
+  outputConstant="RasterXTransformationFunctions_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="RasterX Transformation Functions"
+/>
+
+### Complete Example
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="RasterXCompleteExample"
+  language="scala"
+  outputConstant="RasterXCompleteExample_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="RasterX Complete Example"
+/>
+
+## GridX Functions
+
+### BNG Functions
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="GridXBNGFunctions"
+  language="scala"
+  outputConstant="GridXBNGFunctions_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="GridX BNG Functions"
+/>
+
+### Complete Example
+
+<CodeFromTest
+  code={gridXCompleteSnippet}
+  language="scala"
+  source="docs/tests/scala/api/GridXCompleteExample.snippet"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="GridX Complete Example"
+  output={`+----------+-----------+-----------+
+|bng_cell  |point_count|avg_value  |
++----------+-----------+-----------+
+|TQ 30 80  |150        |42.5       |
+|TQ 31 80  |89         |38.2       |
+|...       |...        |...        |
++----------+-----------+-----------+
+
+Table bng_aggregated written to Delta.`}
+/>
+
+## VectorX Functions
+
+### Complete Example
+
+:::info Databricks Runtime integration
+This example uses `st_geomfromwkb`, `st_isvalid`, and `st_area` and requires **Databricks Runtime 17.1+** (or Databricks SQL with ST support). The snippet and integration tests live under `docs/tests-dbr/` (Scala snippet in `scala/api/`; Python integration tests in `python/api/`).
+:::
+
+<CodeFromTest
+  code={vectorXCompleteSnippet}
+  language="scala"
+  source="docs/tests-dbr/scala/api/VectorXCompleteExample.snippet"
+  testFile="docs/tests-dbr/python/api/test_vectorx_conversion.py"
+  title="VectorX Complete Example"
+  output={`+----------+-----------+----------+---------+------+
+|feature_id|properties |geometry  |is_valid  |area |
++----------+-----------+----------+---------+------+
+|1         |{...}      |POLYGON...|true     |1250.5|
+|2         |{...}      |POLYGON...|true     |890.2 |
+|...       |...        |...       |...      |...   |
++----------+-----------+----------+---------+------+
+
+Table migrated_features written to Delta.`}
+/>
+
+## Next Steps
+
+- [Python API Reference](./python)
+- [SQL API Reference](./sql)
+- [Examples](../examples/overview)
+- [Package Documentation](../packages/overview)
+

@@ -3,17 +3,10 @@ package com.databricks.labs.gbx.rasterx.operator
 import org.gdal.gdal.Dataset
 import org.gdal.gdalconst.gdalconstConstants._
 
-/** OperatorOptions is a helper object for parsing GDAL command options. */
+/** Parses GDAL command strings and appends format/compression/block options for translate/warp/calc. */
 object OperatorOptions {
 
-    /**
-      * Parses the options from a GDAL command.
-      *
-      * @param command
-      *   The GDAL command.
-      * @return
-      *   A vector of options.
-      */
+    /** Splits command by spaces and returns options as Vector (args after first token). */
     def parseOptions(command: String): java.util.Vector[String] = {
         val args = command.split(" ")
         val optionsVec = new java.util.Vector[String]()
@@ -21,19 +14,7 @@ object OperatorOptions {
         optionsVec
     }
 
-    /**
-      * Add default options to the command. Extract the compression from the
-      * raster and append it to the command. This operation does not change the
-      * output format. For changing the output format, use RST_ToFormat.
-      *
-      * @param command
-      *   The command to append options to.
-      * @param writeOptions
-      *   The write options to append. Note that not all available options are
-      *   actually appended. At this point it is up to the bellow logic to
-      *   decide what is supported and for which format.
-      * @return
-      */
+    /** Appends -of/--format, -co compression/blocksize/predictor from writeOptions and ds; does not change output format (use RST_AsFormat for that). */
     def appendOptions(command: String, writeOptions: Map[String, String], ds: Dataset): String = {
         val format = writeOptions.getOrElse("format", "GTiff")
         // scalastyle:off caselocale

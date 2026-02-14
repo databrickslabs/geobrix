@@ -1,0 +1,69 @@
+---
+description: Align Spark-style table strings in doc example outputs
+alwaysApply: false
+---
+
+# Doc Example Output Alignment
+
+Result blocks shown in documentation (e.g. under **Python**, **Scala**, or **SQL** on reader/package pages) use constants named `*_output` or `*_example_output` in `docs/tests` and `docs/tests-dbr`. When those constants contain **Spark-style ASCII tables** (borders with `+---...+` and rows with `|...|`), every row must be aligned so that the pipe characters line up vertically.
+
+## The Rule
+
+**For each column, the width is fixed.** Every row (border, header, and every data row) must use exactly that width for that column.
+
+- **Border row**: The number of dashes between `+` signs is the column width (e.g. `+--------------------------------------------------+-----+` → first column 50, second 5).
+- **Header and data rows**: The content between two pipes (including spaces) must equal that column width exactly. Not one character more or less.
+
+## How to Align
+
+1. **Determine each column width** from the border: count the dashes in each segment.
+2. **For each row**, for each column:
+   - Content length (e.g. `path` = 4, `/Volumes/.../file.tif` = 35).
+   - Add spaces so that **content + spaces = column width**.
+3. **If content cannot be shortened** (e.g. a long path or value that must stay as-is), **widen that column** and then pad **all other rows** (header, other data rows, ellipsis rows) to the new width. Do not truncate content that the user said must stay.
+
+## Conventions Used in This Repo
+
+- **Path column (long paths)**: Often **50** characters (`+--------------------------------------------------+`) so truncated paths like `/Volumes/.../nyc_sentinel2_red.tif` fit. Header: `path` + 46 spaces = 50. Data: path string + spaces = 50.
+- **Path column (short / multi-column tables)**: Sometimes **20** characters (`+--------------------+`) for reader examples with several columns.
+- **Tile column**: Often **5** chars (`|tile |`, `|{...}|`).
+- **Other columns**: Width = max(header length, representative value length); pad with spaces so every row matches.
+
+## Checklist When Editing a Table
+
+- [ ] Border: each `+---...+` segment length = column width.
+- [ ] Header: each cell = column width (label + spaces).
+- [ ] Every data row: each cell = column width (value + spaces).
+- [ ] Ellipsis / continuation rows (e.g. `|... |...   |`): same widths.
+- [ ] If one row’s content is fixed and too long, widen the column and re-pad **all** rows; do not shorten that content.
+
+## Where These Live
+
+- **Python**: `docs/tests/python/**/*.py` (e.g. `readers/gdal_examples.py`, `sample_data/overview.py`, `packages/examples.py`).
+- **Scala**: `docs/tests/scala/**/*.scala` (e.g. `readers/GDALExamples.scala`, `packages/GridxPackageExamples.scala`).
+- **Same pattern** in `docs/tests-dbr` if present.
+
+## Example (Correct)
+
+```text
++--------------------------------------------------+-----+
+|path                                              |tile |
++--------------------------------------------------+-----+
+|/Volumes/.../nyc_sentinel2_red.tif                |{...}|
++--------------------------------------------------+-----+
+```
+
+- Column 1 width = 50. Header `path` (4) + 46 spaces = 50. Data path (35) + 15 spaces = 50.
+- Column 2 width = 5. `tile ` = 5, `{...}` = 5.
+
+## Common Mistakes
+
+- **Header one space short**: e.g. `|area     |` with 9 chars in a 10-char column → add one space so the closing `|` lines up.
+- **Data row wrong padding**: e.g. long path with too few or too many spaces → count content length, then add exactly (width − length) spaces.
+- **Ellipsis row wrong**: e.g. `|...              |` in an 18-char column: `...` (3) + 15 spaces = 18; 12 spaces would misalign.
+- **Truncating content that must stay**: If the user says a value cannot be shortened, widen the column and pad every other row to the new width.
+
+## Cross-Reference
+
+- **Payload pattern** (constants and display): `.cursor/rules/documentation-payload-pattern.mdc`
+- **Single source (tests as doc source)**: `.cursor/rules/docs-test-single-source.mdc`

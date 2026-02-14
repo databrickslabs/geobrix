@@ -10,11 +10,13 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
+/** Expression that returns the intersection of two BNG cell chips (binary). Arguments: leftChip, rightChip. */
 case class BNG_CellIntersection(
     leftChip: Expression,
     rightChip: Expression
 ) extends InvokedExpression {
 
+    /** Cell/chip ID DataType from the chip struct. */
     private def childType = leftChip.dataType.asInstanceOf[StructType].fields(0).dataType
     override def children: Seq[Expression] = Seq(leftChip, rightChip)
     override def dataType: DataType = BNG.cellType(childType)
@@ -29,6 +31,7 @@ case class BNG_CellIntersection(
 
 }
 
+/** Companion: SQL name gbx_bng_cellintersection, builder, and eval. */
 object BNG_CellIntersection extends WithExpressionInfo {
 
     def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow = {
@@ -85,13 +88,5 @@ object BNG_CellIntersection extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_CellIntersection(c(0), c(1))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

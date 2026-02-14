@@ -1,0 +1,320 @@
+---
+sidebar_position: 4
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import libraryIntegration from '!!raw-loader!../../tests/python/advanced/library_integration.py';
+
+# Third-Party Library Integration
+
+Learn how to integrate GeoBrix with popular Python geospatial libraries like rasterio, xarray, and PDAL for extended functionality.
+
+## Overview
+
+While GeoBrix provides comprehensive spatial processing on Spark, you may want to integrate with specialized Python libraries for:
+- Advanced array operations (xarray)
+- Flexible raster I/O (rasterio)  
+- Point cloud processing (PDAL)
+- NumPy-based operations
+
+GeoBrix works seamlessly with these libraries because it uses standard formats (WKB, GeoTIFF bytes) that can be easily converted to library-specific objects.
+
+---
+
+## Rasterio Integration
+
+[Rasterio](https://rasterio.readthedocs.io/) is a Python library for reading and writing geospatial raster data. It provides a Pythonic API for GDAL with excellent NumPy integration.
+
+### Why Use Rasterio with GeoBrix?
+
+- **Pythonic API**: More intuitive than raw GDAL bindings
+- **NumPy Integration**: Direct access to raster data as NumPy arrays
+- **Flexible I/O**: Advanced reading/writing capabilities
+- **Metadata Access**: Easy access to coordinate systems, bounds, transforms
+- **Window Operations**: Read/write specific regions efficiently
+
+### Installation
+
+Rasterio is typically available in Databricks ML runtimes, or install via:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="rasterio_install_snippet"
+  title="Install Rasterio"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+/>
+
+---
+
+### Basic Pattern: GeoBrix Tile to Rasterio
+
+Convert GeoBrix raster tiles to rasterio datasets for processing:
+
+:::tip Understanding Tiles
+GeoBrix tiles are structured types with three fields: `cellid`, `raster`, and `metadata`. The `raster` field contains either a file path (String) or binary content (Binary). See [Tile Structure](../api/tile-structure) for details.
+:::
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="rasterio_compute_statistics"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="rasterio_compute_statistics_output"
+/>
+
+### Reading Raster Data with Rasterio
+
+Access raster data and metadata within UDFs:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="rasterio_extract_metadata"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="rasterio_extract_metadata_output"
+/>
+
+---
+
+### Array Operations with NumPy
+
+Perform advanced array operations using rasterio + NumPy:
+
+**Normalize Raster Values:**
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="rasterio_normalize_raster"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="rasterio_normalize_raster_output"
+/>
+
+**Compute NDVI:**
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="rasterio_compute_ndvi"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="rasterio_compute_ndvi_output"
+/>
+
+---
+
+### Window Operations
+
+Process large rasters in windows for memory efficiency:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="rasterio_window_operations"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="rasterio_window_operations_output"
+/>
+
+---
+
+## XArray Integration
+
+[XArray](https://xarray.pydata.org/) provides powerful N-dimensional array operations with labeled axes, making it ideal for multi-temporal and multi-band raster analysis.
+
+### Why Use XArray with GeoBrix?
+
+- **Labeled Dimensions**: Work with named dimensions (time, x, y, band)
+- **Multi-Temporal**: Stack and analyze time series naturally
+- **Broadcasting**: Automatic alignment of coordinates
+- **NetCDF Support**: Native support for NetCDF/HDF formats
+
+### Installation
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="xarray_install_snippet"
+  title="Install XArray"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+/>
+
+---
+
+### Basic XArray Integration
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="xarray_integration_basic"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="xarray_integration_basic_output"
+/>
+
+### Multi-Temporal Analysis
+
+Stack and analyze multiple time periods:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="xarray_multitemporal_analysis"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="xarray_multitemporal_analysis_output"
+/>
+
+### Spatial Resampling and Aggregation
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="xarray_resampling_aggregation"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="xarray_resampling_aggregation_output"
+/>
+
+---
+
+## PDAL Integration
+
+[PDAL](https://pdal.io/) (Point Data Abstraction Library) processes point cloud data from lidar, photogrammetry, and other sources.
+
+### Why Use PDAL with GeoBrix?
+
+- **Point Cloud Processing**: LAS/LAZ file support
+- **Filtering**: Remove noise, classify points
+- **DEM Generation**: Create rasters from point clouds
+- **Format Conversion**: Convert between point cloud formats
+- **Integration**: Combine lidar with imagery
+
+### Installation
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="pdal_install_snippet"
+  title="Install PDAL"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+/>
+
+:::note PDAL native binaries
+The Python packages above provide bindings only. You also need PDAL native libraries installed on the cluster (e.g. `libpdal` and PDAL command-line tools). On Databricks, install them via [cluster-scoped init scripts](https://docs.databricks.com/aws/en/init-scripts/cluster-scoped) (for example, a script that runs `apt-get install -y pdal` or equivalent for your environment).
+:::
+
+---
+
+### Basic PDAL Integration
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="pdal_integration_basic"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="pdal_integration_basic_output"
+/>
+
+### PDAL-Raster Integration Pattern
+
+Combine point cloud processing with raster analysis:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="pdal_raster_integration_pattern"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="pdal_raster_integration_pattern_output"
+/>
+
+---
+
+## Advanced NumPy Operations
+
+Apply complex array operations via rasterio:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="numpy_advanced_operations"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+  outputConstant="numpy_advanced_operations_output"
+/>
+
+---
+
+## Best Practices
+
+### 1. Memory Management
+
+Be mindful of memory when loading rasters into Python libraries:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="best_practice_memory_management"
+  title="Memory Management"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+/>
+
+### 2. Coordinate System Handling
+
+Always check and handle coordinate systems:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="best_practice_coordinate_system_handling"
+  title="Coordinate System Handling"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+/>
+
+### 3. Type Conversions
+
+Handle data type conversions carefully:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="best_practice_type_conversions"
+  title="Type Conversions"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+/>
+
+### 4. Resource Cleanup
+
+Always close resources properly:
+
+<CodeFromTest 
+  code={libraryIntegration} 
+  language="python" 
+  functionName="best_practice_resource_cleanup"
+  title="Resource Cleanup"
+  source="docs/tests/python/advanced/library_integration.py"
+  testFile="docs/tests/python/advanced/test_library_integration.py"
+/>
+
+---
+
+## Next Steps
+
+- [Custom UDFs](./custom-udfs) - Build custom functions with libraries
+- [GDAL CLI](./gdal-cli) - Combine with GDAL preprocessing
+- [Examples](./examples) - Real-world integration workflows
+- [Rasterio Docs](https://rasterio.readthedocs.io/)
+- [XArray Docs](https://xarray.pydata.org/)
+- [PDAL Docs](https://pdal.io/)

@@ -4,9 +4,10 @@ import com.databricks.labs.gbx.gridx.grid.H3
 import com.databricks.labs.gbx.rasterx.gdal.GDAL
 import org.gdal.gdal.Dataset
 
-/** RasterTessellate is a helper object for tessellating rasters. */
+/** Tessellates a raster into H3 cells: clips by cell geometry and yields (cellId, Dataset, metadata) per cell. */
 object RasterTessellate {
 
+    /** Clips ds to the H3 cell geometry and returns (cellId, clipped Dataset, metadata); returns null if empty. */
     def getTile(ds: Dataset, options: Map[String, String], cell: Long): (Long, Dataset, Map[String, String]) = {
         val cellGeom = H3.cellIdToGeometry(cell)
         val (resDs, resMtd) = ClipToGeom.clip(ds, options, cellGeom, GDAL.WSG84)
@@ -16,19 +17,7 @@ object RasterTessellate {
         (cell, resDs, resMtd)
     }
 
-    /**
-      * Tessellates a raster into tiles. The raster is projected into the grid
-      * system and then split into tiles. Each tile corresponds to a cell in the
-      * grid system.
-      *
-      * @param ds
-      *   The raster to tessellate.
-      * @param resolution
-      *   The resolution of the tiles.
-      *
-      * @return
-      *   A sequence of Raster objects.
-      */
+    /** Iterator of (cellId, Dataset, metadata) per H3 cell overlapping the raster bbox at resolution. Caller must release each Dataset; iterator is AutoCloseable. */
     def tessellateH3Iter(
         ds: Dataset,
         options: Map[String, String],
@@ -46,6 +35,7 @@ object RasterTessellate {
             private var cc = 0
             private var nextTile: (Long, Dataset, Map[String, String]) = _
 
+            /** Fetches the next (cell, Dataset, metadata) into nextTile or closes when exhausted. */
             private def advance(): Unit = {
                 fetched = true
                 nextTile = null
@@ -57,17 +47,20 @@ object RasterTessellate {
                 if (cc >= _cells.length && nextTile == null) close()
             }
 
+            /** Overrides Iterator.hasNext: true until advance() exhausts cells or close() called. */
             override def hasNext: Boolean = {
                 if (!fetched && !closed) advance()
                 !closed && nextTile != null
             }
 
+            /** Overrides Iterator.next: returns (cellId, Dataset, metadata); caller must release Dataset. */
             override def next(): (Long, Dataset, Map[String, String]) = {
                 if (!fetched && !closed) advance()
                 fetched = false
                 nextTile
             }
 
+            /** Overrides AutoCloseable.close: unlinks dataset and nulls reference; idempotent. */
             override def close(): Unit = {
                 if (!closed) {
                     closed = true

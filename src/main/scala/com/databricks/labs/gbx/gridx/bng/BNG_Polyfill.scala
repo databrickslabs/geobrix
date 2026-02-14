@@ -9,6 +9,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
+/** Expression that fills a geometry with BNG cells at the given resolution (array of cell IDs). Arguments: geom, resolution. */
 case class BNG_Polyfill(
     geom: Expression,
     resolution: Expression
@@ -23,6 +24,7 @@ case class BNG_Polyfill(
 
 }
 
+/** Companion: SQL name gbx_bng_polyfill, builder, and eval. */
 object BNG_Polyfill extends WithExpressionInfo {
 
     def eval(geom: UTF8String, resolution: UTF8String): Array[String] = {
@@ -64,13 +66,5 @@ object BNG_Polyfill extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_Polyfill(c(0), c(1))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

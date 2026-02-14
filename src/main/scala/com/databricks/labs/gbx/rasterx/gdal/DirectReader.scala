@@ -3,12 +3,14 @@ package com.databricks.labs.gbx.rasterx.gdal
 import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import org.gdal.gdal.Band
 
+/** Reads a band window into a 2D Double array with NoData from mask applied; reuses internal buffers. */
 final class DirectReader(initialCapacity: Int = 0) {
 
     private var dataBuf = new Array[Double](initialCapacity)
     private var maskBuf = new Array[Byte](initialCapacity)
     private var outputBuf = Array.ofDim[Double](0, 0)
 
+    /** Reads (x,y,w,h) window; returns 2D array (row-major) or null if all pixels masked/NoData. */
     def readWindow(
         band: Band,
         window: (Int, Int, Int, Int)

@@ -1,0 +1,120 @@
+---
+sidebar_position: 3
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import pythonApiExamples from '!!raw-loader!../../tests/python/api/python_api.py';
+import vectorxCompleteExample from '!!raw-loader!../../tests-dbr/python/api/vectorx_conversion.py';
+
+# Python API Reference
+
+GeoBrix provides Python bindings through PySpark, offering Pythonic access to all GeoBrix functionality.
+
+## Import Patterns
+
+### RasterX
+
+<CodeFromTest code={pythonApiExamples} functionName="import_pattern_rasterx" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="import_pattern_rasterx_output" />
+
+### GridX (BNG)
+
+<CodeFromTest code={pythonApiExamples} functionName="import_pattern_gridx" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="import_pattern_gridx_output" />
+
+### VectorX
+
+<CodeFromTest code={pythonApiExamples} functionName="import_pattern_vectorx" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="import_pattern_vectorx_output" />
+
+## RasterX Functions
+
+### Accessor Functions
+
+Get raster properties and metadata.
+
+#### `rst_boundingbox(tile)`
+
+Get the bounding box of a raster.
+
+<CodeFromTest code={pythonApiExamples} functionName="rst_boundingbox_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rst_boundingbox_example_output" />
+
+#### `rst_width(tile)`
+
+Get raster width in pixels.
+
+<CodeFromTest code={pythonApiExamples} functionName="rst_width_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rst_width_example_output" />
+
+#### `rst_height(tile)`
+
+Get raster height in pixels.
+
+<CodeFromTest code={pythonApiExamples} functionName="rst_height_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rst_height_example_output" />
+
+#### `rst_numbands(tile)`
+
+Get number of bands in raster.
+
+<CodeFromTest code={pythonApiExamples} functionName="rst_numbands_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rst_numbands_example_output" />
+
+#### `rst_metadata(tile)`
+
+Get raster metadata.
+
+<CodeFromTest code={pythonApiExamples} functionName="rst_metadata_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rst_metadata_example_output" />
+
+#### `rst_srid(tile)`
+
+Get spatial reference identifier.
+
+<CodeFromTest code={pythonApiExamples} functionName="rst_srid_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rst_srid_example_output" />
+
+### Transformation Functions
+
+Transform and manipulate rasters.
+
+#### `rst_clip(tile, geometry, cutline_all_touched)`
+
+Clip raster by geometry. The geometry must be **WKT** (string) or **WKB** (binary); do not use `st_geomfromtext()` or other DBR native geometry, as GeoBrix does not accept it.
+
+<CodeFromTest code={pythonApiExamples} functionName="rst_clip_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rst_clip_example_output" />
+
+### Complete Example
+
+<CodeFromTest code={pythonApiExamples} functionName="rasterx_complete_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="rasterx_complete_example_output" />
+
+## GridX Functions
+
+### BNG Functions
+
+British National Grid functions.
+
+#### `bng_cellarea(grid_letter, precision)`
+
+Calculate area of a BNG grid cell.
+
+<CodeFromTest code={pythonApiExamples} functionName="bng_cellarea_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="bng_cellarea_example_output" />
+
+#### `bng_pointascell(point, resolution)` (point to BNG cell)
+
+Convert point geometry to BNG grid cell. The point must be **WKT** or **WKB**; do not use `st_point()` or other DBR native geometry.
+
+<CodeFromTest code={pythonApiExamples} functionName="bng_pointtocell_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="bng_pointtocell_example_output" />
+
+### Complete Example
+
+<CodeFromTest code={pythonApiExamples} functionName="gridx_complete_example" language="python" source="docs/tests/python/api/python_api.py" testFile="docs/tests/python/api/test_python_api.py" outputConstant="gridx_complete_example_output" />
+
+## VectorX Functions
+
+### Complete Example
+
+:::info Databricks Runtime integration
+This example uses `st_geomfromwkb`, `st_isvalid`, and `st_area` and requires **Databricks Runtime 17.1+** (or Databricks SQL with ST support). The example and its integration test live under `docs/tests-dbr/`.
+:::
+
+<CodeFromTest code={vectorxCompleteExample} functionName="vectorx_complete_example" language="python" source="docs/tests-dbr/python/api/vectorx_conversion.py" testFile="docs/tests-dbr/python/api/test_vectorx_conversion.py" outputConstant="vectorx_complete_example_output" />
+
+## Next Steps
+
+- [SQL API Reference](./sql)
+- [Scala API Reference](./scala)
+- [Examples](../examples/overview)
+- [Package Documentation](../packages/overview)

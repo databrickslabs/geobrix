@@ -9,9 +9,11 @@ import org.gdal.ogr._
 import java.sql.Timestamp
 import scala.util.Try
 
+/** Infers Spark schema from OGR layer/features and maps OGR types to Spark types. */
 //noinspection VarCouldBeVal
 object OGR_SchemaInference extends Serializable {
 
+    /** Creates an empty OGR geometry (POINT EMPTY) for type inference; side-effect registers drivers. */
     private def OGREmptyGeometry: Geometry = {
         enableOGRDrivers()
         ogr.CreateGeometryFromWkt("POINT EMPTY")
@@ -25,14 +27,7 @@ object OGR_SchemaInference extends Serializable {
         }
     }
 
-    /**
-      * Converts an OGR type name to Spark SQL data type.
-      *
-      * @param typeName
-      *   the OGR type name.
-      * @return
-      *   the Spark SQL data type.
-      */
+    /** Maps OGR field type name to Spark DataType (e.g. Integer → IntegerType, Real → DoubleType). */
     def getType(typeName: String): DataType =
         typeName match {
             case "Boolean"        => BooleanType
@@ -52,19 +47,7 @@ object OGR_SchemaInference extends Serializable {
             case _                => StringType
         }
 
-    /**
-      * Infers the type of field from a feature. The type is inferred from the
-      * value of the field. If the field type is String, the inferred type is
-      * returned. Otherwise, the inferred type is coerced to the reported type.
-      * If the reported type is not String, the inferred type is coerced to the
-      * reported type.
-      * @param feature
-      *   the feature
-      * @param j
-      *   the field index
-      * @return
-      *   the inferred type
-      */
+    /** Infers Spark type from feature field value; coerces to reported OGR type when not String. */
     private def inferType(feature: Feature, j: Int): DataType = {
         val field = feature.GetFieldDefnRef(j)
         val reportedType = getType(field.GetFieldTypeName(field.GetFieldType))
@@ -91,14 +74,7 @@ object OGR_SchemaInference extends Serializable {
         }
     }
 
-    /**
-      * Coerces a list of types to a single type.
-      *
-      * @param coerceables
-      *   the list of types.
-      * @return
-      *   the coerced type.
-      */
+    /** Picks single DataType from list (precedence: String > Long > Double > … > Date > String fallback). */
     private[ds] def coerceTypeList(coerceables: Seq[DataType]): DataType = {
         if (coerceables.isEmpty) StringType
         else if (coerceables.contains(StringType)) StringType
@@ -115,16 +91,7 @@ object OGR_SchemaInference extends Serializable {
         else StringType
     }
 
-    /**
-      * Extracts the value of a field from a feature. The type of the value is
-      * determined by the field type.
-      *
-      * @param feature
-      *   OGR feature.
-      * @param j
-      *   field index.
-      * @return
-      */
+    /** Extracts feature field j as Spark type (dataType); dates/timestamps via getDate/getDateTime. */
     def getValue(feature: Feature, j: Int, dataType: DataType): Any = {
         dataType match {
             case IntegerType               => feature.GetFieldAsInteger(j)
@@ -141,32 +108,14 @@ object OGR_SchemaInference extends Serializable {
         }
     }
 
-    /**
-      * Return the field index of a field name if it exists.
-      *
-      * @param feature
-      *   the OGR feature.
-      * @param name
-      *   the field name.
-      * @return
-      *   the field index.
-      */
+    /** Returns the 0-based field index for the given field name, or None if not found. */
     def getFieldIndex(feature: Feature, name: String): Option[Int] = {
         val field = feature.GetFieldDefnRef(name)
         if (field == null) None
         else (0 until feature.GetFieldCount).find(i => feature.GetFieldDefnRef(i).GetName == name)
     }
 
-    /**
-      * Converts a OGR date to a java.sql.Date.
-      *
-      * @param feature
-      *   the OGR feature.
-      * @param id
-      *   the field index.
-      * @return
-      *   the java.sql.Date.
-      */
+    /** OGR DateTime field → java.sql.Timestamp; returns null for invalid components. */
     // noinspection ScalaDeprecation
     private def getJavaSQLTimestamp(feature: Feature, id: Int): Timestamp = {
         var year: Array[Int] = Array.fill[Int](1)(0)
@@ -185,59 +134,55 @@ object OGR_SchemaInference extends Serializable {
         val M = minute(0)
         val s = second(0)
 
+        // Validate date components - GDAL/OGR may return invalid values (e.g., month=0)
+        // If invalid, return null timestamp instead of throwing exception
+        if (y < 1 || m < 1 || m > 12 || d < 1 || d > 31 || H < 0 || H > 23 || M < 0 || M > 59) {
+            return null
+        }
+
         val sInt = math.floor(s).toInt
         val nanos = ((s - sInt) * 1e9).round.toInt.max(0)
 
-        val ldt = java.time.LocalDateTime.of(y, m, d, H, M, sInt, nanos)
+        try {
+            val ldt = java.time.LocalDateTime.of(y, m, d, H, M, sInt, nanos)
 
-        val inst = tz(0) match {
-            case 100   => ldt.toInstant(java.time.ZoneOffset.UTC) // UTC
-            case 0 | 1 => ldt.atZone(java.time.ZoneId.systemDefault()).toInstant // unknown/local
-            case off   => ldt.atOffset(java.time.ZoneOffset.ofTotalSeconds(off * 60)).toInstant // minutes offset
+            val inst = tz(0) match {
+                case 100   => ldt.toInstant(java.time.ZoneOffset.UTC) // UTC
+                case 0 | 1 => ldt.atZone(java.time.ZoneId.systemDefault()).toInstant // unknown/local
+                case off   => ldt.atOffset(java.time.ZoneOffset.ofTotalSeconds(off * 60)).toInstant // minutes offset
+            }
+
+            val ts: java.sql.Timestamp = java.sql.Timestamp.from(inst)
+            ts
+        } catch {
+            // Handle any remaining invalid date/time combinations (e.g., Feb 30)
+            case _: java.time.DateTimeException => null
         }
-
-        val ts: java.sql.Timestamp = java.sql.Timestamp.from(inst)
-        ts
     }
 
-    /**
-      * Extracts the value of a date field from a feature.
-      *
-      * @param feature
-      *   OGR feature.
-      * @param id
-      *   field index.
-      * @return
-      */
-    private def getDate(feature: Feature, id: Int): Int = {
+    /** Date field as Spark DateType (days since epoch); null if invalid. */
+    private def getDate(feature: Feature, id: Int): Any = {
         val timestamp = getJavaSQLTimestamp(feature, id)
+        if (timestamp == null) {
+            // Return null for invalid dates (e.g., month=0, day=0)
+            return null
+        }
         val localDate = timestamp.toLocalDateTime.toLocalDate       // correct Y-M-D
         val date = java.sql.Date.valueOf(localDate)                 // build sql.Date properly
         DateTimeUtils.fromJavaDate(date)
     }
 
-    /**
-      * Extracts the value of a date-time field from a feature.
-      *
-      * @param feature
-      *   OGR feature.
-      * @param id
-      *   field index.
-      * @return
-      */
-    private def getDateTime(feature: Feature, id: Int): Long = {
+    /** DateTime field as Spark TimestampType (micros); null if invalid. */
+    private def getDateTime(feature: Feature, id: Int): Any = {
         val datetime = getJavaSQLTimestamp(feature, id)
+        if (datetime == null) {
+            // Return null for invalid datetimes (e.g., month=0, day=0)
+            return null
+        }
         DateTimeUtils.fromJavaTimestamp(datetime)
     }
 
-    /**
-      * Creates a Spark SQL schema from an OGR feature.
-      *
-      * @param feature
-      *   OGR feature.
-      * @return
-      *   Spark SQL schema.
-      */
+    /** Builds StructType from feature fields (inferType) plus geom fields (WKT/WKB + srid + proj4). */
     private def getFeatureSchema(feature: Feature, asWKB: Boolean): StructType = {
         val geomDataType = if (asWKB) BinaryType else StringType
         val fields = (0 until feature.GetFieldCount())
@@ -260,15 +205,7 @@ object OGR_SchemaInference extends Serializable {
         StructType(fields)
     }
 
-    /**
-      * Get the fields of a feature as an array of values.
-      * @param feature
-      *   OGR feature.
-      * @param featureSchema
-      *   Spark SQL schema.
-      * @return
-      *   Array of values.
-      */
+    /** Values for all feature fields and geom fields (WKT/WKB, srid, proj4) in schema order. */
     def getFeatureFields(feature: Feature, featureSchema: StructType, asWKB: Boolean): Array[Any] = {
         val types = featureSchema.fields.map(_.dataType)
         val fields = (0 until feature.GetFieldCount())
@@ -296,18 +233,7 @@ object OGR_SchemaInference extends Serializable {
         values.toArray
     }
 
-    /**
-      * Infer the schema of an OGR file.
-      *
-      * @param driverName
-      *   the name of the OGR driver
-      * @param path
-      *   the path to the file to infer the schema from
-      * @param options
-      *   the options to use for the inference
-      * @return
-      *   the inferred schema for the given files and layer
-      */
+    /** Opens layer at path with driverName and options; returns Some(schema) from first feature or None. */
     def inferSchemaImpl(
         driverName: String,
         path: String,
@@ -320,25 +246,49 @@ object OGR_SchemaInference extends Serializable {
         val asWKB = options.getOrElse("asWKB", "true").toBoolean
 
         val dataset = OGR_Driver.open(path, driverName)
-        val resolvedLayerName = if (layerName.isEmpty) dataset.GetLayer(layerN).GetName() else layerName
+        val layerByIndex = dataset.GetLayer(layerN)
+        if (layerByIndex == null) {
+            throw new IllegalArgumentException(
+              s"No layer at index $layerN in dataset. Path: $path"
+            )
+        }
+        val resolvedLayerName = if (layerName.isEmpty) layerByIndex.GetName() else layerName
         val layer = dataset.GetLayer(resolvedLayerName)
+        if (layer == null) {
+            throw new IllegalArgumentException(
+              s"Layer '$resolvedLayerName' not found in dataset. Path: $path. " +
+              s"Available layers: ${(0 until dataset.GetLayerCount()).map(i => dataset.GetLayer(i).GetName()).mkString(", ")}"
+            )
+        }
         layer.ResetReading()
         val headFeature = layer.GetNextFeature()
+        
+        // Handle empty layers - return None if no features
+        if (headFeature == null) {
+            return None
+        }
+        
         val headSchemaFields = getFeatureSchema(headFeature, asWKB).fields
         val n = math.min(inferenceLimit, layer.GetFeatureCount()).toInt
 
         // start from 1 since 1 feature was read already
         val layerSchema = (1 until n).foldLeft(headSchemaFields) { (schema, _) =>
             val feature = layer.GetNextFeature()
-            val featureSchema = getFeatureSchema(feature, asWKB)
-            schema.zip(featureSchema.fields).map { case (s, f) =>
-                (s, f) match {
-                    case (StructField(name, StringType, _, _), StructField(_, dataType, _, _)) =>
-                        StructField(name, dataType, nullable = true)
-                    case (StructField(name, dataType, _, _), StructField(_, StringType, _, _)) =>
-                        StructField(name, dataType, nullable = true)
-                    case (StructField(name, dataType, _, _), StructField(_, dataType2, _, _))  =>
-                        StructField(name, TypeCoercion.findTightestCommonType(dataType2, dataType).getOrElse(StringType), nullable = true)
+            
+            // Skip null features (shouldn't happen but defensive programming)
+            if (feature == null) {
+                schema
+            } else {
+                val featureSchema = getFeatureSchema(feature, asWKB)
+                schema.zip(featureSchema.fields).map { case (s, f) =>
+                    (s, f) match {
+                        case (StructField(name, StringType, _, _), StructField(_, dataType, _, _)) =>
+                            StructField(name, dataType, nullable = true)
+                        case (StructField(name, dataType, _, _), StructField(_, StringType, _, _)) =>
+                            StructField(name, dataType, nullable = true)
+                        case (StructField(name, dataType, _, _), StructField(_, dataType2, _, _))  =>
+                            StructField(name, TypeCoercion.findTightestCommonType(dataType2, dataType).getOrElse(StringType), nullable = true)
+                    }
                 }
             }
         }

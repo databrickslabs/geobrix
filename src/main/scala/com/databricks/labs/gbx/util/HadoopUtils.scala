@@ -8,15 +8,18 @@ import org.apache.spark.util.SerializableConfiguration
 import java.net.URI
 import scala.collection.mutable
 
+/** Path normalization (Volumes, DBFS, file:), listing, first-file, and copy for Hadoop filesystems. */
 //noinspection ScalaWeakerAccess
 object HadoopUtils {
 
     var hadoopConf: SerializableConfiguration = _
 
+    /** Sets the default Hadoop config used by listHadoopFiles when no config is passed. */
     def setHadoopConf(hconf: SerializableConfiguration): Unit = {
         hadoopConf = hconf
     }
 
+    /** Normalizes path for Hadoop (e.g. /dbfs/ -> dbfs:/, /tmp/ -> file:/tmp/, /Volumes/ unchanged). */
     def cleanPath(inPath: String): String = {
         inPath match {
             // Handle Unity Catalog Volumes path
@@ -38,10 +41,12 @@ object HadoopUtils {
         }
     }
 
+    /** Lists non-directory files under inPath using hadoopConf. */
     def listHadoopFiles(inPath: String): Seq[String] = {
         listHadoopFiles(inPath, hadoopConf)
     }
 
+    /** Lists non-directory files under inPath using the given Hadoop config. */
     def listHadoopFiles(inPath: String, hconf: SerializableConfiguration): Seq[String] = {
         val path = new Path(new URI(cleanPath(inPath)))
         val fs = path.getFileSystem(hconf.value)
@@ -50,12 +55,19 @@ object HadoopUtils {
             .map(_.getPath.toString)
     }
 
+    /** Returns the first file (by name) under inPath; used for schema inference from a single file. */
     def getFirstFile(inPath: String, hconf: SerializableConfiguration): String = {
         val path = new Path(new URI(cleanPath(inPath)))
         val fs = path.getFileSystem(hconf.value)
-        fs.listFiles(path, false).next().getPath.toString
+        val status = fs.getFileStatus(path)
+        if (status.isDirectory) {
+            fs.listFiles(path, false).next().getPath.toString
+        } else {
+            path.toString
+        }
     }
 
+    /** Lists immediate subdirectories under inPath (non-recursive). */
     def listHadoopDirs(inPath: String, hconf: SerializableConfiguration): Seq[String] = {
         val path = new Path(new URI(cleanPath(inPath)))
         val fs = path.getFileSystem(hconf.value)
@@ -66,6 +78,7 @@ object HadoopUtils {
             .map(_.getPath.toString)
     }
 
+    /** Recursively lists files under inPath, optionally filtered by regex and excluding empty files. */
     def listAllHadoopFiles(
         inPath: String,
         hconf: SerializableConfiguration,
@@ -90,6 +103,7 @@ object HadoopUtils {
         files
     }
 
+    /** Copies a file or directory from inPath to outPath; returns path to copied item in outDir. */
     def copyToPath(
         inPath: String,
         outPath: String,
@@ -107,6 +121,7 @@ object HadoopUtils {
         copyToLocalDir(copyFromPath.toString, outputDir, hconf)
     }
 
+    /** Copies files from srcFs whose names start with baseSrcPath prefix into dstDirPath on dstFs. */
     def copyRelativeFiles(
         srcFs: FileSystem,
         dstFs: FileSystem,
@@ -131,6 +146,7 @@ object HadoopUtils {
         }
     }
 
+    /** Copies inPath (file or dir) into outDir; for multi-file sources (e.g. .shp) copies all related files. Returns path to result. */
     def copyToLocalDir(inPath: String, outDir: String, hConf: SerializableConfiguration): String = {
         val copyFromPath = new Path(cleanPath(inPath))
         val outDirPath = new Path(cleanPath(outDir))
@@ -151,15 +167,7 @@ object HadoopUtils {
         }
     }
 
-    /**
-      * Reads the content of the file.
-      * @param fs
-      *   File system.
-      * @param status
-      *   File status.
-      * @return
-      *   An array of bytes.
-      */
+    /** Reads file at status.getPath into a byte array; caller closes stream via try/finally. */
     def readContent(fs: FileSystem, status: FileStatus): Array[Byte] = {
         val stream = fs.open(status.getPath)
         try { // noinspection UnstableApiUsage
@@ -169,6 +177,7 @@ object HadoopUtils {
         }
     }
 
+    /** Deletes the path recursively if it exists. */
     def deleteIfExists(tmpPath: String, hconf: SerializableConfiguration): Unit = {
         val cleanPath = HadoopUtils.cleanPath(tmpPath)
         val path = new Path(cleanPath)
@@ -178,6 +187,7 @@ object HadoopUtils {
         }
     }
 
+    /** Returns total size in bytes (file length or directory content summary). */
     def getSize(path: String, hConf: SerializableConfiguration): Long = {
         val cleanPath = new Path(HadoopUtils.cleanPath(path))
         val fs = cleanPath.getFileSystem(hConf.value)
@@ -189,14 +199,7 @@ object HadoopUtils {
         }
     }
 
-    /**
-      * Generates a UUID for the file.
-      *
-      * @param status
-      *   File status.
-      * @return
-      *   A UUID.
-      */
+    /** Murmur3 hash of path + length + modification time; used as stable file id. */
     def getUUID(status: FileStatus): Long = {
         val uuid = Murmur3.hash64(
           status.getPath.toString.getBytes("UTF-8") ++

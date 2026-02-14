@@ -1,0 +1,174 @@
+---
+sidebar_position: 1
+---
+
+# Readers Overview
+
+GeoBrix provides Spark readers for geospatial file formats. Readers are automatically registered when the GeoBrix JAR is on the classpath.
+
+## Available Readers
+
+### Raster Readers (GDAL-based)
+
+| Reader | Format Name | Description |
+|--------|-------------|-------------|
+| [GDAL Reader](./gdal) | `gdal` | Generic reader for any GDAL-supported raster format |
+| [GeoTIFF Reader](./gtiff) | `gtiff_gdal` | Named reader for GeoTIFF files (preset `driver="GTiff"`) |
+
+### Vector Readers (OGR-based)
+
+| Reader | Format Name | Description |
+|--------|-------------|-------------|
+| [OGR Reader](./ogr) | `ogr` | Generic reader for any OGR-supported vector format |
+| [Shapefile Reader](./shapefile) | `shapefile_ogr` | Named reader for ESRI Shapefiles |
+| [GeoJSON Reader](./geojson) | `geojson_ogr` | Named reader for GeoJSON/GeoJSONSeq |
+| [GeoPackage Reader](./geopackage) | `gpkg_ogr` | Named reader for GeoPackage |
+| [FileGDB Reader](./filegdb) | `file_gdb_ogr` | Named reader for ESRI File Geodatabase |
+
+## Basic Usage
+
+All readers follow the same pattern:
+
+```python
+# Python
+df = spark.read.format("<reader_name>").load("/path/to/file")
+
+# Scala
+val df = spark.read.format("<reader_name>").load("/path/to/file")
+```
+
+```sql
+-- SQL
+SELECT * FROM <reader_name>.`/path/to/file`;
+```
+
+### Examples
+
+**Raster (GeoTIFF)**:
+```python
+df = spark.read.format("gtiff_gdal").load("/path/to/raster.tif")
+```
+
+**Vector (Shapefile)**:
+```python
+df = spark.read.format("shapefile_ogr").load("/path/to/data.shp")
+```
+
+**Generic (any format)**:
+```python
+# Generic GDAL for rasters
+df = spark.read.format("gdal").option("driver", "NetCDF").load("/path/to/data.nc")
+
+# Generic OGR for vectors
+df = spark.read.format("ogr").option("driverName", "KML").load("/path/to/data.kml")
+```
+
+## Output Schemas
+
+### Raster Output
+
+_Produces the standard `tile` format used by GeoBrix APIs._
+
+```
+root
+ |-- tile: struct
+     |-- cellid: bigint (grid cell ID, nullable)
+     |-- raster: binary (raster file content)
+     |-- metadata: map<string,string> (driver, extension, etc.)
+```
+
+See [Tile Structure](../api/tile-structure) for detailed field descriptions.
+
+### Vector Output
+
+_Output will vary, depending on format / driver conventions._
+
+```
+root
+ |-- geom_0: binary (geometry in WKB format)
+ |-- geom_0_srid: integer (spatial reference ID)
+ |-- geom_0_srid_proj: string (projection definition)
+ |-- <attribute_columns>: various (feature attributes)
+```
+
+## Path Types
+
+All readers support:
+- **Single file**: `/path/to/file.tif`
+- **Directory**: `/path/to/directory/`
+- **Wildcard**: `/path/to/*.tif`
+- **Cloud storage**: `s3://bucket/path`, `abfss://...`, `gs://bucket/path`
+- **Unity Catalog Volumes**: `/Volumes/catalog/schema/volume/path`
+
+## Common Options
+
+### Raster Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `driver` | Auto-detect | GDAL driver name (e.g., "GTiff", "NetCDF") |
+| `sizeInMB` | `"16"` | Split threshold for large files |
+| `filterRegex` | `".*"` | Filter files by regex pattern |
+
+### Vector Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `driverName` | Auto-detect | OGR driver name (e.g., "ESRI Shapefile") |
+| `chunkSize` | `"10000"` | Records per chunk for parallel reading |
+| `layerName` | `""` | Layer name for multi-layer formats |
+| `layerN` | `"0"` | Layer index for multi-layer formats |
+| `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text) |
+
+## Reader Types Explained
+
+**Generic Readers** (`gdal`, `ogr`):
+- Work with any format supported by GDAL/OGR
+- Require `driver` or `driverName` option for non-standard formats
+- Use when format doesn't have a named reader
+
+**Named Readers** (`gtiff_gdal`, `shapefile_ogr`, etc.):
+- Preset the driver option for common formats
+- Cleaner syntax, no driver option needed
+- Recommended for supported formats
+
+**Example**:
+```python
+# Named reader (cleaner)
+df = spark.read.format("gtiff_gdal").load("/path/to/file.tif")
+
+# Generic reader (more verbose, same result)
+df = spark.read.format("gdal").option("driver", "GTiff").load("/path/to/file.tif")
+```
+
+## Performance Tips
+
+1. **Use appropriate split size for rasters**:
+   ```python
+   df = spark.read.format("gdal").option("sizeInMB", "32").load("/path")
+   ```
+
+2. **Use chunk size for vectors**:
+   ```python
+   df = spark.read.format("ogr").option("chunkSize", "50000").load("/path")
+   ```
+
+3. **Filter files with regex**:
+   ```python
+   df = spark.read.format("gdal").option("filterRegex", ".*_2024.*\\.tif").load("/path")
+   ```
+
+4. **Write data after read to a table (avoid repeat loading from file)**:
+   ```python
+   df = spark.read.format("shapefile_ogr").load("/path").write.saveAsTable(...)
+   ```
+
+## Next Steps
+
+- [GDAL Reader](./gdal) - Generic raster reader
+- [GeoTIFF Reader](./gtiff) - Named GeoTIFF reader
+- [OGR Reader](./ogr) - Generic vector reader
+- [Shapefile Reader](./shapefile) - Named Shapefile reader
+- [GeoJSON Reader](./geojson) - Named GeoJSON reader
+- [GeoPackage Reader](./geopackage) - Named GeoPackage reader
+- [FileGDB Reader](./filegdb) - Named File Geodatabase reader

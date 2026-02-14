@@ -194,10 +194,10 @@ class BNG_ExpressionExecuteTest extends AnyFunSuite {
         kloop2.foreach(cell => (BNG.euclideanDistance(BNG.parse(cell), cellID2) <= 2) shouldBe true)
     }
 
-    test("BNG_PointAsBNG should return cell IDs of the point") {
-        val cellId = BNG_PointAsBNG.executeWKT("POINT (199222 230330)", 3)
+    test("BNG_PointAsCell should return cell IDs of the point") {
+        val cellId = BNG_PointAsCell.executeWKT("POINT (199222 230330)", 3)
         cellId shouldBe "SM9930"
-        val cellId2 = BNG_PointAsBNG.executeWKB(JTS.toWKB(JTS.fromWKT("POINT (199222 230330)")), 3)
+        val cellId2 = BNG_PointAsCell.executeWKB(JTS.toWKB(JTS.fromWKT("POINT (199222 230330)")), 3)
         cellId2 shouldBe "SM9930"
     }
 

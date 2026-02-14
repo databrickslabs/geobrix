@@ -1,0 +1,136 @@
+---
+sidebar_position: 5
+title: Beta Release Notes
+---
+
+# Beta Release Notes
+
+:::info Current version: 0.2.0
+The changes on this page are relative to 0.1.0 (and earlier).
+:::
+
+This page tracks **API and naming changes** since the GeoBrix project started. After the project is approved, formal release notes will take over; until then, use this as the single place to look up what changed and why.
+
+**Conventions:**
+- **baseline** — Name or behavior before the change (what to search for in old code or docs).
+- **Notes** — Short reason (e.g. standardize across languages, underscore standardization, _geometry → _geom).
+
+---
+
+## General
+
+| Baseline | Current | Notes |
+|----------|---------|--------|
+| Python import `geobrix.*` | `databricks.labs.gbx.*` | Match Scala package and published artifact; avoid namespace clashes. |
+| Extra underscores in function names (multi-word parts spelled with `_`) | Single underscore between prefix and compound (e.g. `rst_pixelwidth`, `gbx_bng_cellarea`) | Underscore standardization: one leading prefix, then one compound word; no `_` inside the operation name. |
+
+All specific function renames from that standardization are listed in the component tables below.
+
+---
+
+## RasterX
+
+| Baseline | Current | Notes |
+|----------|---------|--------|
+| (GDAL reader output column) `path` | `source` | Docs/tests aligned to GDAL reader output column name. |
+| `rst_band_metadata` / `gbx_rst_band_metadata` | `rst_bandmetadata` / `gbx_rst_bandmetadata` | Underscore standardization. |
+| `rst_bounding_box` / `gbx_rst_bounding_box` | `rst_boundingbox` / `gbx_rst_boundingbox` | Underscore standardization. |
+| `rst_pixel_width` / `gbx_rst_pixel_width` | `rst_pixelwidth` / `gbx_rst_pixelwidth` | Underscore standardization. |
+| `rst_pixel_height` / `gbx_rst_pixel_height` | `rst_pixelheight` / `gbx_rst_pixelheight` | Underscore standardization. |
+| `rst_num_bands` / `gbx_rst_num_bands` | `rst_numbands` / `gbx_rst_numbands` | Underscore standardization. |
+| `rst_pixel_count` / `gbx_rst_pixel_count` | `rst_pixelcount` / `gbx_rst_pixelcount` | Underscore standardization. |
+| `rst_scale_x` / `gbx_rst_scale_x` | `rst_scalex` / `gbx_rst_scalex` | Underscore standardization. |
+| `rst_scale_y` / `gbx_rst_scale_y` | `rst_scaley` / `gbx_rst_scaley` | Underscore standardization. |
+| `rst_upper_left_x` / `gbx_rst_upper_left_x` | `rst_upperleftx` / `gbx_rst_upperleftx` | Underscore standardization. |
+| `rst_upper_left_y` / `gbx_rst_upper_left_y` | `rst_upperlefty` / `gbx_rst_upperlefty` | Underscore standardization. |
+| `rst_geo_reference` / `gbx_rst_geo_reference` | `rst_georeference` / `gbx_rst_georeference` | Underscore standardization. |
+| `rst_get_nodata` / `gbx_rst_get_nodata` | `rst_getnodata` / `gbx_rst_getnodata` | Underscore standardization. |
+| `rst_get_subdataset` / `gbx_rst_get_subdataset` | `rst_getsubdataset` / `gbx_rst_getsubdataset` | Underscore standardization. |
+| `rst_mem_size` / `gbx_rst_mem_size` | `rst_memsize` / `gbx_rst_memsize` | Underscore standardization. |
+| `rst_sub_datasets` / `gbx_rst_sub_datasets` | `rst_subdatasets` / `gbx_rst_subdatasets` | Underscore standardization. |
+| `rst_combine_avg_agg` / `gbx_rst_combine_avg_agg` | `rst_combineavg_agg` / `gbx_rst_combineavg_agg` | Underscore standardization. |
+| `rst_derived_band_agg` / `gbx_rst_derived_band_agg` | `rst_derivedband_agg` / `gbx_rst_derivedband_agg` | Underscore standardization. |
+| `rst_from_content` / `gbx_rst_from_content` | `rst_fromcontent` / `gbx_rst_fromcontent` | Underscore standardization. |
+| `rst_from_file` / `gbx_rst_from_file` | `rst_fromfile` / `gbx_rst_fromfile` | Underscore standardization. |
+| `rst_from_bands` / `gbx_rst_from_bands` | `rst_frombands` / `gbx_rst_frombands` | Underscore standardization. |
+| `rst_make_tiles` / `gbx_rst_make_tiles` | `rst_maketiles` / `gbx_rst_maketiles` | Underscore standardization. |
+| `rst_re_tile` / `gbx_rst_re_tile` | `rst_retile` / `gbx_rst_retile` | Underscore standardization. |
+| `rst_separate_bands` / `gbx_rst_separate_bands` | `rst_separatebands` / `gbx_rst_separatebands` | Underscore standardization. |
+| `rst_to_overlapping_tiles` / `gbx_rst_to_overlapping_tiles` | `rst_tooverlappingtiles` / `gbx_rst_tooverlappingtiles` | Underscore standardization. |
+| `rst_init_nodata` / `gbx_rst_init_nodata` | `rst_initnodata` / `gbx_rst_initnodata` | Underscore standardization. |
+| `rst_is_empty` / `gbx_rst_is_empty` | `rst_isempty` / `gbx_rst_isempty` | Underscore standardization. |
+| `rst_map_algebra` / `gbx_rst_map_algebra` | `rst_mapalgebra` / `gbx_rst_mapalgebra` | Underscore standardization. |
+| `rst_raster_to_world_coord` / `gbx_rst_raster_to_world_coord` (and X/Y variants) | `rst_rastertoworldcoord` / `gbx_rst_rastertoworldcoord` (and X/Y) | Underscore standardization. |
+| `rst_world_to_raster_coord` / `gbx_rst_world_to_raster_coord` (and X/Y variants) | `rst_worldtorastercoord` / `gbx_rst_worldtorastercoord` (and X/Y) | Underscore standardization. |
+| `rst_as_format` / `gbx_rst_as_format` | `rst_asformat` / `gbx_rst_asformat` | Underscore standardization. |
+| `rst_combine_avg` / `gbx_rst_combine_avg` | `rst_combineavg` / `gbx_rst_combineavg` | Underscore standardization. |
+| `rst_h3_raster_to_grid_avg` (and Count/Max/Min/Median) | `rst_h3_rastertogridavg` (and Count/Max/Min/Median) | Underscore standardization. |
+| `rst_bandmetadata(tile)` (single arg) | `rst_bandmetadata(tile, band)` | Required `band` parameter added; use e.g. `rst_bandmetadata("tile", f.lit(1))`. |
+
+---
+
+## GridX (BNG)
+
+| Baseline | Current | Notes |
+|----------|---------|--------|
+| `bng_eastnortasbng` (Python) / `gbx_bng_eastnortasbng` (SQL) | `bng_eastnorthasbng` / `gbx_bng_eastnorthasbng` | Standardize across languages (Python had typo; Scala already `eastnorth`). |
+| `bng_cell_area` / `gbx_bng_cell_area` | `bng_cellarea` / `gbx_bng_cellarea` | Underscore standardization. |
+| `bng_cell_intersection` / `gbx_bng_cell_intersection` | `bng_cellintersection` / `gbx_bng_cellintersection` | Underscore standardization. |
+| `bng_cell_union` / `gbx_bng_cell_union` | `bng_cellunion` / `gbx_bng_cellunion` | Underscore standardization. |
+| `bng_euclidean_distance` / `gbx_bng_euclidean_distance` | `bng_euclideandistance` / `gbx_bng_euclideandistance` | Underscore standardization. |
+| `bng_point_as_bng` / `gbx_bng_point_as_bng` | `bng_pointascell` / `gbx_bng_pointascell` | Underscore standardization; Renamed for clarity: point → cell (not "point as BNG"). |
+| `bng_cell_intersection_agg` / `gbx_bng_cell_intersection_agg` | `bng_cellintersection_agg` / `gbx_bng_cellintersection_agg` | Underscore standardization. |
+| `bng_cell_union_agg` / `gbx_bng_cell_union_agg` | `bng_cellunion_agg` / `gbx_bng_cellunion_agg` | Underscore standardization. |
+| `bng_geometry_kring` / `gbx_bng_geometry_kring` | `bng_geomkring` / `gbx_bng_geomkring` | _geometry → _geom in name. |
+| `bng_geometry_kloop` / `gbx_bng_geometry_kloop` | `bng_geomkloop` / `gbx_bng_geomkloop` | _geometry → _geom in name. |
+| `bng_geometry_kring_explode` / `gbx_bng_geometry_kring_explode` | `bng_geomkringexplode` / `gbx_bng_geomkringexplode` | _geometry → _geom + underscore standardization. |
+| `bng_geometry_kloop_explode` / `gbx_bng_geometry_kloop_explode` | `bng_geomkloopexplode` / `gbx_bng_geomkloopexplode` | _geometry → _geom + underscore standardization. |
+| `bng_k_ring` / `gbx_bng_k_ring` | `bng_kring` / `gbx_bng_kring` | Underscore standardization. |
+| `bng_k_loop` / `gbx_bng_k_loop` | `bng_kloop` / `gbx_bng_kloop` | Underscore standardization. |
+| `bng_k_ring_explode` / `gbx_bng_k_ring_explode` | `bng_kringexplode` / `gbx_bng_kringexplode` | Underscore standardization. |
+| `bng_k_loop_explode` / `gbx_bng_k_loop_explode` | `bng_kloopexplode` / `gbx_bng_kloopexplode` | Underscore standardization. |
+| `bng_tessellate_explode` / `gbx_bng_tessellate_explode` | `bng_tessellateexplode` / `gbx_bng_tessellateexplode` | Underscore standardization. |
+
+---
+
+## VectorX
+
+| Baseline | Current | Notes |
+|----------|---------|--------|
+| (Schema/column) `_geometry` | `_geom` | Standardize geometry column suffix across readers and examples. |
+| `st_legacy_as_wkb` / `gbx_st_legacy_as_wkb` | `st_legacyaswkb` / `gbx_st_legacyaswkb` | Underscore standardization. |
+
+---
+
+## Readers
+
+| Baseline | Current | Notes |
+|----------|---------|--------|
+| `shapefile` | `shapefile_ogr` | Reader namespace: format + engine to avoid conflicts with other Spark extensions. |
+| `geojson` | `geojson_ogr` | Same. |
+| `ogr_gpkg` | `gpkg_ogr` | Same; consistent format_engine order. |
+| `file_gdb` | `file_gdb_ogr` | Same. |
+| (none) | `gtiff_gdal` | **New** reader: named GDAL reader for GeoTIFF; use instead of `gdal` with `option("driver", "GTiff")`. |
+
+:::info
+Reader renames above are planned for 0.2.0. Beta (0.1.x) may still expose the baseline names in some contexts.
+:::
+
+---
+
+## How to use this page
+
+- **Migrating code:** Search for the **baseline** name in your code or config; replace with **Current** and apply any behavior notes.
+- **Docs or tests:** After a change, add one row here so future readers know what changed and why.
+- **After approval:** Move content into formal release notes (e.g. per-version sections) and keep this page for historical beta-only changes, or retire it.
+
+---
+
+## Notable improvements and fixes
+
+- **Python package rename:** Imports changed from `geobrix.*` to `databricks.labs.gbx.*` to align with Scala and the published artifact; update all import statements and environment references.
+- **Init script / NumPy:** Init script updated to install NumPy 2.x so GDAL Python array operations execute correctly; fixes runtime failures in `gbx_rst_mapalgebra` and `gbx_rst_ndvi` when used with array-based paths.
+- **Error handling:** Functions that previously threw exceptions during execution now surface errors more clearly (e.g. return null or a controlled default with error messages captured) instead of failing with opaque stack traces.
+- **RasterX `rst_bandmetadata`:** A required `band` argument was added; call as `rst_bandmetadata(tile, band)` (e.g. `rst_bandmetadata("tile", f.lit(1))`) in Python/SQL/Scala.
+- **GDAL reader column:** Raster DataFrames from the GDAL reader use the column name `source` (not `path`) for the file path; update any code or docs that assumed `path`.
+- **BNG aggregators (`bng_cellunion_agg`, `bng_cellintersection_agg`):** Fixed a bug where aggregation buffers were shared across partitions (and across tests in the same JVM), causing incorrect `core` flags when running full test suites or with multiple partitions. Each partition now gets a fresh buffer. Chip fields are resolved by type/name in the union aggregator for robustness to struct field order. Test expectation corrected for “all core chips” intersection: result is now correctly documented as `core=true` (whole cell).

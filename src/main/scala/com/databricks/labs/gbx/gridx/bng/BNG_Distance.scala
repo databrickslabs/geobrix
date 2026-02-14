@@ -7,6 +7,7 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Expression that returns the grid distance between two BNG cells. Arguments: cellId, cellId2. */
 case class BNG_Distance(
     cellId: Expression,
     cellId2: Expression
@@ -21,6 +22,7 @@ case class BNG_Distance(
 
 }
 
+/** Companion: SQL name gbx_bng_distance, builder, and eval. */
 object BNG_Distance extends WithExpressionInfo {
 
     def eval(cellId: Long, cellId2: Long): Long = execute(cellId, cellId2)
@@ -38,13 +40,5 @@ object BNG_Distance extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_Distance(c(0), c(1))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

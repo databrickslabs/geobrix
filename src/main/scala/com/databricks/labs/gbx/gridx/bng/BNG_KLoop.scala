@@ -8,6 +8,7 @@ import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Expression that returns the k-loop (hollow ring) of cell IDs at distance k. Arguments: cellId, k. */
 case class BNG_KLoop(
     cellId: Expression,
     k: Expression
@@ -22,6 +23,7 @@ case class BNG_KLoop(
 
 }
 
+/** Companion: SQL name gbx_bng_kloop, builder, and eval. */
 object BNG_KLoop extends WithExpressionInfo {
 
     def eval(cellId: UTF8String, k: Int): ArrayData = {
@@ -46,13 +48,5 @@ object BNG_KLoop extends WithExpressionInfo {
 
     override def name: String = "gbx_bng_kloop"
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

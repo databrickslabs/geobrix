@@ -17,6 +17,7 @@ case class RST_RasterToWorldCoord(
     y: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, x, y, ExpressionConfigExpr())
     override def dataType: DataType =
@@ -33,7 +34,7 @@ case class RST_RasterToWorldCoord(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_RasterToWorldCoord extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, x: Int, y: Int, conf: UTF8String): InternalRow = eval(row, x, y, conf, StringType)
@@ -61,21 +62,5 @@ object RST_RasterToWorldCoord extends WithExpressionInfo {
     override def name: String = "gbx_rst_rastertoworldcoord"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_RasterToWorldCoord(c(0), c(1), c(2))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Computes the world coordinates of the raster tile at the given x and y pixel coordinates."
-
-    override def usageArgs: String = "tile, pixel_x, pixel_y"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, 3, 3) AS tile FROM table;
-           |      POINT (-179.85000609927647 89.84999847624096)
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, pixel_x: Int, pixel_y: Int"
 
 }

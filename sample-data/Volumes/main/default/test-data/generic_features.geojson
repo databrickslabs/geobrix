@@ -1,0 +1,140 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "id": 1,
+      "properties": {
+        "name": "Central Park",
+        "type": "park",
+        "area": 341.15,
+        "description": "Large urban park in Manhattan"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -73.9730,
+              40.7644
+            ],
+            [
+              -73.9730,
+              40.8004
+            ],
+            [
+              -73.9495,
+              40.8004
+            ],
+            [
+              -73.9495,
+              40.7644
+            ],
+            [
+              -73.9730,
+              40.7644
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 2,
+      "properties": {
+        "name": "Empire State Building",
+        "type": "building",
+        "area": 0.05,
+        "description": "Iconic skyscraper in Midtown Manhattan"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -73.9857,
+          40.7484
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 3,
+      "properties": {
+        "name": "Brooklyn Bridge",
+        "type": "bridge",
+        "length": 1.825,
+        "description": "Historic suspension bridge connecting Manhattan and Brooklyn"
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [
+            -73.9970,
+            40.7061
+          ],
+          [
+            -73.9936,
+            40.7054
+          ],
+          [
+            -73.9903,
+            40.7047
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 4,
+      "properties": {
+        "name": "Times Square",
+        "type": "plaza",
+        "area": 0.01,
+        "description": "Major commercial intersection in Midtown Manhattan"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          -73.9855,
+          40.7580
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "id": 5,
+      "properties": {
+        "name": "Prospect Park",
+        "type": "park",
+        "area": 237.0,
+        "description": "Urban park in Brooklyn"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -73.9697,
+              40.6602
+            ],
+            [
+              -73.9697,
+              40.6748
+            ],
+            [
+              -73.9540,
+              40.6748
+            ],
+            [
+              -73.9540,
+              40.6602
+            ],
+            [
+              -73.9697,
+              40.6602
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}

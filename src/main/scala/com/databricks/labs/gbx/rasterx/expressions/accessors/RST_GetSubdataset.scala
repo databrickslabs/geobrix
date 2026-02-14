@@ -17,6 +17,7 @@ case class RST_GetSubdataset(
     subsetName: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, subsetName, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
@@ -27,7 +28,7 @@ case class RST_GetSubdataset(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_GetSubdataset extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, subsetName: UTF8String, conf: UTF8String): InternalRow = eval(row, subsetName, conf, StringType)
@@ -60,21 +61,5 @@ object RST_GetSubdataset extends WithExpressionInfo {
     override def name: String = "gbx_rst_getsubdataset"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_GetSubdataset(c(0), c(1))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Returns the subdataset of the raster tile with a given name."
-
-    override def usageArgs: String = "tile, subset_name"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, 'sst') AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, subset_name: String"
 
 }

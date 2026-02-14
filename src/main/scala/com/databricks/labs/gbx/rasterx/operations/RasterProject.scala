@@ -5,24 +5,10 @@ import com.databricks.labs.gbx.rasterx.operator.GDALWarp
 import org.gdal.gdal.Dataset
 import org.gdal.osr.SpatialReference
 
-/**
-  * RasterProject is an object that defines the interface for projecting a
-  * raster.
-  */
+/** Projects a raster to a new CRS via GDAL Warp (-t_srs); returns (Dataset, metadata). Caller must release. */
 object RasterProject {
 
-    /**
-      * Projects a raster to a new CRS. The method handles all the abstractions
-      * over GDAL Warp. It uses cubic resampling to ensure that the output is
-      * smooth.
-      *
-      * @param ds
-      *   The raster to project.
-      * @param dstSR
-      *   The destination spatial reference.
-      * @return
-      *   A projected raster.
-      */
+    /** Warps ds to dstSR (auth:code); writes to vsimem. */
     def project(ds: Dataset, options: Map[String, String], dstSR: SpatialReference): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val driver = ds.GetDriver()

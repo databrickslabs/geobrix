@@ -17,6 +17,7 @@ case class RST_Merge(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile array element struct. */
     private def rasterType = tileExpr.dataType.asInstanceOf[ArrayType].elementType.asInstanceOf[StructType].fields(1).dataType
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
@@ -27,7 +28,7 @@ case class RST_Merge(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Merge extends WithExpressionInfo {
 
     def evalPath(array: ArrayData, conf: UTF8String): InternalRow = eval(array, conf, StringType)
@@ -58,21 +59,5 @@ object RST_Merge extends WithExpressionInfo {
     override def name: String = "gbx_rst_merge"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Merge(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Combines a collection of raster tiles into a single raster."
-
-    override def usageArgs: String = "tiles"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(array(tile1, tile2, tile3)) AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_ARRAY_TYPE_}"
 
 }

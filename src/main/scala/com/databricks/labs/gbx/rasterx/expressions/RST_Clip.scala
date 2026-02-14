@@ -23,6 +23,7 @@ case class RST_Clip(
     cutlineAllTouchedExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, geometryExpr, cutlineAllTouchedExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
@@ -33,7 +34,7 @@ case class RST_Clip(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Clip extends WithExpressionInfo {
 
     def evalBinary(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String): InternalRow =
@@ -80,20 +81,5 @@ object RST_Clip extends WithExpressionInfo {
     override def name: String = "gbx_rst_clip"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Clip(c(0), c(1), c(2))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String = "Clips tile using provided clip Geometry in a supported encoding (WKB, WKT)."
-
-    override def usageArgs: String = "tile, clip, cutline_all_touched"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, clip_geom, true);
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, clip: <WKB | WKT>, cutline_all_touched: Boolean"
 
 }

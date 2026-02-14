@@ -16,6 +16,7 @@ case class RST_MemSize(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = LongType
@@ -26,7 +27,7 @@ case class RST_MemSize(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MemSize extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): Long = eval(row, conf, StringType)
@@ -54,21 +55,5 @@ object RST_MemSize extends WithExpressionInfo {
     override def name: String = "gbx_rst_memsize"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_MemSize(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Returns size of the raster tile in bytes."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      730260
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

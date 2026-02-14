@@ -2,9 +2,10 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import org.gdal.gdal.Dataset
 
-/** OverlappingTiles is a helper object for retiling rasters. */
+/** Generates overlapping tile windows and retiles a raster with a given overlap percentage. */
 object OverlappingTiles {
 
+    /** Returns (x, y, xSize, ySize) windows with step = tileSize - overlap. */
     def generateWindows(
         ds: Dataset,
         tileWidth: Int,
@@ -24,22 +25,7 @@ object OverlappingTiles {
         }
     }
 
-    /**
-      * Retiles a raster into overlapping tiles.
-      * @note
-      *   The overlap percentage is a percentage of the tile size.
-      *
-      * @param ds
-      *   The raster to retile.
-      * @param tileWidth
-      *   The width of the tiles.
-      * @param tileHeight
-      *   The height of the tiles.
-      * @param overlapPercentage
-      *   The percentage of overlap between tiles.
-      * @return
-      *   A sequence of Raster objects.
-      */
+    /** Iterator of (Dataset, metadata) over overlapping windows. Overlap is a percentage of tile size. Caller must release; iterator is AutoCloseable via ReTile. */
     def reTileIter(
         ds: Dataset,
         options: Map[String, String],

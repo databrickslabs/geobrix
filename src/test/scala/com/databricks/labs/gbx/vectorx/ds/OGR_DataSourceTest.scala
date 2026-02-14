@@ -30,7 +30,7 @@ class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
         res_sp1.foreach(v => v should be >= 0.0)
 
         val res_sp2 = spark.read
-            .format("shapefile")
+            .format("shapefile_ogr")
             .option("chunkSize", "100")
             .load(shpPath)
 
@@ -41,7 +41,7 @@ class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
         val shpZipPath = this.getClass.getResource("/binary/shapefile/zip/tl_rd22_13037_addrfeat.zip").toString.replace("file:", "")
 
         val res_spz = spark.read
-            .format("shapefile")
+            .format("shapefile_ogr")
             .load(shpZipPath)
 
         res_spz.count() should be > 0L
@@ -51,7 +51,7 @@ class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
         val gdbZipPath = this.getClass.getResource("/binary/gdb/bridges.gdb.zip").toString.replace("file:", "")
 
         val res_gdb = spark.read
-            .format("file_gdb")
+            .format("file_gdb_ogr")
             .load(gdbZipPath)
 
         res_gdb.count() should be > 0L
@@ -61,13 +61,13 @@ class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
         val gjPath = this.getClass.getResource("/text/NYC_Taxi_Zones.geojson").toString.replace("file:", "")
 
         val res_gj1 = spark.read
-            .format("geojson")
+            .format("geojson_ogr")
             .load(gjPath)
 
         res_gj1.count() should be > 1L // newline geoms
 
         val res_gj2 = spark.read
-            .format("geojson")
+            .format("geojson_ogr")
             .option("multi", "false")
             .load(gjPath)
 
@@ -75,7 +75,7 @@ class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
 
         val gjAltPath = this.getClass.getResource("/text/sample.geojson").toString.replace("file:", "")
         val res_gj3 = spark.read
-            .format("geojson")
+            .format("geojson_ogr")
             .option("multi", "false")
             .load(gjAltPath)
 
@@ -86,7 +86,7 @@ class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
         val gpkgPath = this.getClass.getResource("/binary/gpkg/util_wastewater_discharge.gpkg").toString.replace("file:", "")
 
         val res_gpkg = spark.read
-            .format("ogr_gpkg")
+            .format("gpkg_ogr")
             .load(gpkgPath)
 
         res_gpkg.count() should be > 0L

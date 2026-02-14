@@ -1,0 +1,344 @@
+---
+description: Maven configuration and .m2 repository management in Docker
+alwaysApply: true
+---
+
+# Maven Configuration in GeoBrix
+
+## Custom Maven Setup
+
+GeoBrix uses a custom Maven configuration to optimize Docker container performance and avoid re-downloading dependencies on every container restart.
+
+### Key Configuration
+
+**Location**: `scripts/docker/m2/settings.xml`
+
+```xml
+<settings>
+    <!-- Custom local repository inside project (persisted on host) -->
+    <localRepository>/root/geobrix/scripts/docker/m2</localRepository>
+    
+    <!-- Default profile: skipScoverage for faster builds -->
+    <activeProfiles>
+        <activeProfile>skipScoverage</activeProfile>
+    </activeProfiles>
+</settings>
+```
+
+---
+
+## How It Works
+
+### 1. Persistent .m2 Repository
+
+**Default Maven**: `~/.m2/repository` (inside container, lost on restart)
+
+**GeoBrix Custom**: `/root/geobrix/scripts/docker/m2` (mapped to host filesystem)
+
+**Benefits**:
+- ✅ Dependencies persist across container restarts
+- ✅ No re-download of 100+ dependencies (~500MB)
+- ✅ Faster development cycle
+
+**Host Path**: `scripts/docker/m2/` (gitignored)
+
+---
+
+### 2. Default Profile: skipScoverage
+
+**Purpose**: Faster day-to-day compilation and testing without coverage instrumentation overhead.
+
+**Active by Default**: All Maven commands use `skipScoverage` profile unless explicitly overridden.
+
+**Impact**:
+```bash
+# Uses skipScoverage (fast)
+mvn compile
+mvn test
+mvn package
+
+# Explicitly uses standard profile (with scoverage)
+mvn package -P standard
+```
+
+---
+
+## Docker Initialization
+
+**Script**: `scripts/docker/extras/docker_init.sh`
+
+**Execution** (run once when container is first created):
+
+```bash
+# Step 1: Unset JAVA_TOOL_OPTIONS
+unset JAVA_TOOL_OPTIONS
+
+# Step 2: Install custom settings.xml
+mv /usr/local/share/maven/conf/settings.xml /usr/local/share/maven/conf/settings.xml.BAK
+cp /root/geobrix/scripts/docker/m2/settings.xml /usr/local/share/maven/conf
+
+# Step 3: Initial build (populates .m2 if needed)
+mvn clean package -DskipTests
+
+# Step 4: Build Python bindings
+pip install python/geobrix/ --break-system-packages
+```
+
+---
+
+## Profile Reference
+
+### POM Profiles
+
+**Location**: `pom.xml` (lines 294-343)
+
+| Profile | Purpose | Scoverage | Active By Default |
+|---------|---------|-----------|-------------------|
+| `standard` | Full build with coverage | Enabled | Yes (in POM) |
+| `skipScoverage` | Fast build without coverage | Disabled | Yes (in settings.xml) |
+
+**Precedence**: `settings.xml` overrides `pom.xml`, so `skipScoverage` wins.
+
+---
+
+## Coverage Commands and Profiles
+
+### How Coverage Commands Work
+
+**Challenge**: Default profile is `skipScoverage`, but coverage needs the `standard` profile.
+
+**Solution**: Coverage commands explicitly run full package goal which triggers scoverage.
+
+#### gbx:coverage:scala
+
+```bash
+# Command used
+mvn clean package -DskipTests=false -Dminimum.coverage=80
+
+# What happens:
+# 1. 'clean' removes previous builds
+# 2. 'package' phase triggers scoverage plugin (configured in standard profile)
+# 3. Even though skipScoverage is default, the explicit package goal works
+```
+
+**Why This Works**:
+- The `scoverage-maven-plugin` is configured in the `standard` profile
+- The `package` phase executes scoverage goals even with `skipScoverage` active
+- The plugin configuration is still present and functional
+
+---
+
+## Best Practices
+
+### For Development (Fast)
+
+```bash
+# Compile only (no coverage)
+mvn compile
+
+# Run tests (no coverage)
+mvn test -PskipScoverage
+
+# Full build (no coverage)
+mvn package -PskipScoverage -DskipTests=false
+```
+
+### For Coverage Analysis
+
+```bash
+# Use Cursor command (recommended)
+gbx:coverage:scala --open
+
+# Or manually
+mvn clean package -DskipTests=false
+```
+
+### For CI/CD
+
+```bash
+# Explicitly activate standard profile for coverage
+mvn clean package -P standard -DskipTests=false
+```
+
+---
+
+## Troubleshooting
+
+### Issue: Dependencies Not Found
+
+**Symptom**: Maven downloads dependencies even though they should be cached.
+
+**Cause**: Custom settings.xml not installed.
+
+**Solution**:
+```bash
+# Re-run docker init script
+docker exec geobrix-dev /bin/bash /root/geobrix/scripts/docker/extras/docker_init.sh
+```
+
+---
+
+### Issue: Coverage Not Generated
+
+**Symptom**: `mvn package` completes but no coverage report in `target/scoverage-report/`.
+
+**Cause 1**: skipScoverage profile active and scoverage plugin not triggered.
+
+**Solution**:
+```bash
+# Explicitly activate standard profile
+mvn clean package -P standard -DskipTests=false
+```
+
+**Cause 2**: Tests skipped.
+
+**Solution**:
+```bash
+# Ensure tests run
+mvn clean package -DskipTests=false
+```
+
+---
+
+### Issue: Slow Initial Build
+
+**Symptom**: First build after container creation takes 10+ minutes.
+
+**Cause**: `.m2` repository being populated for first time.
+
+**Expected**: This only happens once. Subsequent builds are fast (~1-2 minutes).
+
+**Progress**: Check `.m2` repository growth:
+```bash
+docker exec geobrix-dev du -sh /root/geobrix/scripts/docker/m2
+```
+
+---
+
+## .m2 Repository Management
+
+### Check Repository Size
+
+```bash
+# Inside container
+du -sh /root/geobrix/scripts/docker/m2
+
+# From host
+du -sh scripts/docker/m2
+```
+
+**Expected Size**: ~500MB-1GB (fully populated)
+
+---
+
+### Clean Repository (Force Fresh Download)
+
+⚠️ **Warning**: This will re-download all dependencies (~500MB)
+
+```bash
+# Stop container
+docker stop geobrix-dev
+
+# Remove .m2 on host
+rm -rf scripts/docker/m2/com
+rm -rf scripts/docker/m2/org
+rm -rf scripts/docker/m2/io
+
+# Restart container and rebuild
+docker start geobrix-dev
+docker exec geobrix-dev /bin/bash /root/geobrix/scripts/docker/extras/docker_init.sh
+```
+
+---
+
+### Backup .m2 Repository
+
+```bash
+# Create backup
+tar -czf m2-backup-$(date +%Y%m%d).tar.gz scripts/docker/m2/
+
+# Restore from backup
+tar -xzf m2-backup-YYYYMMDD.tar.gz
+```
+
+---
+
+## Integration with Cursor Commands
+
+All GeoBrix Cursor commands are aware of this Maven configuration:
+
+### Test Commands
+
+```bash
+# Scala unit tests - Uses skipScoverage (fast)
+gbx:test:scala
+
+# Scala docs tests - Uses skipScoverage (fast)
+gbx:test:scala-docs
+```
+
+### Coverage Commands
+
+```bash
+# Scala coverage - Explicitly triggers scoverage via 'package' goal
+gbx:coverage:scala --open
+```
+
+---
+
+## File Locations
+
+| File | Purpose |
+|------|---------|
+| `scripts/docker/m2/settings.xml` | Custom Maven settings |
+| `scripts/docker/m2/` | Local Maven repository (gitignored) |
+| `scripts/docker/extras/docker_init.sh` | Docker initialization script |
+| `pom.xml` | Maven project configuration with profiles |
+
+---
+
+## Environment Variables
+
+### JAVA_TOOL_OPTIONS
+
+**Unset in docker_init.sh**: Prevents Maven warnings and conflicts.
+
+```bash
+unset JAVA_TOOL_OPTIONS
+```
+
+**Effect**: Cleaner Maven output, fewer warnings.
+
+---
+
+### JUPYTER_PLATFORM_DIRS
+
+**Set in docker_init.sh**: Required for PySpark integration.
+
+```bash
+export JUPYTER_PLATFORM_DIRS=1
+```
+
+**Effect**: Suppresses Jupyter deprecation warnings in Python tests.
+
+---
+
+## References
+
+- **Custom Settings**: `scripts/docker/m2/settings.xml`
+- **Docker Init**: `scripts/docker/extras/docker_init.sh`
+- **POM Profiles**: `pom.xml` (lines 294-343)
+- **Cursor Commands**: `.cursor/rules/cursor-commands.mdc`
+
+---
+
+## Summary
+
+GeoBrix's custom Maven setup:
+1. ✅ **Persists dependencies** across container restarts
+2. ✅ **Defaults to fast builds** (skipScoverage profile)
+3. ✅ **Supports coverage** (explicit package goal)
+4. ✅ **Reduces startup time** from 10+ minutes to seconds
+5. ✅ **Integrates seamlessly** with Cursor commands
+
+**Key Takeaway**: The `.m2` repository lives inside the project (`scripts/docker/m2/`) and persists across container restarts, eliminating the need to re-download dependencies.

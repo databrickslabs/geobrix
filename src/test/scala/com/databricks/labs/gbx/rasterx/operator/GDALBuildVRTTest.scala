@@ -114,5 +114,35 @@ class GDALBuildVRTTest extends AnyFunSuite with BeforeAndAfterAll {
         resultDs.delete()
     }
 
+    test("GDALBuildVRT should reject invalid command") {
+        val vrtPath = "/vsimem/invalid.vrt"
+        val invalidCommand = "invalid_command"
+        
+        assertThrows[IllegalArgumentException] {
+            GDALBuildVRT.executeVRT(vrtPath, Array(ds1), Map.empty, invalidCommand)
+        }
+    }
+
+    test("GDALBuildVRT should bypass format options") {
+        val vrtPath = "/vsimem/format_bypass.vrt"
+        val command = "gdalbuildvrt"
+        // VRT commands should ignore format options in OperatorOptions.appendOptions
+        val (resultDs, metadata) = GDALBuildVRT.executeVRT(
+            vrtPath, 
+            Array(ds1), 
+            Map("format" -> "GTiff", "compression" -> "DEFLATE"), 
+            command
+        )
+
+        resultDs should not be null
+        resultDs.GetDriver().getShortName shouldBe "VRT"
+        // Command should not have added format options
+        metadata should contain key "last_command"
+        metadata("last_command") should not include("-of")
+
+        gdal.Unlink(vrtPath)
+        resultDs.delete()
+    }
+
 }
 

@@ -12,23 +12,22 @@
 /python/geobrix/test/vectorx/spark-warehouse/
 /python/geobrix/test/gridx/artifacts/
 /.github-bak/
-/.cursor/
 /metastore_db/
-/claude/
 /derby.log
 /test-logs/
-/ci-logs/
-
-# macOS files
+/ci-logs/# macOS files
 .DS_Store
-**/.DS_Store
-
-# Python cache and compiled files
+**/.DS_Store# Python cache and compiled files
 __pycache__/
 **/__pycache__/
 *.py[cod]
-*$py.class
-
-# Python compiled extensions (but NOT the GDAL library!)
+*$py.class# Python compiled extensions (but NOT the GDAL library!)
 *.so
 !scripts/gdal311/*.so
+/prompts/
+/sample-data/Volumes/main/default/geobrix_samples/
+/WORKFLOW-SETUP.md
+/.vscode/
+/.coverage
+/python/coverage-report/
+/python/geobrix/test/coverage-report/

@@ -10,11 +10,13 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
+/** Expression that returns the union of two BNG cell chips (binary). Case class holding leftChip, rightChip; used as the catalyst node when gbx_bng_cellunion(left, right) is invoked in SQL or DataFrame API. */
 case class BNG_CellUnion(
     leftChip: Expression,
     rightChip: Expression
 ) extends InvokedExpression {
 
+    /** Cell/chip ID DataType from the chip struct. */
     private def childType = leftChip.dataType.asInstanceOf[StructType].fields(0).dataType
     override def children: Seq[Expression] = Seq(leftChip, rightChip)
     override def dataType: DataType = BNG.cellType(childType)
@@ -29,6 +31,7 @@ case class BNG_CellUnion(
 
 }
 
+/** Companion: SQL name gbx_bng_cellunion, builder, and eval. */
 object BNG_CellUnion extends WithExpressionInfo {
 
     def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow = {
@@ -81,13 +84,5 @@ object BNG_CellUnion extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_CellUnion(c(0), c(1))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

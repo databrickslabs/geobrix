@@ -9,6 +9,7 @@ import org.locationtech.jts.linearref.LengthIndexedLine
 import java.util.Locale
 import scala.jdk.CollectionConverters._
 
+/** Delaunay triangulation from points and breaklines; interpolates Z at grid points and builds point grids. */
 object InterpolateElevation {
 
     object TriangulationSplitPointTypeEnum extends Enumeration {
@@ -28,6 +29,7 @@ object InterpolateElevation {
 
     }
 
+    /** Builds triangulation from multipoint and breaklines, then interpolates Z for each grid point. */
     def interpolate(
         multipoint: MultiPoint,
         breaklines: Seq[LineString],
@@ -65,6 +67,7 @@ object InterpolateElevation {
             .toSeq
     }
 
+    /** Returns constrained Delaunay triangles from multiPoint and optional breaklines. */
     def triangulate(
         multiPoint: Geometry,
         breaklines: Seq[Geometry],
@@ -84,6 +87,7 @@ object InterpolateElevation {
         postProcessedTrianglePolygons
     }
 
+    /** Snaps triangle vertices to constraint lines within tolerance and rebuilds polygons. */
     private def postProcessTriangulation(
         trianglePolygons: Seq[Polygon],
         constraintLineGeom: Geometry,
@@ -127,6 +131,7 @@ object InterpolateElevation {
         })
     }
 
+    /** Builds a regular grid of points (origin + xCells×yCells, cell sizes xSize×ySize). */
     def pointGrid(origin: Point, xCells: Int, yCells: Int, xSize: Double, ySize: Double): MultiPoint = {
         val gridPoints = for (i <- 0 until xCells; j <- 0 until yCells) yield {
             val x = origin.getX + i * xSize + xSize / 2

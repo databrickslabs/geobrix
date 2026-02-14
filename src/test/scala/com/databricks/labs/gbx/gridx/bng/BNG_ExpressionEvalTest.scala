@@ -34,25 +34,25 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
             df.select(
               bng_aswkb(df("cellId")),
               bng_aswkt(df("cellId")),
-              bng_cell_area(df("cellId")),
-              bng_cell_intersection(coreCell, coreCell),
-              bng_cell_intersection(coreCell, nonCoreCell),
-              bng_cell_intersection(nonCoreCell, coreCell),
-              bng_cell_intersection(nonCoreCell, nonCoreCell),
-              bng_cell_union(coreCell, coreCell),
-              bng_cell_union(coreCell, nonCoreCell),
-              bng_cell_union(nonCoreCell, coreCell),
-              bng_cell_union(nonCoreCell, nonCoreCell),
+              bng_cellarea(df("cellId")),
+              bng_cellintersection(coreCell, coreCell),
+              bng_cellintersection(coreCell, nonCoreCell),
+              bng_cellintersection(nonCoreCell, coreCell),
+              bng_cellintersection(nonCoreCell, nonCoreCell),
+              bng_cellunion(coreCell, coreCell),
+              bng_cellunion(coreCell, nonCoreCell),
+              bng_cellunion(nonCoreCell, coreCell),
+              bng_cellunion(nonCoreCell, nonCoreCell),
               bng_centroid(df("cellId")),
               bng_distance(df("cellId"), df("cellId")),
               bng_eastnorthasbng(lit(100000), lit(200000), lit(3)),
               bng_eastnorthasbng(lit(100000), lit(200000), lit("50m")),
               bng_euclideandistance(df("cellId"), df("cellId")),
-              bng_geometry_kring(lit(wkbLit), lit(1), lit(1)),
-              bng_geometry_kloop(lit(wkbLit), lit(1), lit(1)),
+              bng_geomkring(lit(wkbLit), lit(1), lit(1)),
+              bng_geomkloop(lit(wkbLit), lit(1), lit(1)),
               bng_kloop(df("cellId"), lit(1)),
               bng_kring(df("cellId"), lit(1)),
-              bng_pointasbng(lit(wkbLit), lit(1)),
+              bng_pointascell(lit(wkbLit), lit(1)),
               bng_polyfill(lit(wkbLit), lit(1)),
               bng_polyfill(lit(wkbLit), lit("50m")),
               bng_polyfill(lit(wktLit), lit(1)),
@@ -96,8 +96,8 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
                 .repartition(10)
                 .groupBy("dummy")
                 .agg(
-                  bng_cell_union_agg(col("cell")).as("unionCore"),
-                  bng_cell_intersection_agg(col("cell")).as("intersectCore")
+                  bng_cellunion_agg(col("cell")).as("unionCore"),
+                  bng_cellintersection_agg(col("cell")).as("intersectCore")
                 )
                 .write
                 .format("noop")
@@ -130,10 +130,10 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
             val wkbLit = JTS.toWKB(JTS.fromWKT("POLYGON ((0 0, 2 0, 2 1, 0 1, 0 0))"))
             val wktLit = "POLYGON ((0 0, 2 0, 2 1, 0 1, 0 0))"
             df.select(
-              bng_geometry_kloopexplode(lit(wktLit), lit(1), lit(1)),
-              bng_geometry_kloopexplode(lit(wkbLit), lit(1), lit(1)),
-              bng_geometry_kringexplode(lit(wktLit), lit(1), lit(1)),
-              bng_geometry_kringexplode(lit(wkbLit), lit(1), lit(1)),
+              bng_geomkloopexplode(lit(wktLit), lit(1), lit(1)),
+              bng_geomkloopexplode(lit(wkbLit), lit(1), lit(1)),
+              bng_geomkringexplode(lit(wktLit), lit(1), lit(1)),
+              bng_geomkringexplode(lit(wkbLit), lit(1), lit(1)),
               bng_kloopexplode(col("cellId"), lit(1)),
               bng_kringexplode(col("cellId"), lit(1)),
               bng_tessellateexplode(lit(wkbLit), lit(1)),

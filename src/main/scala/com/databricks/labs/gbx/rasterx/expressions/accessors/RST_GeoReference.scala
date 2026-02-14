@@ -12,11 +12,12 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Returns the georeference of the raster. */
+/** Expression that evaluates to the raster geotransform as a map (upperLeftX/Y, scaleX/Y, skewX/Y). */
 case class RST_GeoReference(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = MapType(StringType, DoubleType)
@@ -27,7 +28,7 @@ case class RST_GeoReference(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_GeoReference extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): MapData = eval(row, conf, StringType)
@@ -65,31 +66,5 @@ object RST_GeoReference extends WithExpressionInfo {
     override def name: String = "gbx_rst_georeference"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_GeoReference(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Returns GeoTransform of the raster tile as a Map."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      {"scaleY": -0.049999999152053956, "skewX": 0, "skewY": 0, "upperLeftY": 89.99999847369712,
-           |       "upperLeftX": -180.00000610436345, "scaleX": 0.050000001695656514}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
-
-    override def extendedDescription: String =
-    """The output takes the form of a MapType with the following keys:
-    | "upperLeftX" -> geoTransform(0)
-    | "upperLeftY" -> geoTransform(3)
-    | "scaleX" -> geoTransform(1)
-    | "scaleY" -> geoTransform(5)
-    | "skewX" -> geoTransform(2)
-    | "skewY" -> geoTransform(4)""".stripMargin
 
 }

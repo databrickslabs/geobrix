@@ -5,8 +5,10 @@ import org.gdal.ogr.{Geometry => OGRGeometry}
 import org.gdal.osr.SpatialReference
 import org.locationtech.jts.geom.{Geometry => JTSGeometry}
 
+/** Reprojects a JTS geometry from one OSR SpatialReference to another via OGR. */
 object OSRTransformGeometry {
 
+    /** Transforms the geometry from srcSR to dstSR; returns the same geometry if CRS are equal. */
     def transform(
         geom: JTSGeometry,
         srcSR: SpatialReference,

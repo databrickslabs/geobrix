@@ -4,21 +4,10 @@ import org.gdal.gdal.{BuildVRTOptions, Dataset, gdal}
 
 import scala.util.Try
 
-/** GDALBuildVRT is a wrapper for the GDAL BuildVRT command. */
+/** Runs gdal.BuildVRT to build a VRT from an array of Datasets; returns (Dataset, metadata). Caller must release. */
 object GDALBuildVRT {
 
-    /**
-      * Executes the GDAL BuildVRT command.
-      *
-      * @param outputPath
-      *   The output path of the VRT file.
-      * @param dss
-      *   The rasters to build the VRT from.
-      * @param command
-      *   The GDAL BuildVRT command.
-      * @return
-      *   A Raster object.
-      */
+    /** Builds VRT at outputPath from dss; returns (Dataset, newOptions). */
     def executeVRT(outputPath: String, dss: Array[Dataset], options: Map[String, String], command: String): (Dataset, Map[String, String]) = {
         require(command.startsWith("gdalbuildvrt"), "Not a valid GDAL Build VRT command.")
         val effectiveCommand = OperatorOptions.appendOptions(command, options, dss.head)

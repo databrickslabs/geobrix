@@ -1,0 +1,214 @@
+---
+description: Best practices for GDAL resource management and API usage
+alwaysApply: true
+---
+
+# GDAL Resource Management
+
+Proper patterns for working with GDAL resources to prevent memory leaks and errors.
+
+## Core Principles
+
+1. **Always release GDAL resources** - Datasets, bands, arrays must be explicitly released
+2. **Use `rst_fromcontent` over `rst_fromfile`** - Avoids temp file lifecycle issues
+3. **Proper API usage** - Use correct GDAL method signatures
+4. **Handle errors appropriately** - Suppress expected warnings, surface real errors
+
+## Pattern 1: Load Rasters with Binary Format
+
+### ✅ GOOD: Use `rst_fromcontent` with `binaryFile`
+
+**Python:**
+```python
+from databricks.labs.gbx.rasterx import functions as rx
+from pyspark.sql import functions as f
+
+# Read raster as binary content
+df = (spark.read
+    .format("binaryFile")
+    .load("/path/to/raster.tif")
+    .withColumn("tile", rx.rst_fromcontent("content", f.lit("GTiff")))
+)
+```
+
+**Benefits:**
+- ✅ Keeps raster data in memory
+- ✅ Avoids temp file cleanup race conditions
+- ✅ More reliable in distributed environments
+- ✅ Prevents `NullPointerException` from temp file issues
+
+### ❌ BAD: Using `rst_fromfile` with temp files
+
+```python
+# Temp files may be cleaned up before GDAL accesses them
+df = df.withColumn("tile", rx.rst_fromfile("path"))
+# Can cause: NullPointerException, file not found errors
+```
+
+## Pattern 2: Proper GDAL API Usage
+
+### ✅ GOOD: Correct method signatures
+
+**Scala:**
+```scala
+import org.gdal.gdal.{Dataset, Band}
+import org.gdal.gdalconst.gdalconstConstants._
+
+// Get statistics using MDArray
+val band: Band = dataset.GetRasterBand(1)
+val array = band.AsMDArray()
+val stats = array.GetStatistics()
+
+// stats.get("STATISTICS_MINIMUM") -> Double
+// stats.get("STATISTICS_MAXIMUM") -> Double
+```
+
+**Get NoData value:**
+```scala
+val nodataArray = Array.ofDim[java.lang.Double](1)
+band.GetNoDataValue(nodataArray)
+val nodata = nodataArray(0)
+```
+
+### ❌ BAD: Incorrect GDAL API usage
+
+```scala
+// Wrong - GetStatistics doesn't exist on Band directly
+val stats = band.GetStatistics()  // Compilation error!
+
+// Wrong - GetNoDataValue returns void, need output array
+val nodata = band.GetNoDataValue()  // Returns nothing!
+```
+
+## Pattern 3: Resource Cleanup
+
+### ✅ GOOD: Always release GDAL resources
+
+**Scala:**
+```scala
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+
+try {
+  val dataset = RasterDriver.readFromBytes(bytes, Map.empty)
+  // Use dataset
+  val result = processRaster(dataset)
+  result
+} finally {
+  // Always release!
+  RasterDriver.releaseDataset(dataset)
+}
+```
+
+**Python (in UDFs):**
+```python
+from databricks.labs.gbx.rasterx.gdal import RasterDriver
+
+def process_raster(binary_content):
+    ds = RasterDriver.readFromBytes(binary_content, {})
+    try:
+        # Process dataset
+        result = compute(ds)
+        return result
+    finally:
+        RasterDriver.releaseDataset(ds)
+```
+
+### ❌ BAD: Not releasing resources
+
+```scala
+val dataset = RasterDriver.readFromBytes(bytes, Map.empty)
+processRaster(dataset)
+// Memory leak! Dataset never released
+```
+
+## Pattern 4: Format Conversion
+
+### ✅ GOOD: Test actual format conversions
+
+```python
+# Test meaningful format change
+result = rx.rst_asformat(tile, f.lit("Zarr"))
+
+# Or test format options
+result = rx.rst_asformat(tile, f.lit("COG"), 
+    f.create_map(f.lit("COMPRESS"), f.lit("DEFLATE")))
+```
+
+### ❌ BAD: No-op format conversion
+
+```python
+# GTiff → GTiff is a no-op, doesn't test anything!
+result = rx.rst_asformat(tile, f.lit("GTiff"))
+
+# COG with unsupported options
+result = rx.rst_asformat(tile, f.lit("COG"),
+    f.create_map(f.lit("ZSTD_LEVEL"), f.lit("9")))  # GDAL warning!
+```
+
+## Pattern 5: Error Suppression
+
+### ✅ GOOD: Suppress expected PROJ warnings
+
+**Scala Test:**
+```scala
+import com.databricks.labs.gbx.rasterx.SilenceProjError
+
+class MyRasterTest extends AnyFunSuite 
+  with BeforeAndAfterAll 
+  with SilenceProjError {
+  
+  test("reproject raster") {
+    // PROJ "crs not found" warnings automatically suppressed
+    val result = RasterProject.execute(...)
+    assert(result != null)
+  }
+}
+```
+
+**Why:** Working with non-EPSG projections (like ESRI:54008) produces expected PROJ warnings. These are not errors - the code handles them correctly with EPSG:0 defaults.
+
+### ❌ BAD: Letting noise pollute test output
+
+```scala
+class MyRasterTest extends AnyFunSuite {
+  test("reproject raster") {
+    // 50+ lines of PROJ warnings in output!
+    // ERROR 1: PROJ: proj_create_from_database: crs not found
+    // ERROR 1: PROJ: proj_create_from_database: crs not found
+    // ...
+  }
+}
+```
+
+## Quick Reference
+
+### Common GDAL Operations
+
+```scala
+// Read dataset
+val ds = RasterDriver.readFromBytes(bytes, options)
+
+// Get band
+val band = ds.GetRasterBand(1)
+
+// Get statistics
+val array = band.AsMDArray()
+val stats = array.GetStatistics()
+val min = stats.get("STATISTICS_MINIMUM").asInstanceOf[Double]
+
+// Get NoData
+val nodataArray = Array.ofDim[java.lang.Double](1)
+band.GetNoDataValue(nodataArray)
+val nodata = nodataArray(0)
+
+// Always cleanup
+RasterDriver.releaseDataset(ds)
+```
+
+## Reference
+
+Based on test improvement sessions that resolved:
+- NullPointerException issues with temp files
+- GDAL API usage errors in multiple test files
+- 60% reduction in PROJ warning noise
+- Proper resource management patterns

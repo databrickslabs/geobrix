@@ -1,0 +1,144 @@
+---
+sidebar_position: 2
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.py';
+import rasterxScalaCode from '!!raw-loader!../../tests/scala/packages/RasterxPackageExamples.scala';
+
+# RasterX
+
+![RasterX](../../../resources/images/RasterX.png)
+
+:::tip Full API reference
+For the complete list of RasterX functions with parameters and examples, see the [RasterX Function Reference](../api/rasterx-functions).
+:::
+
+RasterX is GeoBrix's raster data processing package, providing comprehensive tools for working with raster datasets such as satellite imagery, elevation models, and other gridded spatial data.
+
+## Overview
+
+RasterX is a refactor and improvement of Mosaic raster functions. Since Databricks product does not (yet) support anything built-in specifically for raster processing, RasterX provides a "fully" gap-filling capability for raster operations on the Databricks platform.
+
+## Key Features
+
+- **GDAL-Powered**: Leverages GDAL for robust raster format support
+- **Distributed Processing**: Built on Spark for scalable raster operations
+- **Multiple Format Support**: GeoTIFF, NetCDF, and other GDAL-supported formats
+- **Metadata Extraction**: Comprehensive raster metadata access
+- **Raster Operations**: Clipping, resampling, transformations
+- **Band Operations**: Multi-band raster support
+
+## Function Categories
+
+### Accessors
+
+Functions to access raster properties and metadata:
+
+- `gbx_rst_boundingbox` - Bounding box of the raster
+- `gbx_rst_width` - Raster width in pixels
+- `gbx_rst_height` - Raster height in pixels
+- `gbx_rst_numbands` - Number of bands
+- `gbx_rst_metadata` - Raster metadata map
+- `gbx_rst_srid` - Spatial reference identifier
+- `gbx_rst_georeference` - Georeference parameters
+- `gbx_rst_pixelwidth`, `gbx_rst_pixelheight` - Pixel size
+- `gbx_rst_upperleftx`, `gbx_rst_upperlefty` - Upper-left corner
+- `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_rotation`, `gbx_rst_skewx`, `gbx_rst_skewy` - Geotransform components
+- `gbx_rst_format` - Raster format (e.g. GTiff)
+- `gbx_rst_getnodata` - NoData value
+- `gbx_rst_bandmetadata` - Band metadata
+- `gbx_rst_avg`, `gbx_rst_min`, `gbx_rst_max`, `gbx_rst_median` - Pixel statistics
+- `gbx_rst_pixelcount` - Number of pixels
+- `gbx_rst_memsize` - Approximate memory size
+- `gbx_rst_type` - Raster data type
+- `gbx_rst_summary` - Summary statistics
+- `gbx_rst_subdatasets` - Subdataset names (e.g. NetCDF/GRIB)
+- `gbx_rst_getsubdataset` - Open a subdataset by name
+
+### Constructors
+
+- `gbx_rst_fromfile` - Load raster from file path
+- `gbx_rst_fromcontent` - Create raster from binary content
+- `gbx_rst_frombands` - Build raster from band expressions
+
+### Transformations and operations
+
+- `gbx_rst_clip` - Clip raster by geometry
+- `gbx_rst_transform` - Reproject to a target CRS
+- `gbx_rst_merge` - Merge multiple rasters
+- `gbx_rst_combineavg` - Average multiple rasters (same extent)
+- `gbx_rst_asformat` - Write to a different format (e.g. COG)
+- `gbx_rst_convolve` - Convolution filter
+- `gbx_rst_filter` - Custom filter expression
+- `gbx_rst_mapalgebra` - Map algebra expression
+- `gbx_rst_derivedband` - Derive band via Python UDF
+- `gbx_rst_ndvi` - NDVI from red/NIR bands
+- `gbx_rst_dtmfromgeoms` - Rasterize geometries to DTM
+- `gbx_rst_initnodata` - Initialize NoData
+- `gbx_rst_updatetype` - Change raster data type
+- `gbx_rst_isempty` - Test if raster is empty
+- `gbx_rst_tryopen` - Open raster or return NULL on failure
+- `gbx_rst_rastertoworldcoord`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy` - Pixel to world coordinates
+- `gbx_rst_worldtorastercoord`, `gbx_rst_worldtorastercoordx`, `gbx_rst_worldtorastercoordy` - World to pixel coordinates
+
+### Generators
+
+- `gbx_rst_separatebands` - Explode multi-band raster into rows per band
+- `gbx_rst_retile` - Retile rasters to a given tile size
+- `gbx_rst_maketiles` - Build tiles from grid spec
+- `gbx_rst_tooverlappingtiles` - Overlapping tile grid
+- `gbx_rst_h3_tessellate` - Tessellate raster into H3 cells
+
+### H3 grid aggregation
+
+- `gbx_rst_h3_rastertogridavg` - Average raster values per H3 cell
+- `gbx_rst_h3_rastertogridcount` - Pixel count per H3 cell
+- `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridmedian` - Min/max/median per H3 cell
+
+### Aggregations
+
+- `gbx_rst_combineavg_agg` - Average multiple rasters (aggregate)
+- `gbx_rst_merge_agg` - Merge rasters with aggregation
+- `gbx_rst_derivedband_agg` - Derived band aggregate
+
+## Usage Examples
+
+### Python/PySpark
+
+<CodeFromTest
+  code={packagesExamples}
+  language="python"
+  source="docs/tests/python/packages/examples.py"
+  testFile="docs/tests/python/packages/test_examples.py"
+  functionName="rasterx_basic_usage"
+  outputConstant="rasterx_basic_usage_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={rasterxScalaCode}
+  language="scala"
+  source="docs/tests/scala/packages/RasterxPackageExamples.scala"
+  testFile="docs/tests/scala/packages/RasterxExamplesDocTest.scala"
+  functionName="RASTERX_SCALA_USAGE"
+  outputConstant="RASTERX_SCALA_USAGE_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={packagesExamples}
+  language="sql"
+  source="docs/tests/python/packages/examples.py"
+  testFile="docs/tests/python/packages/test_examples.py"
+  functionName="SQL_RASTERX_USAGE"
+  outputConstant="SQL_RASTERX_USAGE_output"
+/>
+
+## Next Steps
+
+- [View API Reference](../api/overview)
+- [Check Examples](../examples/overview)
+- [Learn about Readers](../readers/gdal)

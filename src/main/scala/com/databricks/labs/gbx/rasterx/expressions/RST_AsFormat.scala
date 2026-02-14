@@ -11,11 +11,13 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
+/** Expression that re-encodes the raster to a new GDAL format (e.g. COG, Zarr). Arguments: tile, newFormat. */
 case class RST_AsFormat(
     tileExpr: Expression,
     newFormat: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, newFormat, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
@@ -26,12 +28,13 @@ case class RST_AsFormat(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_AsFormat extends WithExpressionInfo {
 
     def evalBinary(row: InternalRow, newFormat: UTF8String, conf: UTF8String): InternalRow = eval(row, newFormat, conf, BinaryType)
     def evalPath(row: InternalRow, newFormat: UTF8String, conf: UTF8String): InternalRow = eval(row, newFormat, conf, StringType)
 
+    /** Converts tile to newFormat via TranslateFormat or returns unchanged row; uses safeEval. */
     private def eval(row: InternalRow, newFormat: UTF8String, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {
@@ -65,28 +68,5 @@ object RST_AsFormat extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_AsFormat(c(0), c(1))
 
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def usageArgs: String = "tile, new_format"
-
-    override def description: String = "Convert a tile to a new format."
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, new_format: String"
-
-    override def examples: String = {
-        s"""
-           |# showing notional python
-           |(
-           | spark.read.format("gdal")
-           |   .option("driverName", "netCDF")
-           | .load("/Volumes/geospatial_docs/geobrix/data/netcdf/")
-           |   .withColumn("tile", rx.rst_asformat("tile", f.lit("GTiff")))
-           | .write.format("gdal")
-           |   .mode("append")       # include "append" in the write
-           |   .option("ext", "tif") # 'tif' (default)
-           | .save("/Volumes/geospatial_docs/geobrix/data/out/netcdf-gtiff/")
-           |)""".stripMargin
-    }
-
-    override def extendedDescription: String = "You may find that some formats are not configured or just don't work."
 
 }

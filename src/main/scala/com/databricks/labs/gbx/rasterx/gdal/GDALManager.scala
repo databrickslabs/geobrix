@@ -7,6 +7,14 @@ import org.gdal.gdal.gdal
 import java.nio.file.{Files, Paths}
 import scala.util.{Success, Try}
 
+/**
+  * One-time GDAL environment setup for the JVM process (driver or executor).
+  *
+  * Initializes GDAL driver registration, config options (from ExpressionConfig), shared native
+  * libraries, and checkpoint paths. Must be called before any raster operations; typically
+  * triggered from [[com.databricks.labs.gbx.rasterx.functions.register]] or when the first
+  * raster expression runs on an executor.
+  */
 object GDALManager extends Logging {
 
     var isEnabled = false
@@ -14,6 +22,7 @@ object GDALManager extends Logging {
     var checkpointPath: String = _
     var useCheckpoint: Boolean = _
 
+    /** Initialize GDAL once per process; idempotent after first success. */
     def init(config: ExpressionConfig): Unit =
         lock.synchronized {
             if (!isEnabled) {
@@ -33,8 +42,8 @@ object GDALManager extends Logging {
             }
         }
 
+    /** Apply ExpressionConfig to GDAL options and store checkpoint settings for this process. */
     def configureGDAL(config: ExpressionConfig): Unit = {
-        // TODO: check the config propagation here
         val CPL_TMPDIR = config.configs.getOrElse("cpl_tmpdir", "/tmp/gdal")
         val GDAL_PAM_PROXY_DIR = config.configs.getOrElse("gdal_pam_proxy_dir", "/tmp/gdal/pam")
         configureGDAL(CPL_TMPDIR, GDAL_PAM_PROXY_DIR)

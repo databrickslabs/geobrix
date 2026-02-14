@@ -1,0 +1,79 @@
+---
+description: Critical context for every agent — rules layout, topic→subagent, commands vs skills, delegation. Read this first.
+alwaysApply: true
+---
+
+# Agent Context (Read This First)
+
+This rule gives every agent the minimal context needed to operate consistently with Cursor rules, subagents, commands, and skills. Topic-specific detail lives in other rules and in subagent files.
+
+## When invoking another agent or subagent
+
+**Required (QA)**: When an agent invokes another Cursor agent or subagent, it **must prompt that agent with the root cursor rule** (`.cursorrules` at repo root, or this rule) so the invoked agent has this grounding context. No agent should execute without it.
+
+## 1. How Rules Work
+
+- **Rules** = topical guidance in `.cursor/rules/*.mdc`. They are either:
+  - **Always applied** (`alwaysApply: true`) — loaded every session.
+  - **File- or topic-scoped** (`globs:` or `alwaysApply: false`) — applied when relevant.
+- **This rule** (`00-agent-context.mdc`) is the single entry point for “how to behave”: delegation, commands, skills, and a stable topic index. Finer detail is in **topic rules** and **subagents** so the session agent does not need to hold full context for every topic; delegate to the right subagent and let that subagent’s context spike for the task, then subside.
+- **.cursorrules** at repo root is a short pointer: follow this rule and the subagent protocol; use Cursor commands; see topic rules for detail.
+
+## 2. Topic → Subagent (Delegate Here)
+
+**One subagent per topic.** For any task in these areas, **invoke the listed subagent** (read `.cursor/agents/<file>.md` and delegate the work). The subagent owns that topic’s knowledge and **maintains/improves Cursor commands** in that domain.
+
+| Topic | Subagent file | Command prefix (subagent owns these) |
+|-------|----------------|--------------------------------------|
+| Testing (run tests, debug, organize) | `test.md` | `gbx:test:*` |
+| Code coverage | `coverage.md` | `gbx:coverage:*` |
+| Sample data, formats, bundles | `data.md` | `gbx:data:*` |
+| Docs server, build, preview | `docs.md` | `gbx:docs:*` (except function-info) |
+| **Function-info** (generator, DESCRIBE, coverage) | `function-info.md` | `gbx:docs:function-info`, `gbx:test:function-info` |
+| Docker container lifecycle, exec, mounts | `docker.md` | `gbx:docker:*` |
+| GDAL, drivers, formats, CRS | `gdal.md` | `gbx:gdal:*` |
+| RasterX API (rst_* / gbx_rst_*) | `rasterx.md` | `gbx:rasterx:*` |
+| GridX/BNG API (bng_* / gbx_bng_*) | `gridx.md` | `gbx:gridx:*` |
+| VectorX API (st_* / gbx_st_*) | `vectorx.md` | `gbx:vectorx:*` |
+
+**When to delegate**: Domain expertise, API questions, consistency checks, troubleshooting in that domain, or when the user explicitly asks about that area. **Do not** invoke for generic project/git questions unless they touch a topic above.
+
+**Subagents get smarter**: They are updated from sessions (gaps, corrections, new patterns). They maintain and improve **Cursor commands** for their topic; the master agent does not duplicate that knowledge.
+
+## 3. Topic → Rule Files (Finer Detail)
+
+Use these when you need rule-level detail; subagents hold the rest.
+
+| Topic | Rule file(s) |
+|-------|----------------|
+| How to delegate, command authority | `subagent-protocol.mdc` |
+| Function-info population & testing | `function-info.mdc` |
+| Tests, logging, organization | `test-organization-logging.mdc`, `doc-test-iteration-strategy.mdc`, `documentation-test-validation.mdc`, `execution-workflow.mdc`, `python-test-dependencies.mdc`, `notebook-tests-behavior.mdc` |
+| Docs: single source, validation, payload | `docs-test-single-source.mdc`, `documentation-code-validation.mdc`, `documentation-payload-pattern.mdc`, `function-documentation-standards.mdc`, `doc-example-output-alignment.mdc`, `library-integration-doc-examples.mdc`, `scala-documentation-pattern.mdc` |
+| Coverage strategy | `coverage-strategy.mdc` |
+| Build / Maven | `maven-configuration.mdc` |
+| GDAL resources & API | `gdal-resource-management.mdc` |
+| Naming (Scala/Python/SQL) | `cross-language-naming-consistency.mdc`, `reader-naming-convention.mdc` |
+| GridX/BNG API (resolutions, ported-code consistency) | `gridx-bng-api.mdc` |
+| Commands list & usage | `cursor-commands.mdc` |
+| Progress, required behavior | `progress-updates.mdc`, `Required-behavior.mdc` |
+| Summaries (prompts/) | `summary-files-organization.mdc` |
+
+## 4. Commands vs Skills vs Rules
+
+- **Commands** (`.cursor/commands/*.sh` + `.md`): Invocable actions (e.g. `gbx:test:function-info`, `gbx:docker:exec`). **Always use these** instead of raw shell for tests, coverage, docs, docker, data. If a command fails, **fix the command**; do not work around it. Subagents **own** and improve commands for their topic.
+- **Skills** (`.cursor/skills/<name>/SKILL.md` or user skills): Reusable **procedures** the agent follows (e.g. “add or fix a GeoBrix Cursor command”, “create a Cursor rule”). Use a skill when the task is “how to do X in a standard way” rather than “run X”. Invoke skills by name when the user asks to create rules, skills, or commands, or when adding/fixing a gbx command.
+- **Rules**: Persistent guidance (what to do, when to delegate, patterns). They do not “run”; they constrain and direct behavior.
+
+## 5. Beta / API Stability
+
+- We are in **Beta**. The API may break to stabilize it.
+- **No aliases** for functions (e.g. no `gbx_bng_pointasbng` as alias for `gbx_bng_pointascell`). One canonical name per function; fix registration and docs to match.
+
+## 6. Quick Reference
+
+- **Run tests**: Use `gbx:test:*` (Test Specialist).
+- **Function-info**: Generator + tests → Function-Info subagent; doc SQL in `docs/tests/python/api/*_functions_sql.py`; see `function-info.mdc`.
+- **Add/fix a Cursor command**: Use project skill **add-or-fix-gbx-command** (if present) and the subagent for that command’s topic.
+- **Create or update a Cursor rule**: Use project skill **create-cursor-rule** (and Cursor's create-rule for generic format); then update 00-agent-context topic→rules and owning subagent if needed.
+- **API naming or usage**: RasterX / GridX / VectorX subagent for the relevant package.

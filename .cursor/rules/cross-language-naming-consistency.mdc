@@ -1,0 +1,83 @@
+---
+description: Ensures consistent naming conventions between Scala and Python bindings
+alwaysApply: true
+---
+
+# Cross-Language Naming Consistency
+
+Maintain consistent naming between Scala implementations and Python bindings.
+
+## Naming Pattern
+
+```
+Scala Class:      Component_OperationName
+Scala API:        component_operationname   (e.g. rst_combineavg_agg, bng_geomkring)
+SQL (registered): gbx_ + Scala API name   (e.g. gbx_rst_combineavg_agg, gbx_bng_geomkring)
+Python API:       same as Scala API        (component_operationname)
+Test Function:   test_component_operationname
+```
+
+- **SQL**: Keep the `gbx_` prefix; match the rest to the Scala API (e.g. use `_agg` not `agg` for aggregators, to align with Databricks geospatial docs).
+- **Geometry**: Use `_geom` in function names, not `_geometry` (e.g. `bng_geomkring`, not `bng_geometrykring`).
+
+## Examples
+
+### ✅ GOOD: Consistent naming across languages
+
+**Scala:**
+```scala
+// File: BNG_EastNorthAsBNG.scala
+class BNG_EastNorthAsBNG extends Expression {
+  // Registered as: gbx_bng_eastnorthasbng
+}
+```
+
+**Python:**
+```python
+# File: gridx/bng/functions.py
+def bng_eastnorthasbng(east, north, resolution):
+    return f.call_function("gbx_bng_eastnorthasbng", east, north, resolution)
+```
+
+**Test:**
+```python
+# File: test_bng_operations.py
+def test_bng_eastnorthasbng(spark):
+    result = bng.bng_eastnorthasbng(...)
+```
+
+### ❌ BAD: Inconsistent naming
+
+**Scala:** `gbx_bng_eastnorthasbng` (with 'h')
+**Python:** `bng_eastnortasbng` (missing 'h')
+**Result:** Function not found errors, broken bindings!
+
+## Verification Checklist
+
+When adding a new function:
+
+1. **Define Scala implementation** with proper class name
+2. **Register function** with standardized `gbx_` prefix
+3. **Create Python binding** matching the Scala function name
+4. **Write test** using the same naming pattern
+5. **Verify all references** use consistent spelling
+
+## Common Mistakes
+
+- ❌ Typos in Python bindings (e.g., `eastnort` vs `eastnorth`)
+- ❌ Case inconsistencies (e.g., `EastNorth` vs `eastNorth`)
+- ❌ Missing underscores (e.g., `eastnorth` vs `east_north`)
+- ❌ Abbreviations differ between languages
+
+## Quick Check Command
+
+```bash
+# Find potential naming mismatches
+grep -r "def bng_" python/geobrix/src/ | cut -d'(' -f1
+grep -r "gbx_bng_" src/main/scala/ | grep "register"
+# Should match!
+```
+
+## Reference
+
+Based on BNG naming standardization fix where inconsistent naming between Scala (`eastnorth`) and Python (`eastnort`) caused binding failures.

@@ -1,0 +1,197 @@
+---
+sidebar_position: 4
+title: Databricks Spatial
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import databricksSpatialCode from '!!raw-loader!../tests-dbr/python/databricks_spatial/examples.py';
+
+# Databricks Spatial Types and Functions
+
+Databricks provides **built-in spatial types** and **ST (spatial) and H3 (grid) functions** in Databricks SQL and Databricks Runtime 17.1+. This page gives a concise overview with runnable examples. Use these alongside GeoBrix for workflows that combine native Databricks geometry with GeoBrix raster/vector readers and GridX (e.g. BNG).
+
+:::info Databricks Runtime required
+Examples on this page are validated under `docs/tests-dbr/` and require **Databricks Runtime 17.1+** (or Databricks SQL with ST/H3 support). They will skip when run on open-source Spark.
+:::
+
+**References:**
+- [GEOMETRY type](https://docs.databricks.com/aws/en/sql/language-manual/data-types/geometry-type) — Euclidean X,Y (and Z); SRID or ANY
+- [GEOGRAPHY type](https://docs.databricks.com/aws/en/sql/language-manual/data-types/geography-type) — Lat/lon; SRID 4326 only
+- [ST geospatial functions](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-st-geospatial-functions) — Import, export, measurements, predicates, overlay
+- [H3 geospatial functions](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-h3-geospatial-functions) — Grid indexing with hexagons
+
+---
+
+## GEOMETRY type
+
+Represents a geometric object in a coordinate reference system described by its **SRID**. X,Y (and optionally Z) units depend on the SRID. Use for projected coordinates or when SRID varies.
+
+**Create from WKT, GeoJSON, or WKB:**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="GEOMETRY_CREATE_FROM_WKT"
+/>
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="GEOMETRY_CREATE_FROM_GEOJSON"
+/>
+
+**Export to WKB, GeoJSON, WKT:**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="GEOMETRY_EXPORT"
+/>
+
+:::note
+About 11000 SRID values are supported.
+:::
+
+---
+
+## GEOGRAPHY type
+
+Represents a **geographic** object; coordinates are longitude ([-180, 180]) and latitude ([-90, 90]). Only **SRID 4326** (WGS 84) is allowed.
+
+**Create and export:**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="GEOGRAPHY_CREATE"
+/>
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="GEOGRAPHY_EXPORT"
+/>
+
+---
+
+## ST geospatial functions
+
+ST functions operate on `GEOMETRY` and/or `GEOGRAPHY`: construct values, export to WKT/GeoJSON/WKB, measure (area, length, distance), test predicates (intersects, contains), and overlay (buffer, convex hull, intersection).
+
+**In Python notebooks (Databricks Runtime):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="python"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="ST_IMPORT_PYTHON"
+/>
+
+**Measurements (area, centroid, distance):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="ST_MEASUREMENTS"
+/>
+
+**Predicates (intersects, contains):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="ST_PREDICATES"
+/>
+
+**Constructors (point, buffer, convex hull):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="ST_CONSTRUCTORS"
+/>
+
+---
+
+## H3 geospatial functions
+
+H3 is a **global hexagonal grid** with 16 resolutions. Use it to index points and polygons to cell IDs, then aggregate or join on cells (semantic spatial join without geometry predicates).
+
+**In Python notebooks:**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="python"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="H3_IMPORT_PYTHON"
+/>
+
+**Index a point (e.g. NYC; resolution 7 ≈ 5 km²):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="H3_POINT_INDEX"
+/>
+
+**Polyfill (cells contained by a polygon):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="H3_POLYFILL"
+/>
+
+**Neighbors (k-ring, hex ring):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="H3_NEIGHBORS"
+/>
+
+**Cell boundary and center (WKT/GeoJSON):**
+
+<CodeFromTest
+  code={databricksSpatialCode}
+  language="sql"
+  source="docs/tests-dbr/python/databricks_spatial/examples.py"
+  testFile="docs/tests-dbr/python/databricks_spatial/test_examples.py"
+  functionName="H3_BOUNDARY"
+/>
+
+:::note
+H3 expressions require Photon-enabled clusters or Databricks SQL (Pro/Serverless). The H3 library is included in Databricks Runtime 11.2+.
+:::
+
+---
+
+## Combining with GeoBrix
+
+- **Readers:** Use [GeoBrix readers](/docs/readers/overview) (GDAL, GeoJSON, Shapefile, etc.) to load vector/raster data; then use `st_geomfromwkb(geom_0)` or similar to get Databricks `GEOMETRY`/`GEOGRAPHY` for ST or H3.
+- **GridX (BNG):** For British National Grid, use [GridX BNG functions](/docs/api/gridx-functions) (e.g. `bng_polyfill`, `bng_tessellate`). For a global hex grid, use Databricks H3.
+- **RasterX:** Use [RasterX](/docs/api/rasterx-functions) for raster I/O and operations; combine with ST/H3 for zonal stats or grid aggregation in SQL.

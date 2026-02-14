@@ -4,17 +4,10 @@ import com.databricks.labs.gbx.rasterx.gdal.GDAL
 import com.databricks.labs.gbx.rasterx.operator.{GDALBuildVRT, GDALTranslate}
 import org.gdal.gdal.{Dataset, gdal}
 
-/** MergeRasters is a helper object for merging rasters. */
+/** Merges multiple rasters into one via VRT + gdal_translate (resolution highest). Returns (Dataset, metadata). Caller must release. */
 object MergeRasters {
 
-    /**
-      * Merges the rasters into a single raster.
-      *
-      * @param dss
-      *   The rasters to merge.
-      * @return
-      *   A Raster object.
-      */
+    /** Builds VRT from dss, translates to output path; returns (Dataset, metadata). */
     def merge(dss: Array[Dataset], options: Map[String, String]): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val driver = dss.head.GetDriver()

@@ -11,6 +11,7 @@ import org.apache.spark.sql.catalyst.trees.UnaryLike
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Aggregate expression that intersects BNG cell chips (binary) into a single chip per group. */
 final case class BNG_CellIntersectionAgg(
     inputChip: Expression,
     mutableAggBufferOffset: Int = 0,
@@ -18,6 +19,7 @@ final case class BNG_CellIntersectionAgg(
 ) extends TypedImperativeAggregate[IntersectionAcc]
       with UnaryLike[Expression] {
 
+    /** Chip ID DataType from the input chip array element. */
     private def idType = inputChip.dataType.asInstanceOf[StructType].fields(0).dataType
     override lazy val deterministic: Boolean = true
     override val child: Expression = inputChip
@@ -28,7 +30,8 @@ final case class BNG_CellIntersectionAgg(
     override def prettyName: String = BNG_CellIntersectionAgg.name
     override protected def withNewChildInternal(newChild: Expression): BNG_CellIntersectionAgg = copy(inputChip = newChild)
 
-    override def createAggregationBuffer(): IntersectionAcc = IntersectionAcc.empty
+    override def createAggregationBuffer(): IntersectionAcc =
+        IntersectionAcc(initialized = false, 0L, boundaryWkb = null)
     override def serialize(buf: IntersectionAcc): Array[Byte] = buf.serialize
     override def deserialize(bytes: Array[Byte]): IntersectionAcc = IntersectionAcc.deserialize(bytes)
 
@@ -61,18 +64,11 @@ final case class BNG_CellIntersectionAgg(
 
 }
 
+/** Companion: SQL name gbx_bng_cellintersection_agg, builder. */
 object BNG_CellIntersectionAgg extends WithExpressionInfo {
 
     override def name: String = "gbx_bng_cellintersection_agg"
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_CellIntersectionAgg(c.head)
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

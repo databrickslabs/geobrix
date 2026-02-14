@@ -34,7 +34,7 @@ cd "$PROJECT_ROOT"
 CURRENT_BRANCH=$(git branch --show-current)
 
 echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║${NC}  ${CYAN}🚀 Push and Watch CI${NC}                              ${BLUE}║${NC}"
+echo -e "${BLUE}║${NC}  ${CYAN}🚀 Push and Watch CI${NC}                                  ${BLUE}║${NC}"
 echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${BLUE}📍 Branch:${NC} ${YELLOW}${CURRENT_BRANCH}${NC}"

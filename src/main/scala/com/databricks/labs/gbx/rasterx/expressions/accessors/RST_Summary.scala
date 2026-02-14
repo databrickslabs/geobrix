@@ -18,6 +18,7 @@ case class RST_Summary(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def nullable: Boolean = true
@@ -28,7 +29,7 @@ case class RST_Summary(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Summary extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): UTF8String = eval(row, conf, StringType)
@@ -62,26 +63,5 @@ object RST_Summary extends WithExpressionInfo {
     override def name: String = "gbx_rst_summary"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Summary(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Returns a summary description of the raster tile including metadata and statistics in JSON format."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      { "description":"/dbfs/FileStore/geospatial/mosaic/sample_raster_data/binary/netcdf-coral/ct5km_
-           |      baa_max_7d_v3_1_20220106-1.nc",   "driverShortName":"netCDF",   "driverLongName":"Network Common
-           |      Data Format",   "files":[ "/dbfs/FileStore/geospatial/mosaic/sample_raster_data/binary/netcdf-co
-           |      ral/ct5km_baa_max_7d_v3_1_20220106-1.nc" ],   "size":[     512,     512   ],   "metadata":{
-           |      "":{       "NC_GLOBAL#acknowledgement":"NOAA Coral Reef
-           |      Watch Program", "NC_GLOBAL#cdm_data_type":"Gr...
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

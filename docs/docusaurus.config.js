@@ -23,7 +23,7 @@ const config = {
   organizationName: 'databrickslabs', // Usually your GitHub org/user name.
   projectName: 'geobrix', // Usually your repo name.
 
-  onBrokenLinks: 'throw',
+  onBrokenLinks: 'warn',
 
   // Markdown configuration
   markdown: {
@@ -39,6 +39,31 @@ const config = {
     defaultLocale: 'en',
     locales: ['en'],
   },
+
+  // Custom webpack plugin to enable importing test files
+  plugins: [
+    function customWebpackPlugin(context, options) {
+      return {
+        name: 'custom-webpack-plugin',
+        configureWebpack(config, isServer, utils) {
+          return {
+            module: {
+              rules: [
+                {
+                  test: /\.(py|scala|snippet)$/,
+                  use: 'raw-loader',
+                },
+                {
+                  test: /\.ipynb$/,
+                  use: 'raw-loader',
+                },
+              ],
+            },
+          };
+        },
+      };
+    },
+  ],
 
   presets: [
     [

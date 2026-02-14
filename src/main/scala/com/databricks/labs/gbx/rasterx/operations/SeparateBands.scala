@@ -4,12 +4,10 @@ import com.databricks.labs.gbx.rasterx.gdal.GDAL
 import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
 import org.gdal.gdal.Dataset
 
-/**
-  * ReTile is a helper object for splitting multi-band rasters into
-  * single-band-per-row.
-  */
+/** Splits a multi-band raster into single-band rasters; getTile extracts one band, separateIter yields all bands. */
 object SeparateBands {
 
+    /** Extracts a single band (0-based bandIdx) as a new Dataset. Caller must release. */
     def getTile(ds: Dataset, options: Map[String, String], bandIdx: Int): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val driver = ds.GetDriver
@@ -29,14 +27,7 @@ object SeparateBands {
         (resDs, resMtd)
     }
 
-    /**
-      * Separates raster bands into separate rasters. Empty bands are discarded.
-      *
-      * @param ds
-      *   The raster to retile.
-      * @return
-      *   A sequence of Raster objects.
-      */
+    /** Iterator of (Dataset, metadata) per band; empty bands skipped. Caller must release each Dataset. Iterator is AutoCloseable. */
     def separateIter(
         ds: Dataset,
         options: Map[String, String]
@@ -47,12 +38,14 @@ object SeparateBands {
             private var _ds = ds
             private var closed = false
 
+            /** Overrides Iterator.hasNext: true while currentBand < bandCount; closes when exhausted. */
             override def hasNext: Boolean = {
                 val more = currentBand < bandCount
                 if (!more) close()
                 more
             }
 
+            /** Overrides Iterator.next: returns (Dataset, metadata) for next band via getTile; caller must release. */
             override def next(): (Dataset, Map[String, String]) = {
                 if (!hasNext) return null
                 val tile = getTile(ds, options, currentBand)
@@ -61,6 +54,7 @@ object SeparateBands {
                 tile
             }
 
+            /** Overrides AutoCloseable.close: unlinks dataset and nulls reference; idempotent. */
             override def close(): Unit = {
                 if (!closed) {
                     closed = true

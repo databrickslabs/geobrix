@@ -7,7 +7,7 @@ import org.gdal.gdalconst.gdalconstConstants.GA_ReadOnly
 import java.nio.file.{Files, Paths}
 import scala.util.Try
 
-/** GDALCalc is a helper object for executing GDAL Calc commands. */
+/** Runs gdal_calc.py to produce a raster from a calc expression; returns (Dataset, metadata). */
 object GDALCalc {
 
     private val gdal_calc: String = {
@@ -22,15 +22,7 @@ object GDALCalc {
         }
     }
 
-    /**
-      * Executes the GDAL Calc command.
-      * @param gdalCalcCommand
-      *   The GDAL Calc command to execute.
-      * @param resultPath
-      *   The path to the result.
-      * @return
-      *   Returns the result as a [[Dataset]].
-      */
+    /** Runs gdal_calc command (via python3), opens resultPath as Dataset; returns (Dataset, metadata). Caller must release. */
     def executeCalc(
         gdalCalcCommand: String,
         resultPath: String,

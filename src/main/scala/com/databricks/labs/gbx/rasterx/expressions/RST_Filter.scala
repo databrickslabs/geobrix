@@ -18,6 +18,7 @@ case class RST_Filter(
     operationExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, kernelSizeExpr, operationExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
@@ -28,7 +29,7 @@ case class RST_Filter(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Filter extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String): InternalRow = eval(row, n, operation, conf, StringType)
@@ -59,23 +60,4 @@ object RST_Filter extends WithExpressionInfo {
     override def name: String = "gbx_rst_filter"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Filter(c(0), c(1), c(2))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        """
-          |Applies a filter to the raster. Returns a new raster tile with the filter applied.
-          |kernel_size is the number of pixels to compare; it must be odd. operation is the op to apply,
-          |e.g. 'avg', 'median', 'mode', 'max', 'min'.""".stripMargin
-
-    override def usageArgs: String = "tile, kernel_size, operation"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, 3, "mode") AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, kernel_size: Int, operation: String"
 }

@@ -2,8 +2,10 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import org.gdal.gdal.Dataset
 
+/** Builds gdal_calc command line from a JSON spec (rasters A–Z, bands, calc expression). */
 object MapAlgebra {
 
+    /** Parses the JSON spec and returns the gdal_calc command string for the given result path and datasets. */
     def parseSpec(jsonSpec: String, resultPath: String, dss: Seq[Dataset]): String = {
         import org.json4s._
         import org.json4s.jackson.JsonMethods._

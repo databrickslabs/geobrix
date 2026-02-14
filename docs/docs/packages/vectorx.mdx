@@ -1,0 +1,35 @@
+---
+sidebar_position: 4
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import quickstartCode from '!!raw-loader!../../tests/python/quickstart/examples.py';
+
+# VectorX
+
+:::tip Full API reference
+For the complete list of VectorX functions with parameters and examples, see the [VectorX Function Reference](../api/vectorx-functions).
+:::
+
+VectorX converts legacy DBLabs Mosaic geometry strings to Well-Known Binary (WKB) for use with Databricks spatial functions.
+
+:::note Import path
+Use `databricks.labs.gbx.vectorx.jts.legacy` (Python) or `com.databricks.labs.gbx.vectorx.jts.legacy` (Scala).
+:::
+
+## Example
+
+Convert a legacy point to WKB (same example as [Quick Start](../quick-start)):
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="USE_VECTORX"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="USE_VECTORX_output"
+/>
+
+## Learn more
+
+- [VectorX Function Reference](../api/vectorx-functions) — `st_legacyaswkb` API
+- [API Overview](../api/overview) — All GeoBrix APIs

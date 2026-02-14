@@ -1,0 +1,629 @@
+# Documentation Payload-Only Code Pattern
+
+## Core Principle
+
+Documentation should display **payload code only** - the exact code a user would type, without test scaffolding or function wrappers.
+
+**Goal**: Users can copy-paste code directly from docs into their notebooks/scripts.
+
+## The Pattern
+
+### Structure
+
+**Test File** (`docs/tests/python/readers/shapefile_examples.py`):
+```python
+# String constant for documentation display (payload only)
+READ_SHAPEFILE = """# Read shapefile (supports .shp, .zip, directories)
+df = spark.read.format("shapefile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip")"""
+
+# Function for test validation (encapsulates logic)
+def read_shapefile(spark, path="/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip"):
+    """Verify READ_SHAPEFILE pattern works."""
+    return spark.read.format("shapefile").load(path)
+```
+
+**Documentation** (`docs/docs/readers/shapefile.mdx`):
+```jsx
+<CodeFromTest 
+  code={shapefileExamples} 
+  language="python" 
+  functionName="READ_SHAPEFILE"  // References the string constant
+  testFile="docs/tests/python/readers/test_shapefile_examples.py"
+/>
+```
+
+**Result in Docs**:
+```python
+# Read shapefile (supports .shp, .zip, directories)
+df = spark.read.format("shapefile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip")
+```
+
+## Formatting Standards
+
+### 1. SQL Code
+
+**✅ CORRECT**: Plain triple-quoted string
+```python
+SQL_EXAMPLE = """-- Read shapefile in SQL
+SELECT * FROM shapefile.`/Volumes/.../file.zip`;"""
+```
+
+**❌ WRONG**: Raw string prefix (breaks syntax highlighting)
+```python
+SQL_EXAMPLE = r"""-- Read shapefile in SQL
+SELECT * FROM shapefile.`/Volumes/.../file.zip`;"""
+```
+
+**Why**: Plain strings enable proper SQL syntax highlighting in documentation.
+
+### 2. Python Line Continuation
+
+**✅ CORRECT**: Single backslash
+```python
+READ_EXAMPLE = """df = spark.read.format("shapefile") \
+    .option("chunkSize", "50000") \
+    .load("/Volumes/.../file.zip")"""
+```
+
+**❌ WRONG**: Double backslash
+```python
+READ_EXAMPLE = """df = spark.read.format("shapefile") \\
+    .option("chunkSize", "50000") \\
+    .load("/Volumes/.../file.zip")"""
+```
+
+**Why**: Single backslash is valid Python syntax; double backslash displays incorrectly.
+
+### 3. Inline Documentation
+
+**✅ CORRECT**: Include helpful comments
+```python
+CONVERT_EXAMPLE = """# Convert WKB to Databricks GEOMETRY type
+df = spark.read.format("shapefile").load("/Volumes/.../subway.zip")
+df_with_geom = df.select("*", expr("st_geomfromwkb(geom_0)").alias("geometry"))"""
+```
+
+**❌ WRONG**: Verbose docstrings or explanatory text
+```python
+CONVERT_EXAMPLE = """\"\"\"
+This example demonstrates how to convert Well-Known Binary (WKB) 
+geometry data to Databricks GEOMETRY type using st_geomfromwkb.
+\"\"\"
+df = spark.read.format("shapefile").load("/Volumes/.../subway.zip")
+# ... verbose comments ...
+"""
+```
+
+**Why**: Brief inline comments are helpful; docstrings belong in the function, not the display code.
+
+### 4. Python f-strings (use `{var}` not `$var`)
+
+**✅ CORRECT**: Python f-strings use curly braces
+```python
+EXAMPLE = """path = f"/Volumes/{catalog}/{schema}/{volume}/data"
+df = spark.read.format("gdal").load(f"{path}/raster.tif")"""
+```
+
+**❌ WRONG**: Dollar sign (Scala/shell style)
+```python
+EXAMPLE = """path = f"/Volumes/$catalog/$schema/$volume/data"
+df = spark.read.format("gdal").load(f"$path/raster.tif")"""
+```
+
+**Why**: In Python, f-string interpolation uses `{expression}` only. `$var` is Scala (s"...") or shell; using it in Python would display literally and not interpolate. Code in `docs/tests/python/` is loaded by raw-loader and displayed as-is—no MDX escaping. Keeping correct Python syntax in the test files ensures the one-copy pattern never reintroduces the `$` error when code is copied into docs.
+
+**Exception**: URL query parameters (e.g. `?$limit=300`) and comments showing shell commands may contain `$`; those are fine.
+
+## Content Standards
+
+### 1. Use Actual Sample Data
+
+**✅ CORRECT**: Real sample data paths
+```python
+READ_EXAMPLE = """df = spark.read.format("shapefile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip")"""
+```
+
+**❌ WRONG**: Placeholder paths
+```python
+READ_EXAMPLE = """df = spark.read.format("shapefile").load("/path/to/your/file.shp")"""
+```
+
+**Why**: Real paths show users working examples and enable integration testing.
+
+### 2. Keep Examples Focused
+
+**✅ CORRECT**: Tight to the feature/reader
+```python
+# Shapefile reader example - focuses on reading
+READ_SHAPEFILE = """df = spark.read.format("shapefile").load("/Volumes/.../subway.zip")"""
+```
+
+**❌ WRONG**: Generic Spark concepts or unrelated operations
+```python
+# Shapefile reader example - includes caching, partitioning, etc.
+READ_SHAPEFILE = """df = spark.read.format("shapefile").load("/Volumes/.../subway.zip")
+df.cache()  # Generic Spark - not reader-specific
+df.repartition(10)  # Not about reading shapefiles
+df.write.format("delta").save("/output")  # Unrelated to reading
+"""
+```
+
+**Why**: Documentation should teach the specific feature, not general Spark usage.
+
+### 3. Minimal DBR Integration
+
+**✅ CORRECT**: Only essential DBR patterns
+```python
+# Convert WKB to GEOMETRY
+CONVERT_EXAMPLE = """df = spark.read.format("shapefile").load("/Volumes/.../subway.zip")
+df_with_geom = df.select("*", expr("st_geomfromwkb(geom_0)").alias("geometry"))"""
+```
+
+**❌ WRONG**: Complex multi-step workflows
+```python
+# Too complex for documentation example
+WORKFLOW = """# Read shapefile
+df1 = spark.read.format("shapefile").load("/Volumes/.../file1.zip")
+df2 = spark.read.format("shapefile").load("/Volumes/.../file2.zip")
+
+# Convert to geometry
+df1_geom = df1.select("*", expr("st_geomfromwkb(geom_0)").alias("geom1"))
+df2_geom = df2.select("*", expr("st_geomfromwkb(geom_0)").alias("geom2"))
+
+# Spatial join
+result = df1_geom.join(df2_geom, expr("st_intersects(geom1, geom2)"))
+
+# Filter and aggregate
+result.filter(expr("st_area(geom1) > 1000")).groupBy("type").count()
+"""
+```
+
+**Why**: Keep DBR examples simple; complex workflows belong in separate tutorials.
+
+## Test Structure
+
+### Test Files Must Validate Display Code
+
+**Test File** (`test_shapefile_examples.py`):
+```python
+import pytest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import shapefile_examples
+
+def test_read_shapefile(spark, sample_nyc_subway_shp):
+    """Test basic shapefile read - validates READ_SHAPEFILE constant."""
+    result = shapefile_examples.read_shapefile(spark, sample_nyc_subway_shp)
+    assert result is not None
+    assert result.count() > 2000
+    assert 'geom_0' in result.columns
+
+def test_sql_constant():
+    """Test SQL constant is defined and valid."""
+    assert hasattr(shapefile_examples, 'SQL_SHAPEFILE')
+    assert 'shapefile.' in shapefile_examples.SQL_SHAPEFILE
+    assert 'SELECT' in shapefile_examples.SQL_SHAPEFILE
+```
+
+**Rules**:
+- ✅ Test the **function** that encapsulates the logic
+- ✅ Assert on actual results (row counts, columns, data)
+- ✅ Verify **constants** are defined and well-formed
+- ✅ Use actual sample data paths
+- ❌ Don't execute string constants directly (test the function instead)
+
+## When to Apply This Pattern
+
+### Apply For:
+- ✅ **All user-facing code examples** in documentation
+- ✅ **API function examples** (Python, Scala, SQL)
+- ✅ **Reader usage examples**
+- ✅ **Quick start guides**
+- ✅ **Integration patterns** (DBR, Delta, etc.)
+
+### Do NOT Apply For:
+- ❌ **Internal utility functions** (not shown in docs)
+- ❌ **Test fixtures** (configuration code)
+- ❌ **Complex test logic** (multi-step validation)
+
+## Migration Checklist
+
+When converting existing examples to payload-only pattern:
+
+- [ ] **Create string constant** with payload code
+  - Use UPPERCASE naming (e.g., `READ_SHAPEFILE`)
+  - Include brief inline comments
+  - Use single backslash for line continuation
+  - Use plain triple-quotes for SQL (not raw strings)
+
+- [ ] **Create test function** to validate logic
+  - Use lowercase naming matching constant (e.g., `def read_shapefile(...)`)
+  - Accept necessary parameters (spark, paths)
+  - Return testable results
+  - Add comprehensive docstring
+
+- [ ] **Update test file** to validate
+  - Import module explicitly (`import shapefile_examples`)
+  - Test the function with real data
+  - Verify constant is defined
+
+- [ ] **Update documentation** to reference constant
+  - Change `functionName="read_shapefile"` to `functionName="READ_SHAPEFILE"`
+  - Verify correct `testFile` path
+  - Check syntax highlighting in docs preview
+
+- [ ] **Remove old patterns**
+  - Delete redundant/duplicate examples
+  - Remove placeholder paths
+  - Remove generic Spark boilerplate
+
+## Examples
+
+### Complete Example: Shapefile Reader
+
+**Code Module** (`docs/tests/python/readers/shapefile_examples.py`):
+```python
+"""
+Shapefile Reader Examples - Single Source of Truth
+
+All code examples shown in docs/docs/readers/shapefile.mdx are imported from this file.
+"""
+
+# Display constants (payload only)
+READ_SHAPEFILE = """# Read shapefile (supports .shp, .zip, directories)
+df = spark.read.format("shapefile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip")"""
+
+READ_WITH_OPTIONS = """# Adjust chunk size for performance
+df = spark.read.format("shapefile") \
+    .option("chunkSize", "50000") \
+    .load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip")"""
+
+SQL_SHAPEFILE = """-- Read shapefile in SQL
+SELECT * FROM shapefile.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip` LIMIT 10;"""
+
+# Test functions (validate logic)
+def read_shapefile(spark, path="/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip"):
+    """Verify READ_SHAPEFILE pattern works."""
+    return spark.read.format("shapefile").load(path)
+
+def read_with_options(spark, path="/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.zip"):
+    """Verify READ_WITH_OPTIONS pattern works."""
+    return spark.read.format("shapefile").option("chunkSize", "50000").load(path)
+```
+
+**Test File** (`docs/tests/python/readers/test_shapefile_examples.py`):
+```python
+import pytest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import shapefile_examples
+
+def test_read_shapefile(spark, sample_nyc_subway_shp):
+    """Test basic shapefile read."""
+    result = shapefile_examples.read_shapefile(spark, sample_nyc_subway_shp)
+    assert result is not None
+    assert result.count() > 2000
+
+def test_read_with_options(spark, sample_nyc_subway_shp):
+    """Test shapefile read with chunk size option."""
+    result = shapefile_examples.read_with_options(spark, sample_nyc_subway_shp)
+    assert result is not None
+
+def test_sql_constant():
+    """Test SQL constant is defined."""
+    assert hasattr(shapefile_examples, 'SQL_SHAPEFILE')
+    assert 'shapefile.' in shapefile_examples.SQL_SHAPEFILE
+```
+
+**Documentation** (`docs/docs/readers/shapefile.mdx`):
+```mdx
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import shapefileExamples from '!!raw-loader!../../tests/python/readers/shapefile_examples.py';
+
+## Basic Usage
+
+<CodeFromTest 
+  code={shapefileExamples} 
+  language="python" 
+  functionName="READ_SHAPEFILE"
+  testFile="docs/tests/python/readers/test_shapefile_examples.py"
+/>
+
+## Options
+
+<CodeFromTest 
+  code={shapefileExamples} 
+  language="python" 
+  functionName="READ_WITH_OPTIONS"
+  testFile="docs/tests/python/readers/test_shapefile_examples.py"
+/>
+
+## SQL
+
+<CodeFromTest 
+  code={shapefileExamples} 
+  language="sql" 
+  functionName="SQL_SHAPEFILE"
+  testFile="docs/tests/python/readers/test_shapefile_examples.py"
+/>
+```
+
+## Benefits
+
+### For Users
+- ✅ **Copy-paste ready** - code works as shown
+- ✅ **No scaffolding** - no need to extract from function definitions
+- ✅ **Real examples** - uses actual sample data
+- ✅ **Focused** - learns specific feature, not generic Spark
+
+### For Maintainers
+- ✅ **Single source** - code exists in one place
+- ✅ **Tested** - every example is validated
+- ✅ **Consistent** - standardized formatting across all docs
+- ✅ **Scalable** - easy to add new examples
+
+## Common Mistakes
+
+### ❌ Mistake 1: Including Function Wrapper
+```python
+# WRONG - Shows function definition
+def read_shapefile(spark):
+    """Read a shapefile."""
+    return spark.read.format("shapefile").load("/path")
+```
+**Fix**: Use string constant with payload only.
+
+### ❌ Mistake 2: Raw String for SQL
+```python
+# WRONG - Breaks syntax highlighting
+SQL_EXAMPLE = r"""SELECT * FROM ..."""
+```
+**Fix**: Remove `r` prefix.
+
+### ❌ Mistake 3: Double Backslash
+```python
+# WRONG - Displays incorrectly
+df = spark.read.format("shapefile") \\
+    .load("/path")
+```
+**Fix**: Use single backslash `\`.
+
+### ❌ Mistake 4: Placeholder Paths
+```python
+# WRONG - Not testable
+READ_EXAMPLE = """df = spark.read.format("shapefile").load("/path/to/your/file.shp")"""
+```
+**Fix**: Use actual sample data path.
+
+### ❌ Mistake 5: Verbose Examples
+```python
+# WRONG - Too much content
+EXAMPLE = """# This is a comprehensive example showing multiple features
+df = spark.read.format("shapefile").load("/path")
+df.cache()  # Cache for performance
+df.repartition(10)  # Repartition data
+# ... 20 more lines ...
+"""
+```
+**Fix**: Keep examples focused on one concept.
+
+## Databricks Integration Callout
+
+**Requirement**: All reader documentation with DBR examples MUST include this callout before the Databricks Integration section:
+
+```markdown
+:::tip Requires Databricks Runtime
+These examples use `st_geomfromwkb` to convert GeoBrix WKB to Databricks GEOMETRY type.
+:::
+```
+
+**Why**: 
+- Sets clear expectations about runtime requirements
+- Explains the purpose of `st_geomfromwkb` function
+- Consistent across all reader documentation
+
+**Pattern** (from shapefile and geojson readers):
+```markdown
+---
+
+## Databricks Integration
+
+:::tip Requires Databricks Runtime
+These examples use `st_geomfromwkb` to convert GeoBrix WKB to Databricks GEOMETRY type.
+:::
+
+### Convert to GEOMETRY
+...
+```
+
+## Sample Data Requirements
+
+### Real Paths, Not Placeholders
+
+**✅ CORRECT**: Use actual sample data paths
+```python
+READ_EXAMPLE = """df = spark.read.format("geojson").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson")"""
+```
+
+**❌ WRONG**: Placeholder paths
+```python
+READ_EXAMPLE = """df = spark.read.format("geojson").load("/path/to/your/file.geojson")"""
+```
+
+### Auto-Generate Derived Formats
+
+When examples require specific file formats that can be derived from existing data:
+
+**Pattern**: Add conversion to `sample-data/download-essential-bundle.py`
+
+**Example** (GeoJSONSeq from GeoJSON):
+```python
+def convert_geojson_to_geojsonseq(input_file, output_file, description):
+    """Convert GeoJSON FeatureCollection to GeoJSONSeq (newline-delimited)"""
+    import json
+    
+    with open(input_file, 'r') as f:
+        geojson = json.load(f)
+    
+    with open(output_file, 'w') as f:
+        for feature in geojson.get('features', []):
+            f.write(json.dumps(feature) + '\n')
+```
+
+**Benefits**:
+- ✅ Real, testable examples
+- ✅ Consistent data across all examples
+- ✅ One-time setup, reusable everywhere
+- ✅ Avoids "works in docs but not in reality" issues
+
+## Documentation Structure Standards
+
+### Format Availability Language
+
+**✅ CORRECT**: "Available Formats" with clear disclaimer
+```markdown
+## Available Formats
+
+The [Reader Name] can work with [many/specific] formats, including:
+- Format 1
+- Format 2
+- ...
+
+:::note Format Availability
+Experience varies across formats. Not all formats are available by default—some require additional packages or drivers to be installed in your environment.
+:::
+```
+
+**❌ WRONG**: "Supported Formats" without qualifications
+```markdown
+## Supported Formats
+
+The reader supports all these formats:
+- Format 1
+- Format 2
+```
+
+**Why**: "Available" is more accurate than "supported" (implies guaranteed functionality). The note sets proper expectations about varying experiences and dependencies.
+
+### Options Presentation
+
+**When to Use Tables**: Multiple simple options without complex examples
+
+**✅ CORRECT**: Clean table for straightforward options
+```markdown
+## Options
+
+### `primaryOption`
+
+[Detailed explanation with code example]
+
+### Other Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `chunkSize` | `"10000"` | Number of records per chunk |
+| `layerN` | `"0"` | Layer index (0-based) |
+| `asWKB` | `"true"` | Output as WKB vs WKT |
+```
+
+**❌ WRONG**: Separate subsections for each simple option
+```markdown
+### `chunkSize`
+
+**Default:** `"10000"`
+
+Number of records per chunk.
+
+<CodeFromTest ... /> <!-- Test-like example, not real usage -->
+
+### `layerN`
+
+**Default:** `"0"`
+
+Layer index.
+
+<CodeFromTest ... /> <!-- Another test-like example -->
+```
+
+**Why**: Tables are cleaner for simple options; save detailed subsections for complex options that warrant examples.
+
+### Streamlining Verbose Examples
+
+**✅ CORRECT**: Focus on essential, tested examples
+```markdown
+## Basic Usage
+[Python, Scala, SQL - fully validated]
+
+## Options
+[1-2 key options with examples, others in table]
+
+## Databricks Integration
+[Essential DBR conversion pattern]
+
+## Named Readers vs General Reader
+[When to use which]
+```
+
+**❌ WRONG**: Extensive compile-validated examples
+```markdown
+## Usage Examples
+### Example 1: Read with Specific Driver
+### Example 2: Read Multi-Layer Format
+### Example 3: Adjust Performance
+### Example 4: Convert to Databricks Types
+
+## Working with Different Formats
+### KML Files
+### GML Files
+### CSV with Geometry
+### Database Connections
+
+## Performance Tuning
+### Chunk Size Optimization
+### Parallel Reading
+```
+
+**Why**: 
+- Too many examples overwhelm users
+- Compile-validated examples often show test structure, not real usage
+- Focused documentation is easier to maintain and update
+
+**What to Keep**:
+- ✅ Basic Usage (fully validated with real data)
+- ✅ 1-2 key options with examples
+- ✅ Databricks Integration (if applicable)
+- ✅ Common use cases
+
+**What to Remove**:
+- ❌ Extensive "Usage Examples" sections
+- ❌ "Performance Tuning" sections (unless reader-specific)
+- ❌ Multiple format-specific examples (keep in named reader docs)
+- ❌ Generic Spark patterns (caching, repartitioning)
+
+## Reference
+
+Based on reader documentation migrations (2026-01-27 to 2026-01-29):
+- ✅ Shapefile: Proof-of-concept for payload-only pattern
+- ✅ GeoJSON: Added DBR callout and real sample data
+- ✅ GeoPackage: Format name accuracy (`ogr_gpkg`)
+- ✅ OGR: Streamlined options, format availability language
+
+Achieved:
+- ✅ Clean, user-facing code display
+- ✅ Proper SQL syntax highlighting
+- ✅ Single-source pattern maintained
+- ✅ 100% test coverage for basic examples
+- ✅ Real sample data usage
+- ✅ Consistent DBR callouts
+- ✅ Streamlined, focused documentation
+
+See also:
+- `.cursor/rules/docs-test-single-source.mdc` - Single-copy pattern
+- `.cursor/rules/documentation-code-validation.mdc` - Validation labels
+- `.cursor/rules/scala-documentation-pattern.mdc` - Scala testing pattern
+- `.cursor/rules/doc-example-output-alignment.mdc` - Aligning Spark-style table results (`*_output` / `*_example_output`)
+- `docs/tests/READERS-PAYLOAD-PATTERN-MIGRATION-PLAN.md` - Full migration plan

@@ -5,6 +5,7 @@ import org.gdal.gdal.Band
 
 import scala.reflect.ClassTag
 
+/** A block of band pixels plus mask and padding; used for kernel/convolve operations with local access. */
 case class GDALBlock[T: ClassTag](
     block: Array[T],
     maskBlock: Array[Double],
@@ -18,18 +19,25 @@ case class GDALBlock[T: ClassTag](
     num: Numeric[T]
 ) {
 
+    /** Value at linear index. */
     def elementAt(index: Int): T = block(index)
 
+    /** Mask value at linear index. */
     def maskAt(index: Int): Double = maskBlock(index)
 
+    /** Value at (x, y) in block coordinates. */
     def elementAt(x: Int, y: Int): T = block(y * width + x)
 
+    /** Mask at (x, y) in block coordinates. */
     def maskAt(x: Int, y: Int): Double = maskBlock(y * width + x)
 
+    /** Value at (x, y) in raster coordinates (relative to block offset). */
     def rasterElementAt(x: Int, y: Int): T = block((y - yOffset) * width + (x - xOffset))
 
+    /** Mask at (x, y) in raster coordinates. */
     def rasterMaskAt(x: Int, y: Int): Double = maskBlock((y - yOffset) * width + (x - xOffset))
 
+    /** Extracts kernelWidth×kernelHeight values centred at (x, y), NoData where invalid. */
     def valuesAt(x: Int, y: Int, kernelWidth: Int, kernelHeight: Int): Array[Double] = {
         val kernelCenterX = kernelWidth / 2
         val kernelCenterY = kernelHeight / 2

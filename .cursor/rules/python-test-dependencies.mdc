@@ -1,0 +1,180 @@
+---
+description: Required Python packages and environment setup for testing
+alwaysApply: true
+---
+
+# Python Test Dependencies
+
+## Required Packages
+
+### Core Testing Framework
+```bash
+pytest              # Test framework for Python
+pytest-cov          # Code coverage plugin for pytest
+```
+
+### GeoBrix Dependencies
+```bash
+pyspark            # Apache Spark for Python
+gdal               # Geospatial data abstraction library
+numpy              # Numerical computing (required for GDAL operations)
+```
+
+## Installation in Docker
+
+All required packages are pre-installed in the `geobrix-dev` Docker container via the Dockerfile:
+
+```dockerfile
+# Core test framework
+RUN pip3 install pytest pytest-cov --break-system-packages
+
+# GeoBrix dependencies
+RUN pip3 install pyspark==$SPARK_VERSION --break-system-packages
+RUN pip3 install gdal==$GDAL_VERSION --break-system-packages
+```
+
+## Verification
+
+### Check Installed Packages
+```bash
+docker exec geobrix-dev pip3 list | grep -E "pytest|pytest-cov|pyspark|gdal"
+```
+
+Expected output:
+```
+pytest              8.4.2
+pytest-cov          7.0.0
+pyspark             4.0.0
+gdal                3.11.4
+```
+
+### Test pytest-cov Installation
+```bash
+docker exec geobrix-dev python3 -m pytest --version
+docker exec geobrix-dev python3 -c "import pytest_cov; print(f'pytest-cov {pytest_cov.__version__}')"
+```
+
+## Usage
+
+### Running Tests with Coverage
+
+**Python Unit Tests (non-docs):**
+```bash
+# Tests: python/geobrix/test/
+# Coverage measured on: python/geobrix/src/databricks/labs/gbx/ (SOURCE CODE)
+docker exec geobrix-dev python3 -m pytest \
+  /root/geobrix/python/geobrix/test \
+  --cov=/root/geobrix/python/geobrix/src/databricks/labs/gbx \
+  --cov-report=html:/root/geobrix/python/coverage-report \
+  --cov-report=term
+```
+
+**Python Documentation Tests:**
+```bash
+# Tests: docs/tests/python/
+# Coverage measured on: python/geobrix/src/databricks/labs/gbx/ (SOURCE CODE)
+docker exec geobrix-dev python3 -m pytest \
+  /root/geobrix/docs/tests/python \
+  --cov=/root/geobrix/python/geobrix/src/databricks/labs/gbx \
+  --cov-report=html:/root/geobrix/docs/tests/coverage-report \
+  --cov-report=term \
+  -m "not integration"
+```
+
+### Cursor Commands
+
+GeoBrix provides convenient commands that handle all setup:
+
+```bash
+# Python unit test coverage
+gbx:coverage:python --open
+
+# Python docs test coverage
+gbx:coverage:python-docs --open
+```
+
+## Coverage Report Locations
+
+| Test Type | HTML Report Location | Coverage Measured On |
+|-----------|---------------------|---------------------|
+| Python Unit Tests | `python/coverage-report/index.html` | `python/geobrix/src/databricks/labs/gbx/` |
+| Python Docs Tests | `docs/tests/coverage-report/index.html` | `python/geobrix/src/databricks/labs/gbx/` |
+
+**Note**: Both test suites measure coverage of the same source code, but run different tests. This shows which parts of the source are exercised by unit tests vs documentation tests.
+
+## Troubleshooting
+
+### pytest-cov Not Found
+
+**Symptom:**
+```
+ERROR: unrecognized arguments: --cov=...
+```
+
+**Solution:**
+```bash
+# Install in running container
+docker exec geobrix-dev pip3 install pytest-cov --break-system-packages
+
+# For permanent fix, rebuild Docker image
+cd scripts/docker
+docker build -t geobrix-dev .
+```
+
+### Coverage Report Not Generated
+
+**Check pytest-cov is installed:**
+```bash
+docker exec geobrix-dev python3 -c "import coverage; print(f'coverage {coverage.__version__}')"
+```
+
+**Verify output directory exists:**
+```bash
+docker exec geobrix-dev mkdir -p /root/geobrix/docs/tests/coverage-report
+```
+
+## Best Practices
+
+### 1. Always Generate HTML Reports
+HTML reports provide:
+- Line-by-line coverage visualization
+- Missing branch highlighting
+- Easy navigation through codebase
+
+### 2. Set Minimum Coverage Thresholds
+```bash
+# Fail if coverage drops below 80%
+pytest --cov --cov-fail-under=80
+```
+
+### 3. Exclude Test Files from Coverage
+Use `--cov-config` with `.coveragerc`:
+```ini
+[run]
+omit = 
+    */tests/*
+    */test_*.py
+```
+
+### 4. Use Coverage to Guide Test Writing
+- Red lines = untested code
+- Focus on critical paths first
+- Don't chase 100% coverage blindly
+
+## Integration with CI/CD
+
+Coverage reports are generated automatically in CI:
+```bash
+# In GitHub Actions or CI pipeline
+python3 -m pytest --cov --cov-report=html --cov-report=xml
+```
+
+## Reference
+
+See `.cursor/rules/cursor-commands.mdc` for full command documentation.
+
+Based on testing infrastructure that:
+- Provides 8 standardized test commands
+- Generates HTML coverage reports with auto-open
+- Supports both unit and documentation tests
+- Integrates with Docker environment

@@ -1,0 +1,173 @@
+---
+sidebar_position: 2
+title: Raster Data
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import rasterDataCode from '!!raw-loader!../../tests/python/sample_data/raster_data.py';
+
+## Raster Data
+
+Datasets below are either included in the **Essential** or **Complete** setup script on the [Setup](./setup) page, or can be downloaded individually with the scripts here.
+
+### Sentinel-2 Imagery via STAC (NYC Area)
+
+:::tip Essential bundle
+Included in the **Essential** setup script.
+:::
+
+Search and download Sentinel-2 imagery using STAC (SpatioTemporal Asset Catalog) - the modern standard for satellite data discovery.
+
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="DOWNLOAD_SENTINEL_NYC"
+  outputConstant="DOWNLOAD_SENTINEL_NYC_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="USAGE_SENTINEL_NYC"
+/>
+
+
+:::tip STAC Benefits
+- Search by location, date, and cloud cover
+- Access multiple bands (RGB, NIR, SWIR)
+- Get the freshest available imagery
+- Industry-standard metadata
+:::
+
+---
+
+### Sentinel-2 Imagery via STAC (London Area)
+
+:::tip Essential bundle
+Included in the **Essential** setup script.
+:::
+
+Search and download Sentinel-2 imagery over London - perfect for UK GridX BNG examples.
+
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="DOWNLOAD_SENTINEL_LONDON"
+  outputConstant="DOWNLOAD_SENTINEL_LONDON_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="USAGE_SENTINEL_LONDON"
+/>
+
+
+---
+
+### SRTM Elevation Data - NYC Area
+
+:::tip Essential bundle
+Included in the **Essential** setup script.
+:::
+
+Digital elevation model from NASA SRTM - great for terrain analysis examples.
+
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="DOWNLOAD_SRTM_NYC"
+  outputConstant="DOWNLOAD_SRTM_NYC_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="USAGE_SRTM_NYC"
+/>
+
+
+---
+
+### SRTM Elevation Data - London Area
+
+:::tip Essential bundle
+Included in the **Essential** setup script.
+:::
+
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="DOWNLOAD_SRTM_LONDON"
+  outputConstant="DOWNLOAD_SRTM_LONDON_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="USAGE_SRTM_LONDON"
+/>
+
+
+---
+
+### NetCDF / GRIB2 - NOAA HRRR Weather Data (NYC)
+
+:::info Complete bundle
+Included in the **Complete** setup script.
+:::
+
+High-resolution weather forecast data in GRIB2 format (read by GDAL as multi-band raster) - demonstrates time-series raster processing.
+
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="DOWNLOAD_HRRR_NYC"
+  outputConstant="DOWNLOAD_HRRR_NYC_output"
+/>
+
+**Note**: HRRR files are in GRIB2 format (a type of NetCDF). GDAL reads them as multi-band rasters with meteorological variables.
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={rasterDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/raster_data.py"
+  testFile="docs/tests/python/sample_data/test_raster_data.py"
+  functionName="USAGE_HRRR_NYC"
+/>
+
+
+---

@@ -1,0 +1,99 @@
+---
+sidebar_position: 4
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import sqlApiExamples from '!!raw-loader!../../tests/python/api/sql_api.py';
+import sqlVectorxDbr from '!!raw-loader!../../tests-dbr/python/api/vectorx_conversion.py';
+import sqlReadingDbr from '!!raw-loader!../../tests-dbr/python/api/sql_reading_dbr.py';
+
+# SQL API Reference
+
+GeoBrix functions can be used directly in SQL after registration, providing a familiar interface for SQL users.
+
+## Registration
+
+SQL functions must be registered via Python or Scala before use:
+
+### Via Python
+
+<CodeFromTest code={sqlApiExamples} functionName="REGISTER_PYTHON" language="python" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" />
+
+### Via Scala
+
+<CodeFromTest code={sqlApiExamples} functionName="REGISTER_SCALA" language="scala" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" />
+
+## Function Naming
+
+All GeoBrix SQL functions use the `gbx_` prefix:
+
+- **RasterX**: `gbx_rst_*`
+- **GridX/BNG**: `gbx_bng_*`
+- **VectorX**: `gbx_st_*`
+
+## Listing Functions
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_LIST_FUNCTIONS" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_LIST_FUNCTIONS_output" />
+
+## Describing Functions
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_DESCRIBE" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_DESCRIBE_output" />
+
+## RasterX SQL Functions
+
+### Reading and Querying Rasters
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_READ_AND_QUERY_RASTERS" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_READ_AND_QUERY_RASTERS_output" />
+
+### Filtering Rasters
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_FILTER_RASTERS" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_FILTER_RASTERS_output" />
+
+### Raster Transformations
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_RASTER_TRANSFORMATIONS" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_RASTER_TRANSFORMATIONS_output" />
+
+## GridX SQL Functions (BNG)
+
+### Cell Operations
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_BNG_CELL_OPERATIONS" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_BNG_CELL_OPERATIONS_output" />
+
+### Point to Cell Conversion
+
+Use `gbx_bng_pointascell` with **WKT or WKB** for the point; do not use `st_point()` (GeoBrix does not accept DBR native geometry).
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_BNG_POINT_TO_CELL" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_BNG_POINT_TO_CELL_output" />
+
+### Spatial Aggregation
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_BNG_SPATIAL_AGGREGATION" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_BNG_SPATIAL_AGGREGATION_output" />
+
+### Multi-Resolution Analysis
+
+<CodeFromTest code={sqlApiExamples} functionName="SQL_BNG_MULTI_RESOLUTION" language="sql" source="docs/tests/python/api/sql_api.py" testFile="docs/tests/python/api/test_sql_api.py" outputConstant="SQL_BNG_MULTI_RESOLUTION_output" />
+
+## VectorX SQL Functions
+
+### Legacy Geometry Conversion
+
+:::info Databricks Runtime integration
+This example uses `st_geomfromwkb` and requires **Databricks Runtime 17.1+**. The example and test live under `docs/tests-dbr/`.
+:::
+
+<CodeFromTest code={sqlVectorxDbr} functionName="SQL_VECTORX_LEGACY_CONVERSION" language="sql" source="docs/tests-dbr/python/api/vectorx_conversion.py" testFile="docs/tests-dbr/python/api/test_vectorx_conversion.py" outputConstant="SQL_VECTORX_LEGACY_CONVERSION_output" />
+
+## Reading Data with SQL
+
+:::info Databricks Runtime integration
+This example uses `st_geomfromwkb`, `st_area`, and `st_centroid` and requires **Databricks Runtime 17.1+**. The example and test live under `docs/tests-dbr/`.
+:::
+
+<CodeFromTest code={sqlReadingDbr} functionName="SQL_READ_SHAPEFILE" language="sql" source="docs/tests-dbr/python/api/sql_reading_dbr.py" testFile="docs/tests-dbr/python/api/test_sql_reading_dbr.py" outputConstant="SQL_READ_SHAPEFILE_output" />
+
+## Next Steps
+
+- [Python API Reference](./python)
+- [Scala API Reference](./scala)
+- [Examples](../examples/overview)
+- [Package Documentation](../packages/overview)

@@ -1,0 +1,308 @@
+---
+sidebar_position: 1
+title: Vector Data
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import vectorDataCode from '!!raw-loader!../../tests/python/sample_data/vector_data.py';
+
+## Vector Data
+
+Datasets below are either included in the **Essential** or **Complete** setup script on the [Setup](./setup) page, or can be downloaded individually with the scripts here.
+
+### NYC Taxi Zones (GeoJSON)
+
+:::tip Essential bundle
+Included in the **Essential** setup script.
+:::
+
+New York City taxi zone boundaries - perfect for spatial join and aggregation examples.
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="DOWNLOAD_NYC_TAXI_ZONES"
+  outputConstant="DOWNLOAD_NYC_TAXI_ZONES_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_NYC_TAXI_ZONES"
+/>
+
+
+---
+
+### London Postcode Zones (GeoJSON)
+
+:::tip Essential bundle
+Included in the **Essential** setup script.
+:::
+
+London postcode district boundaries - great for UK-based GridX BNG examples.
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="DOWNLOAD_LONDON_POSTCODES"
+  outputConstant="DOWNLOAD_LONDON_POSTCODES_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_LONDON_POSTCODES"
+/>
+
+
+---
+
+### NYC Boroughs (GeoJSON)
+
+:::tip Essential bundle
+Included in the **Essential** setup script.
+:::
+
+NYC's 5 boroughs - large administrative areas perfect for aggregation examples.
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="DOWNLOAD_NYC_BOROUGHS"
+  outputConstant="DOWNLOAD_NYC_BOROUGHS_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_NYC_BOROUGHS"
+/>
+
+
+---
+
+### NYC Neighborhood Tabulation Areas (GeoJSON)
+
+:::info Complete bundle
+Included in the **Complete** setup script.
+:::
+
+NYC neighborhoods - medium-sized areas for detailed analysis.
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="DOWNLOAD_NYC_NTA"
+  outputConstant="DOWNLOAD_NYC_NTA_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_NYC_NTA"
+/>
+
+
+---
+
+### London Boroughs (GeoJSON)
+
+:::info Complete bundle
+Included in the **Complete** setup script (downloaded as shapefile and converted to GeoJSON at `london/boroughs/london_boroughs.geojson`).
+:::
+
+London's boroughs—perfect for UK-based analysis and GridX BNG examples. Use the **geojson_ogr** reader.
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="DOWNLOAD_LONDON_BOROUGHS"
+  outputConstant="DOWNLOAD_LONDON_BOROUGHS_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_LONDON_BOROUGHS"
+/>
+
+
+---
+
+### Shapefiles - NYC Parks
+
+:::info Complete bundle
+Included in the **Complete** setup script.
+:::
+
+NYC parks as traditional shapefile format - demonstrates multi-file shapefile reading (.shp, .shx, .dbf, .prj).
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="DOWNLOAD_NYC_PARKS"
+  outputConstant="DOWNLOAD_NYC_PARKS_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_NYC_PARKS"
+/>
+
+
+---
+
+### Shapefiles - NYC Subway Stations
+
+:::info Complete bundle
+Included in the **Complete** setup script.
+:::
+
+NYC subway station entrances as point shapefile - demonstrates point geometry in shapefile format.
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="DOWNLOAD_NYC_SUBWAY"
+  outputConstant="DOWNLOAD_NYC_SUBWAY_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_NYC_SUBWAY"
+/>
+
+
+---
+
+### GeoPackage - NYC Multi-Layer
+
+:::info Complete bundle
+Included in the **Complete** setup script (created from other NYC vector layers).
+:::
+
+Multi-layer GeoPackage with all NYC vector data in one file - demonstrates layer-based organization.
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="CREATE_GEOPACKAGE_NYC"
+  outputConstant="CREATE_GEOPACKAGE_NYC_output"
+/>
+
+**Usage in examples:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_GEOPACKAGE_NYC"
+/>
+
+
+---
+
+### File Geodatabase - NYC Multi-Feature Class
+
+:::info Complete bundle
+Optional: Create with the script below. GeoBrix can read FileGDB (OpenFileGDB driver). The Complete setup script creates a GeoPackage instead; use this section if you need FileGDB format.
+:::
+
+Multi-feature class File Geodatabase (Esri format) created with **OpenFileGDB driver** (GDAL 3.6+).
+
+:::tip OpenFileGDB Driver (GDAL 3.6+)
+The **OpenFileGDB driver** provides full read/write support for FileGDB since GDAL 3.6 and is included in standard GDAL installations. No proprietary Esri SDK required!
+
+**GeoPackage** is still recommended for new projects due to its open standard and wider tool support, but FileGDB creation now works out-of-the-box with modern GDAL.
+:::
+
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="CREATE_FILEGDB_NYC"
+  outputConstant="CREATE_FILEGDB_NYC_output"
+/>
+
+**Usage with GeoBrix:**
+
+<CodeFromTest
+  code={vectorDataCode}
+  language="python"
+  source="docs/tests/python/sample_data/vector_data.py"
+  testFile="docs/tests/python/sample_data/test_vector_data.py"
+  functionName="USAGE_FILEGDB_NYC"
+/>
+
+
+:::info OpenFileGDB Driver (GDAL 3.6+)
+**Full read/write support** is available with the OpenFileGDB driver since GDAL 3.6:
+- ✅ **Read**: Works with any GDAL version
+- ✅ **Write**: Available since GDAL 3.6+ (included in standard distributions)
+- ✅ **No proprietary SDK required** (unlike the old FileGDB driver)
+
+**Source**: [GDAL OpenFileGDB Documentation](https://gdal.org/en/stable/drivers/vector/openfilegdb.html)
+
+GeoPackage is still recommended for new projects due to its open standard, but FileGDB creation now works out-of-the-box with modern GDAL!
+:::
+
+
+---

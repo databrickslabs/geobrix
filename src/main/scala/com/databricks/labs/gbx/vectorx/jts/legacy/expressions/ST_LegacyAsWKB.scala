@@ -8,6 +8,10 @@ import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.types._
 
+/**
+  * Case class: catalyst expression node for gbx_st_legacyaswkb(geom). Converts a legacy internal-row geometry
+  * to WKB bytes. Used when the function is invoked in SQL or via functions.st_legacyaswkb(column).
+  */
 case class ST_LegacyAsWKB(
     geom: Expression
 ) extends InvokedExpression {
@@ -21,6 +25,7 @@ case class ST_LegacyAsWKB(
 
 }
 
+/** Companion: SQL name gbx_st_legacyaswkb, builder, and eval. */
 object ST_LegacyAsWKB extends WithExpressionInfo {
 
     def eval(legacyGeom: InternalRow): Array[Byte] = {
@@ -31,20 +36,4 @@ object ST_LegacyAsWKB extends WithExpressionInfo {
     override def name: String = "gbx_st_legacyaswkb"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new ST_LegacyAsWKB(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String = "Returns the legacy vector data format used by DBLabs Mosaic as WKB."
-
-    override def usageArgs: String = "legacy_geom"
-
-    override def examples: String = {
-        s"""
-          |    Examples:
-          |      > SELECT _FUNC_(_ARGS_);
-          |        [01 03 00 00 00 0...]
-          |  """.stripMargin
-    }
-
-    // extended usage args might be useful
-    override def extendedUsageArgs: String = "legacy_geom: <see vectorx.jts.legacy.InternalGeometry>"
 }

@@ -71,7 +71,27 @@ git commit -m "feat: your changes"
 
 ---
 
-### Scenario 3: **CI Failed - Need to Debug**
+### Scenario 3: **Test Documentation Code** 📚
+
+```bash
+# 1. Run documentation tests locally (fast)
+./scripts/ci/run-doc-tests.sh local
+
+# 2. If passing, trigger in CI
+./scripts/ci/run-doc-tests.sh trigger
+
+# 3. Watch the CI run
+./scripts/ci/run-doc-tests.sh watch
+```
+
+**Alternative** (via ci-manager):
+```bash
+./scripts/ci/ci-manager.sh docs
+```
+
+---
+
+### Scenario 4: **CI Failed - Need to Debug**
 
 ```bash
 # 1. Fetch the logs
@@ -126,8 +146,10 @@ Enter choice [1-7]:
 | Command | What It Does | When To Use |
 |---------|--------------|-------------|
 | `./scripts/ci/push-and-watch.sh` ⭐ | Push & auto-watch | **Most common - after commits** |
+| `./scripts/ci/run-doc-tests.sh local` 📚 | Run doc tests locally | Test documentation code |
 | `./scripts/ci/ci-manager.sh status` | Show CI dashboard | Check if tests are passing |
 | `./scripts/ci/ci-manager.sh push` | Same as push-and-watch.sh | Alternative command |
+| `./scripts/ci/ci-manager.sh docs` | Documentation tests menu | Test/check doc examples |
 | `./scripts/ci/ci-manager.sh watch` | Watch existing run | Monitor in-progress tests |
 | `./scripts/ci/ci-manager.sh logs` | Download logs | Debug failures |
 

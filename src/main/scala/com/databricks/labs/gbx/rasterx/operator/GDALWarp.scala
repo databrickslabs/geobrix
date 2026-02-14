@@ -5,9 +5,10 @@ import org.gdal.gdal.{Dataset, WarpOptions, gdal}
 import java.nio.file.{Files, Paths}
 import scala.util.Try
 
-/** GDALWarp is a wrapper for the GDAL Warp command. */
+/** Runs gdal.Warp to reproject/mosaic rasters to outputPath; returns (Dataset, metadata). Caller must release. */
 object GDALWarp {
 
+    /** Adds -s_srs EPSG:4326 when dataset has no SRS. */
     private def addSrcSRS(options: java.util.Vector[String], ds: Dataset): java.util.Vector[String] = {
         val srs = ds.GetSpatialRef()
         if (srs == null) {
@@ -21,18 +22,7 @@ object GDALWarp {
         }
     }
 
-    /**
-      * Executes the GDAL Warp command.
-      *
-      * @param outputPath
-      *   The output path of the warped file.
-      * @param dss
-      *   The rasters to warp.
-      * @param command
-      *   The GDAL Warp command.
-      * @return
-      *   A Raster object.
-      */
+    /** Warps dss to outputPath; appends options and injects SRS if needed. Returns (Dataset, metadata). */
     def executeWarp(
         outputPath: String,
         dss: Array[Dataset],

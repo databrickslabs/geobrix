@@ -7,17 +7,8 @@ import org.apache.spark.sql.types._
 import org.locationtech.jts.geom.Geometry
 
 /**
-  * A case class modeling Polygons and MultiPolygons.
-  *
-  * @param typeId
-  *   Type id indicting which enum value represents this geometry.
-  * @param boundaries
-  *   A collection of boundaries, for Polygon the length is 1, for MultiPolygon
-  *   the collection will contain boundaries of each sub Polygon.
-  * @param holes
-  *   A collection of hole collections, for Polygon the length is 1, for
-  *   MultiPolygon the collection will contain hole collection for each sub
-  *   Polygon.
+  * Case class modeling Polygons and MultiPolygons in legacy Spark-internal form (typeId, srid, boundaries, holes).
+  * Used for serialization/deserialization of geometry in legacy vector path; convert to JTS via toJTS.
   */
 case class InternalGeometry(
     typeId: Int,
@@ -26,6 +17,7 @@ case class InternalGeometry(
     holes: Array[Array[Array[InternalCoord]]]
 ) {
 
+    /** Converts this internal representation to a JTS Geometry (Point, LineString, Polygon, etc.). */
     def toJTS: Geometry = {
         GeometryTypeEnum.fromTypeId(typeId) match {
             case GeometryTypeEnum.POINT              => JTS.point(boundaries.head.head.toCoordinate)
@@ -47,20 +39,13 @@ case class InternalGeometry(
 
 }
 
-/** Companion object. */
+/** Companion: InternalCoordType for schema; apply(InternalRow) builds from Spark internal row. */
 object InternalGeometry {
 
+    /** Spark DataType for a single InternalCoord (array of doubles). */
     val InternalCoordType: DataType = ArrayType.apply(DoubleType)
 
-    /**
-      * A smart constructor that construct an instance of [[InternalGeometry]]
-      * based on an instance of internal Spark data.
-      *
-      * @param input
-      *   An instance of [[InternalRow]].
-      * @return
-      *   An instance of [[InternalGeometry]].
-      */
+    /** Builds InternalGeometry from a Spark InternalRow (typeId, srid, boundaries array, holes array). */
     def apply(input: InternalRow): InternalGeometry = {
         val typeId = input.getInt(0)
         val srid = input.getInt(1)

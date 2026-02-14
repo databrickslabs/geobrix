@@ -12,11 +12,12 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Expression for combining rasters using average of pixels. */
+/** Expression for combining rasters using average of pixels. Case class holding tileExpr (array of tiles); used as the catalyst node when gbx_rst_combineavg(tiles) is invoked in SQL or DataFrame API. */
 case class RST_CombineAvg(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile array element struct. */
     private def rasterType = tileExpr.dataType.asInstanceOf[ArrayType].elementType.asInstanceOf[StructType].fields(1).dataType
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
@@ -27,7 +28,7 @@ case class RST_CombineAvg(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_CombineAvg extends WithExpressionInfo {
 
     def evalPath(row: ArrayData, conf: UTF8String): InternalRow = eval(row, conf, StringType)
@@ -58,20 +59,5 @@ object RST_CombineAvg extends WithExpressionInfo {
     override def name: String = "gbx_rst_combineavg"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_CombineAvg(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String = "Combines a collection of raster tiles by averaging the pixel values."
-
-    override def usageArgs: String = "tiles"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(array(tile1, tile2, tile3) AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_ARRAY_TYPE_}"
 
 }

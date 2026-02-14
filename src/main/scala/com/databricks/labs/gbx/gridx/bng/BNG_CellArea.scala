@@ -7,6 +7,7 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types.{DataType, DoubleType}
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Expression that returns the area of the BNG cell in square kilometres. Argument: cellId. */
 case class BNG_CellArea(
     cellIdExpression: Expression
 ) extends InvokedExpression {
@@ -20,6 +21,7 @@ case class BNG_CellArea(
 
 }
 
+/** Companion: SQL name gbx_bng_cellarea, builder, and eval. */
 object BNG_CellArea extends WithExpressionInfo {
 
     def eval(cellId: UTF8String): Double = execute(cellId.toString)
@@ -36,13 +38,5 @@ object BNG_CellArea extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_CellArea(c(0))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

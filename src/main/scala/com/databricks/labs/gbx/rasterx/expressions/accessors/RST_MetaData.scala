@@ -19,6 +19,7 @@ case class RST_MetaData(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = MapType(StringType, StringType)
@@ -29,7 +30,7 @@ case class RST_MetaData(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MetaData extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): MapData = eval(row, conf, StringType)
@@ -71,31 +72,5 @@ object RST_MetaData extends WithExpressionInfo {
     override def name: String = "gbx_rst_metadata"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_MetaData(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Extract the metadata describing the raster tile. Metadata is return as a map of key value pairs."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      {"NC_GLOBAL#publisher_url": "https://coralreefwatch.noaa.gov", "NC_GLOBAL#geospatial_lat_units":
-           |      "Degrees_north", "NC_GLOBAL#platform_vocabulary": "NOAA NODC Ocean Archive System Platforms",
-           |      "NC_GLOBAL#creator_type": "group", "NC_GLOBAL#geospatial_lon_units": "degrees_east",
-           |      "NC_GLOBAL#geospatial_bounds": "POLYGON((-90.0 180.0, 90.0 180.0, 90.0 -180.0, -90.0 -180.0,
-           |      -90.0 180.0))", "NC_GLOBAL#keywords": "Oceans > Ocean Temperature > Sea Surface Temperature,
-           |      Oceans > Ocean Temperature > Water Temperature, Spectral/Engineering > Infrared Wavelengths >
-           |      Thermal Infrared, Oceans > Ocean Temperature > Bleaching Alert Area", "NC_GLOBAL#geospatial_lat_
-           |      max": "89.974998", .... (truncated).... "NC_GLOBAL#history": "This is a product data file of the
-           |      NOAA Coral Reef Watch Daily Global 5km Satellite Coral Bleaching Heat Stress Monitoring Product
-           |      Suite Version 3.1 (v3.1) in its NetCDF Version 1.0 (v1.0).", "NC_GLOBAL#publisher_institution":
-           |      "NOAA/NESDIS/STAR Coral Reef Watch Program", "NC_GLOBAL#cdm_data_type": "Grid"}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

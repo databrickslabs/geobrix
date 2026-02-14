@@ -21,6 +21,7 @@ case class RST_SeparateBands(
       with Serializable
       with CodegenFallback {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def position: Boolean = false
@@ -50,28 +51,11 @@ case class RST_SeparateBands(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_SeparateBands extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_separatebands"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_SeparateBands(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        """Returns a set of new single-band rasters, one for each band in the input raster.
-          | The result set will contain one row per input band for each tile provided and will add field ‘bandIndex’.""".stripMargin
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

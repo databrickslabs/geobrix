@@ -1,0 +1,58 @@
+---
+description: Pattern for advanced library-integration doc examples (rasterio, xarray, etc.)
+alwaysApply: false
+---
+
+# Library Integration Doc Examples Pattern
+
+Use this pattern for code examples on `docs/docs/advanced/library-integration.mdx` (rasterio, xarray, PDAL, etc.) so they are one-copy, fully validated, and show execution with sample-data.
+
+## 1. Single source and path at top
+
+- **All example code** lives in `docs/tests/python/advanced/library_integration.py`.
+- **At the top of each example function** (right after the docstring), specify the sample-data Volumes path so the doc snippet shows the actual value:
+  ```python
+  # Sample-data Volumes path (used by all [rasterio|xarray|…] examples on this page)
+  raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+  ```
+- Use that variable (e.g. `raster_path`) in the load call; do not rely only on a module-level constant in the snippet.
+
+## 2. Execution and results
+
+- Each example function **takes `spark`**, loads data from the sample path, runs the UDF/pipeline, and **displays results**:
+  - `rx.register(spark)` when using GeoBrix raster functions.
+  - Load with `spark.read.format("binaryFile").load(raster_path)` (or appropriate reader).
+  - Build tiles if needed: `rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")`.
+  - Apply the UDF, then e.g. `result.limit(2).show(truncate=50)`.
+  - **Return** the result DataFrame so tests can assert on it.
+
+## 3. Output constants
+
+- For each example function, add a **corresponding `_output` constant** with representative `.show()`-style output (table with path and result columns).
+- Use these in the doc via `outputConstant="..._output"` so the "Example output" block is consistent and single-source.
+
+## 4. Install snippets
+
+- Put install commands in **constants** (e.g. `rasterio_install_snippet`, `xarray_install_snippet`) so the doc uses CodeFromTest with `functionName="..._install_snippet"` instead of static blocks.
+
+## 5. MDX (CodeFromTest)
+
+- Use **source** and **testFile** on every example:
+  - `source="docs/tests/python/advanced/library_integration.py"`
+  - `testFile="docs/tests/python/advanced/test_library_integration.py"`
+- Use **outputConstant** for the example’s `_output` constant so the block is "Fully Validated" and shows example output.
+- Do **not** set `validationLevel="compile"` for these; omit it so the badge shows as fully validated (tested).
+
+## 6. Tests
+
+- **Integration tests**: For each example, a test that calls the function with the `spark` fixture, asserts result is not None and has expected columns, and uses `pytest.skip` if deps or sample data are missing. Mark with `@pytest.mark.integration`.
+- **Output constants**: A single test that asserts all `_output` constants for that section exist (e.g. `test_xarray_output_constants`).
+
+## Reference: sample-data Volumes paths
+
+- NYC Sentinel-2 (single raster): `/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif`
+- Base: `/Volumes/main/default/geobrix_samples/geobrix-examples` (nyc/, london/, etc.)
+
+## Reference: rasterio implementation
+
+Rasterio examples follow this pattern in `library_integration.py` and `library-integration.mdx`; use them as the template when adding or refactoring xarray, PDAL, or other library sections.

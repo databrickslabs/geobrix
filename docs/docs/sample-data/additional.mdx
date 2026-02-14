@@ -1,0 +1,118 @@
+---
+sidebar_position: 3
+title: Additional
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import additionalCode from '!!raw-loader!../../tests/python/sample_data/additional.py';
+import additionalDBR from '!!raw-loader!../../tests-dbr/python/sample_data/additional.py';
+
+## Generate Synthetic Data
+
+For lightweight testing without downloads, create synthetic data directly in your notebook:
+
+### Synthetic Points (Vector)
+
+:::info Databricks Runtime only
+This example uses built-in **`st_point`** and **`st_astext`** ([Databricks Spatial SQL](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-st-geospatial-functions)), which are only available on **Databricks Runtime (DBR) 17.1+**. The code and tests live under `docs/tests-dbr/` and will skip when run on open-source Spark.
+:::
+
+<CodeFromTest
+  code={additionalDBR}
+  language="python"
+  source="docs/tests-dbr/python/sample_data/additional.py"
+  testFile="docs/tests-dbr/python/sample_data/test_additional.py"
+  functionName="SYNTHETIC_POINTS"
+  outputConstant="SYNTHETIC_POINTS_output"
+/>
+
+
+### Synthetic Raster (Small Test File)
+
+
+<CodeFromTest
+  code={additionalCode}
+  language="python"
+  source="docs/tests/python/sample_data/additional.py"
+  testFile="docs/tests/python/sample_data/test_additional.py"
+  functionName="SYNTHETIC_RASTER"
+  outputConstant="SYNTHETIC_RASTER_output"
+/>
+
+
+---
+
+## Alternative Data Sources
+
+### NYC Open Data
+
+Explore 100+ additional NYC datasets at https://data.cityofnewyork.us/
+
+**Popular datasets:**
+- **NYC Parks**: `https://data.cityofnewyork.us/api/geospatial/enfh-gkve?method=export&format=GeoJSON`
+- **Street Centerlines**: Vector road network
+- **Land Use**: Zoning and property data
+- **311 Service Requests**: Point data with coordinates
+- **Building Footprints**: All NYC buildings
+
+### London Open Data
+
+Explore London datasets at https://data.london.gov.uk/
+
+**Popular datasets:**
+- **Transport networks**: Underground, bus routes
+- **Crime statistics**: With geographic data
+- **Green spaces**: Parks and nature reserves
+
+### More Sentinel-2 Imagery via STAC
+
+Access global Sentinel-2 data:
+
+
+<CodeFromTest
+  code={additionalCode}
+  language="python"
+  source="docs/tests/python/sample_data/additional.py"
+  testFile="docs/tests/python/sample_data/test_additional.py"
+  functionName="STAC_ANY_LOCATION"
+/>
+
+
+### Other STAC Catalogs
+
+- **Earth Search**: https://earth-search.aws.element84.com/v1
+  - Sentinel-2, Landsat on AWS
+  
+- **USGS STAC**: https://landsatlook.usgs.gov/stac-server
+  - Landsat collection
+
+- **Copernicus Data Space**: https://dataspace.copernicus.eu/
+  - European satellite data
+
+### Global Elevation Data
+
+- **SRTM 30m**: https://dwtkns.com/srtm30m/
+  - Global coverage (60°N to 56°S)
+  - 30m resolution
+  
+- **Copernicus DEM**: https://portal.opentopography.org/
+  - Higher resolution for Europe
+  - 30m global
+
+### US Data
+
+- **US Census TIGER**: https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html
+  - All US administrative boundaries
+  - Roads, water features, census tracts
+
+- **USGS National Map**: https://www.usgs.gov/programs/national-geospatial-program/national-map
+  - Elevation, land cover, imagery
+
+### UK Data
+
+- **Ordnance Survey Open Data**: https://www.ordnancesurvey.co.uk/business-government/products/open-map-data
+  - UK administrative boundaries
+  - Topographic data
+
+- **Environment Agency**: https://environment.data.gov.uk/
+  - Flood zones, elevation, land cover

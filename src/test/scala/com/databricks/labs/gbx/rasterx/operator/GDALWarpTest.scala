@@ -134,5 +134,42 @@ class GDALWarpTest extends AnyFunSuite with BeforeAndAfterAll {
         caught should not be null
     }
 
+    test("GDALWarp should reject invalid command") {
+        val outputPath = "/vsimem/invalid.tif"
+        val invalidCommand = "invalid_command"
+        
+        assertThrows[IllegalArgumentException] {
+            GDALWarp.executeWarp(outputPath, Array(ds), Map.empty, invalidCommand)
+        }
+    }
+
+    test("GDALWarp should handle dataset without spatial reference") {
+        // Create a dataset without spatial reference
+        val driver = gdal.GetDriverByName("MEM")
+        val memDs = driver.Create("/vsimem/no_srs.tif", 100, 100, 1)
+        
+        // Set geotransform so it's a valid raster
+        val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, -1.0)
+        memDs.SetGeoTransform(gt)
+        
+        // Verify it has no spatial reference (triggers addSrcSRS code path)
+        memDs.GetSpatialRef shouldBe null
+        
+        val outputPath = "/vsimem/warped_default_srs.tif"
+        val command = "gdalwarp -t_srs EPSG:3857"
+        val (resultDs, metadata) = GDALWarp.executeWarp(outputPath, Array(memDs), Map.empty, command)
+        
+        // Operation should complete successfully (addSrcSRS adds EPSG:4326 default)
+        resultDs should not be null
+        resultDs.getRasterXSize should be > 0
+        resultDs.getRasterYSize should be > 0
+        metadata should contain key "path"
+        
+        gdal.Unlink(outputPath)
+        if (resultDs != null) resultDs.delete()
+        memDs.delete()
+        gdal.Unlink("/vsimem/no_srs.tif")
+    }
+
 }
 

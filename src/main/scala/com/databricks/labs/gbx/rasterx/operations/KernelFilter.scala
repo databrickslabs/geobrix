@@ -5,8 +5,10 @@ import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
 import org.gdal.gdal.{Band, Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GF_Write
 
+/** Applies an NxN kernel filter (e.g. min, max, mean) to each band. */
 object KernelFilter {
 
+    /** Filters the dataset with a kernel of the given size and operation; returns (new Dataset, metadata). Caller must release. */
     def filter(ds: Dataset, kernelSize: Int, operation: String): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val outShortName = ds.GetDriver().getShortName
@@ -38,6 +40,7 @@ object KernelFilter {
         (resDs, newOptions)
     }
 
+    /** Applies the kernel filter to one band, writing to outBand. */
     def filterBand(inBand: Band, outBand: Band, kernelSize: Int, operation: String): Unit = {
         val blockSize = inBand.GetBlockXSize()
         val stride = kernelSize / 2

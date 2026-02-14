@@ -11,8 +11,10 @@ import org.locationtech.jts.geom.Geometry
 import java.nio.file.{Files, Paths}
 import java.util.Locale
 
+/** Clips a raster to a JTS geometry via gdalwarp cutline; geometry is reprojected to raster CRS and buffered. */
 object ClipToGeom {
 
+    /** Clips the dataset to the geometry; returns (new Dataset, updated metadata). Caller must release the Dataset. */
     def clip(
         ds: Dataset,
         options: Map[String, String],
@@ -41,6 +43,7 @@ object ClipToGeom {
         result
     }
 
+    /** Writes geometry to a temp file for gdalwarp cutline; returns path. */
     private def generateClipFile(
         geometry: Geometry,
         geomCRS: SpatialReference,
@@ -65,6 +68,7 @@ object ClipToGeom {
         tmpFile.toAbsolutePath.toString
     }
 
+    /** Reprojects geometry to raster CRS and buffers by half a pixel for clean clip. */
     private def getClipGeom(
         geometry: Geometry,
         geomSR: SpatialReference,
@@ -82,6 +86,7 @@ object ClipToGeom {
         adjustedGeom
     }
 
+    /** Deletes the temporary cutline file. */
     private def cleanUpClipper(fileName: String): Unit = {
         val clipFile = Paths.get(fileName)
         Files.deleteIfExists(clipFile)

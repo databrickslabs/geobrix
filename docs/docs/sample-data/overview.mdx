@@ -1,0 +1,136 @@
+---
+sidebar_position: 0
+title: Overview
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import overviewCode from '!!raw-loader!../../tests/python/sample_data/overview.py';
+
+# Sample Data for Examples
+
+This page provides copy-paste code to download sample datasets for use with GeoBrix examples.
+
+:::tip Quick Start
+Copy any code block below into a Databricks notebook cell and run it. The data will be downloaded to Unity Catalog Volumes and ready to use.
+:::
+
+---
+
+## Overview
+
+GeoBrix provides two curated sample data bundles with geographically coherent datasets for NYC and London. All datasets within each region cover the same area, so you can run realistic workflows (clip rasters to boundaries, zonal statistics, multi-scale spatial joins).
+
+### Essential Bundle (~355MB) — Get Started Quickly
+- **NYC:** Taxi Zones, Boroughs, Sentinel-2 imagery, SRTM elevation  
+- **London:** Postcodes, Sentinel-2 imagery, SRTM elevation  
+- **Formats:** GeoJSON, GeoTIFF, SRTM  
+- **Use for:** Learning GeoBrix basics, RasterX operations, GridX BNG examples, basic spatial analysis  
+- **[Jump to setup script →](./setup#essential-bundle-setup)**
+
+### Complete Bundle (~795MB) — Full Format Coverage
+- Everything in Essential, plus:
+  - NYC Neighborhoods, Parks, Subway, HRRR weather (NetCDF/GRIB2), extra SRTM tile (NYC East), GeoPackage
+  - London Boroughs
+- **Formats:** All of the above + Shapefile, GeoPackage. FileGDB can be created optionally via the [Vector Data](./vector-data#file-geodatabase---nyc-multi-feature-class) script.  
+- **Use for:** Multi-scale analysis, all GeoBrix reader formats, advanced workflows, production-like examples  
+- **[Jump to setup script →](./setup#complete-bundle-setup-optional)**
+
+**Which to choose?** Essential for learning and most docs; Complete if you need Shapefile/NetCDF/GeoPackage/FileGDB or want the full set of datasets.
+
+Next: [**Setup**](./setup) — Configure storage location and run the Essential or Complete bundle scripts.
+
+---
+
+## Geographic Coherence
+
+All sample data is organized around two coherent geographic regions, enabling realistic workflows:
+
+:::tip Regional Organization
+Data is organized by region with parent folders:
+- `nyc/` - All NYC datasets (vector, raster, weather, format examples)
+- `london/` - All London datasets (vector, raster)
+
+This structure makes it easy to find related datasets and understand geographic scope.
+:::
+
+### NYC Region (Primary)
+
+**Vector layers:**
+- Taxi Zones (small areas)
+- Boroughs (large areas)
+- Neighborhoods (medium areas - Complete bundle)
+- Parks, Subway stations (Complete bundle)
+
+**Raster layers:**
+- Sentinel-2 imagery (10m resolution)
+- SRTM elevation (30m resolution)
+- HRRR weather data (3km resolution, CONUS-only - Complete bundle)
+
+**Enables workflows like:**
+
+<CodeFromTest
+  code={overviewCode}
+  language="python"
+  source="docs/tests/python/sample_data/overview.py"
+  testFile="docs/tests/python/sample_data/test_overview.py"
+  functionName="GEOGRAPHIC_COHERENCE_NYC_ZONAL"
+  outputConstant="GEOGRAPHIC_COHERENCE_NYC_ZONAL_output"
+/>
+
+<CodeFromTest
+  code={overviewCode}
+  language="python"
+  source="docs/tests/python/sample_data/overview.py"
+  testFile="docs/tests/python/sample_data/test_overview.py"
+  functionName="GEOGRAPHIC_COHERENCE_NYC_CLIP"
+  outputConstant="GEOGRAPHIC_COHERENCE_NYC_CLIP_output"
+/>
+
+<CodeFromTest
+  code={overviewCode}
+  language="python"
+  source="docs/tests/python/sample_data/overview.py"
+  testFile="docs/tests/python/sample_data/test_overview.py"
+  functionName="GEOGRAPHIC_COHERENCE_NYC_MULTISCALE"
+  outputConstant="GEOGRAPHIC_COHERENCE_NYC_MULTISCALE_output"
+/>
+
+### London Region (For BNG Examples)
+
+**Vector layers:**
+- Postcode zones
+- Boroughs (Complete bundle)
+
+**Raster layers:**
+- Sentinel-2 imagery (10m resolution)
+- SRTM elevation (30m resolution)
+
+**Perfect for GridX BNG examples:**
+
+<CodeFromTest
+  code={overviewCode}
+  language="python"
+  source="docs/tests/python/sample_data/overview.py"
+  testFile="docs/tests/python/sample_data/test_overview.py"
+  functionName="GEOGRAPHIC_COHERENCE_LONDON_BNG"
+  outputConstant="GEOGRAPHIC_COHERENCE_LONDON_BNG_output"
+/>
+
+
+---
+
+## Next Steps
+
+- [Quick Start](../../quick-start) — Use this sample data in your first GeoBrix workflow
+- [API Reference](../../api/overview) — Explore all available functions
+
+---
+
+## More
+
+Sample Data subpages (same order as sidebar):
+
+- [Setup](./setup) — Configure storage and run Essential or Complete bundle scripts
+- [Vector Data](./vector-data) — Per-dataset download scripts (NYC Taxi Zones, Boroughs, London Postcodes, Neighborhoods, Parks, Subway, GeoPackage, FileGDB, London Boroughs)
+- [Raster Data](./raster-data) — Sentinel-2 (NYC & London), SRTM elevation, HRRR weather (GRIB2)
+- [Additional](./additional) — Synthetic data and alternative data sources (NYC Open Data, STAC, USGS, Ordnance Survey)

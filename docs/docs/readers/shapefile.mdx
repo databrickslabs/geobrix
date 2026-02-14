@@ -1,0 +1,80 @@
+---
+sidebar_position: 4
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import shapefileExamples from '!!raw-loader!../../tests/python/readers/shapefile_examples.py';
+import shapefileScala from '!!raw-loader!../../tests/scala/readers/ShapefileExamples.scala';
+
+# Shapefile Reader
+
+Read ESRI Shapefile format using the `shapefile` reader.
+
+## Format Name
+
+`shapefile_ogr`
+
+## Supported Files
+
+- **`.shp`** - Standard shapefile (requires .shx, .dbf files)
+- **`.zip`** - ZIP files containing shapefiles
+- Directories with multiple shapefiles
+
+## Basic Usage
+
+### Python
+
+<CodeFromTest
+  code={shapefileExamples}
+  language="python"
+  functionName="READ_SHAPEFILE"
+  source="docs/tests/python/readers/shapefile_examples.py"
+  testFile="docs/tests/python/readers/test_shapefile_examples.py"
+  outputConstant="READ_SHAPEFILE_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={shapefileScala}
+  language="scala"
+  functionName="READ_SHAPEFILE"
+  source="docs/tests/scala/readers/ShapefileExamples.scala"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+  outputConstant="READ_SHAPEFILE_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={shapefileExamples}
+  language="sql"
+  functionName="SQL_SHAPEFILE"
+  source="docs/tests/python/readers/shapefile_examples.py"
+  testFile="docs/tests/python/readers/test_shapefile_examples.py"
+  outputConstant="SQL_SHAPEFILE_output"
+/>
+
+## Options
+
+For the full list of options (chunkSize, driverName, layerN, asWKB, etc.), see [OGR reader options](./ogr#options).
+
+### Chunk Size
+
+Adjust records per chunk for performance:
+
+<CodeFromTest
+  code={shapefileExamples}
+  language="python"
+  functionName="READ_WITH_OPTIONS"
+  source="docs/tests/python/readers/shapefile_examples.py"
+  testFile="docs/tests/python/readers/test_shapefile_examples.py"
+  outputConstant="READ_WITH_OPTIONS_output"
+/>
+
+## Next Steps
+
+- [GeoJSON Reader](./geojson)
+- [GeoPackage Reader](./geopackage)
+- [FileGDB Reader](./filegdb)
+- [API Reference](../api/overview)

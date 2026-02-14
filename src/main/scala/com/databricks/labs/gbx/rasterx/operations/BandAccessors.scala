@@ -6,8 +6,10 @@ import org.gdal.gdalconst.gdalconstConstants
 import scala.jdk.CollectionConverters.DictionaryHasAsScala
 import scala.util.Try
 
+/** Extracts metadata and statistics from a GDAL band (metadata dict, min/max, NoData, data type, mask). */
 object BandAccessors {
 
+    /** Returns the band's metadata dictionary as a String->String map. */
     def getMetadata(band: Band): Map[String, String] = {
         if (Option(band).isEmpty) Map.empty
         else {
@@ -17,6 +19,7 @@ object BandAccessors {
         }
     }
 
+    /** Computes and returns (min, max) pixel value for the band; (NaN, NaN) if band is null. */
     def getMinMax(band: Band): (Double, Double) = {
         val minmax = Array.ofDim[Double](2)
         if (Option(band).isEmpty) (Double.NaN, Double.NaN)
@@ -26,6 +29,7 @@ object BandAccessors {
         }
     }
 
+    /** Returns the band's NoData value, or Double.NaN if unset or band is null. */
     def getNoDataValue(band: Band): Double = {
         if (Option(band).isEmpty) Double.NaN
         else {
@@ -40,6 +44,7 @@ object BandAccessors {
         }
     }
 
+    /** Returns a human-readable data type name (e.g. Byte, Float32) for the band. */
     def dataTypeHuman(band: Band): String =
         Try(band.getDataType).getOrElse(0) match {
             case gdalconstConstants.GDT_Byte     => "Byte"
@@ -56,6 +61,7 @@ object BandAccessors {
             case _                               => "Unknown"
         }
 
+    /** Returns true if the band has no valid pixels (mask all invalid). */
     def isEmpty(band: Band): Boolean = {
         val flags = band.GetMaskFlags()
         if ((flags & gdalconstConstants.GMF_ALL_VALID) != 0) return false

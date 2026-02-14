@@ -4,28 +4,15 @@ import org.apache.spark.sql.catalyst.util.ArrayData
 import org.locationtech.jts.geom.Coordinate
 
 /**
-  * A case class modeling 2D or 3D point instances. Coordinates are stored as an
-  * array of doubles to accommodate for variable number of dimensions.
-  *
-  * @param coords
-  *   A sequence of coordinates.
+  * Case class modeling a 2D or 3D point (coords: x, y or x, y, z). Used by legacy InternalGeometry
+  * to represent vertices; serializes to Spark ArrayData and converts to/from JTS Coordinate.
   */
 case class InternalCoord(coords: Seq[Double]) {
 
-    /**
-      * Serialize for spark internals.
-      *
-      * @return
-      *   An instance of [[ArrayData]].
-      */
+    /** Serializes coords to Spark ArrayData for storage in InternalRow/arrays. */
     def serialize: ArrayData = ArrayData.toArrayData(coords)
 
-    /**
-      * Convert to JTS [[Coordinate]] instance.
-      *
-      * @return
-      *   An instance of [[Coordinate]].
-      */
+    /** Converts to a JTS Coordinate (2D or 3D depending on coords.length). */
     // noinspection ZeroIndexToHead
     def toCoordinate: Coordinate = {
         if (coords.length == 2) {
@@ -37,17 +24,10 @@ case class InternalCoord(coords: Seq[Double]) {
 
 }
 
-/** Companion object. */
+/** Companion: construct from JTS Coordinate or Spark ArrayData. */
 object InternalCoord {
 
-    /**
-      * Smart constructor based on JTS [[Coordinate]] instance.
-      *
-      * @param coordinate
-      *   An instance of [[Coordinate]].
-      * @return
-      *   An instance of [[InternalCoord]].
-      */
+    /** Builds InternalCoord from a JTS Coordinate (2 or 3 doubles). */
     def apply(coordinate: Coordinate): InternalCoord = {
         val z = coordinate.getZ
         if (z.isNaN) {
@@ -57,14 +37,7 @@ object InternalCoord {
         }
     }
 
-    /**
-      * Smart constructor based on Spark internal instance.
-      *
-      * @param input
-      *   An instance of [[ArrayData]].
-      * @return
-      *   An instance of [[InternalCoord]].
-      */
+    /** Builds InternalCoord from Spark ArrayData (2 or 3 doubles). */
     def apply(input: ArrayData): InternalCoord = {
         if (input.numElements() == 2) {
             new InternalCoord(Seq(input.getDouble(0), input.getDouble(1)))

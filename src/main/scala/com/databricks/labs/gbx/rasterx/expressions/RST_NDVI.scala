@@ -23,6 +23,7 @@ case class RST_NDVI(
     nirIndex: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, redIndex, nirIndex, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
@@ -33,7 +34,7 @@ case class RST_NDVI(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_NDVI extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, redIndex: Int, nirIndex: Int, conf: UTF8String): InternalRow = {
@@ -90,21 +91,5 @@ object RST_NDVI extends WithExpressionInfo {
     override def name: String = "gbx_rst_ndvi"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_NDVI(c(0), c(1), c(2))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Calculates the Normalized Difference Vegetation Index (NDVI) for a raster."
-
-    override def usageArgs: String = "tile, red_band, nir_band"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, 1, 2) AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, red_band: Int, nir_band: Int"
 
 }

@@ -4,15 +4,9 @@
 echo "\n::: [1] ... unsetting JAVA_TOOL_OPTIONS (probably need to do in container as well) :::"
 unset JAVA_TOOL_OPTIONS
 
-# [2] copy custom settings.xml
-# - defaults to new skipScoverage profile
-# - compliments the pom config (profile sCoverage also added there)
-# - sets .m2 folder to be in project
+# [2] Maven: .m2 in project + skipScoverage as default (same as gbx-docker-start)
 echo "\n::: [2] ... setting up new .m2 (in project) + new skipScoverage profile (as default) :::"
-mv /usr/local/share/maven/conf/settings.xml /usr/local/share/maven/conf/settings.xml.BAK
-cp /root/geobrix/scripts/docker/m2/settings.xml /usr/local/share/maven/conf
-echo "        ... mvn active profile(s)\n"
-cd /root/geobrix && mvn help:active-profiles
+sh /root/geobrix/scripts/docker/extras/docker_maven_setup.sh
 
 # [3] build JVM code
 # this is building for container JDK

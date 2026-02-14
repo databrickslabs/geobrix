@@ -1,0 +1,76 @@
+---
+sidebar_position: 9
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import limitationsCode from '!!raw-loader!../tests-dbr/python/limitations/examples.py';
+
+# Known Limitations
+
+GeoBrix Beta has some known limitations that will be addressed in future releases.
+
+## Databricks Spatial Types
+
+### Current State
+
+The Beta does not yet support Databricks Spatial Types directly but is standardized to WKB or WKT where geometries are involved.
+
+### Workaround
+
+Convert GeoBrix output to Databricks types:
+
+<CodeFromTest
+  code={limitationsCode}
+  language="python"
+  title="Convert to Databricks GEOMETRY Type"
+  source="docs/tests-dbr/python/limitations/examples.py"
+  testFile="docs/tests-dbr/python/limitations/test_examples.py"
+  functionName="CONVERT_TO_DATABRICKS_GEOMETRY_WORKAROUND"
+  outputConstant="CONVERT_TO_DATABRICKS_GEOMETRY_WORKAROUND_output"
+/>
+
+## Function Availability
+
+A handful of functions from DBLabs Mosaic are not yet ported:
+
+### RasterX
+
+- `rst_dtmfromgeoms` - Digital Terrain Model from geometries
+
+### VectorX
+
+- `st_interpolateelevation` - Interpolate elevation values
+- `st_triangulate` - Triangulation operations
+
+### GridX
+
+- **Custom Gridding** - Not fully ported
+
+### Spatial KNN
+
+Spatial K-Nearest Neighbors is not yet ported:
+- No KNN operations currently available
+- H3 support for Geometry-based K-Ring and K-Loop not included
+
+## Compute Requirements
+
+GeoBrix requires Databricks Classic Clusters:
+- **Not** currently compatible with Serverless compute
+- Requires GDAL native libraries via init script, which are currently only supported on classic clusters
+
+Databricks Runtime:
+- **Minimum**: DBR 17.1 (recommend DBR 17.3 LTS or later)
+- GeoBrix is designed to work with Databricks product spatial functions (available DBR 17.1+)
+
+## Format Support
+
+- [OGR](./readers/ogr) - focus is on named vector readers in GDAL's OGR package.
+- [GDAL](./readers/gdal) - focus is on GeoTiff (named raster reader).
+- Advanced features of some formats may have limited support.
+
+## Next Steps
+
+- [View Installation Guide](./installation)
+- [Check Quick Start](./quick-start)
+- [Review API Documentation](./api/overview)
+- [Get Support](./support)

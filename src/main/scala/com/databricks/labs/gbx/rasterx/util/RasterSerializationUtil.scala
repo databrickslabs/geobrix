@@ -12,8 +12,15 @@ import org.gdal.gdal.Dataset
 
 import scala.util.Try
 
+/**
+  * Converts between Spark InternalRow (tile struct) and GDAL Dataset for raster expressions.
+  *
+  * Tile rows have (cellid, raster, metadata): raster is either path (String) or binary content.
+  * Callers must call [[RasterDriver.releaseDataset]] on any returned Dataset when done.
+  */
 object RasterSerializationUtil {
 
+    /** Deserialize a tile row to (cellId, Dataset, metadata); opens the raster via RasterDriver. */
     def rowToTile(row: InternalRow, rasterDT: DataType): (Long, Dataset, Map[String, String]) = {
         val cellID = row.getLong(0)
         val metadataRow = row.getMap(2)
@@ -30,6 +37,7 @@ object RasterSerializationUtil {
         }
     }
 
+    /** Extract and open the raster Dataset from a tile row; caller must release the Dataset. */
     def rowToDS(row: InternalRow, rasterDT: DataType, shared: Boolean = false): Dataset = {
         val metadataRow = row.getMap(2)
         val metadata = SerializationUtil.createMap[String, String](metadataRow)
@@ -43,6 +51,7 @@ object RasterSerializationUtil {
         }
     }
 
+    /** Serialize (cellId, Dataset, metadata) to an InternalRow; writes raster to bytes or checkpoint path. */
     def tileToRow(tuple: (Long, Dataset, Map[String, String]), dataType: DataType, hconf: SerializableConfiguration): InternalRow = {
         dataType match {
             case BinaryType =>
@@ -93,6 +102,7 @@ object RasterSerializationUtil {
         }
     }
 
+    /** Deserialize an array of tile structs to (cellId, Dataset, metadata); caller must release each Dataset. */
     def arrayToTiles(array: ArrayData, dataType: DataType): Seq[(Long, Dataset, Map[String, String])] = {
         val n = array.numElements()
         (0 until n).map { i =>

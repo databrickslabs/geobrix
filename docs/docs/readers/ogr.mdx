@@ -1,0 +1,162 @@
+---
+sidebar_position: 3
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ogrExamples from '!!raw-loader!../../tests/python/readers/ogr_examples.py';
+import ogrScala from '!!raw-loader!../../tests/scala/readers/OGRExamples.scala';
+import ogrDBR from '!!raw-loader!../../tests-dbr/python/readers/ogr/examples.py';
+
+# OGR Reader
+
+The OGR reader provides generic support for reading vector data formats through the OGR library. This is the base reader that powers all vector format readers in GeoBrix.
+
+## Format Name
+
+`ogr`
+
+## Overview
+
+The OGR reader is a generic vector data reader that can handle any format supported by OGR/GDAL. While GeoBrix provides named readers for common formats (Shapefile, GeoJSON, GeoPackage, etc.), you can use the OGR reader directly for any available format.
+
+## Available Formats
+
+The OGR reader can work with [many OGR vector drivers](https://gdal.org/drivers/vector/index.html), including:
+
+- **ESRI Shapefile** (.shp)
+- **GeoJSON** (.geojson, .json)
+- **GeoPackage** (.gpkg)
+- **File Geodatabase** (.gdb)
+- **KML** (.kml)
+- **GML** (.gml)
+- **CSV** with geometry (.csv)
+- **PostgreSQL/PostGIS**
+- **And 80+ more formats**
+
+:::note Format Availability
+Experience varies across GDAL formats. Not all formats are available by default—some require additional packages or drivers to be installed in your environment.
+:::
+
+## Basic Usage
+
+### Python
+
+<CodeFromTest
+  code={ogrExamples}
+  language="python"
+  functionName="READ_OGR"
+  source="docs/tests/python/readers/ogr_examples.py"
+  testFile="docs/tests/python/readers/test_ogr_examples.py"
+  outputConstant="READ_OGR_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={ogrScala}
+  language="scala"
+  functionName="READ_OGR"
+  source="docs/tests/scala/readers/OGRExamples.scala"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+  outputConstant="READ_OGR_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={ogrExamples}
+  language="sql"
+  functionName="SQL_OGR"
+  source="docs/tests/python/readers/ogr_examples.py"
+  testFile="docs/tests/python/readers/test_ogr_examples.py"
+  outputConstant="SQL_OGR_output"
+/>
+
+## Options
+
+### `driverName`
+
+**Default:** Auto-detected from file extension if not specified
+
+Explicitly specify the OGR driver to use (regardless of extension).
+
+<CodeFromTest
+  code={ogrExamples}
+  language="python"
+  functionName="READ_WITH_DRIVER"
+  source="docs/tests/python/readers/ogr_examples.py"
+  testFile="docs/tests/python/readers/test_ogr_examples.py"
+  outputConstant="READ_WITH_DRIVER_output"
+/>
+
+### Other Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `chunkSize` | `"10000"` | Number of records per chunk for parallel reading |
+| `layerN` | `"0"` | Layer index for multi-layer formats (0-based) |
+| `layerName` | `""` | Layer name for multi-layer formats (overrides `layerN`) |
+| `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text) |
+
+## Output Schema
+
+```
+root
+ |-- geom_0: binary (geometry in WKB format)
+ |-- geom_0_srid: integer (spatial reference ID)
+ |-- geom_0_srid_proj: string (projection definition)
+ |-- <attribute_1>: <type> (feature attributes...)
+ |-- <attribute_2>: <type>
+ |-- ...
+```
+
+## Databricks Integration
+
+OGR (and named vector readers) output geometry in WKB format. To use with Databricks spatial functions, convert to GEOMETRY type. Example uses the Shapefile reader and sample-data Volumes path; the same pattern applies to any OGR-based reader.
+
+:::tip Requires Databricks Runtime
+These examples use `st_geomfromwkb` to convert GeoBrix WKB to Databricks GEOMETRY type.
+:::
+
+### Convert to GEOMETRY
+
+<CodeFromTest
+  code={ogrDBR}
+  language="python"
+  functionName="CONVERT_TO_GEOMETRY"
+  source="docs/tests-dbr/python/readers/ogr/examples.py"
+  testFile="docs/tests-dbr/python/readers/ogr/test_examples.py"
+/>
+
+### SQL Example
+
+<CodeFromTest
+  code={ogrDBR}
+  language="sql"
+  functionName="SQL_READ_SHAPEFILE"
+  source="docs/tests-dbr/python/readers/ogr/examples.py"
+  testFile="docs/tests-dbr/python/readers/ogr/test_examples.py"
+/>
+
+## Named Readers vs OGR
+
+For common formats, GeoBrix provides named readers for convenience (sample-data Volumes path):
+
+<CodeFromTest
+  code={ogrExamples}
+  language="python"
+  functionName="NAMED_VS_OGR"
+  source="docs/tests/python/readers/ogr_examples.py"
+  testFile="docs/tests/python/readers/test_ogr_examples.py"
+/>
+
+**When to use each**:
+- **Named readers** (shapefile, geojson, ogr_gpkg, file_gdb): Better for common formats, cleaner syntax
+- **OGR**: Useful for less common formats or when you need OGR-specific options
+
+## Next Steps
+
+- [Shapefile Reader](./shapefile)
+- [GeoJSON Reader](./geojson)
+- [GeoPackage Reader](./geopackage)
+- [File GeoDatabase Reader](./filegdb)

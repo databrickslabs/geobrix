@@ -7,12 +7,16 @@ import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionRead
 import org.apache.spark.sql.functions.{col, explode, udf}
 import org.apache.spark.sql.types.StructType
 
+/** Scan/Batch for OGR: plans partitions per (file, chunk) and supplies OGR_Reader as reader factory. */
 class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan with Batch {
 
+    /** Overrides Scan.readSchema: returns table schema. */
     override def readSchema(): StructType = schema
 
+    /** Overrides Scan.toBatch: returns this batch. */
     override def toBatch: Batch = this
 
+    /** Overrides Batch.planInputPartitions: one partition per (file, start, end) chunk; UDF counts features and splits by chunkSize. */
     override def planInputPartitions(): Array[InputPartition] = {
         val inPath = options("path")
         val chunkSize = options.getOrElse("chunkSize", "10000").toInt
@@ -71,6 +75,7 @@ class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan w
         partitions.toArray
     }
 
+    /** Overrides Batch.createReaderFactory: builds OGR_Reader for each OGR_Partition. */
     override def createReaderFactory(): PartitionReaderFactory =
         (partition: InputPartition) => {
             new OGR_Reader(partition.asInstanceOf[OGR_Partition])

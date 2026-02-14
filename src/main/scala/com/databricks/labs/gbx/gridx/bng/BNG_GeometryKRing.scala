@@ -9,6 +9,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
+/** Expression that returns the k-ring geometry (polygon) for a BNG cell at resolution. Arguments: cellId, resolution, k. */
 case class BNG_GeometryKRing(
     geom: Expression,
     resolution: Expression,
@@ -24,6 +25,7 @@ case class BNG_GeometryKRing(
 
 }
 
+/** Companion: SQL name gbx_bng_geometrykring, builder, and eval. */
 object BNG_GeometryKRing extends WithExpressionInfo {
 
     def eval(geom: UTF8String, res: Int, k: Int): Array[String] = {
@@ -43,17 +45,9 @@ object BNG_GeometryKRing extends WithExpressionInfo {
         kRing.map(BNG.format)
     }
 
-    override def name: String = "gbx_bng_geometrykring"
+    override def name: String = "gbx_bng_geomkring"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_GeometryKRing(c(0), c(1), c(2))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

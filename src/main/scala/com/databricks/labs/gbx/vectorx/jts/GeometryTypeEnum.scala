@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx.jts
 
+/** JTS geometry type identifiers (Point, LineString, Polygon, etc.). Used by InternalGeometry and legacy serialization. */
 object GeometryTypeEnum extends Enumeration {
 
     val INVALID: GeometryTypeEnum.Value = Value(0, "INVALID")
@@ -13,12 +14,14 @@ object GeometryTypeEnum extends Enumeration {
     val LINEARRING: GeometryTypeEnum.Value = Value(7, "LINEARRING")
     val GEOMETRYCOLLECTION: GeometryTypeEnum.Value = Value(8, "GEOMETRYCOLLECTION")
 
+    /** Looks up enum by name (case-insensitive); returns INVALID if not found. */
     def apply(tpe: String): GeometryTypeEnum.Value = {
         GeometryTypeEnum.values
             .find(_.toString.equalsIgnoreCase(tpe))
             .getOrElse(INVALID)
     }
 
+    /** Looks up enum by numeric id; returns INVALID if not found. */
     def fromTypeId(typeId: Int): GeometryTypeEnum.Value = {
         GeometryTypeEnum.values
             .find(_.id == typeId)

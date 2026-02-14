@@ -18,6 +18,7 @@ case class RST_Subdatasets(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def nullable: Boolean = true
@@ -28,7 +29,7 @@ case class RST_Subdatasets(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Subdatasets extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): MapData = eval(row, conf, StringType)
@@ -56,25 +57,5 @@ object RST_Subdatasets extends WithExpressionInfo {
     override def name: String = "gbx_rst_subdatasets"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Subdatasets(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        """Returns the subdatasets of the raster tile as a set of paths in the standard GDAL format.
-          |The result is a map of the subdataset path to the subdatasets and the description of the subdatasets.""".stripMargin
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      { "NETCDF:\"/dbfs/FileStore/geospatial/mosaic/sample_raster_data/binary/netcdf-coral/ct5km_baa
-           |      _max_7d_v3_1_20220106-1.nc\":bleaching_alert_area": "[1x3600x7200] N/A (8-bit unsigned integer)"
-           |      , "NETCDF:\"/dbfs/FileStore/geospatial/mosaic/sample_raster_data/binary/netcdf-coral/ct5km_baa_m
-           |      ax_7d_v3_1_20220106-1.nc\":mask": "[1x3600x7200] mask (8-bit unsigned integer)"}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

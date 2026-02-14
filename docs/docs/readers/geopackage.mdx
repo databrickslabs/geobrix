@@ -1,0 +1,105 @@
+---
+sidebar_position: 6
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import geopackageExamples from '!!raw-loader!../../tests/python/readers/geopackage_examples.py';
+import geopackageScala from '!!raw-loader!../../tests/scala/readers/GeoPackageExamples.scala';
+
+# GeoPackage Reader
+
+The GeoPackage reader provides support for reading OGC GeoPackage format, a modern SQLite-based geospatial format.
+
+## Format Name
+
+`gpkg_ogr`
+
+## Overview
+
+This is a named OGR Reader that uses the [GPKG](https://gdal.org/en/stable/drivers/vector/geojson.html) driver. GeoPackage is an open, standards-based, platform-independent, portable, self-describing format for transferring geospatial information.
+
+## Key Features
+
+- **Self-contained**: Single-file SQLite database
+- **Multi-layer**: Can contain multiple vector layers and raster tiles
+- **Attributes**: Full attribute support with data types
+- **Spatial Index**: Built-in spatial indexing
+- **Portable**: Cross-platform compatibility
+
+## Basic Usage
+
+### Python
+
+<CodeFromTest
+  code={geopackageExamples}
+  language="python"
+  functionName="READ_GEOPACKAGE"
+  source="docs/tests/python/readers/geopackage_examples.py"
+  testFile="docs/tests/python/readers/test_geopackage_examples.py"
+  outputConstant="READ_GEOPACKAGE_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={geopackageScala}
+  language="scala"
+  functionName="READ_GEOPACKAGE"
+  source="docs/tests/scala/readers/GeoPackageExamples.scala"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+  outputConstant="READ_GEOPACKAGE_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={geopackageExamples}
+  language="sql"
+  functionName="SQL_GEOPACKAGE"
+  source="docs/tests/python/readers/geopackage_examples.py"
+  testFile="docs/tests/python/readers/test_geopackage_examples.py"
+  outputConstant="SQL_GEOPACKAGE_output"
+/>
+
+## Output Schema
+
+The output maintains attribute columns and adds geometry columns. Note that GeoPackage typically uses `shape` as the geometry column name:
+
+```
+root
+ |-- shape: binary (geometry in WKB format)
+ |-- shape_srid: integer (spatial reference ID)
+ |-- shape_srid_proj: string (projection definition)
+ |-- <attribute_columns>: various types
+```
+
+## Options
+
+### Multi-Layer Support
+
+GeoPackage files can contain multiple layers. Use the `layerName` option to specify which layer to read:
+
+<CodeFromTest
+  code={geopackageExamples}
+  language="python"
+  functionName="READ_SPECIFIC_LAYER"
+  source="docs/tests/python/readers/geopackage_examples.py"
+  testFile="docs/tests/python/readers/test_geopackage_examples.py"
+  outputConstant="READ_SPECIFIC_LAYER_output"
+/>
+
+### Other Options
+
+All [OGR reader options](./ogr#options) are available, e.g.:
+
+- `chunkSize` - Records per chunk (default: "10000")
+- `asWKB` - Output as WKB vs WKT (default: "true")
+- `layerName` - Specific layer to read
+- `layerN` - Layer index to read (0-based)
+
+## Next Steps
+
+- [View API Reference](../api/overview)
+- [Check Examples](../examples/overview)
+- [Other Readers](./overview)
+- [Learn about VectorX](../packages/vectorx)

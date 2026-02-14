@@ -12,13 +12,16 @@ import scala.jdk.CollectionConverters._
 import scala.util.{Success, Try}
 
 /**
-  * @see
-  *   [[https://github.com/uber/h3-java]]
+  * H3 hexagonal grid (Uber H3) in WGS84. Used for RST_H3_* expressions and tessellate/grid operations.
+  *
+  * @see [[https://github.com/uber/h3-java]]
   */
 object H3 extends Serializable {
 
+    /** Edge length in km for the given resolution. */
     def edgeLength(res: Int): Double = h3.edgeLength(res, LengthUnit.km)
 
+    /** CRS for H3 (WGS84). */
     def crsID: Int = 4326
 
     val name = "H3"
@@ -80,21 +83,16 @@ object H3 extends Serializable {
             coordinates.map { coord =>
                 if (coord.x < 0) new Coordinate(coord.x + 360.0, coord.y)
                 else coord
-            }
         }
+    }
 
+    /** True; H3 extent is cylindrical (wraps longitude). */
     def isCylindrical: Boolean = true
 
     // An instance of H3Core to be used for Grid System implementation.
     @transient private val h3: H3Core = H3Core.newInstance()
 
-    /**
-      * H3 resolution can only be an Int value between 0 and 15.
-      * @param res
-      *   Any type input to be parsed into the Int representation of resolution.
-      * @return
-      *   Int value representing the resolution.
-      */
+    /** Parses resolution from Int, String, or UTF8String; must be in 0–15 (throws otherwise). */
     def getResolution(res: Any): Int = {
         val resolution = (
           Try(res.asInstanceOf[Int]),
@@ -112,23 +110,7 @@ object H3 extends Serializable {
         resolution
     }
 
-    /**
-      * A radius of minimal enclosing circle is always smaller than the largest
-      * side of the skewed hexagon. Since H3 is generating hexagons that take
-      * into account curvature of the spherical envelope a radius may be
-      * different at different localities due to the skew. To address this
-      * problem a centroid hexagon is selected from the geometry and the optimal
-      * radius is computed based on this hexagon.
-      *
-      * @param geometry
-      *   An instance of [[Geometry]] for which we are computing the optimal
-      *   buffer radius.
-      * @param resolution
-      *   A resolution to be used to get the centroid cell geometry.
-      * @return
-      *   An optimal radius to buffer the geometry in order to avoid blind spots
-      *   when performing polyfill.
-      */
+    /** Optimal buffer radius for polyfill: centroid cell at resolution, max distance from centroid to cell boundary (avoids blind spots). */
     def getBufferRadius(geometry: Geometry, resolution: Int): Double = {
         val centroid = geometry.getCentroid
         val (xC, yC) =
@@ -151,17 +133,7 @@ object H3 extends Serializable {
         }
     }
 
-    /**
-      * Boundary that is returned by H3 isn't valid from JTS perspective since
-      * it does not form a LinearRing (ie first point == last point). The first
-      * point of the boundary is appended to the end of the boundary to form a
-      * LinearRing.
-      *
-      * @param cellID
-      *   ID of the cell whose geometry should be returned.
-      * @return
-      *   An instance of [[Geometry]] corresponding to cell ID.
-      */
+    /** H3 boundary → JTS polygon; appends first point to close LinearRing; handles pole-crossing via makePoleGeometry. */
     def cellIdToGeometry(cellID: Long): Geometry = {
         val boundary = h3.h3ToGeoBoundary(cellID).asScala
         val extended = boundary ++ List(boundary.head)
@@ -174,6 +146,7 @@ object H3 extends Serializable {
         geom
     }
 
+    /** Handles geometry crossing the antimeridian by splitting and shifting to extent. */
     def alignToGrid(geometry: Geometry): Geometry = {
         val extentEnvelope = geometry.getEnvelopeInternal
         val width = extentEnvelope.getMaxX - extentEnvelope.getMinX
@@ -184,17 +157,7 @@ object H3 extends Serializable {
         central.union(left).union(right)
     }
 
-    /**
-      * H3 polyfill logic is based on the centroid point of the individual cell
-      * geometry. Blind spots do occur near the boundary of the geometry.
-      *
-      * @param geometry
-      *   Input geometry to be represented.
-      * @param resolution
-      *   A resolution of the indices.
-      * @return
-      *   A set of indices representing the input geometry.
-      */
+    /** H3 cell IDs covering geometry at resolution; splits across antimeridian and unions western/eastern. */
     def polyfill(geometry: Geometry, resolution: Int): Seq[Long] = {
 
         def polygonToIndices(polygon: Polygon): mutable.Seq[Long] = {
@@ -233,46 +196,17 @@ object H3 extends Serializable {
         }
     }
 
-    /**
-      * Get the cell ID corresponding to the provided coordinates.
-      *
-      * @param lon
-      *   Longitude coordinate of the point.
-      * @param lat
-      *   Latitude coordinate of the point.
-      * @param resolution
-      *   Resolution of the grid.
-      * @return
-      *   Cell ID in this grid system.
-      */
+    /** Returns H3 cell ID containing (lon, lat) at the given resolution. */
     def pointToCellID(lon: Double, lat: Double, resolution: Int): Long = {
         h3.geoToH3(lat, lon, resolution)
     }
 
-    /**
-      * Get the k ring of indices around the provided cell id.
-      *
-      * @param cellID
-      *   Cell ID to be used as a center of k ring.
-      * @param n
-      *   Number of k rings to be generated around the input cell.
-      * @return
-      *   A collection of cell IDs forming a k ring.
-      */
+    /** All cell IDs within k rings of center cellID (distance ≤ n). */
     def kRing(cellID: Long, n: Int): mutable.Seq[Long] = {
         h3.kRing(cellID, n).asScala.map(_.toLong)
     }
 
-    /**
-      * Get the k disk of indices around the provided cell id.
-      *
-      * @param cellID
-      *   Cell ID to be used as a center of k disk.
-      * @param n
-      *   Distance of k disk to be generated around the input cell.
-      * @return
-      *   A collection of cell IDs forming a k disk.
-      */
+    /** Cell IDs at exactly distance n from cellID (hexRing); falls back to kRing+filter for pentagons. */
     def kLoop(cellID: Long, n: Int): mutable.Seq[Long] = {
         // HexRing crashes in case of pentagons.
         // Ensure a KRing fallback in said case.
@@ -288,38 +222,36 @@ object H3 extends Serializable {
         )
     }
 
-    /**
-      * H3 supports resolutions ranging from 0 until 15. Resolution 0 represents
-      * the most coarse resolution where the surface of the earth is split into
-      * 122 hexagons. Resolution 15 represents the mre fine-grained resolution.
-      * @see
-      *   https://h3geo.org/docs/core-library/restable/
-      * @return
-      *   A set of supported resolutions.
-      */
+    /** Supported H3 resolutions 0–15 (0 = coarsest, 122 hexagons; 15 = finest). */
     def resolutions: Set[Int] = (0 to 15).toSet
 
+    /** Converts cell ID to H3 address string. */
     def format(id: Long): String = {
         val geo = h3.h3ToGeo(id)
         h3.geoToH3Address(geo.lat, geo.lng, h3.h3GetResolution(id))
     }
 
+    /** String form of resolution (e.g. for display). */
     def getResolutionStr(resolution: Int): String = resolution.toString
 
+    /** Parses H3 address string to cell ID. */
     def parse(id: String): Long = {
         val geo = h3.h3ToGeo(id)
         h3.geoToH3(geo.lat, geo.lng, h3.h3GetResolution(id))
     }
 
+    /** Returns the centroid of the H3 cell as a Coordinate (lat, lng). */
     def cellIdToCenter(cellID: Long): Coordinate = {
         val geo = h3.h3ToGeo(cellID)
         new Coordinate(geo.lat, geo.lng)
     }
 
+    /** Returns the boundary of the H3 cell as a sequence of Coordinates. */
     def cellIdToBoundary(cellID: Long): mutable.Seq[Coordinate] = {
         h3.h3ToGeoBoundary(cellID).asScala.map(p => new Coordinate(p.lat, p.lng))
     }
 
+    /** H3 grid distance between two cells; 0 if invalid. */
     def distance(cellId: Long, cellId2: Long): Long = Try(h3.h3Distance(cellId, cellId2)).map(_.toLong).getOrElse(0)
 
     // Find all cells that cross the North Pole. There always is exactly one cell per resolution.
@@ -328,22 +260,18 @@ object H3 extends Serializable {
     // Find all cells that cross the South Pole. There always is exactly one cell per resolution.
     private lazy val southPoleCells = Range.inclusive(0, 15).map(h3.geoToH3(-90, 0, _))
 
+    /** True if this cell (by Long id) crosses the North Pole. */
     private def crossesNorthPole(cell_id: Long): Boolean = northPoleCells contains cell_id
+    /** True if this cell (by Long id) crosses the South Pole. */
     private def crossesSouthPole(cell_id: Long): Boolean = southPoleCells contains cell_id
     // noinspection ScalaUnusedSymbol
+    /** True if this cell (by address string) crosses the North Pole. */
     private def crossesNorthPole(cell_id: String): Boolean = northPoleCells contains h3.stringToH3(cell_id)
     // noinspection ScalaUnusedSymbol
+    /** True if this cell (by address string) crosses the South Pole. */
     private def crossesSouthPole(cell_id: String): Boolean = southPoleCells contains h3.stringToH3(cell_id)
 
-    /**
-      * Check if H3 cell crosses the anti-meridian. This check is not
-      * generalizable for arbitrary polygons.
-      * @param geometry
-      *   H3 Geometry to be checked.
-      * @return
-      *   boolean True if the geometry crosses the anti-meridian, false
-      *   otherwise.
-      */
+    /** True if geometry envelope spans lon 0 and (width > 180° or invalid); not general for all polygons. */
     def crossesAntiMeridian(geometry: Geometry): Boolean = {
         val envelope = geometry.getEnvelopeInternal
         val minX = envelope.getMinX
@@ -400,6 +328,7 @@ object H3 extends Serializable {
         makeSafeGeometry(unsafeGeometry)
     }
 
+    /** Splits geometry crossing the antimeridian into western/eastern parts and unions; otherwise returns as-is. */
     def makeSafeGeometry(unsafeGeometry: Geometry): Geometry = {
         if (crossesAntiMeridian(unsafeGeometry)) {
             val shiftedGeometry = editor.edit(unsafeGeometry, shiftEast)

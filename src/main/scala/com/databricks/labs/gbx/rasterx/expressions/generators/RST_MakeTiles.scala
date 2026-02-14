@@ -30,6 +30,7 @@ import org.apache.spark.unsafe.types.UTF8String
   *   in memory, it is subdivided into tiles of size 64MB.
   * @param exprConfExpr
   *   Additional arguments for the expression (expressionConfigs).
+  * Used as the catalyst node when gbx_rst_maketiles(tile, sizeInMB) is invoked in SQL or DataFrame API.
   */
 case class RST_MakeTiles(
     tileExpr: Expression,
@@ -39,6 +40,7 @@ case class RST_MakeTiles(
       with Serializable
       with CodegenFallback {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def position: Boolean = false
@@ -47,14 +49,7 @@ case class RST_MakeTiles(
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
     override def children: scala.Seq[Expression] = Seq(tileExpr, sizeInMBExpr, exprConfExpr)
 
-    /**
-      * Loads a raster from a file and subdivides it into tiles of the specified
-      * size (in MB).
-      * @param input
-      *   The input file path.
-      * @return
-      *   The tiles.
-      */
+    /** Overrides generator eval: subdivides tile into (Dataset, metadata) rows by sizeInMB via BalancedSubdivision; caller must release. */
     override def eval(input: InternalRow): IterableOnce[InternalRow] =
         RST_ErrorHandler.safeEval(
           () => {
@@ -92,27 +87,11 @@ case class RST_MakeTiles(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MakeTiles extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_maketiles"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_MakeTiles(c(0), c(1))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Subdivide the raster into tiles of the given size in MB."
-
-    override def usageArgs: String = "tile, size_in_mb"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, 16) AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, size_in_mb: Int"
 
 }

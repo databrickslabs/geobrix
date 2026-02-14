@@ -20,7 +20,9 @@ case class RST_Convolve(
 ) extends InvokedExpression {
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
+    /** Element type of the 2D kernel array. */
     private def kernelType = kernelExpr.dataType.asInstanceOf[ArrayType].elementType.asInstanceOf[ArrayType].elementType
     override def children: Seq[Expression] = Seq(tileExpr, kernelExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
@@ -40,7 +42,7 @@ case class RST_Convolve(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Convolve extends WithExpressionInfo {
 
     def evalPathDouble(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, StringType, DoubleType)
@@ -81,20 +83,5 @@ object RST_Convolve extends WithExpressionInfo {
     override def name: String = "gbx_rst_convolve"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Convolve(c(0), c(1))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String = "Applies a convolution filter to the raster."
-
-    override def usageArgs: String = "tile, kernel"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) AS tile FROM table;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, kernel: Array<Array<Double>>>"
 
 }

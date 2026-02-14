@@ -1,3 +1,13 @@
+## v0.2.0
+
+Version bump with notable fixes and improvements. See [Beta Release Notes](docs/docs/beta-release-notes.mdx) for API and naming changes.
+
+### Notable changes
+- BNG aggregators (`bng_cellunion_agg`, `bng_cellintersection_agg`): fixed shared aggregation buffer bug (fresh buffer per partition); chip field resolution by type/name in union agg.
+- Reader renames and other API changes documented in Beta Release Notes.
+
+---
+
 ## v0.1.0 [DBR 17.3 LTS]
 
 This is the beta release series.

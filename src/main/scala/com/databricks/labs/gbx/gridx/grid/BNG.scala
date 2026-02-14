@@ -15,9 +15,9 @@ import scala.util.{Success, Try}
   * covers the EPSG:27700 bounds. The grid system is represented as a square
   * grid, where x and y coordinates are provided as eastings and northings. The
   * grid system supports representation of cell ids as integers and as strings.
-  * The grid system supports providing resolutions as integer numbers and as
-  * string cell size descriptors (eg. 500m for resolution where cell edge is 500
-  * meters long). Negative resolution values represent resolutions for quad tree
+  * The grid system supports resolutions as integer indices (1–6, or negative for
+  * quadrant resolutions) and as string cell size descriptors (e.g. "1km", "100m"
+  * via resolutionMap). Negative resolution values represent quad tree
   * representations where each cell is split into orientation quadrants.
   * Orientation quadrants represent south-east, north-east, south-west and
   * north-west orientations.
@@ -28,6 +28,7 @@ import scala.util.{Success, Try}
 //noinspection ScalaWeakerAccess
 object BNG extends Serializable {
 
+    /** StructType for a BNG cell: cellid (idType), core (Boolean), chip (Binary). */
     def cellType(idType: DataType): StructType =
         StructType(
           Array(
@@ -37,6 +38,7 @@ object BNG extends Serializable {
           )
         )
 
+    /** CRS for BNG (EPSG:27700). */
     def crsID: Int = 27700
 
     val name = "BNG"
@@ -89,7 +91,7 @@ object BNG extends Serializable {
 
     /**
       * Matrix representing a mapping between letter portions of the eastings
-      * and northings coordinates to a letter pair. Given th small area of
+      * and northings coordinates to a letter pair. Given the small area of
       * coverage of this grid system having a lookup is more efficient than
       * performing any math transformations between ints and chars.
       */
@@ -114,31 +116,42 @@ object BNG extends Serializable {
     /**
       * Provides a string representation from an integer representation of a BNG
       * cell id. The string representations follows letter prefix followed by
-      * easting bin, followed by nothings bin and finally (for quad tree
+      * easting bin, followed by northings bin and finally (for quad tree
       * resolutions) followed by quadrant suffix.
       * @param id
       *   Integer id to be formatted.
       * @return
       *   A string representation of the cell id -
-      *   "(prefix)(estings_bin)(northins_bin)(suffix)". E.g. SW123987NW where
+      *   "(prefix)(eastings_bin)(northings_bin)(suffix)". E.g. SW123987NW where
       *   SW is the prefix, 123 is eastings bin, 987 is northings bin and NW is
       *   suffix.
       */
     def format(id: Long): String = {
         val digits = cellDigits(id)
         if (digits.length < 6) {
-            val prefix = letterMap(digits.slice(3, 5).mkString.toInt)(digits.slice(1, 3).mkString.toInt)(0).toString
+            val xIdx = safeDigitIndex(digits.slice(3, 5), letterMap.length - 1)
+            val yIdx = safeDigitIndex(digits.slice(1, 3), letterMap.head.length - 1)
+            val prefix = letterMap(xIdx)(yIdx)(0).toString
             prefix
         } else {
-            val quadrant = digits.last
-            val prefix = letterMap(digits.slice(3, 5).mkString.toInt)(digits.slice(1, 3).mkString.toInt)
+            val qIdx = math.max(0, math.min(quadrants.length - 1, digits.last))
+            val xIdx = safeDigitIndex(digits.slice(3, 5), letterMap.length - 1)
+            val yIdx = safeDigitIndex(digits.slice(1, 3), letterMap.head.length - 1)
+            val prefix = letterMap(xIdx)(yIdx)
             val coords = digits.drop(5).dropRight(1)
             val k = coords.length / 2
             val xStr = if (coords.isEmpty) "" else coords.slice(0, k).padTo(k, 0).mkString
             val yStr = if (coords.isEmpty) "" else coords.slice(k, 2 * k).padTo(k, 0).mkString
-            val qStr = quadrants(quadrant)
+            val qStr = quadrants(qIdx)
             s"$prefix$xStr$yStr$qStr"
         }
+    }
+
+    /** Parses a digit slice to Int and clamps to [0, max] to avoid index out of bounds. */
+    private def safeDigitIndex(digitSlice: Seq[Int], max: Int): Int = {
+        val s = digitSlice.mkString
+        val n = if (s.isEmpty) 0 else s.toInt
+        math.max(0, math.min(max, n))
     }
 
     /**
@@ -173,6 +186,7 @@ object BNG extends Serializable {
         getEdgeSize(resolutionStr)
     }
 
+    /** Edge size in metres for the given resolution string (e.g. "100m"). */
     def getEdgeSize(resolution: String): Int = {
         sizeMap(resolution)
     }
@@ -203,6 +217,7 @@ object BNG extends Serializable {
 
             private var nextElem: Option[Long] = None
 
+            /** Pops from queue until a cell inside the geometry is found and set in nextElem. */
             private def advance(): Unit = {
                 while (queue.nonEmpty && nextElem.isEmpty) {
                     val current = queue.dequeue()
@@ -218,11 +233,13 @@ object BNG extends Serializable {
                 }
             }
 
+            /** Overrides Iterator.hasNext: true while advance() can fill nextElem from geometry-contained cells. */
             override def hasNext: Boolean = {
                 if (nextElem.isEmpty) advance()
                 nextElem.isDefined
             }
 
+            /** Overrides Iterator.next: returns next BNG cell id inside the geometry (from k-ring traversal). */
             override def next(): Long = {
                 if (!hasNext) throw new NoSuchElementException
                 val result = nextElem.get
@@ -399,7 +416,7 @@ object BNG extends Serializable {
     /**
       * Provides a long representation from a string representation of a BNG
       * cell id. The string representations follows letter prefix followed by
-      * easting bin, followed by nothings bin and finally (for quad tree
+      * easting bin, followed by northings bin and finally (for quad tree
       * resolutions) followed by quadrant suffix.
       * @param cellID
       *   String id to be parsed.
@@ -526,28 +543,32 @@ object BNG extends Serializable {
         yDigits.mkString.toInt * edgeSizeAdj + yOffset
     }
 
+    /** Resolution string (e.g. "100m") for the given resolution Int, or empty if unknown. */
     def getResolutionStr(resolution: Int): String = resolutionMap.find(_._2 == resolution).map(_._1).getOrElse("")
 
+    /** Area of the cell in square kilometres. */
     def area(cellID: Long): Double = {
         val digits = cellDigits(cellID)
         val resolution = getResolution(digits)
         val edgeSize = getEdgeSize(resolution).asInstanceOf[Double]
-        val area = math.pow(edgeSize / 1000, 2)
-        area
+        math.pow(edgeSize / 1000, 2)
     }
 
+    /** Centroid of the BNG cell as a Coordinate. */
     def cellIdToCenter(cellID: Long): Coordinate = {
         val geom = cellIdToGeometry(cellID)
         val centroid = geom.getCentroid
         JTS.coordinatesFromXYs(centroid.getX, centroid.getY)
     }
 
+    /** Boundary of the BNG cell as a sequence of Coordinates. */
     def cellIdToBoundary(cellID: Long): Seq[Coordinate] = {
         val geom = cellIdToGeometry(cellID)
         val coordinates = geom.getCoordinates
         coordinates.map(coord => JTS.coordinatesFromXYs(coord.getX, coord.getY))
     }
 
+    /** Grid (Manhattan) distance between two cells in edge-size units. */
     def distance(cellId: Long, cellId2: Long): Long = {
         val digits1 = cellDigits(cellId)
         val digits2 = cellDigits(cellId2)
@@ -562,6 +583,7 @@ object BNG extends Serializable {
         math.abs((x1 - x2) / edgeSize) + math.abs((y1 - y2) / edgeSize)
     }
 
+    /** Euclidean (max of dx, dy) distance between two cells in edge-size units. */
     def euclideanDistance(cellId: Long, cellId2: Long): Long = {
         val digits1 = cellDigits(cellId)
         val digits2 = cellDigits(cellId2)
@@ -577,6 +599,7 @@ object BNG extends Serializable {
         math.max(math.abs(x1 - x2), math.abs(y1 - y2)) / edgeSize
     }
 
+    /** Builds a BNG cell ID from letter indices, bins, quadrant, and resolution. */
     def encode(eLetter: Int, nLetter: Int, eBin: Int, nBin: Int, quadrant: Int, nPositions: Int, resolution: Int): Long = {
         val idPlaceholder = math.pow(10, 5 + 2 * nPositions - 2) // 1(##)(##)(#...#)(#...#)(#)
         val eLetterShift = math.pow(10, 3 + 2 * nPositions - 2) // (##)(##)(#...#)(#...#)(#)
@@ -592,6 +615,7 @@ object BNG extends Serializable {
         id.toLong
     }
 
+    /** Set of cell IDs forming the k-loop (hollow ring) around the geometry at the given resolution. */
     def geometryKLoop(geometry: Geometry, resolution: Int, k: Int): Set[Long] = {
         // TODO: MOVE TO ITERATOR
         val n: Int = k - 1
@@ -611,6 +635,7 @@ object BNG extends Serializable {
         kLoop.filter(BNG.isValid)
     }
 
+    /** Set of cell IDs forming the k-ring around the geometry at the given resolution. */
     def geometryKRing(geometry: Geometry, resolution: Int, k: Int): Set[Long] = {
         // TODO: MOVE TO ITERATOR
         val chips = getChips(geometry, resolution, keepCoreGeom = false).toSeq
@@ -669,6 +694,7 @@ object BNG extends Serializable {
     //      intersection of the line with the cell geometry.
     // perhaps queue logic can be replaced with a more efficient way of selecting
     // what to process next.
+    /** Decomposes a line into (cellId, core, chipGeom) by walking along the line and expanding via k-loop. */
     private def lineDecompose(
         line: LineString,
         resolution: Int
@@ -676,6 +702,7 @@ object BNG extends Serializable {
         val start = line.getStartPoint
         val startCellID = pointToCellID(start.getX, start.getY, resolution)
 
+        /** Tail-recursive walk along the line; yields (cellId, core=false, chipGeom) and expands queue via k-ring. */
         @tailrec
         def traverseLine(
             line: LineString,

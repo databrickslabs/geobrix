@@ -5,6 +5,7 @@ import com.databricks.labs.gbx.util.{NodeFileManager, SerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.PartitionReader
 
+/** Reads one partition of an OGR source: opens the layer and yields feature rows from start to end index. */
 class OGR_Reader(partition: OGR_Partition) extends PartitionReader[InternalRow] {
 
     GDALManager.init(partition.expressionConfig)
@@ -20,6 +21,7 @@ class OGR_Reader(partition: OGR_Partition) extends PartitionReader[InternalRow] 
 
     private var nextRow: InternalRow = _
 
+    /** Overrides PartitionReader.next: fetches next feature into nextRow; returns false when at end or after close. */
     override def next(): Boolean = {
         nextRow = null
         val feature = layer.GetNextFeature()
@@ -34,8 +36,10 @@ class OGR_Reader(partition: OGR_Partition) extends PartitionReader[InternalRow] 
         }
     }
 
+    /** Overrides PartitionReader.get: returns the row set by last next(). */
     override def get(): InternalRow = nextRow
 
+    /** Overrides PartitionReader.close: releases remote file path via NodeFileManager. */
     override def close(): Unit = NodeFileManager.releaseRemote(partition.filePath)
 
 }

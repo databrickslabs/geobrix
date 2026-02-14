@@ -4,19 +4,10 @@ import com.databricks.labs.gbx.rasterx.gdal.GDAL
 import com.databricks.labs.gbx.rasterx.operator.{GDALBuildVRT, GDALTranslate}
 import org.gdal.gdal.{Dataset, gdal}
 
-/** MergeBands is a helper object for merging raster bands. */
+/** Merges multiple single-band rasters into one multi-band raster via VRT (-separate) + gdal_translate. Returns (Dataset, metadata). Caller must release. */
 object MergeBands {
 
-    /**
-      * Merges the raster bands into a single raster.
-      *
-      * @param dss
-      *   The rasters to merge.
-      * @param resampling
-      *   The resampling method to use.
-      * @return
-      *   A Raster object.
-      */
+    /** VRT from dss with -separate, then translate with given resampling; returns (Dataset, metadata). */
     def merge(dss: Seq[Dataset], options: Map[String, String], resampling: String): (Dataset, Map[String, String]) = {
         val uuid1 = java.util.UUID.randomUUID().toString.replace("-", "_")
         val outShortName = dss.head.GetDriver().getShortName
@@ -45,19 +36,7 @@ object MergeBands {
         result
     }
 
-    /**
-      * Merges the raster bands into a single raster. This method allows for
-      * custom pixel sizes.
-      *
-      * @param dss
-      *   The rasters to merge.
-      * @param pixel
-      *   The pixel size to use.
-      * @param resampling
-      *   The resampling method to use.
-      * @return
-      *   A Raster object.
-      */
+    /** Same as merge(dss, options, resampling) but with custom pixel size (x, y). Returns (Dataset, metadata). Caller must release. */
     def merge(
         dss: Seq[Dataset],
         options: Map[String, String],

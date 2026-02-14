@@ -5,21 +5,10 @@ import com.databricks.labs.gbx.rasterx.operator.GDALCalc
 import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.gdal.gdal.Dataset
 
-/** NDVI is a helper object for computing NDVI. */
+/** Computes NDVI (B-A)/(B+A) via gdal_calc from red and NIR bands; returns (Dataset, metadata). Caller must release. */
 object NDVI {
 
-    /**
-      * Computes NDVI from a Raster.
-      *
-      * @param ds
-      *   Raster to compute NDVI from.
-      * @param redIndex
-      *   Index of the red band.
-      * @param nirIndex
-      *   Index of the near-infrared band.
-      * @return
-      *   Raster with NDVI computed.
-      */
+    /** Single-band output with NDVI; redIndex and nirIndex are 1-based band indices. */
     def compute(ds: Dataset, options: Map[String, String], redIndex: Int, nirIndex: Int): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val driver = ds.GetDriver

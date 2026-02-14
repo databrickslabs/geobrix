@@ -5,8 +5,10 @@ import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
 import org.gdal.gdal.{Band, Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GF_Write
 
+/** Applies a 2D convolution kernel to each band of a raster; kernel must have odd dimensions. */
 object Convolve {
 
+    /** Convolves the dataset with the given kernel; returns (new Dataset, metadata). Caller must release. */
     def convolve(ds: Dataset, options: Map[String, String], kernel: Array[Array[Double]]): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val driver = ds.GetDriver()
@@ -53,6 +55,7 @@ object Convolve {
         (outputRaster, newOptions)
     }
 
+    /** Per-band convolution; pads band, applies kernel, strips padding. */
     private def convolve(
         band: Band,
         kernel: Array[Array[Double]],

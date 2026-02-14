@@ -10,6 +10,7 @@ import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expressio
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Generator that explodes the k-loop geometry of a BNG cell (from geom at resolution) into one row per cell. Arguments: geom, resolution, k. */
 case class BNG_GeometryKLoopExplode(
     geom: Expression,
     resolution: Expression,
@@ -52,19 +53,12 @@ case class BNG_GeometryKLoopExplode(
 
 }
 
+/** Companion: SQL name gbx_bng_geomkloopexplode, builder. */
 object BNG_GeometryKLoopExplode extends WithExpressionInfo {
 
-    override def name: String = "gbx_bng_geometrykloopexplode"
+    override def name: String = "gbx_bng_geomkloopexplode"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_GeometryKLoopExplode(c(0), c(1), c(2))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

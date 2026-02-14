@@ -13,13 +13,21 @@ import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.{Column, SparkSession}
 
+/**
+  * RasterX API entry point: register all raster SQL functions and provide Column-based helpers.
+  *
+  * Call `functions.register(spark)` once per session to make `gbx_rst_*` functions available in SQL
+  * and to initialize GDAL/checkpoint state. The Column helpers (e.g. `rst_width`) delegate to
+  * the same registered functions.
+  */
 object functions extends Serializable {
 
     val flag = "com.databricks.labs.gbx.rasterx.registered"
 
+    /** Register all RasterX expressions with Spark and initialize GDAL/checkpoint; idempotent per session. */
     def register(spark: SparkSession): Unit = {
         val sc = spark.sparkContext
-        if (sc.getConf.get(flag, "false") == "true") return // Prevent multiple registrations
+        if (sc.getConf.get(flag, "false") == "true") return
 
         val expressionConfig = ExpressionConfig(spark)
         CheckpointManager.init(expressionConfig)
@@ -141,10 +149,10 @@ object functions extends Serializable {
     def rst_width(tileExpr: Column): Column = ColumnAdapter(RST_Width.name, Seq(tileExpr))
 
     // Aggregators
-    def rst_combineavgagg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgAgg.name, Seq(tileExpr))
-    def rst_derivedbandagg(tileExpr: Column, pyfunc: String, funcName: String): Column =
-        ColumnAdapter(RST_DerivedBandAgg.name, Seq(tileExpr, lit(pyfunc), lit(funcName)))
-    def rst_mergeagg(tileExpr: Column): Column = ColumnAdapter(RST_MergeAgg.name, Seq(tileExpr))
+def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgAgg.name, Seq(tileExpr))
+    def rst_derivedband_agg(tileExpr: Column, pyfunc: String, funcName: String): Column =
+      ColumnAdapter(RST_DerivedBandAgg.name, Seq(tileExpr, lit(pyfunc), lit(funcName)))
+    def rst_merge_agg(tileExpr: Column): Column = ColumnAdapter(RST_MergeAgg.name, Seq(tileExpr))
 
     // Constructors
     def rst_fromcontent(content: Column, driver: Column): Column = ColumnAdapter(RST_FromContent.name, Seq(content, driver))

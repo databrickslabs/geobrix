@@ -1,1 +1,0 @@
-See [User Guide](../user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information.

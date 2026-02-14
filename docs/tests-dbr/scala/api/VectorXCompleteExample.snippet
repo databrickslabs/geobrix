@@ -1,0 +1,26 @@
+import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
+import org.apache.spark.sql.functions._
+
+// Register functions
+vx.register(spark)
+
+// Full migration workflow
+val legacyTable = spark.table("legacy_mosaic_geometries")
+
+// Convert and validate
+val migrated = legacyTable
+  .select(
+    col("*"),
+    expr("st_geomfromwkb(gbx_st_legacyaswkb(mosaic_geom))").alias("geometry")
+  )
+  .select(
+    col("feature_id"),
+    col("properties"),
+    col("geometry"),
+    expr("st_isvalid(geometry)").alias("is_valid"),
+    expr("st_area(geometry)").alias("area")
+  )
+  .filter(col("is_valid") === true)
+
+// Save to Delta
+migrated.write.mode("overwrite").saveAsTable("migrated_features")

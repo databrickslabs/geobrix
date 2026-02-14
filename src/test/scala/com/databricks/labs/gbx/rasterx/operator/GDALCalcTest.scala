@@ -199,5 +199,33 @@ class GDALCalcTest extends AnyFunSuite with BeforeAndAfterAll {
         Try(Files.deleteIfExists(Paths.get(outputPath)))
     }
 
+    test("GDALCalc should reject invalid command") {
+        val outputPath = s"/tmp/gdal_calc_invalid_${UUID.randomUUID()}.tif"
+        val invalidCommand = "invalid_command"
+        
+        assertThrows[IllegalArgumentException] {
+            GDALCalc.executeCalc(invalidCommand, outputPath, Map.empty, multiBandDs)
+        }
+        
+        Try(Files.deleteIfExists(Paths.get(outputPath)))
+    }
+
+    test("GDALCalc should handle PNM format output") {
+        val outputPath = s"/tmp/gdal_calc_pnm_${UUID.randomUUID()}.pnm"
+        val command = s"""gdal_calc -A $multiBandPath --A_band=1 --calc="A*2" --outfile=$outputPath"""
+        val (resultDs, metadata) = GDALCalc.executeCalc(command, outputPath, Map("format" -> "PNM"), multiBandDs)
+
+        // PNM format with gdal_calc uses --format flag
+        metadata should contain key "last_command"
+        metadata("last_command") should include("--format PNM")
+        
+        // PNM format may fail with gdal_calc, but command structure is what we're testing
+        if (resultDs != null) {
+            resultDs.delete()
+        }
+
+        Try(Files.deleteIfExists(Paths.get(outputPath)))
+    }
+
 }
 

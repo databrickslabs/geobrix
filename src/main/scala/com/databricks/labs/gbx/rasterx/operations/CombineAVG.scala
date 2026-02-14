@@ -2,21 +2,10 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import org.gdal.gdal.Dataset
 
-/** CombineAVG is a helper object for combining rasters using average. */
+/** Pixel-wise average of input rasters via VRT Python pixel function; output type double. Returns (Dataset, metadata). Caller must release. */
 object CombineAVG {
 
-    /**
-      * Creates a new raster using average of input rasters. The average is
-      * computed as (sum of all rasters) / (number of rasters). It is applied to
-      * all bands of the input rasters. Please note the data type of the output
-      * raster is double.
-      *
-      * @param rasters
-      *   The rasters to compute result for.
-      *
-      * @return
-      *   A new raster with average of input rasters.
-      */
+    /** Average = sum/div per pixel (div = count of non-zero); delegates to PixelCombineRasters. */
     def compute(rasters: Array[Dataset], options: Map[String, String]): (Dataset, Map[String, String]) = {
 
         val pythonFunc = """

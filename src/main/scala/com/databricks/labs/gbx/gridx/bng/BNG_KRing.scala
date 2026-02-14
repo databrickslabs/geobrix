@@ -8,6 +8,7 @@ import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Expression that returns the k-ring of cell IDs around the given cell (array of strings). Arguments: cellId, k. */
 case class BNG_KRing(
     cellId: Expression,
     k: Expression
@@ -22,6 +23,7 @@ case class BNG_KRing(
 
 }
 
+/** Companion: SQL name gbx_bng_kring, builder, and eval. */
 object BNG_KRing extends WithExpressionInfo {
 
     def eval(cellId: UTF8String, k: Int): ArrayData = {
@@ -46,13 +48,5 @@ object BNG_KRing extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_KRing(c(0), c(1))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

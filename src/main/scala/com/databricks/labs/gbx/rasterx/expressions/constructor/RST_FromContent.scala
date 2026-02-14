@@ -28,7 +28,7 @@ case class RST_FromContent(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_FromContent extends WithExpressionInfo {
 
     def eval(content: Array[Byte], driver: UTF8String, conf: UTF8String): InternalRow =
@@ -55,24 +55,5 @@ object RST_FromContent extends WithExpressionInfo {
     override def name: String = "gbx_rst_fromcontent"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_FromContent(c(0), c(1))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Returns a tile from raster data."
-
-    override def usageArgs: String = "content, driver"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > CREATE TABLE IF NOT EXISTS TABLE tbl
-           |        USING binaryFile
-           |        OPTIONS (path "/Volumes/...");
-           |      > SELECT _FUNC_(content, 'GTiff') FROM tbl AS tile;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"content: Binary, driver: String"
 
 }

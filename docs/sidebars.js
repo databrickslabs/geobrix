@@ -18,6 +18,19 @@ const sidebars = {
     'intro',
     'installation',
     'quick-start',
+    'databricks-spatial',
+    'beta-release-notes',
+    {
+      type: 'category',
+      label: 'Sample Data',
+      items: [
+        'sample-data/overview',
+        'sample-data/setup',
+        'sample-data/vector-data',
+        'sample-data/raster-data',
+        'sample-data/additional',
+      ],
+    },
     {
       type: 'category',
       label: 'Packages',
@@ -34,6 +47,7 @@ const sidebars = {
       items: [
         'readers/overview',
         'readers/gdal',
+        'readers/gtiff',
         'readers/ogr',
         'readers/shapefile',
         'readers/geojson',
@@ -46,6 +60,7 @@ const sidebars = {
       label: 'API Reference',
       items: [
         'api/overview',
+        'api/tile-structure',
         {
           type: 'category',
           label: 'Function Reference',
@@ -60,13 +75,25 @@ const sidebars = {
         'api/sql',
       ],
     },
+    // Temporarily hidden until Examples section is ready to ship
+    // {
+    //   type: 'category',
+    //   label: 'Examples',
+    //   items: [
+    //     'examples/overview',
+    //   ],
+    // },
     {
       type: 'category',
-      label: 'Examples',
+      label: 'Advanced Usage',
       items: [
-        'examples/overview',
+        'advanced/overview',
+        'advanced/custom-udfs',
+        'advanced/gdal-cli',
+        'advanced/library-integration',
       ],
     },
+    'developers',
     'limitations',
     'support',
   ],

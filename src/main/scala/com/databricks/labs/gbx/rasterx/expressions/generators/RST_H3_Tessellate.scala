@@ -23,6 +23,7 @@ case class RST_H3_Tessellate(
       with Serializable
       with CodegenFallback {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def position: Boolean = false
@@ -56,31 +57,11 @@ case class RST_H3_Tessellate(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_H3_Tessellate extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_h3_tessellate"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_H3_Tessellate(c(0), c(1))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        """Divides the raster tile into tessellating chips for the given resolution of the supported grid (H3, BNG, Custom).
-          |The result is a collection of new raster tiles.
-          |Each tile in the tile set corresponds to an index cell intersecting the bounding box of the tile.""".stripMargin
-
-    override def usageArgs: String = "tile, resolution"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, 10) AS tile FROM table;
-           |      {index_id: 593308294097928191, raster: [00 01 10 ... 00], parentPath: "...", driver: "GTiff" }
-           |      {index_id: 593308294097928192, raster: [00 03 10 ... 00], parentPath: "...", driver: "GTiff" }
-           |
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, resolution: Int"
 
 }

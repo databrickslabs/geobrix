@@ -9,6 +9,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
+/** Expression that returns the k-loop geometry (polygon) for a BNG cell at resolution. Arguments: cellId, resolution, k. */
 case class BNG_GeometryKLoop(
     geom: Expression,
     resolution: Expression,
@@ -25,6 +26,7 @@ case class BNG_GeometryKLoop(
 
 }
 
+/** Companion: SQL name gbx_bng_geometrykloop, builder, and eval. */
 object BNG_GeometryKLoop extends WithExpressionInfo {
     def eval(geom: UTF8String, res: Int, k: Int): Array[String] = {
         val geometry = JTS.fromWKT(geom.toString)
@@ -43,17 +45,9 @@ object BNG_GeometryKLoop extends WithExpressionInfo {
         kLoop.map(BNG.format)
     }
 
-    override def name: String = "gbx_bng_geometrykloop"
+    override def name: String = "gbx_bng_geomkloop"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_GeometryKLoop(c(0), c(1), c(2))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

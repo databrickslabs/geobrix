@@ -23,6 +23,7 @@ case class RST_ReTile(
       with Serializable
       with CodegenFallback {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def position: Boolean = false
@@ -54,27 +55,11 @@ case class RST_ReTile(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_ReTile extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_retile"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_ReTile(c(0), c(1), c(2))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Retiles the raster tile to the given size. The result is a collection of new raster tiles."
-
-    override def usageArgs: String = "tile, tile_width, tile_height"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, 300, 300) AS tile FROM table;
-           |      {index_id: ..., raster: [00 01 10 ... 00], parentPath: "...", driver: "GTiff" }
-           |      {index_id: ..., raster: [00 03 10 ... 00], parentPath: "...", driver: "GTiff" }""".stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, tile_width: Int, tile_height: Int"
 
 }

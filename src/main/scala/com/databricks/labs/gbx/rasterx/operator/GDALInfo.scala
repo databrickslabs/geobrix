@@ -2,20 +2,10 @@ package com.databricks.labs.gbx.rasterx.operator
 
 import org.gdal.gdal.{Dataset, InfoOptions, gdal}
 
-/** GDALBuildVRT is a wrapper for the GDAL BuildVRT command. */
+/** Wrapper for GDAL Info: returns metadata string for a dataset via gdal.GDALInfo. */
 object GDALInfo {
 
-    /**
-      * Executes the GDAL BuildVRT command. For flags check the way gdalinfo.py
-      * script is called, InfoOptions expects a collection of same flags.
-      *
-      * @param ds
-      *   The raster to get info from.
-      * @param command
-      *   The GDAL Info command.
-      * @return
-      *   A result json string.
-      */
+    /** Runs gdal.GDALInfo(ds, InfoOptions(parseOptions(command))); returns metadata string or error message. */
     def executeInfo(ds: Dataset, command: String): String = {
         require(command.startsWith("gdalinfo"), "Not a valid GDAL Info command.")
 

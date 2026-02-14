@@ -1,0 +1,151 @@
+---
+sidebar_position: 2
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import initScript from '!!raw-loader!../../scripts/geobrix-gdal-init.sh';
+import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
+
+# Installation
+
+GeoBrix currently offers heavy-weight, distributed APIs, primarily written in Scala for Spark with additional language bindings for PySpark and Spark SQL.
+
+## Prerequisites
+
+- Databricks Runtime (DBR) 17.1 or later (LTS releases recommended)
+- Classic Databricks cluster (not Serverless)
+- GDAL native libraries
+
+## Installation Steps
+
+### 1. Download GeoBrix Artifacts
+
+GeoBrix requires the following artifacts:
+
+- **JAR file**: `geobrix-*-jar-with-dependencies.jar`
+- **Shared Object**: `libgdalalljni.so` (GDAL native library)
+- **Python Wheel**: `geobrix-*-py3-none-any.whl`
+
+These are currently delivered via artifacts in the [beta-dist](https://github.com/databrickslabs/geobrix/tree/main/resources/beta-dist) directory.
+
+### 2. Upload to Databricks Volume
+
+1. Create or use an existing Databricks Volume
+2. Upload the following files to your Volume (`*` for version):
+   - `geobrix-*-jar-with-dependencies.jar`
+   - `libgdalalljni.so`
+   - `geobrix-*-py3-none-any.whl`
+
+### 3. Create Init Script
+
+GeoBrix requires GDAL natives, which are currently best installed via an init script on a classic cluster.
+
+1. Use the init script from the repo: [scripts/geobrix-gdal-init.sh](https://github.com/databrickslabs/geobrix/blob/main/scripts/geobrix-gdal-init.sh) (shown below)
+2. Modify the `VOL_DIR` variable to point to your Volume location where you uploaded the artifacts
+3. Upload the modified init script to your Databricks Volume
+
+<CodeFromTest code={initScript} language="bash" title="GeoBrix Init Script (scripts/geobrix-gdal-init.sh)" />
+
+### 4. Configure Cluster
+
+#### Add Init Script
+
+1. Go to your cluster configuration
+2. Navigate to **Advanced Options** > **Init Scripts**
+3. Add the init script path from your Volume
+
+#### Add Libraries
+
+1. In your cluster configuration, go to **Libraries**
+2. Click **Install new**
+3. Install the Python wheel:
+   - Select **Upload** > **Python Whl**
+   - Select the `dblabs_geobrix-0.2.0-py3-none-any.whl` file from your Volume, e.g. `VOL_DIR` location
+4. Install the JAR:
+   - The JAR is installed via the init script, so nothing further is needed
+
+#### Cluster Configuration Example
+
+<CodeFromTest language="json" validationLevel="static" title="Cluster Configuration">
+{`{
+  "cluster_name": "geobrix-cluster",
+  "spark_version": "17.3.x-scala2.13",
+  "node_type_id": "Standard_DS3_v2",
+  "num_workers": 2,
+  "init_scripts": [
+    {
+      "volumes": {
+        "destination": "/Volumes/catalog/schema/volume_name/geobrix-gdal-init.sh"
+      }
+    }
+  ]
+}`}
+</CodeFromTest>
+
+### 5. Start the Cluster
+
+Start or restart your cluster to ensure the init script runs and all libraries are loaded.
+
+## Verification
+
+To verify that GeoBrix is installed correctly (Scala similar to Python):
+
+### Python
+
+<CodeFromTest
+  code={verifyInstallation}
+  language="python"
+  functionName="VERIFY_PYTHON_INSTALLATION"
+  title="Verify Python Installation"
+  source="docs/tests/python/installation/verify_installation.py"
+  testFile="docs/tests/python/installation/test_verify_installation.py"
+  outputConstant="VERIFY_PYTHON_INSTALLATION_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={verifyInstallation}
+  language="sql"
+  functionName="VERIFY_SQL_FUNCTIONS"
+  title="Verify SQL Functions"
+  source="docs/tests/python/installation/verify_installation.py"
+  testFile="docs/tests/python/installation/test_verify_installation.py"
+  outputConstant="VERIFY_SQL_FUNCTIONS_output"
+/>
+
+If you see the GeoBrix functions listed, your installation is successful!
+
+## Troubleshooting
+
+### GDAL Library Issues
+
+If you encounter errors about missing GDAL libraries, please bear in mind that we currently use [UbuntuGIS](https://launchpad.net/~ubuntugis/+archive/ubuntu/ubuntugis-unstable) PPA 
+which from time-to-time might update GDAL version. If the major or minor version is changed, this will result in 
+issues (requires us to recompile the JNI bindings):
+
+1. Check that the init script ran successfully (check driver logs)
+2. Verify the `libgdalalljni.so` file is in `/usr/lib` on the driver and executors
+3. Add `/usr/lib` to `LD_LIBRARY_PATH` (uncommon)
+
+### Function Registration Issues
+
+If functions are not executing (uncommon):
+
+1. Verify the JAR is in `VOL_DIR` used in the init script
+2. Check that you've called the `.register(spark)` method for Spark SQL bindings
+3. Restart the Python kernel or re-attach to cluster in the SQL notebook
+
+### Permission Issues
+
+If you encounter permission errors:
+
+1. Ensure you have read access to the Volume
+2. Check that the init script has execute permissions
+3. Verify cluster policies allow init scripts
+
+## Next Steps
+
+- Follow the [Quick Start Guide](./quick-start) to begin using GeoBrix
+- Explore the [Packages](./packages/overview) documentation
+- Check out [Example Notebooks](./examples/overview)

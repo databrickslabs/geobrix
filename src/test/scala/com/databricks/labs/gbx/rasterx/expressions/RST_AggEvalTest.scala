@@ -27,9 +27,9 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
                 .withColumn("raster", rst_clip(col("raster"), col("clipper"), lit(true)))
                 .groupBy(lit(1))
                 .agg(
-                  rst_combineavgagg(col("raster")),
-                  rst_derivedbandagg(col("raster"), pyfunc, "myfunc"),
-                  rst_mergeagg(col("raster"))
+                  rst_combineavg_agg(col("raster")),
+                  rst_derivedband_agg(col("raster"), pyfunc, "myfunc"),
+                  rst_merge_agg(col("raster"))
                 )
                 .collect()
         }

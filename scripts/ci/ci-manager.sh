@@ -17,8 +17,8 @@ NC='\033[0m'
 # Banner
 show_banner() {
     echo -e "${BLUE}╔═══════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}  ${CYAN}🧊 GeoBriX CI Manager${NC}                             ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  ${YELLOW}Manage GitHub Actions CI from the command line${NC}    ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  ${CYAN}🧊 GeoBriX CI Manager${NC}                                 ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}Manage GitHub Actions CI from the command line${NC}       ${BLUE}║${NC}"
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -35,6 +35,7 @@ show_help() {
     echo -e "  ${GREEN}trigger${NC}      Push and manually trigger CI workflow"
     echo -e "  ${GREEN}watch${NC}        Watch latest CI run in real-time"
     echo -e "  ${GREEN}logs${NC}         Fetch and analyze CI logs"
+    echo -e "  ${GREEN}docs${NC}         Run documentation tests (local or CI)"
     echo -e "  ${GREEN}setup${NC}        Install and configure GitHub CLI"
     echo -e "  ${GREEN}help${NC}         Show this help message"
     echo ""
@@ -89,10 +90,11 @@ show_menu() {
     echo -e "  ${GREEN}3)${NC} Trigger new CI run (manual)"
     echo -e "  ${GREEN}4)${NC} Watch latest CI run"
     echo -e "  ${GREEN}5)${NC} Fetch CI logs"
-    echo -e "  ${GREEN}6)${NC} Setup GitHub CLI"
-    echo -e "  ${GREEN}7)${NC} Exit"
+    echo -e "  ${GREEN}6)${NC} Run documentation tests"
+    echo -e "  ${GREEN}7)${NC} Setup GitHub CLI"
+    echo -e "  ${GREEN}8)${NC} Exit"
     echo ""
-    echo -n -e "${YELLOW}Enter choice [1-7]:${NC} "
+    echo -n -e "${YELLOW}Enter choice [1-8]:${NC} "
 }
 
 # Execute command
@@ -127,7 +129,13 @@ execute_command() {
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             "$SCRIPT_DIR/fetch-ci-logs.sh"
             ;;
-        setup|6)
+        docs|6)
+            echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            echo -e "${CYAN}Documentation Tests${NC}"
+            echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+            "$SCRIPT_DIR/run-doc-tests.sh"
+            ;;
+        setup|7)
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo -e "${CYAN}Setting Up GitHub CLI...${NC}"
             echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -136,7 +144,7 @@ execute_command() {
         help|h|-h|--help)
             show_help
             ;;
-        exit|7|q|quit)
+        exit|8|q|quit)
             echo -e "${GREEN}👋 Goodbye!${NC}"
             exit 0
             ;;
@@ -166,7 +174,7 @@ main() {
         read -r choice
         echo ""
         
-        if [ "$choice" = "7" ] || [ "$choice" = "q" ] || [ "$choice" = "quit" ]; then
+        if [ "$choice" = "8" ] || [ "$choice" = "q" ] || [ "$choice" = "quit" ]; then
             echo -e "${GREEN}👋 Goodbye!${NC}"
             exit 0
         fi

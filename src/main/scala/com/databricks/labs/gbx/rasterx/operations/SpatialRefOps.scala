@@ -2,8 +2,10 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import org.gdal.osr.SpatialReference
 
+/** Helpers for OSR SpatialReference: EPSG code extraction and construction from EPSG code. */
 object SpatialRefOps {
 
+    /** Returns the EPSG authority code as Int, or 0 if not EPSG (e.g. ESRI). */
     def getEPSGCode(spatialRef: SpatialReference): Int = {
         // Try to get the PROJCS/GEOGCS authority code
         // Returns 0 if no EPSG authority is found (e.g., for ESRI projections like ESRI:54008)
@@ -13,6 +15,7 @@ object SpatialRefOps {
         }
     }
 
+    /** Builds a SpatialReference from an EPSG code; uses WGS84 if code <= 0. */
     def fromEPSGCode(getSRID: Int): SpatialReference = {
         val sr = new SpatialReference()
         if (getSRID > 0) {

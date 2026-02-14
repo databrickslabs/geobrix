@@ -1,0 +1,132 @@
+---
+description: Provide regular progress updates during long-running operations
+alwaysApply: true
+---
+
+# Progress Updates for Long-Running Operations
+
+When executing long-running commands or operations (expected duration > 30 seconds), provide regular progress updates to keep the user informed.
+
+## Update Frequency
+
+**Every 30 seconds** during long-running operations:
+- Build commands (`mvn package`, `npm run build`)
+- Test execution (`mvn test`, `pytest`)
+- Long-running searches or file operations
+- Background processes being monitored
+
+## Implementation Patterns
+
+### Pattern 1: Multiple Sequential Checks
+
+For commands running in background (using `block_until_ms: 0`):
+
+```bash
+# Start background process
+Shell(command, block_until_ms=0)
+
+# Monitor with regular updates
+sleep 30 && tail terminals/xxx.txt  # Update at 30s
+sleep 30 && tail terminals/xxx.txt  # Update at 60s
+sleep 30 && tail terminals/xxx.txt  # Final check at 90s
+```
+
+### Pattern 2: Blocking Commands with Status Messages
+
+For commands with `block_until_ms > 30000`:
+
+```markdown
+Running maven package (expected: ~2 minutes)...
+
+[After 30s] Build in progress: compiling Scala sources...
+[After 60s] Build in progress: running tests...
+[After 90s] Build in progress: packaging artifacts...
+```
+
+### Pattern 3: Parallel Progress Monitoring
+
+When running multiple long operations:
+
+```markdown
+Started 3 parallel operations:
+1. ⏳ Building Scala (2 min)
+2. ⏳ Running Python tests (1 min)
+3. ⏳ Building documentation (3 min)
+
+[30s update]
+1. ⏳ Scala: compiling sources (50% done)
+2. ✅ Python tests: Complete (124 passed)
+3. ⏳ Docs: processing MDX files
+
+[60s update]
+1. ✅ Scala: Complete
+3. ⏳ Docs: generating static files (80% done)
+
+[90s update]
+3. ✅ Docs: Complete - all operations finished!
+```
+
+## When to Provide Updates
+
+✅ **Do provide updates:**
+- Any operation expected to take > 30 seconds
+- Docker builds, Maven builds, test runs
+- Large file operations (conversions, searches)
+- Background processes being monitored
+- CI/CD operations
+
+❌ **Don't provide updates:**
+- Quick operations (< 30 seconds)
+- Single file reads/writes
+- Simple grep/search commands
+- Commands already showing streaming output
+
+## Progress Message Format
+
+### Clear Status Indicators
+- ⏳ "In progress..."
+- ✅ "Complete"
+- ❌ "Failed"
+- ⚠️ "Warning/Issue detected"
+
+### Include Context
+- What's happening now
+- Estimated time remaining (if known)
+- Any errors or warnings encountered
+- Percentage complete (if measurable)
+
+### Example Messages
+
+```markdown
+✅ GOOD:
+"Running tests (60s elapsed): 89/137 tests complete, 0 failures so far..."
+
+❌ BAD:
+"Still running..."
+```
+
+## User Expectations
+
+- Updates help track progress and confirm the agent is working
+- Updates reduce uncertainty during long waits
+- Updates allow users to cancel if operation is taking too long
+- Updates demonstrate thoroughness and attention to detail
+
+## Implementation in GeoBrix Context
+
+Common long-running operations in this project:
+
+1. **Maven builds**: `mvn clean package` (~2-3 minutes)
+   - Update at 30s, 60s, 90s with phase info
+   
+2. **Test runs**: `mvn test` (~1-2 minutes)
+   - Update with test count and failures
+   
+3. **Documentation builds**: `npm run build` (~30-60 seconds)
+   - Update with file processing status
+   
+4. **Docker operations**: Container rebuilds (~2-5 minutes)
+   - Update with layer progress
+
+5. **Coverage analysis**: `mvn package` with scoverage (~3-4 minutes)
+   - Update with instrumentation and report generation status

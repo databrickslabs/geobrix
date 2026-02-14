@@ -7,6 +7,7 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Expression that converts (easting, northing) to a BNG cell ID string. Arguments: easting, northing, resolution. */
 case class BNG_EastNorthAsBNG(
     easting: Expression,
     northing: Expression,
@@ -22,6 +23,7 @@ case class BNG_EastNorthAsBNG(
 
 }
 
+/** Companion: SQL name gbx_bng_eastnorthasbng, builder, and eval. */
 object BNG_EastNorthAsBNG extends WithExpressionInfo {
 
     def eval(easting: Double, northing: Double, resolution: Int): UTF8String = {
@@ -49,13 +51,5 @@ object BNG_EastNorthAsBNG extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_EastNorthAsBNG(c(0), c(1), c(2))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

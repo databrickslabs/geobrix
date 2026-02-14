@@ -10,13 +10,14 @@ import org.apache.spark.sql.types.{BinaryType, DataType, IntegerType, StringType
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Returns the x coordinate of the raster. */
+/** Expression that converts world (geo) Y to raster Y coordinate for the given tile. */
 case class RST_WorldToRasterCoordY(
     tileExpr: Expression,
     x: Expression,
     y: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, x, y, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
@@ -27,7 +28,7 @@ case class RST_WorldToRasterCoordY(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_WorldToRasterCoordY extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, xGeo: Double, yGeo: Double, conf: UTF8String): Int =
@@ -57,20 +58,4 @@ object RST_WorldToRasterCoordY extends WithExpressionInfo {
     override def name: String = "gbx_rst_worldtorastercoordy"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_WorldToRasterCoordY(c(0), c(1), c(2))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Computes the (j, i) pixel coordinates of world_x and world_y within tile using the CRS of tile."
-
-    override def usageArgs: String = "tile, world_x, world_y"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(tile, -160.1, 40.0) AS tile FROM table;
-           |      997
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}, world_x: Double, world_y: Double"
 }

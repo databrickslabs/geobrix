@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import org.gdal.gdal.Dataset
 
-/* ReTile is a helper object for retiling rasters. */
+/** Computes balanced tile dimensions (power-of-4 splits) and splits a raster into tiles via ReTile. */
 object BalancedSubdivision {
 
     /**
@@ -33,25 +33,14 @@ object BalancedSubdivision {
         (tileX, tileY)
     }
 
-    /**
-      * Splits a raster into multiple rasters. The number of splits is
-      * determined by the size of the raster and the desired size of the split
-      * rasters. The number of splits is always a power of 4. This is a
-      * heuristic method only due to compressions and other factors.
-      *
-      * @param ds
-      *   The raster to split.
-      * @param sizeInMb
-      *   The desired size of the split rasters in MB.
-      * @return
-      *   A sequence of Raster objects.
-      */
+    /** Seq of (Dataset, metadata) tiles; split count is power-of-4 heuristic from sizeInMb. Caller must release each Dataset. */
     def splitRaster(
         ds: Dataset,
         options: Map[String, String],
         sizeInMb: Int
     ): Seq[(Dataset, Map[String, String])] = splitRasterIter(ds, options, sizeInMb).toSeq
 
+    /** Iterator of (Dataset, metadata) tiles using ReTile with computed tile dimensions. */
     def splitRasterIter(
         ds: Dataset,
         options: Map[String, String],

@@ -4,19 +4,27 @@ import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.ExpressionInfo
 
 /**
-  * WithExpressionInfo is a trait that defines the interface for adding
-  * expression to spark SQL. Any expression that needs to be added to spark SQL
-  * should extend this trait.
+  * Trait for registering a GeoBrix expression with Spark SQL.
+  *
+  * Implementations provide a SQL name (e.g. `gbx_rst_width`), a builder that constructs
+  * the catalyst expression from child expressions, and optional metadata. Metadata for
+  * DESCRIBE FUNCTION EXTENDED is loaded from `function-info.json` when present; the
+  * default empty strings here are used only as fallbacks.
+  *
+  * Convention: the companion object of each expression case class extends this trait
+  * and is registered via [[RegistryDelegate]] (e.g. from rasterx/gridx/vectorx functions).
   */
 trait WithExpressionInfo {
 
+    /** SQL function name (e.g. `gbx_rst_width`). Must be unique across all registered functions. */
     def name: String
 
+    /** Builds the catalyst expression from the given child expressions. */
     def builder(): FunctionBuilder = {
         throw new IllegalAccessException("Builder not implemented")
     }
 
-    //    // For future use with ExpressionConfig
+    // Reserved for future use with ExpressionConfig
     //    def builder(expressionConfig: ExpressionConfig): FunctionBuilder = {
     //        throw new IllegalAccessException("Builder not implemented")
     //    }
@@ -40,38 +48,39 @@ trait WithExpressionInfo {
 
     private val source: String = "built-in"
 
+    /** Version when the function was added (e.g. 1.0); used in ExpressionInfo. */
     def since: String = "1.0"  // baseline
 
     private val db: String = "<default>"
 
-    def usageArgs: String         // must override
+    /** Short usage args for DESCRIBE FUNCTION (e.g. "tile_expr, band_index"); override in companion. */
+    def usageArgs: String = ""
 
-    def description: String       // must override
+    /** One-line description for DESCRIBE FUNCTION; override in companion. */
+    def description: String = ""
 
-    def extendedUsageArgs: String // must override
+    /** Extended usage args for DESCRIBE FUNCTION EXTENDED; override when different from usageArgs. */
+    def extendedUsageArgs: String = ""
 
-    def examples: String          // must override
+    /** Example snippets for DESCRIBE FUNCTION EXTENDED; override or supply via function-info.json. */
+    def examples: String = ""
 
-    def extendedDescription: String = "" // additional
+    /** Extended description for DESCRIBE FUNCTION EXTENDED; override in companion. */
+    def extendedDescription: String = ""
 
+    /** Deprecation message if any; non-empty marks the function deprecated. */
     def deprecated: String = ""
 
+    /** Optional note for DESCRIBE FUNCTION EXTENDED. */
     def note: String = ""
 
+    /** Function group (e.g. "raster", "grid") for documentation. */
     def group: String = ""
 
-    // help expressions
-    val _TILE_TYPE_ = "tile: <Raster Tile>"
-    val _TILE_ARRAY_TYPE_ = "tiles: Array<Raster Tile>"
-    val _TILE_RESULT_ = """{index_id: ..., raster: [00 01 10 ... 00], parentPath: "...", driver: "GTiff" }"""
-
-    // for private functions
-    val _FUNC_ = "_FUNC_" // swaps with `name`
-    val _ARGS_ = "_ARGS_" // swaps with `usageArgs`
-
-
+    /** One-line usage string for DESCRIBE FUNCTION. */
     private def getUsage: String = s"${name}(${usageArgs}) - ${description}"
 
+    /** Extended usage args or usageArgs if not overridden. */
     private def getExtendedUsageArgs: String = {
         if (extendedUsageArgs.isEmpty) {
             usageArgs
@@ -80,14 +89,17 @@ trait WithExpressionInfo {
         }
     }
 
+    /** Extended usage string for DESCRIBE FUNCTION. */
     private def getExtendedUsage: String = s"${name}(${getExtendedUsageArgs}) - ${extendedDescription}"
 
-    private def getExamples: String = {
-        this.examples
-            .replace(_FUNC_, name)
-            .replace(_ARGS_, usageArgs)
-    }
+    /** Examples from FunctionInfoLoader or this.examples. */
+    private def getExamples: String =
+        FunctionInfoLoader
+            .get(name)
+            .flatMap(_.examples)
+            .getOrElse(this.examples)
 
+    /** Fully qualified class name of the implementing companion (for ExpressionInfo). */
     private def getImplementingClassFullName: String = {
         this.getClass.getName.replace("$", "") // fully qualified name of the implementing class
     }

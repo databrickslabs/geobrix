@@ -4,11 +4,13 @@ import org.apache.hadoop.fs.{FileSystem, FileUtil, Path}
 
 import java.time.{Duration, Instant}
 
+/** Copy between Hadoop FileSystems with retry/wait until destination exists (for distributed consistency). */
 object AtomicDistributedCopy {
 
     // Maximum wait time for file existence (10 seconds)
     private val MAX_WAIT_TIME_MS = 10000
 
+    /** Copies srcPath to dstPath if dst does not exist; otherwise waits up to MAX_WAIT_TIME_MS for dst to appear. */
     def copyIfNeeded(
         srcFs: FileSystem,
         dstFs: FileSystem,
@@ -29,6 +31,7 @@ object AtomicDistributedCopy {
         }
     }
 
+    /** Polls until path exists or MAX_WAIT_TIME_MS elapses. */
     private def waitUntilFileExists(fs: FileSystem, path: Path): Unit = {
         val startTime = Instant.now()
         while (!fs.exists(path) && Duration.between(startTime, Instant.now()).toMillis < MAX_WAIT_TIME_MS) {

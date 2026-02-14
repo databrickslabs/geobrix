@@ -97,29 +97,11 @@ case class RST_MergeAgg(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MergeAgg extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_merge_agg"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => RST_MergeAgg(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Aggregates raster tiles into a single raster."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) AS tile
-           |        FROM table
-           |        GROUP BY date;
-           |      ${_TILE_RESULT_}
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

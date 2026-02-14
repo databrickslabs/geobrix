@@ -1,5 +1,12 @@
 <img src="resources/images/GeoBriX.png" width="50%" />
 
+[![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
+[![codecov](https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg)](https://codecov.io/gh/databrickslabs/geobrix)
+[![docs](https://github.com/databrickslabs/geobrix/actions/workflows/doc-tests.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/doc-tests.yml)
+[![scala](https://img.shields.io/badge/scala-2.13-red.svg)](https://www.scala-lang.org/)
+[![python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
+[![license](https://img.shields.io/badge/license-Databricks-blue.svg)](LICENSE)
+
 GeoBrix is a high-performance spatial processing library. Its heavy-weight readers and functions are powered by GDAL, implemented on Apache Spark, and built to run exclusively on the Databricks Runtime (DBR).
 
 ## Background
@@ -56,6 +63,31 @@ We are really only focused on [GeoTiffs](https://gdal.org/en/stable/drivers/rast
 
 <img src="resources/images/readers/gdal_reader.png" width="50%" />
 
+### Named Readers
+
+The following are available and call the “gdal” reader with some options explicitly set.
+
+#### GeoTiff ["gtiff_gdal"]
+
+Read GeoTIFF raster files - the most common geospatial raster format. This is a named OGR Reader, sets “driverName” → "[GTiff](https://gdal.org/en/stable/drivers/raster/gtiff.html)":
+
+* GDAL auto-associates GeoTiff and BigTiff extensions to this driver, e.g. __.tif__ files
+* With the named reader, the driver is specified to be used regardless of extension
+
+```commandline
+(
+  spark
+    .read.format(“gtiff_gdal”)
+    .load("<path_to_supported_files>")
+)
+```
+
+# TODO: Update
+
+The output will look something like the following, maintaining attribute columns and having 3 columns for geometry: ‘geom_0’, ‘geom_0_srid’, and ‘geom_0_srid_proj’.
+
+<img src="resources/images/readers/shapefile_reader.png" width="50%" />
+
 ### Vector [“ogr”]
 
 #### Options
@@ -72,7 +104,7 @@ Note: For the Beta, results are not converted to Databricks new native spatial t
 
 The following are available and call the “ogr” reader with some options explicitly set.
 
-#### Shapefile [“shapefile”]
+#### Shapefile [“shapefile_ogr”]
 
 This is a named OGR Reader, sets “driverName” → "[ESRI Shapefile](https://gdal.org/en/stable/drivers/vector/shapefile.html)":
 
@@ -82,7 +114,7 @@ This is a named OGR Reader, sets “driverName” → "[ESRI Shapefile](https://
 ```
 (
   spark
-    .read.format(“shapefile”)
+    .read.format(“shapefile_ogr”)
     .load("<path_to_supported_files>")
 )
 ```
@@ -91,7 +123,7 @@ The output will look something like the following, maintaining attribute columns
 
 <img src="resources/images/readers/shapefile_reader.png" width="50%" />
 
-### GeoJSON [“geojson”]
+### GeoJSON [“geojson_ogr”]
 
 This is a named OGR Reader.
 
@@ -104,7 +136,7 @@ This is a named OGR Reader.
 ```
 (
   spark
-    .read.format(“geojson”)
+    .read.format(“geojson_ogr”)
     .option("multi", "false") # if not provided, "true" assumed
     .load("<path_to_supported_files>")
 )
@@ -114,14 +146,14 @@ The output will look something like the following, maintaining attribute columns
 
 <img src="resources/images/readers/geojson_reader.png" width="50%" />
 
-### GeoPackage [“gpkg”]
+### GeoPackage [“gpkg_ogr”]
 
 This is a named OGR Reader, sets “driverName” → "[GPKG](https://gdal.org/en/stable/drivers/vector/gpkg.html)".
 
 ```
 (
   spark
-    .read.format(“ogr_gpkg”)
+    .read.format(“gpkg_ogr”)
     .load("<path_to_supported_files>")
 )
 ```
@@ -130,14 +162,14 @@ The output will look something like the following, maintaining attribute columns
 
 <img src="resources/images/readers/gpkg_reader.png" width="50%" />
 
-### File GeoDatabase [“file_gdb”]
+### File GeoDatabase [“file_gdb_ogr”]
 
 This is a named OGR Reader, sets “driverName” → "[OpenFileGDB](https://gdal.org/en/stable/drivers/vector/openfilegdb.html)". You also may want to specify options “layerN” or “layerName” to read the desired layer.
 
 ```
 (
   spark
-    .read.format(“file_gdb”)
+    .read.format(“file_gdb_ogr”)
     .load("<path_to_supported_files>")
 )
 ```
@@ -153,7 +185,7 @@ Any issues discovered through the use of this project should be filed as GitHub 
 
 ## Installing & Using GeoBrix
 
-GeoBrix currently offers heavy-weight, distributed APIs, primarily written in Scala for Spark with additional language bindings for PySpark and Spark SQL. See [User Guide](resources/user-guide/GeoBrix%20Beta%20-%20User%20Guide.pdf) for more information on installing and using available readers and functions.
+GeoBrix currently offers heavy-weight, distributed APIs, primarily written in Scala for Spark with additional language bindings for PySpark and Spark SQL. See docs for more information on installing and using available readers and functions.
 
 ### Quick Start
 

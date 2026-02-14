@@ -1,0 +1,43 @@
+---
+description: GridX/BNG API conventions — supported resolutions, ported-code consistency, docs and examples.
+alwaysApply: false
+globs: "src/main/scala/com/databricks/labs/gbx/gridx/**/*.scala,docs/**/*gridx*,docs/**/*bng*"
+---
+
+# GridX / BNG API Conventions
+
+Use this rule when changing BNG resolution handling, adding BNG expressions, or updating GridX/BNG docs and examples. BNG code was ported from another project; preserve baseline behavior and document it clearly.
+
+## BNG resolution: supported values only
+
+**Supported resolutions** are defined by the initial codebase:
+
+- **Int**: BNG resolution **index** only — one of `1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6` (see `BNG.resolutions`). Meaning: 1=100km, 2=10km, 3=1km, 4=100m, 5=10m, 6=1m; negatives for quadrant resolutions.
+- **String**: Keys from `BNG.resolutionMap` only — e.g. `"500km"`, `"100km"`, `"1km"`, `"100m"`, `"10m"`.
+
+**Do not** add or document support for numeric metre values (e.g. `1000`, `100`) as Int to mean “1 km” or “100 m”. That would be a new interpretation inconsistent with `BNG.getResolution(res: Any)` and the ported API.
+
+- **Docs and examples**: Use resolution **3** or **`'1km'`** for 1 km, **4** or **`'100m'`** for 100 m — never `1000` or `100` as resolution.
+- **Comments**: In BNG and expression classes, state that resolution is a “BNG resolution (integer index or string from resolutionMap, e.g. 3 or '1km')”.
+
+## Ported code: verify baseline before extending
+
+When changing behavior in ported code (e.g. BNG from another project):
+
+1. **Establish baseline**: Inspect the original resolution/parameter handling (e.g. `getResolution`, `resolutionMap`, existing `eval` overloads). What types and values are accepted? What throws?
+2. **Prefer consistency**: If the baseline does not support a “convenience” interpretation (e.g. metres as Int), do not add it without explicit product/API decision. Prefer reverting to the documented/supported API and clarifying in comments and docs.
+3. **Match sibling expressions**: If other expressions in the same module support both Int and String for a parameter (e.g. resolution), add the same overload for consistency (e.g. `eval(..., resolution: UTF8String)` using `resolutionMap`).
+
+## Expression consistency
+
+- BNG expressions that take **resolution** should accept **Int** (resolution index) and, where appropriate, **String** via `BNG.resolutionMap` (e.g. `BNG_Tessellate`, `BNG_EastNorthAsBNG`, `BNG_PointAsCell`). Use the same pattern; do not add a third “metres as Int” path.
+- **Point inputs for BNG**: `bng_pointascell` and geometry-at-resolution APIs expect geometry in **BNG coordinates (eastings, northings, EPSG:27700)** when the implementation uses `pointToCellID(x, y, res)`. Document and use BNG coords in examples (e.g. `POINT(530000 180000)` for London); do not document WGS84 lon/lat as if they were supported for pointToCellID.
+
+## gbx_bng_cellarea
+
+- Returns **square kilometres** (not square metres). Docs and examples must say so and use column names/constants like `area_km2` and value `1.0` for a 1 km cell.
+
+## Reference
+
+- Baseline and revert rationale: `prompts/documentation/2026-02-10-bng-resolution-baseline-and-revert.md`
+- GridX subagent: `.cursor/agents/gridx.md`

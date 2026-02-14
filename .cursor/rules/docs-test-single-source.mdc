@@ -1,0 +1,1775 @@
+---
+description: Single source of truth pattern - tests populate documentation
+alwaysApply: true
+---
+
+# Documentation & Test Single Source of Truth
+
+**Core Principle: Tests ARE the documentation source, not validators of it.**
+
+## The Problem This Solves
+
+❌ **Before**: Copy-paste code between tests and docs → drift → broken examples
+✅ **After**: Tests contain code → docs import from tests → impossible to drift
+
+## CRITICAL REQUIREMENTS ⚠️
+
+### Tests MUST Be Executable with Real Data
+
+**❌ NOT ACCEPTABLE**: Tests that only check structure/compilation
+**✅ REQUIRED**: Tests that execute code with real data and validate results
+
+```python
+# ❌ WRONG - Only checks if code exists
+def test_function_exists(self):
+    assert hasattr(module, 'get_dimensions')
+
+# ✅ CORRECT - Executes code and validates output
+def test_get_dimensions_with_real_data(spark):
+    rasters = spark.read.format("gdal").load(SAMPLE_DATA_PATH)
+    result = get_dimensions(rasters)
+    row = result.collect()[0]
+    assert row['width'] == 1024
+    assert row['height'] == 1024
+```
+
+### Execution Environment Requirements
+
+**ALL documentation tests MUST**:
+
+1. ✅ **Run in Docker container** via `./scripts/ci/run-doc-tests.sh`
+   - Full Spark environment available
+   - GeoBrix library installed
+   - All dependencies present
+
+2. ✅ **Use established sample data** from `/Volumes/` paths
+   - NYC datasets: `/Volumes/main/geobrix_samples/geobrix-examples/nyc/`
+   - London datasets: `/Volumes/main/geobrix_samples/geobrix-examples/london/`
+   - See `docs/docs/sample-data.md` for complete catalog
+
+3. ✅ **Execute actual code** with real assertions
+   - Read real raster/vector files
+   - Apply GeoBrix functions
+   - Assert on expected results
+
+4. ✅ **Minimal mocking** - only for:
+   - External API calls (not under our control)
+   - Very expensive operations (multi-hour processing)
+   - Flaky external dependencies
+
+### What NOT to Mock
+
+**DO NOT mock these (use real implementations)**:
+- ❌ Spark operations (use real Spark in Docker)
+- ❌ GeoBrix functions (use real library)
+- ❌ File I/O with sample data (use real files)
+- ❌ DataFrames (use real data from sample files)
+
+### Test Quality Standard
+
+**Every documentation test MUST**:
+- Execute the function with real parameters
+- Use sample data files from `/Volumes/`
+- Assert on actual output values (dimensions, coordinates, counts, etc.)
+- Validate data types and structure
+- Test both success and edge cases
+
+**Example of Complete Test**:
+```python
+def test_get_raster_metadata_with_nyc_elevation(spark):
+    """Test metadata extraction with NYC elevation raster."""
+    # Load real sample data
+    rasters = spark.read.format("gdal").load(
+        "/Volumes/main/geobrix_samples/geobrix-examples/nyc/rasters/elevation.tif"
+    )
+    
+    # Execute function
+    result = get_raster_metadata(rasters)
+    
+    # Assert on real results
+    metadata = result.collect()[0]
+    assert metadata['driver'] == 'GTiff'
+    assert metadata['crs'] == 'EPSG:4326'
+    assert metadata['band_count'] == 1
+    assert isinstance(metadata['nodata_value'], (int, float, type(None)))
+```
+
+## Directory Structure
+
+```
+docs/
+├── tests/                          # ✨ UNIFIED: All documentation test code
+│   ├── pytest.ini                  # Python test configuration
+│   ├── README.md                   # Comprehensive documentation
+│   │
+│   ├── python/                     # Python examples for docs
+│   │   ├── setup/                  # Setup and configuration
+│   │   │   ├── sample_config.py            ← Code shown in docs
+│   │   │   ├── test_sample_config.py       ← Tests (12/12 ✅)
+│   │   │   ├── essential_bundle.py         ← Script shown in docs
+│   │   │   └── test_bundles.py             ← Tests (10/10 ✅)
+│   │   │
+│   │   ├── rasterx/                # RasterX API examples
+│   │   │   ├── basic_operations.py         ← Code shown in docs
+│   │   │   └── test_basic_operations.py    ← Tests (10/22 ⚠️)
+│   │   │
+│   │   ├── advanced/               # Advanced integration examples
+│   │   │   └── test_library_integration.py ← Tests (10 integration)
+│   │   │
+│   │   ├── vectorx/                # VectorX (future)
+│   │   └── gridx/                  # GridX (future)
+│   │
+│   └── scala/                      # Scala examples for docs
+│       └── advanced/               # Advanced patterns
+│           ├── CustomUdfsDocTest.scala    ← Tests (8 tests)
+│           └── OverviewDocTest.scala      ← Tests (1 test)
+│
+├── unit/                           # Standard unit tests (separate)
+│   ├── python/
+│   └── scala/
+│
+└── integration/                    # Integration tests (separate)
+    ├── python/
+    └── scala/
+
+```
+
+**Migration Complete (2026-01-25)**: All documentation tests unified under `docs/tests/`  
+**Cleanup Complete (2026-01-25)**: Old test locations removed ✅  
+**Relocated (2026-01-25)**: Moved from `tests/docs/` to `docs/tests/` for better co-location ✅  
+**Integration Complete (2026-01-25)**: Webpack raw-loader configured, docs auto-import test code ✅
+
+## Documentation Integration
+
+### How Test Code Gets Into Docs
+
+The documentation uses a **build-time import** pattern with webpack raw-loader:
+
+1. **Write tested code** in `docs/tests/python/`
+2. **Import with raw-loader** in MDX files (correct path is critical):
+   ```jsx
+   // From ANY file in docs/docs/*/ use: ../../tests/
+   import code from '!!raw-loader!../../tests/python/rasterx/accessor_functions.py';
+   ```
+3. **Display with CodeFromTest** component:
+   ```jsx
+   <CodeFromTest 
+     language="python"
+     title="Get Raster Dimensions"
+     source="docs/tests/python/rasterx/accessor_functions.py"
+     testFile="docs/tests/python/rasterx/test_accessor_functions.py"
+     functionName="get_raster_dimensions"
+   >
+     {code}
+   </CodeFromTest>
+   ```
+4. **Webpack processes** .py files at build time (no runtime fetching)
+5. **Static HTML generated** with embedded, tested code
+
+**Result**: Zero drift, guaranteed accuracy, automatic updates
+
+### Import Path Pattern (CRITICAL)
+
+**The correct path depends on file location depth**:
+
+```jsx
+// From files in SUBDIRECTORIES (docs/docs/api/, docs/docs/examples/, etc.)
+// Go up 2 levels: docs/docs/*/ → docs/docs/ → docs/ → tests/
+import code from '!!raw-loader!../../tests/python/module/file.py';
+
+// From files DIRECTLY in docs/docs/ (like quick-start.mdx)
+// Go up 1 level: docs/docs/ → docs/ → tests/
+import code from '!!raw-loader!../tests/python/module/file.py';
+```
+
+**Examples by Location**:
+```jsx
+// File: docs/docs/api/rasterx-functions.mdx (in subdirectory)
+import code from '!!raw-loader!../../tests/python/rasterx/functions.py'; // ✅
+
+// File: docs/docs/examples/quickstart.mdx (in subdirectory)
+import code from '!!raw-loader!../../tests/python/quickstart/examples.py'; // ✅
+
+// File: docs/docs/quick-start.mdx (directly in docs/docs/)
+import code from '!!raw-loader!../tests/python/quickstart/examples.py'; // ✅
+
+// WRONG: Using wrong number of ../
+import code from '!!raw-loader!../../../tests/python/file.py'; // ❌
+```
+
+**Rule of Thumb**:
+- Count directory levels from your MDX file to `docs/`
+- From `docs/docs/subdir/file.mdx`: 2 levels up → `../../tests/`
+- From `docs/docs/file.mdx`: 1 level up → `../tests/`
+- Then add the path within tests: `python/module/file.py`
+
+### Build Documentation
+
+```bash
+# Install dependencies (includes raw-loader)
+cd docs/
+npm install
+
+# Run tests first (must pass!)
+cd ..
+./scripts/ci/run-doc-tests.sh python
+
+# Build docs
+cd docs/
+npm run build
+
+# Serve locally
+npm run serve
+```
+
+See `docs/DOCS-BUILD-GUIDE.md` for complete instructions.
+
+## Running Documentation Tests
+
+### Unified Commands (Recommended) ✅
+
+```bash
+# Run all documentation tests (Python + Scala)
+./scripts/ci/run-doc-tests.sh local
+
+# Run Python tests only
+./scripts/ci/run-doc-tests.sh python
+
+# Run Scala tests only
+./scripts/ci/run-doc-tests.sh scala
+
+# Check CI status
+./scripts/ci/run-doc-tests.sh status
+
+# Trigger in CI
+./scripts/ci/run-doc-tests.sh trigger
+```
+
+### Direct Execution
+
+**Python**:
+```bash
+# All Python tests (excluding integration)
+pytest docs/tests/python/ -v -m "not integration"
+
+# With coverage
+pytest docs/tests/python/ -v --cov=tests/docs/python
+
+# Specific suite
+pytest docs/tests/python/setup/ -v
+```
+
+**Scala**:
+```bash
+# All Scala doc tests
+mvn test -Dsuites='tests.docs.scala.*'
+
+# Specific suite
+mvn test -Dsuites='tests.docs.scala.advanced.*'
+
+# Compile only (fast validation)
+mvn test-compile
+```
+
+## Rules
+
+### Rule 1: Never Duplicate Code
+
+**❌ FORBIDDEN**: Copy-paste code from tests to docs
+```markdown
+<!-- WRONG: Duplicated code -->
+\```python
+import requests
+from pathlib import Path
+
+SAMPLE_DATA_PATH = "/Volumes/main/default/geobrix_samples"
+download_file(url, path, filename)
+\```
+```
+
+**✅ REQUIRED**: Import code from tests
+```mdx
+<!-- CORRECT: Reference to single source -->
+<CodeFromFile 
+  file="/docs/tests/python/setup/essential_bundle.py"
+  lines="10-20"
+  language="python"
+  title="Configure Storage"
+/>
+```
+
+### Rule 2: All Doc Code Must Be Tested
+
+**Every code snippet shown in documentation MUST:**
+1. Live in `tests/docs/{python|scala}/`
+2. Have a corresponding test file
+3. Pass all tests
+
+**❌ FORBIDDEN**: Untested code in docs
+```python
+# scripts/example.py  ← Not tested!
+def my_example():
+    return "Hello"
+```
+
+**✅ REQUIRED**: Tested code in docs
+```python
+# docs/tests/python/rasterx/example.py  ← Has test_example.py!
+def my_example():
+    return "Hello"
+
+# docs/tests/python/rasterx/test_example.py
+def test_my_example():
+    from tests.docs.python.rasterx.example import my_example
+    assert my_example() == "Hello"
+```
+
+### Rule 3: Fail Fast on Test Failures
+
+**If doc tests fail, the entire build MUST fail.**
+
+```yaml
+# .github/workflows/ci.yml
+- name: Run Doc Tests (Python)
+  run: pytest docs/tests/python/ -v --tb=short
+  
+- name: Run Doc Tests (Scala)
+  run: mvn test-compile -Dsuites='com.databricks.labs.gbx.docs.*'
+
+# If either fails, CI fails → no merge → no broken docs
+```
+
+### Rule 3b: One-copy includes displaying results
+
+**Doc examples that produce output MUST show that output in the docs**, so readers see what to expect. This is part of the one-copy discipline: the same source that is tested also defines the displayed result.
+
+**Required:**
+- In the **example code** (in `docs/tests/`): use **`.show()`** (e.g. `.limit(3).show()` or `.limit(1).show(vertical=True)`) so the snippet is runnable and produces visible output.
+- In the **same file**: add an **output constant** (e.g. `<example_name>_output = """..."""`) containing representative `.show()` output (or equivalent), so the doc can render an "Example output" block.
+- In the **MDX**: use **`outputConstant="<example_name>_output"`** on `<CodeFromTest>` so the "Example output" block appears below the code.
+
+**Conventions:**
+- Use **`.limit(3).show()`** for simple tables; use **`.limit(1).show(vertical=True)`** for wide or complex output.
+- Keep the output constant in sync with real runs when sample data or behavior changes.
+- When the output constant is a **Spark-style ASCII table** (rows with `|...|`, borders with `+---...+`), align every row so column widths match the border: each cell’s content + spaces must equal the column width. See **`.cursor/rules/doc-example-output-alignment.mdc`** for the full rule and conventions.
+
+**Example (in `docs/tests/python/.../overview.py`):**
+```python
+def spark_expressions_standard_usage(spark):
+    ...
+    df = rasters.select(rx.rst_boundingbox("tile").alias("bbox"))
+    df.limit(3).show(truncate=40)
+    return df
+
+spark_expressions_standard_usage_output = """
++--------------------+
+|bbox                |
++--------------------+
+|POLYGON ((...))     |
++--------------------+
+"""
+```
+
+**In MDX:** `<CodeFromTest ... outputConstant="spark_expressions_standard_usage_output" />`
+
+### Rule 4: Test File Naming Convention
+
+**Pattern**: `{category}_*.py` for code, `test_{category}_*.py` for tests
+
+**Examples**:
+```
+docs/tests/python/setup/
+├── essential_bundle.py        ← Code shown in docs
+└── test_bundles.py            ← Tests for essential_bundle.py
+
+docs/tests/python/rasterx/
+├── sentinel2_download.py      ← Code shown in docs
+├── raster_operations.py       ← Code shown in docs
+└── test_rasterx_examples.py   ← Tests for both
+```
+
+**Scala**:
+```
+docs/tests/scala/rasterx/
+├── RasterXExamples.scala          ← Code shown in docs
+└── RasterXExamplesDocTest.scala   ← scalatest for examples
+```
+
+### Rule 5: Executable Scripts Must Be Runnable
+
+**Scripts shown in docs MUST be directly executable:**
+
+```python
+# docs/tests/python/setup/essential_bundle.py
+
+"""
+Essential Bundle Setup Script
+
+This script is:
+1. Shown in documentation (via CodeFromFile import)
+2. Tested by pytest (test_bundles.py)
+3. Directly executable by users
+
+DO NOT duplicate this code in docs!
+"""
+
+def main():
+    """Main execution"""
+    print("Setting up essential bundle...")
+    # ... implementation ...
+
+if __name__ == "__main__":
+    main()
+```
+
+**Users can run**:
+```bash
+wget https://raw.githubusercontent.com/databrickslabs/geobrix/main/docs/tests/python/setup/essential_bundle.py
+python essential_bundle.py
+```
+
+### Rule 6: Documentation Imports Code, Never Copies
+
+**❌ WRONG** (`sample-data.md`):
+```markdown
+## Setup Script
+
+\```python
+# Copy-pasted code here
+import requests
+def download_file(...):
+    ...
+\```
+```
+
+**✅ CORRECT** (`sample-data.mdx`):
+```mdx
+import CodeFromFile from '@site/src/components/CodeFromFile';
+
+## Setup Script
+
+<CodeFromFile 
+  file="/docs/tests/python/setup/essential_bundle.py"
+  language="python"
+  title="docs/tests/python/setup/essential_bundle.py"
+/>
+
+Download and run:
+\```bash
+wget https://raw.githubusercontent.com/databrickslabs/geobrix/main/docs/tests/python/setup/essential_bundle.py
+python essential_bundle.py
+\```
+```
+
+### Rule 7: Test Coverage Tracking
+
+**Maintain coverage table in docs**:
+
+```markdown
+## Documentation Test Coverage
+
+| Documentation Page | Test File | Status |
+|-------------------|-----------|--------|
+| sample-data.md | docs/tests/python/setup/test_bundles.py | ✅ 12 tests |
+| api/rasterx-functions.md | docs/tests/scala/rasterx/RasterXExamplesDocTest.scala | ✅ 25 tests |
+| advanced/custom-udfs.md | docs/tests/scala/advanced/CustomUdfsDocTest.scala | ✅ 8 tests |
+```
+
+## Workflow
+
+### Adding New Documentation with Code Examples
+
+Follow this complete workflow to add tested code examples to documentation:
+
+#### Step 1: Create the Python Code Module
+
+```bash
+# Create the example code file
+touch docs/tests/python/rasterx/my_new_example.py
+```
+
+Write the code with comprehensive docstrings:
+
+```python
+"""
+My New Feature Examples - Documentation Code
+
+This module contains tested code examples for the "My New Feature" documentation.
+All code shown in docs is imported from this file.
+
+Documentation: docs/docs/api/rasterx-functions.md
+- Tested by: docs/tests/python/rasterx/test_my_new_example.py
+
+Usage in Documentation:
+    <CodeFromTest 
+      source="docs/tests/python/rasterx/my_new_example.py"
+      testFile="docs/tests/python/rasterx/test_my_new_example.py"
+      functionName="demonstrate_feature"
+    />
+"""
+
+# Conditional imports for testability
+try:
+    from pyspark.sql import SparkSession
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+except ImportError:
+    SparkSession = None
+    rx = None
+    f = None
+
+
+def demonstrate_feature(rasters_df):
+    """
+    Demonstrate the new feature.
+    
+    Parameters:
+        rasters_df: DataFrame with 'tile' column containing raster data
+    
+    Returns:
+        DataFrame with new feature applied
+    
+    Example:
+        >>> # Load rasters
+        >>> rasters = spark.read.format("gdal").load("/data/rasters")
+        >>> 
+        >>> # Apply feature
+        >>> result = demonstrate_feature(rasters)
+        >>> result.show()
+    
+    See Also:
+        - other_related_function: Description
+    """
+    return rasters_df.select(
+        "path",
+        rx.rst_new_feature("tile").alias("feature_result")
+    )
+```
+
+#### Step 2: Create Comprehensive Tests
+
+```bash
+# Create test file
+touch docs/tests/python/rasterx/test_my_new_example.py
+```
+
+Write tests following the three-tier strategy:
+
+```python
+"""
+Tests for My New Feature Examples
+
+These tests verify that the code examples in the documentation are valid.
+
+Documentation: docs/docs/api/rasterx-functions.md
+- Tests verify docs/tests/python/rasterx/my_new_example.py
+
+Run:
+    pytest docs/tests/python/rasterx/test_my_new_example.py -v
+
+Test Markers:
+    - structure: Tests that verify code structure
+    - logic: Tests that verify logic with mocks
+    - integration: Tests that require full Spark environment
+"""
+
+import pytest
+import inspect
+from unittest.mock import Mock
+import sys
+from pathlib import Path
+
+# Import the module under test
+sys.path.insert(0, str(Path(__file__).parent))
+import my_new_example
+
+
+class TestImports:
+    """Test that the module can be imported."""
+    
+    @pytest.mark.structure
+    def test_module_imports(self):
+        """Module should import without errors."""
+        assert my_new_example is not None
+    
+    @pytest.mark.structure
+    def test_function_exists(self):
+        """demonstrate_feature function should exist."""
+        assert hasattr(my_new_example, 'demonstrate_feature')
+
+
+class TestFunctionSignatures:
+    """Test function signatures."""
+    
+    @pytest.mark.structure
+    def test_demonstrate_feature_signature(self):
+        """Function should accept rasters_df parameter."""
+        sig = inspect.signature(my_new_example.demonstrate_feature)
+        params = list(sig.parameters.keys())
+        assert 'rasters_df' in params
+
+
+class TestDocstrings:
+    """Test that functions have proper documentation."""
+    
+    @pytest.mark.structure
+    def test_function_documented(self):
+        """Function should have docstring with example."""
+        func = my_new_example.demonstrate_feature
+        assert func.__doc__ is not None
+        assert "Example:" in func.__doc__
+        assert "Parameters:" in func.__doc__
+
+
+class TestLogic:
+    """Test function logic with mocked dependencies."""
+    
+    @pytest.mark.integration
+    def test_demonstrate_feature_structure(self):
+        """Function should call expected methods."""
+        if my_new_example.rx is None:
+            pytest.skip("Requires GeoBrix rx module")
+        
+        mock_df = Mock()
+        mock_select = Mock(return_value=mock_df)
+        mock_df.select = mock_select
+        
+        result = my_new_example.demonstrate_feature(mock_df)
+        
+        mock_select.assert_called_once()
+
+
+class TestIntegration:
+    """Integration tests requiring full Spark environment."""
+    
+    @pytest.mark.integration
+    def test_with_real_data(self):
+        """Test with real raster data."""
+        pytest.skip("Requires Spark environment with raster data")
+```
+
+#### Step 3: Run Tests (Must Pass!)
+
+```bash
+# Run the new tests
+pytest docs/tests/python/rasterx/test_my_new_example.py -v
+
+# Expected: All structure tests pass
+# Integration tests skip (need Spark environment)
+
+# Run all doc tests to ensure no regressions
+./scripts/ci/run-doc-tests.sh python
+```
+
+**Tests must pass before proceeding to documentation!**
+
+#### Step 4: Add to MDX Documentation
+
+Create or update the MDX file (e.g., `docs/docs/api/rasterx-functions.mdx`):
+
+```mdx
+---
+sidebar_position: 5
+title: RasterX Functions
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import rasterxCode from '!!raw-loader!../../tests/python/rasterx/my_new_example.py';
+
+# RasterX New Feature
+
+Description of the new feature and when to use it.
+
+## Example: Demonstrate Feature
+
+This example shows how to use the new feature with raster data.
+
+<CodeFromTest 
+  language="python"
+  title="Demonstrate New Feature"
+  source="docs/tests/python/rasterx/my_new_example.py"
+  testFile="docs/tests/python/rasterx/test_my_new_example.py"
+  functionName="demonstrate_feature"
+>
+  {rasterxCode}
+</CodeFromTest>
+
+### Usage
+
+\```python
+from databricks.labs.gbx.rasterx import functions as rx
+
+# Load your rasters
+rasters = spark.read.format("gdal").load("/data/rasters")
+
+# Apply the feature
+result = demonstrate_feature(rasters)
+result.show()
+\```
+```
+
+**Critical: Import Path Pattern**
+```jsx
+// From docs/docs/api/ or docs/docs/examples/ or docs/docs/*/
+// ALWAYS use: ../../tests/
+
+import code from '!!raw-loader!../../tests/python/rasterx/my_new_example.py';
+
+// NOT: ../../../tests/ ❌
+// NOT: ../tests/ ❌
+```
+
+#### Step 5: Build and Verify
+
+```bash
+# Build documentation
+cd docs/
+npm run build
+
+# Expected: [SUCCESS] Generated static files in "build".
+
+# Serve locally to verify
+npm run serve
+
+# Open: http://localhost:3000/docs/api/rasterx-functions
+```
+
+**Verification Checklist**:
+- ✅ Code block displays correctly
+- ✅ Function extraction shows only the requested function
+- ✅ Syntax highlighting works
+- ✅ "Single Source of Truth" badge appears
+- ✅ Source and test file paths are correct
+- ✅ No "Error loading" messages
+
+#### Step 6: Update Documentation Index
+
+Add the new example to `docs/tests/README.md`:
+
+```markdown
+| `rasterx/my_new_example.py` | X | Y | ✅ Z% | New feature examples |
+```
+
+**5. Verify docs render (DEPRECATED - see Step 5 above)**
+```bash
+cd docs && npm start
+# Check http://localhost:3000
+```
+
+### Updating Existing Examples
+
+**1. Find the source code**
+```bash
+# Search for the code file
+find tests/docs -name "*bundle*"
+# Result: docs/tests/python/setup/essential_bundle.py
+```
+
+**2. Update the code**
+```bash
+# Edit the single source of truth
+vim docs/tests/python/setup/essential_bundle.py
+```
+
+**3. Run tests**
+```bash
+pytest docs/tests/python/setup/test_bundles.py -v
+```
+
+**4. Done!**
+- ✅ Code updated in ONE place
+- ✅ Tests verify it works
+- ✅ Docs automatically show updated code
+- ✅ No need to touch documentation markdown
+
+### Before Committing
+
+**Required checklist**:
+```bash
+# 1. Run doc tests (Python)
+pytest docs/tests/python/ -v
+
+# 2. Run doc tests (Scala)
+mvn test-compile -Dsuites='com.databricks.labs.gbx.docs.*'
+
+# 3. Build docs locally
+cd docs && npm run build
+
+# 4. Verify no errors
+echo $?  # Should be 0
+```
+
+## Common Patterns
+
+### Pattern 1: Complete Script
+
+**For standalone scripts users can download and run:**
+
+```python
+# docs/tests/python/setup/essential_bundle.py
+"""
+Essential Bundle Setup
+
+Usage in docs: Import entire file
+Test strategy: Mock external dependencies, test logic
+"""
+
+import requests
+from pathlib import Path
+
+def download_file(url, path):
+    """Download helper"""
+    pass
+
+def main():
+    """Main execution"""
+    download_file("https://example.com/data.json", "/path")
+
+if __name__ == "__main__":
+    main()
+```
+
+**In docs:**
+```mdx
+<CodeFromFile 
+  file="/docs/tests/python/setup/essential_bundle.py"
+  language="python"
+  title="Complete Script - docs/tests/python/setup/essential_bundle.py"
+/>
+```
+
+### Pattern 2: Code Snippets
+
+**For small examples showing API usage:**
+
+```python
+# docs/tests/python/rasterx/api_examples.py
+"""
+RasterX API Examples
+
+Usage in docs: Import line ranges
+Test strategy: Test each function independently
+"""
+
+# Example 1: Load raster (lines 10-15)
+def example_load_raster():
+    import databricks.labs.gbx.rasterx as rx
+    raster = spark.read.format("gdal").load("/path/to/raster.tif")
+    return raster
+
+# Example 2: Transform raster (lines 20-25)
+def example_transform():
+    import databricks.labs.gbx.rasterx as rx
+    result = raster.withColumn("transformed", rx.rst_transform("tile", 4326))
+    return result
+```
+
+**In docs:**
+```mdx
+<!-- Show specific examples -->
+<CodeFromFile 
+  file="/docs/tests/python/rasterx/api_examples.py"
+  lines="10-15"
+  language="python"
+  title="Example: Load Raster"
+/>
+
+<CodeFromFile 
+  file="/docs/tests/python/rasterx/api_examples.py"
+  lines="20-25"
+  language="python"
+  title="Example: Transform Raster"
+/>
+```
+
+### Pattern 3: Scala Examples
+
+```scala
+// docs/tests/scala/rasterx/RasterXExamples.scala
+package com.databricks.labs.gbx.docs.rasterx
+
+import com.databricks.labs.gbx.rasterx.expressions._
+import org.apache.spark.sql.SparkSession
+
+object RasterXExamples {
+  
+  /** Example 1: Load raster data */
+  def loadRasterExample()(implicit spark: SparkSession): Unit = {
+    import spark.implicits._
+    val raster = spark.read
+      .format("gdal")
+      .load("/path/to/raster.tif")
+  }
+  
+  /** Example 2: Transform raster */
+  def transformExample()(implicit spark: SparkSession): Unit = {
+    import spark.implicits._
+    // Implementation
+  }
+}
+
+// docs/tests/scala/rasterx/RasterXExamplesDocTest.scala
+package com.databricks.labs.gbx.docs.rasterx
+
+import org.scalatest.funsuite.AnyFunSuite
+
+class RasterXExamplesDocTest extends AnyFunSuite {
+  
+  test("load raster example compiles") {
+    // If imports work, test passes
+    import com.databricks.labs.gbx.rasterx.expressions._
+    succeed
+  }
+}
+```
+
+## Benefits
+
+### ✅ Zero Drift
+- Impossible for docs and code to diverge
+- Single source of truth enforced
+
+### ✅ Always Valid
+- Docs can't show broken code
+- Tests must pass for builds to succeed
+
+### ✅ Easy Maintenance
+- Update code in ONE place
+- Tests verify correctness
+- Docs automatically updated
+
+### ✅ Better User Experience
+- Copy-paste from docs guaranteed to work
+- Can download actual tested scripts
+- Trust in documentation
+
+### ✅ CI/CD Integration
+- Automated validation
+- No manual checks needed
+- Fast feedback
+
+## Migration Checklist
+
+When migrating existing docs to this pattern:
+
+- [ ] Create `docs/tests/python/` and `docs/tests/scala/` directories
+- [ ] Move scripts from `scripts/` to `docs/tests/python/`
+- [ ] Create test files for each script
+- [ ] Update `docs/docs/*.md` → `*.mdx`
+- [ ] Replace code blocks with `<CodeFromFile>` imports
+- [ ] Add CI job to run doc tests
+- [ ] Update README with new structure
+- [ ] Create coverage tracking table
+
+## Anti-Patterns to Avoid
+
+### ❌ Don't: Copy code "just this once"
+**Never duplicate**. Always import from tests.
+
+### ❌ Don't: Skip writing tests
+**Every** code example needs a test. No exceptions.
+
+### ❌ Don't: Keep old scripts around
+**Delete** `scripts/` after migrating to `tests/docs/`.
+
+### ❌ Don't: Manual verification
+**Automate** with tests and CI. No manual checks.
+
+### ❌ Don't: Inline code in docs
+**Import** from tests. Never write code directly in markdown.
+
+## References
+
+- **Literate Programming** - Donald Knuth
+- **Docusaurus Code Blocks** - https://docusaurus.io/docs/markdown-features/code-blocks
+- **pytest Best Practices** - https://docs.pytest.org/
+- **ScalaTest Documentation** - https://www.scalatest.org/
+
+## Related Rules
+
+- `.cursor/rules/documentation-test-validation.mdc` - Compilation validation
+- `.cursor/rules/test-organization-logging.mdc` - Test organization standards
+- `.cursor/rules/function-documentation-standards.mdc` - Code documentation
+
+---
+
+## Practical Implementation Patterns
+
+### Pattern 1: Conditional Imports for Testing
+
+**Problem**: Documentation code imports GeoBrix/Spark libraries not available in test environment.
+
+**Solution**: Use conditional imports with None fallback:
+
+```python
+# docs/tests/python/rasterx/basic_operations.py
+"""
+Single Source of Truth for RasterX examples
+"""
+
+# Conditional imports - allows module to be imported for testing
+try:
+    from pyspark.sql import SparkSession
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+except ImportError:
+    # Modules will be available in Spark environment
+    SparkSession = None
+    rx = None
+    f = None
+
+
+def get_raster_metadata(rasters_df):
+    """Get basic metadata from raster tiles"""
+    return rasters_df.select(
+        rx.rst_width("tile").alias("width"),
+        rx.rst_height("tile").alias("height"),
+        rx.rst_srid("tile").alias("srid")
+    )
+```
+
+**Benefits**:
+- ✅ Module can be imported without dependencies
+- ✅ Tests can verify structure (signatures, docstrings)
+- ✅ Code still works in Spark environment
+- ✅ No need to mock imports globally
+
+### Pattern 2: Executable Scripts with Importable Functions
+
+**Problem**: Scripts need to run standalone AND be importable for testing.
+
+**Solution**: Use `if __name__ == "__main__":` guard with main() function:
+
+```python
+#!/usr/bin/env python3
+"""
+Essential Bundle Setup Script
+
+Can be:
+1. Imported: `from essential_bundle import SAMPLE_DATA_PATH, download_file`
+2. Executed: `python essential_bundle.py`
+"""
+
+import sys
+from pathlib import Path
+
+# Conditional imports
+try:
+    import requests
+except ImportError:
+    pass
+
+# Configuration (available on import)
+CATALOG = "main"
+SCHEMA = "default"
+VOLUME = "geobrix_samples"
+SAMPLE_DATA_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/geobrix-examples"
+
+
+def download_file(url: str, output_path: str, filename: str):
+    """Download file from URL (available on import)"""
+    # ... implementation ...
+    pass
+
+
+def main():
+    """Main execution - only runs when script is executed directly"""
+    # Install dependencies
+    import subprocess
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "geopandas"])
+    
+    # Actual download logic
+    print("Downloading essential bundle...")
+    download_file(...)
+    print("✅ Complete!")
+
+
+if __name__ == "__main__":
+    main()
+```
+
+**Benefits**:
+- ✅ Clean import (doesn't execute on import)
+- ✅ Can test individual functions
+- ✅ Still runnable as standalone script
+- ✅ Dependency installation in main() only
+
+### Pattern 3: Executable Tests with Real Data
+
+**CRITICAL REQUIREMENT**: Documentation tests MUST be executable with real data and assertions.
+
+**❌ WRONG APPROACH - Structure-Only Tests**:
+```python
+# BAD: Only checks if code compiles
+def test_function_exists(self):
+    assert hasattr(module, 'get_raster_dimensions')
+
+def test_function_signature(self):
+    sig = inspect.signature(module.get_raster_dimensions)
+    assert 'rasters_df' in sig.parameters
+```
+
+**✅ CORRECT APPROACH - Executable Tests with Real Data**:
+```python
+# GOOD: Actually executes code and validates results
+def test_get_raster_dimensions_with_sample_data(self):
+    """Test with real raster data - validates actual output"""
+    # Read actual sample data
+    rasters_df = spark.read.format("gdal").load(
+        "/Volumes/main/geobrix_samples/geobrix-examples/nyc/rasters/elevation.tif"
+    )
+    
+    # Execute the function
+    result = get_raster_dimensions(rasters_df)
+    
+    # Assert on actual results
+    dimensions = result.collect()[0]
+    assert dimensions['width'] == 1024
+    assert dimensions['height'] == 1024
+    assert dimensions['width'] > 0 and dimensions['height'] > 0
+```
+
+**Requirements for All Documentation Tests**:
+
+1. **MUST Execute Code**: Tests must run the actual function with real data
+2. **MUST Assert Results**: Tests must verify expected outputs, not just structure
+3. **MUST Use Sample Data**: Use the established sample data from `/Volumes/` paths
+4. **MUST Run in Docker**: All tests execute in the Docker container with full environment
+5. **Mocking ONLY for Edge Cases**: Mock only when real data is impractical (API calls, external services)
+
+### Test Execution Environment
+
+**ALL documentation tests run in Docker with full dependencies**:
+
+```bash
+# Run tests in Docker (REQUIRED for doc tests)
+./scripts/ci/run-doc-tests.sh local
+
+# Inside Docker container:
+# - Full Spark environment
+# - GeoBrix installed
+# - Sample data mounted at /Volumes/
+# - All dependencies available
+```
+
+**Test Structure**:
+```python
+# docs/tests/python/rasterx/test_accessor_functions.py
+import pytest
+from pyspark.sql import SparkSession
+
+# Sample data paths
+SAMPLE_RASTER = "/Volumes/main/geobrix_samples/geobrix-examples/nyc/rasters/elevation.tif"
+SAMPLE_VECTOR = "/Volumes/main/geobrix_samples/geobrix-examples/nyc/vectors/parks.shp"
+
+
+@pytest.fixture(scope="module")
+def spark():
+    """Create Spark session for tests"""
+    return SparkSession.builder.appName("DocTests").getOrCreate()
+
+
+@pytest.fixture(scope="module")
+def sample_raster_df(spark):
+    """Load sample raster data"""
+    return spark.read.format("gdal").load(SAMPLE_RASTER)
+
+
+def test_get_raster_dimensions_returns_correct_values(sample_raster_df):
+    """
+    Test that get_raster_dimensions returns correct width/height.
+    
+    Uses real elevation raster from NYC sample data.
+    """
+    from accessor_functions import get_raster_dimensions
+    
+    result = get_raster_dimensions(sample_raster_df)
+    row = result.collect()[0]
+    
+    # Assert actual dimensions
+    assert row['width'] == 1024
+    assert row['height'] == 1024
+    
+    # Assert data types
+    assert isinstance(row['width'], int)
+    assert isinstance(row['height'], int)
+
+
+def test_get_raster_boundingbox_valid_coordinates(sample_raster_df):
+    """
+    Test that bounding box returns valid geographic coordinates.
+    
+    NYC elevation data should be in NYC area (approx -74, 40).
+    """
+    from accessor_functions import get_raster_boundingbox
+    
+    result = get_raster_boundingbox(sample_raster_df)
+    bbox = result.collect()[0]['bbox']
+    
+    # Parse WKT or struct
+    assert bbox is not None
+    # Validate coordinates are in NYC area
+    # (actual validation depends on data format)
+```
+
+**Benefits**:
+- ✅ Validates code actually works
+- ✅ Catches real bugs before docs
+- ✅ Uses production-like environment
+- ✅ Tests stay synchronized with data
+- ✅ Users can trust examples work
+
+### When to Use Minimal Mocking
+
+**Mock ONLY in these specific cases**:
+
+1. **External API calls** (not under our control)
+   ```python
+   @patch('requests.get')
+   def test_download_from_external_api(mock_get):
+       mock_get.return_value.status_code = 200
+       # Test download logic
+   ```
+
+2. **Very expensive operations** (multi-hour processing)
+   ```python
+   def test_process_massive_dataset_structure():
+       # Mock the expensive operation, test orchestration
+       pass
+   ```
+
+3. **Flaky dependencies** (network, external services)
+   ```python
+   @patch('external_service.connect')
+   def test_handles_service_failure(mock_connect):
+       mock_connect.side_effect = ConnectionError
+       # Test error handling
+   ```
+
+**DO NOT mock**:
+- ❌ Spark operations (use real Spark in Docker)
+- ❌ GeoBrix functions (use real library)
+- ❌ File I/O with sample data (use real files)
+- ❌ DataFrames (use real data)
+- ✅ Gradual test sophistication
+
+### Pattern 4: Documentation-First Function Design
+
+**Problem**: Functions written for production may be hard to document/test.
+
+**Solution**: Design functions with documentation in mind from the start:
+
+```python
+def get_raster_metadata(rasters_df):
+    """
+    Get basic metadata from raster tiles
+    
+    This function extracts essential metadata (width, height, SRID) from
+    raster tiles in a DataFrame.
+    
+    Args:
+        rasters_df: DataFrame with raster tiles in 'tile' column
+    
+    Returns:
+        DataFrame with three columns:
+        - width: Integer pixel width
+        - height: Integer pixel height
+        - srid: Spatial Reference ID (EPSG code)
+    
+    Example:
+        >>> metadata = get_raster_metadata(rasters)
+        >>> metadata.show()
+        +-------+--------+------+
+        | width | height | srid |
+        +-------+--------+------+
+        | 10980 |  10980 | 32618|
+        +-------+--------+------+
+        
+        >>> # Check raster dimensions
+        >>> metadata.filter(col("width") > 10000).count()
+        3
+    
+    See Also:
+        - get_raster_bounds() - Get geographic bounds
+        - get_pixel_statistics() - Get pixel value statistics
+    
+    Note:
+        Requires RasterX functions to be registered:
+        `rx.register(spark)`
+    """
+    return rasters_df.select(
+        rx.rst_width("tile").alias("width"),
+        rx.rst_height("tile").alias("height"),
+        rx.rst_srid("tile").alias("srid")
+    )
+```
+
+**Checklist**:
+- ✅ One-line summary
+- ✅ Detailed description
+- ✅ Args with types and descriptions
+- ✅ Returns with structure
+- ✅ Example with expected output
+- ✅ Related functions
+- ✅ Important notes/prerequisites
+
+### Pattern 5: Test Coverage Tracking
+
+**Problem**: Need visibility into test coverage over time.
+
+**Solution**: Use pytest-cov with clear thresholds:
+
+```ini
+# tests/docs/pytest.ini
+[coverage:report]
+fail_under = 70
+show_missing = True
+precision = 1
+
+[coverage:html]
+directory = htmlcov
+```
+
+**GitHub Actions Integration**:
+```yaml
+- name: Run documentation tests
+  run: |
+    pytest docs/tests/python/ \
+      -v \
+      --cov=tests/docs/python \
+      --cov-report=term-missing \
+      --cov-report=xml
+
+- name: Upload coverage
+  uses: codecov/codecov-action@v4
+  with:
+    file: ./coverage.xml
+    flags: docs
+```
+
+**Benefits**:
+- ✅ Track coverage trends
+- ✅ Enforce minimum standards
+- ✅ Identify untested code
+- ✅ Visual reports
+
+### Pattern 6: Module Organization by Concept
+
+**Problem**: Large monolithic modules are hard to maintain.
+
+**Solution**: One concept per file, 5-10 related functions:
+
+```
+docs/tests/python/rasterx/
+├── basic_operations.py      # Metadata, bounds, statistics
+├── transformations.py       # CRS, reprojection, warping
+├── band_operations.py       # Band math, masking, combining
+├── spatial_operations.py    # Clip, buffer, overlay
+├── io_operations.py         # Reading, writing, formats
+└── test_*.py                # Corresponding tests
+```
+
+**NOT**:
+```
+docs/tests/python/rasterx/
+└── utils.py                 # 50 unrelated functions ❌
+```
+
+**Benefits**:
+- ✅ Easy to find relevant code
+- ✅ Focused test files
+- ✅ Clear imports in docs
+- ✅ Maintainable over time
+
+### Pattern 7: Version-Aware Examples
+
+**Problem**: Examples may break with library updates.
+
+**Solution**: Include version checks and notes:
+
+```python
+"""
+RasterX Basic Operations
+
+Compatibility:
+    - GeoBrix >= 0.1.0
+    - PySpark >= 3.5.0
+    - GDAL >= 3.6.0
+
+Last tested: 2026-01-25
+"""
+
+import sys
+
+# Minimum version check
+REQUIRED_PYTHON = (3, 12)
+if sys.version_info < REQUIRED_PYTHON:
+    raise RuntimeError(
+        f"Python {REQUIRED_PYTHON[0]}.{REQUIRED_PYTHON[1]}+ required"
+    )
+
+
+def get_raster_metadata(rasters_df):
+    """
+    Get basic metadata (GeoBrix 0.1.0+)
+    
+    Changed in 0.2.0: Added 'nodata_value' to output
+    """
+    # Implementation
+    pass
+```
+
+**Benefits**:
+- ✅ Users know compatibility
+- ✅ Easy to track breaking changes
+- ✅ Historical context preserved
+- ✅ Proactive version management
+
+## Implementation Metrics (Jan 2026)
+
+**Progress After Steps 1-5**:
+
+| Metric | Value | Status |
+|--------|-------|--------|
+| Test Modules Created | 3 | ✅ |
+| Functions Documented | 22 | ✅ |
+| Tests Written | 44 | ✅ |
+| Tests Passing | 32 (73%) | ⚠️ |
+| CI/CD Integrated | Yes | ✅ |
+| Doc Pages Migrated | 2 | ⚠️ |
+
+**Test Breakdown**:
+- `sample_config.py`: 12/12 (100%) ✅
+- `essential_bundle.py`: 10/10 (100%) ✅
+- `basic_operations.py`: 10/22 (45%) ⚠️
+
+**Lessons Learned**:
+1. ✅ Conditional imports crucial for testability
+2. ✅ Three-tier test strategy works well
+3. ✅ Structure tests provide 70%+ value
+4. ✅ Integration tests can be deferred
+5. ✅ Pattern scales to API documentation
+6. ⚠️ Spark mocking needs more work
+7. ⚠️ ScalaTest integration pending
+
+## Quick Reference
+
+### Creating New Doc Code
+
+```bash
+# 1. Create module
+touch docs/tests/python/vectorx/spatial_joins.py
+
+# 2. Write code with docstrings
+# (Use conditional imports!)
+
+# 3. Create tests
+touch docs/tests/python/vectorx/test_spatial_joins.py
+
+# 4. Run tests
+pytest docs/tests/python/vectorx/test_spatial_joins.py -v
+
+# 5. Import in docs (MDX)
+# <CodeFromTest source="..." />
+
+# 6. Verify in CI
+git add . && git commit -m "Add spatial joins example"
+git push  # CI will test automatically
+```
+
+### Debugging Test Failures
+
+```bash
+# Run with verbose output
+pytest tests/docs/ -vv
+
+# Run specific test
+pytest docs/tests/python/rasterx/test_basic_operations.py::TestStructure::test_module_imports -v
+
+# Run with print statements visible
+pytest tests/docs/ -v -s
+
+# Run with debugging
+pytest tests/docs/ -v --pdb
+
+# Check coverage
+pytest tests/docs/ -v --cov=tests/docs --cov-report=html
+open htmlcov/index.html
+```
+
+### Review Checklist
+
+Before merging documentation changes:
+
+- [ ] Code lives in `tests/docs/`
+- [ ] Tests exist for all code (`test_*.py`)
+- [ ] Tests pass locally (`pytest -v`)
+- [ ] Functions have comprehensive docstrings
+- [ ] Conditional imports used
+- [ ] `if __name__ == "__main__":` guard present (for scripts)
+- [ ] Documentation imports code (no duplication)
+- [ ] CI passes (GitHub Actions green)
+- [ ] Coverage >= 70% for new code
+
+---
+
+## Quick Reference Card
+
+### Common Tasks
+
+**Add New Documentation Example**:
+```bash
+# 1. Create code module
+touch docs/tests/python/module/example.py
+
+# 2. Create tests
+touch docs/tests/python/module/test_example.py
+
+# 3. Run tests
+pytest docs/tests/python/module/test_example.py -v
+
+# 4. Add to MDX with correct import path
+# docs/docs/api/file.mdx:
+import code from '!!raw-loader!../../tests/python/module/example.py';
+```
+
+**Import Path Pattern** (MEMORIZE THIS):
+```jsx
+// From ANY file in docs/docs/*/
+// Always use: ../../tests/
+
+import code from '!!raw-loader!../../tests/python/module/file.py';
+```
+
+**CodeFromTest Component**:
+```jsx
+<CodeFromTest 
+  language="python"
+  title="Function Title"
+  source="docs/tests/python/module/file.py"
+  testFile="docs/tests/python/module/test_file.py"
+  functionName="specific_function"  // Optional: extract one function
+  lines="10-25"  // Optional: extract line range
+>
+  {codeVariable}
+</CodeFromTest>
+```
+
+**Test File Structure** (MUST be executable with real data):
+```python
+import pytest
+from pyspark.sql import SparkSession
+
+# Sample data paths
+SAMPLE_RASTER = "/Volumes/main/geobrix_samples/geobrix-examples/nyc/rasters/elevation.tif"
+
+@pytest.fixture(scope="module")
+def spark():
+    """Spark session for tests"""
+    return SparkSession.builder.appName("DocTests").getOrCreate()
+
+@pytest.fixture(scope="module")
+def sample_data(spark):
+    """Load real sample data"""
+    return spark.read.format("gdal").load(SAMPLE_RASTER)
+
+# ✅ EXECUTABLE tests with real data
+def test_get_dimensions_with_real_data(sample_data):
+    """Test with actual raster - validates real output"""
+    from module_name import get_dimensions
+    
+    result = get_dimensions(sample_data)
+    row = result.collect()[0]
+    
+    # Assert on actual values
+    assert row['width'] == 1024
+    assert row['height'] == 1024
+    assert isinstance(row['width'], int)
+
+# ❌ DO NOT create structure-only tests
+# def test_function_exists():  # WRONG - doesn't execute
+#     assert hasattr(module_name, 'get_dimensions')
+```
+
+**Run Tests** (MUST run in Docker):
+```bash
+# ✅ CORRECT: Run in Docker (REQUIRED)
+./scripts/ci/run-doc-tests.sh local
+
+# Python only in Docker
+./scripts/ci/run-doc-tests.sh python
+
+# ❌ WRONG: Don't run doc tests outside Docker
+# pytest docs/tests/python/ -v  # Missing dependencies, sample data
+
+# Inside Docker container, you can run specific modules:
+pytest docs/tests/python/module/ -v
+```
+
+**Build Documentation**:
+```bash
+cd docs/
+npm install           # Install raw-loader
+npm run build         # Build docs
+npm run serve         # Test locally
+```
+
+### Common Errors & Fixes
+
+**Error: "Cannot find module 'raw-loader'"**
+```bash
+cd docs/
+npm install raw-loader --save-dev
+```
+
+**Error: "Module not found: Can't resolve '../../../tests/'"**
+```jsx
+// Fix: Use ../../tests/ not ../../../tests/
+import code from '!!raw-loader!../../tests/python/module/file.py';
+```
+
+**Error: "Function 'xxx' not found"**
+```jsx
+// Check functionName matches exactly
+<CodeFromTest functionName="get_raster_dimensions">  // Must match def name
+```
+
+**Error: Tests fail with "AttributeError: 'NoneType'"**
+```python
+// Mark as integration test
+@pytest.mark.integration
+def test_needs_spark():
+    if module.rx is None:
+        pytest.skip("Requires GeoBrix")
+    # Test code
+```
+
+**Code block is empty in docs**
+```bash
+# Check file exists
+ls docs/tests/python/module/file.py
+
+# Verify import path
+# From: docs/docs/api/page.mdx
+# Import: ../../tests/python/module/file.py
+# Resolves to: docs/tests/python/module/file.py ✅
+```
+
+### File Locations
+
+| Item | Location | Notes |
+|------|----------|-------|
+| **Python test code** | `docs/tests/python/` | Where code lives |
+| **Python test files** | `docs/tests/python/test_*.py` | Test the code |
+| **Scala test code** | `docs/tests/scala/` | Scala examples |
+| **MDX documentation** | `docs/docs/` | Import from tests |
+| **React components** | `docs/src/components/` | CodeFromTest.js |
+| **Build guide** | `docs/DOCS-BUILD-GUIDE.md` | Comprehensive guide |
+| **CI scripts** | `scripts/ci/run-doc-tests.sh` | Run tests easily |
+
+### Test Execution Requirements
+
+**ALL documentation tests**:
+- ✅ MUST run in Docker via `./scripts/ci/run-doc-tests.sh`
+- ✅ MUST use real sample data from `/Volumes/` paths
+- ✅ MUST execute code and assert on actual results
+- ✅ MUST validate output values, types, and structure
+- ❌ DO NOT mock Spark, GeoBrix, or file operations
+- ❌ DO NOT create structure-only tests
+
+**Sample Data Paths**:
+- NYC rasters: `/Volumes/main/geobrix_samples/geobrix-examples/nyc/rasters/`
+- NYC vectors: `/Volumes/main/geobrix_samples/geobrix-examples/nyc/vectors/`
+- London data: `/Volumes/main/geobrix_samples/geobrix-examples/london/`
+- See `docs/docs/sample-data.md` for complete catalog
+
+### Key Principles
+
+1. ✅ **Single Source**: Code exists in ONE place only (`docs/tests/`)
+2. ✅ **Tests First**: All code must be tested before shown in docs
+3. ✅ **Display Results**: One-copy includes showing output: use `.show()` in examples and `outputConstant` in MDX so "Example output" blocks appear (see Rule 3b).
+4. ✅ **Executable Tests**: Tests MUST run real code with real data and assertions
+5. ✅ **Docker Execution**: ALL doc tests run in Docker with full environment
+6. ✅ **Real Sample Data**: Tests use established sample data from `/Volumes/`
+7. ✅ **Minimal Mocking**: Mock only external APIs, not Spark/GeoBrix/files
+8. ✅ **Auto-Import**: Docs import code at build time (webpack raw-loader)
+9. ✅ **CI Enforced**: Tests must pass for docs to build
+10. ✅ **Zero Drift**: Impossible for docs to show untested code
+
+---
+
+**Remember: Tests ARE the docs source, not just validators!**
+
+**Status**: ✅ Pattern proven, foundation solid, ready to scale!
+
+
+### CRITICAL: Avoid Duplicate Function Names
+
+**Problem**: If two functions have the same name in the same module, CodeFromTest will extract the first one it finds, causing wrong code to display in docs.
+
+**Solution**: 
+- Use unique, descriptive function names
+- Check for duplicates: `grep "^def " file.py | sort | uniq -d`
+- Use suffixes for similar functions (e.g., `read_shapefile_usage` vs `read_shapefile_basic`)
+
+**Example Issue**:
+```python
+# ❌ WRONG - Duplicate names
+def read_shapefile_basic(...):  # Line 32 - overview example
+def read_shapefile_basic(...):  # Line 1674 - shapefile example
+
+# ✅ CORRECT - Unique names  
+def read_shapefile_basic(...):  # overview example
+def read_shapefile_usage(...):  # shapefile-specific example
+```
+
+---
+
+### CodeFromTest Component Usage
+
+**Accepts Two Patterns**:
+
+```jsx
+// Pattern 1: Using 'code' prop (preferred for imports)
+<CodeFromTest 
+  code={importedCode}
+  language="python" 
+  functionName="my_function"
+/>
+
+// Pattern 2: Using children (for inline code)
+<CodeFromTest language="python">
+  {importedCode}
+</CodeFromTest>
+```
+
+**Supports Both Functions and Constants**:
+- Python functions: `def function_name(...)`
+- SQL/String constants: `CONSTANT_NAME = """..."""`
+- Will auto-extract content from triple-quoted strings
+
+### How code is displayed (snippet + output)
+
+**Python functions show as runnable snippets only** (no wrapper):
+- The `def`, docstring, and trailing `return` are stripped so the docs show copy-paste code.
+- Implemented in `CodeFromTest`: for extracted Python functions, `pythonFunctionToSnippet()` is applied before display.
+
+**Example output in docs** (optional):
+- Add a constant in the same file: `<example_name>_output = """..."""` with sample `.show()` output.
+- In MDX use `outputConstant="<example_name>_output"` (or pass `output={string}`).
+- CodeFromTest renders an "Example output" block below the code when set.
+
+**Display convention for examples that call `.show()`**:
+- Use **`.limit(3).show()`** for simple tables (few rows/columns).
+- Use **`.limit(1).show(vertical=True)`** for wide or complex output.
+- Document in example file docstring; see `docs/tests/python/api/gridx_functions.py` for the pattern.
+
+---
+
+## Related Rules
+
+- **`.cursor/rules/documentation-payload-pattern.mdc`** - Payload-only code display pattern (string constants for docs, functions for tests)
+- **`.cursor/rules/documentation-code-validation.mdc`** - Code validation labels and testing standards
+- **`.cursor/rules/function-documentation-standards.mdc`** - API function documentation requirements
+- **`.cursor/rules/test-organization-logging.mdc`** - Test organization and logging best practices
+

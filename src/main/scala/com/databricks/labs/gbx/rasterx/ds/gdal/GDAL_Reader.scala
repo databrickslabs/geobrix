@@ -8,6 +8,7 @@ import org.apache.spark.sql.connector.read.PartitionReader
 import org.apache.spark.sql.types.BinaryType
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Reads one partition of a GDAL source: splits the raster into tiles (BalancedSubdivision) and yields (source, tile) rows. */
 class GDAL_Reader(partition: GDAL_Partition) extends PartitionReader[InternalRow] {
 
     RST_ExpressionUtil.init(partition.expressionConfig)
@@ -19,8 +20,10 @@ class GDAL_Reader(partition: GDAL_Partition) extends PartitionReader[InternalRow
     private var counter = 0
     private val hconf = partition.expressionConfig.hConf
 
+    /** Overrides PartitionReader.next: true while tilesIter has more tiles. */
     override def next(): Boolean = tilesIter.hasNext
 
+    /** Overrides PartitionReader.get: (source path, tile row); releases each Dataset after serialization. */
     override def get(): InternalRow = {
         val tile = tilesIter.next()
         counter += 1
@@ -34,6 +37,7 @@ class GDAL_Reader(partition: GDAL_Partition) extends PartitionReader[InternalRow
         )
     }
 
+    /** Overrides PartitionReader.close: no-op (tiles released as we go via addCleanupListener). */
     override def close(): Unit = {
         // we close as we go, so nothing to do here
     }

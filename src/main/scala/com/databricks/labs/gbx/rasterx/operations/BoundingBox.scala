@@ -7,14 +7,17 @@ import org.gdal.osr.{CoordinateTransformation, SpatialReference}
 import org.locationtech.jts.algorithm.Orientation
 import org.locationtech.jts.geom.{Coordinate, Geometry}
 
+/** Builds JTS polygon geometries for raster extents (full raster or a pixel window) in a target CRS. */
 object BoundingBox {
 
+    /** Returns the bounding box of the full raster in destSR (polygon, CCW). */
     def bbox(ds: Dataset, destSR: SpatialReference): Geometry = {
         val xSize = ds.GetRasterXSize
         val ySize = ds.GetRasterYSize
         windowBBox((0, 0, xSize, ySize), ds, destSR)
     }
 
+    /** Returns the bounding box of the pixel window (minX, minY, maxX, maxY) in destSR. */
     def windowBBox(window: (Int, Int, Int, Int), ds: Dataset, destSR: SpatialReference): Geometry = {
         val gt = ds.GetGeoTransform
         val srcSR = ds.GetSpatialRef

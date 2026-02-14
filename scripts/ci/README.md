@@ -44,6 +44,37 @@ View recent CI runs, status, and available actions.
 
 ## 📋 Available Scripts
 
+### `run-doc-tests.sh` 📚
+**Purpose**: Run documentation tests locally or in CI
+
+**Usage**:
+```bash
+./scripts/ci/run-doc-tests.sh [command]
+
+# Commands:
+./scripts/ci/run-doc-tests.sh local      # Run tests locally in Docker
+./scripts/ci/run-doc-tests.sh status     # Check CI status
+./scripts/ci/run-doc-tests.sh trigger    # Trigger doc tests in CI
+./scripts/ci/run-doc-tests.sh watch      # Watch latest run
+./scripts/ci/run-doc-tests.sh logs       # Fetch CI logs
+```
+
+**What it does**:
+- Runs Python documentation tests from `docs/tests/python/`
+- Verifies all code examples shown in documentation work correctly
+- Can run locally (Docker) or in CI (GitHub Actions)
+- Ensures single source of truth between tests and docs
+
+**Best for**: Testing documentation code before pushing, or checking CI status of doc tests.
+
+**Output**:
+- Test pass/fail counts
+- Coverage information
+- Failed test details
+- Links to CI runs
+
+---
+
 ### `setup-gh-cli.sh`
 **Purpose**: Install and configure GitHub CLI
 
@@ -235,6 +266,7 @@ scripts/ci/
 ├── trigger-remote-tests.sh     # Manual trigger workflows
 ├── watch-ci.sh                 # Real-time monitoring
 ├── fetch-ci-logs.sh            # Log download & analysis
+├── run-doc-tests.sh            # Documentation tests 📚
 └── ci-manager.sh               # Master CLI
 
 ci-logs/                         # Downloaded logs (created by fetch-ci-logs.sh)
@@ -286,7 +318,27 @@ less ci-logs/ci-run-*.log
 
 ---
 
-### Workflow 4: Compare Local vs Remote
+### Workflow 4: Documentation Tests 📚
+
+```bash
+# Run documentation tests locally
+./scripts/ci/run-doc-tests.sh local
+
+# If passing, check CI status
+./scripts/ci/run-doc-tests.sh status
+
+# Trigger doc tests in CI
+./scripts/ci/run-doc-tests.sh trigger
+
+# Watch the CI run
+./scripts/ci/run-doc-tests.sh watch
+```
+
+**Use case**: Verify documentation code examples work before pushing changes.
+
+---
+
+### Workflow 5: Compare Local vs Remote
 
 ```bash
 # Run tests locally

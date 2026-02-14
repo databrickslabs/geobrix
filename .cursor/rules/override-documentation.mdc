@@ -1,0 +1,41 @@
+# Override Method Documentation
+
+Document overrides so readers see both inherited contract and override-specific behavior.
+
+## Convention
+
+- **Inherited behavior only**: Use `/** Overrides parent: [one-line purpose]. */`
+- **Override adds behavior**: Use `/** Overrides parent: [purpose]. [Override-specific note]. */`
+- **Override changes contract**: Use `/** Overrides parent: [purpose]. Here: [what’s different]. */`
+
+## Where to Apply
+
+- **DataSource/Table/Batch** (e.g. `inferSchema`, `getTable`, `shortName`, `planInputPartitions`, `createReaderFactory`): Comment every override; mention parent role and format-specific detail (e.g. driver name, schema source).
+- **Iterator/AutoCloseable** (e.g. `hasNext`, `next`, `close` in inner iterators): One-line per override describing what this iterator yields and who releases resources.
+- **Expression boilerplate** (e.g. `children`, `dataType`, `prettyName`, `withNewChildrenInternal`): Class-level and companion docs are enough unless an override does something non-standard.
+- **Companion** (`name`, `builder`): Standard one-liner (SQL name + builder) is enough.
+
+## Examples
+
+```scala
+// DataSource override with format-specific detail
+/** Overrides parent: infer schema from first file. Here: uses OGR with driverName = GPKG. */
+override def inferSchema(options: CaseInsensitiveStringMap): StructType = ...
+
+// Iterator override
+/** Overrides Iterator.hasNext: more tiles while index < windows.length and advance() finds a non-empty tile. */
+override def hasNext: Boolean = ...
+
+/** Overrides AutoCloseable.close: unlinks dataset and nulls reference. */
+override def close(): Unit = ...
+```
+
+## Case Classes
+
+- **Expression case classes** (RST_*, BNG_*, ST_LegacyAsWKB, etc.): Document what the expression returns and that the case class holds child expressions; add "Used as the catalyst node when gbx_<name>(...) is invoked in SQL or DataFrame API."
+- **Config/partition case classes** (ExpressionConfig, GDAL_Partition, OGR_Partition, Padding): Document what fields mean and how the value is used (e.g. "Passed to GDAL_Reader", "Serialized via ExpressionConfigExpr").
+- **Data case classes** (FunctionInfo, InternalCoord, InternalGeometry): Document what they represent and where they are produced/consumed.
+
+## Reference
+
+Established during comment pass (2026-01-27) for consistent override docs across rasterx, vectorx, and ds.

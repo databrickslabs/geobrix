@@ -1,0 +1,598 @@
+# Documentation Code Validation System
+
+This rule documents the GeoBrix documentation code validation system, including the CodeFromTest component, validation levels, and JSX template literal escaping patterns.
+
+## Overview
+
+GeoBrix documentation uses a **four-tier validation system** to indicate code quality:
+
+1. **🔗 Fully Validated (Green)** - Code is compiled, tested, and imported from `docs/tests/`
+2. **⚡ Databricks Runtime Required (Blue)** - Code requires DBR, imported from `docs/tests-dbr/`
+3. **🔗 Compile Validated (Gray)** - Code compiles but isn't fully tested
+4. **📄 Static (Gray)** - Reference snippets without validation
+
+## CodeFromTest Component
+
+### Location
+`docs/src/components/CodeFromTest.js`
+
+### Smart Auto-Detection
+
+The component **automatically detects** validation level:
+
+```jsx
+// ✅ AUTO-DETECTED AS "tested" (green badge)
+<CodeFromTest 
+  language="python"
+  source="docs/tests/python/quickstart/examples.py"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  functionName="read_geotiff_files"
+>
+  {quickstartCode}
+</CodeFromTest>
+
+// ✅ AUTO-DETECTED AS "databricks" (blue badge)
+<CodeFromTest 
+  language="python"
+  source="docs/tests-dbr/python/readers/shapefile/examples.py"
+  testFile="docs/tests-dbr/python/readers/shapefile/test_examples.py"
+  functionName="convert_shapefile_to_databricks_geometry"
+>
+  {shapefileDBR}
+</CodeFromTest>
+
+// ✅ AUTO-DETECTED AS "static" (gray badge)
+<CodeFromTest 
+  language="sql"
+  title="List Functions"
+>
+  {`SHOW FUNCTIONS LIKE 'gbx_*';`}
+</CodeFromTest>
+```
+
+**Detection Logic:**
+- If `source` or `testFile` contains `tests-dbr/` → **"databricks"** (blue ⚡)
+- Else if `source`, `testFile`, or `functionName` props present → **"tested"** (green 🔗)
+- Otherwise → **"static"** (gray 📄)
+- Can explicitly override with `validationLevel` prop
+
+### Required Import
+
+**CRITICAL**: Every `.mdx` file using `CodeFromTest` MUST include:
+
+```jsx
+---
+sidebar_position: 1
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+
+# Page Title
+```
+
+**Common Error:**
+```
+Error: Expected component `CodeFromTest` to be defined
+```
+**Fix:** Add the import statement at the top of the .mdx file.
+
+## JSX Template Literal Escaping
+
+When wrapping code in JSX template literals `{``...``}`, certain characters must be escaped.
+
+### Rule 1: Backticks (SQL/Spark Table Notation)
+
+**Problem:** Backticks in SQL conflict with JSX template literal delimiters.
+
+```jsx
+// ❌ WRONG: Causes "Could not parse expression" error
+<CodeFromTest language="sql" validationLevel="static">
+{`SELECT * FROM gdal.\`/path/to/data\`;`}
+</CodeFromTest>
+
+// ✅ CORRECT: Use triple backslash escaping
+<CodeFromTest language="sql" validationLevel="static">
+{`SELECT * FROM gdal.\\\`/path/to/data\\\`;`}
+</CodeFromTest>
+```
+
+**Common Patterns:**
+- `gdal.\`path\`` → `gdal.\\\`path\\\``
+- `shapefile.\`path\`` → `shapefile.\\\`path\\\``
+- `geojson.\`path\`` → `geojson.\\\`path\\\``
+- `geopackage.\`path\`` → `geopackage.\\\`path\\\``
+- `filegdb.\`path\`` → `filegdb.\\\`path\\\``
+
+### Rule 2: Dollar Signs (String Interpolation)
+
+**Problem:** Dollar signs in template strings are interpreted as JavaScript interpolation.
+
+```jsx
+// ❌ WRONG: JS tries to evaluate ${exception}
+<CodeFromTest language="scala" validationLevel="static">
+{`println(s"Error: ${exception.getMessage}")`}
+</CodeFromTest>
+
+// ✅ CORRECT: Escape the dollar sign
+<CodeFromTest language="scala" validationLevel="static">
+{`println(s"Error: \${exception.getMessage}")`}
+</CodeFromTest>
+```
+
+**Common Patterns:**
+
+**Scala string interpolation:**
+- `s"${variable}"` → `s"\${variable}"`
+- `s"$variable"` → `s"\$variable"`
+- `f"$value%.2f"` → `f"\$value%.2f"`
+
+**Bash variables:**
+- `echo "$HOME"` → `echo "\$HOME"`
+- `echo "${USER}"` → `echo "\${USER}"`
+- `export VAR=$VALUE` → `export VAR=\$VALUE`
+
+**Python f-strings (usually fine, but watch for nested templates):**
+- `f"{value}"` → Usually OK in single template literal
+- Complex cases → May need `\${value}`
+
+### Rule 3: Markdown List/Quote Nesting
+
+**Problem:** CodeFromTest inside markdown lists/blockquotes needs proper spacing.
+
+```jsx
+// ❌ WRONG: Causes "Unexpected lazy line" error
+- Transformations use the raster's **geotransform matrix**:
+  <CodeFromTest language="scala" validationLevel="static">
+  {`formula here`}
+  </CodeFromTest>
+- Next item
+
+// ✅ CORRECT: Add blank lines before and after
+- Transformations use the raster's **geotransform matrix**:
+
+<CodeFromTest language="scala" validationLevel="static">
+{`formula here`}
+</CodeFromTest>
+
+- Next item
+```
+
+## Conversion Workflow
+
+### Converting Plain Code Blocks to CodeFromTest
+
+**Pattern:**
+
+```markdown
+<!-- BEFORE: Plain markdown code block -->
+\`\`\`scala
+val df = spark.read.format("gdal").load("/data/rasters")
+\`\`\`
+
+<!-- AFTER: CodeFromTest component -->
+<CodeFromTest language="scala" validationLevel="static" title="Load Rasters">
+{\`val df = spark.read.format("gdal").load("/data/rasters")\`}
+</CodeFromTest>
+```
+
+**Checklist for each conversion:**
+1. ✅ Check if file has `import CodeFromTest` (add if missing)
+2. ✅ Scan code for backticks → escape as `\\\``
+3. ✅ Scan code for `$` → escape as `\$`
+4. ✅ Check for list/quote nesting → add blank lines
+5. ✅ Build and verify after each file
+
+### File-by-File Workflow
+
+**ALWAYS use Cursor commands instead of raw shell commands!**
+
+```bash
+# 1. Convert one file (use editor tools, not vim)
+# Edit: docs/docs/api/scala.mdx
+
+# 2. Build to check for errors
+cd docs && npm run build  # OK: build command is direct
+
+# 3. If errors, check:
+#    - Missing import?
+#    - Unescaped backticks?
+#    - Unescaped dollar signs?
+#    - Nesting issues?
+
+# 4. Fix and rebuild
+cd docs && npm run build  # OK: build command is direct
+
+# 5. Preview changes
+# ✅ CORRECT: Use Cursor command
+gbx:docs:restart --skip-build
+
+# ❌ WRONG: Don't use raw npm commands
+# npm run serve  # Don't do this!
+```
+
+**Cursor Command Reference:**
+- `gbx:docs:start` - Start docs server (builds first)
+- `gbx:docs:start --skip-build` - Start with existing build
+- `gbx:docs:stop` - Stop docs server
+- `gbx:docs:restart` - Stop, rebuild, start
+- `gbx:docs:restart --skip-build` - Stop, start (no rebuild)
+```
+
+## Common Build Errors and Fixes
+
+### Error: "Expected component `CodeFromTest` to be defined"
+
+**Cause:** Missing import statement.
+
+**Fix:**
+```jsx
+import CodeFromTest from '@site/src/components/CodeFromTest';
+```
+
+### Error: "Could not parse expression with acorn"
+
+**Cause:** Unescaped backticks in SQL/Spark code.
+
+**Fix:** Replace `` \` `` with `\\\``
+
+**Example:**
+```jsx
+// ❌ Before
+{`SELECT * FROM gdal.\`/path\`;`}
+
+// ✅ After
+{`SELECT * FROM gdal.\\\`/path\\\`;`}
+```
+
+### Error: "ReferenceError: [variable] is not defined"
+
+**Cause:** Unescaped dollar signs in string interpolation.
+
+**Fix:** Replace `$` with `\$`
+
+**Example:**
+```jsx
+// ❌ Before
+{`println(s"Error: ${exception.getMessage}")`}
+
+// ✅ After
+{`println(s"Error: \${exception.getMessage}")`}
+```
+
+### Error: "Unexpected lazy line in expression"
+
+**Cause:** CodeFromTest inside markdown list/blockquote without proper spacing.
+
+**Fix:** Add blank lines before and after the component.
+
+## Files NOT to Convert
+
+### Do NOT convert these to .mdx:
+
+✅ **All files converted** - Including `api/sql.mdx` and `api/rasterx-functions.mdx`
+
+**Note:** Initial concern about backtick escaping was resolved through systematic escaping rules. All documentation files are now `.mdx` format with proper validation labels.
+
+## Testing Changes
+
+### Local Build Test
+
+```bash
+cd docs
+npm run build
+```
+
+**Success indicator:**
+```
+[SUCCESS] Generated static files in "build".
+```
+
+**Failure indicator:**
+```
+[ERROR] Client bundle compiled with errors
+Error: MDX compilation failed for file "..."
+```
+
+### Local Preview
+
+**CRITICAL: Always use GeoBrix Cursor commands!**
+
+```bash
+# ✅ CORRECT: Use established Cursor commands
+gbx:docs:restart           # Rebuild and restart server
+gbx:docs:restart --skip-build  # Restart without rebuild
+gbx:docs:stop              # Stop server
+gbx:docs:start             # Start server
+gbx:docs:start --skip-build    # Start without rebuild
+
+# ❌ WRONG: Don't use raw commands
+pkill -f "docusaurus serve"  # Don't do this!
+cd docs && npm run serve     # Don't do this!
+```
+
+**Why?**
+- Cursor commands have proper error handling
+- They log consistently
+- They manage PIDs correctly
+- They follow established patterns
+
+Visit http://localhost:3000 and verify:
+- ✅ Green badges on tested code examples
+- ✅ Gray badges on static code examples
+- ✅ No "Error loading" messages
+- ✅ Code displays correctly (no escaped characters visible)
+
+## Badge Visibility Toggle
+
+Users can toggle validation badges using the button in the bottom-right corner of the documentation.
+
+**State stored in:** `localStorage.getItem('hideCodeIndicators')`
+
+**Default:** Badges visible
+
+## Component Props Reference
+
+### CodeFromTest Props
+
+| Prop | Type | Required | Description |
+|------|------|----------|-------------|
+| `language` | string | ✅ | Code language (python, scala, sql, bash, etc.) |
+| `title` | string | ❌ | Display title for code block |
+| `source` | string | ❌ | Path to source code file (triggers "tested" if present) |
+| `testFile` | string | ❌ | Path to test file (triggers "tested" if present) |
+| `functionName` | string | ❌ | Extract specific function (triggers "tested" if present) |
+| `lines` | string | ❌ | Line range to extract (e.g., "10-25") |
+| `validationLevel` | string | ❌ | Override auto-detection: "tested", "compile", or "static" |
+| `showLineNumbers` | boolean | ❌ | Show line numbers (default: false) |
+| `code` | string | ❌ | Alternative to children for passing code |
+| `children` | node | ❌ | Code content (template literal) |
+
+## Integration with Doc-Test Single Source
+
+This validation system works with the **docs-test-single-source** pattern:
+
+1. **Write tested code** in appropriate location:
+   - Pure GeoBrix: `docs/tests/python/` or `docs/tests/scala/`
+   - Databricks integration: `docs/tests-dbr/python/` or `docs/tests-dbr/scala/`
+2. **Import with raw-loader** in MDX files
+3. **Display with CodeFromTest**:
+   - From `docs/tests/` → Auto-shows green "Fully Validated" badge 🔗
+   - From `docs/tests-dbr/` → Auto-shows blue "Databricks Runtime Required" badge ⚡
+4. **Static examples** → Explicitly set `validationLevel="static"` → Shows gray badge 📄
+
+See `.cursor/rules/docs-test-single-source.mdc` for the complete pattern.
+
+## Per-Page Folder Structure for tests-dbr/
+
+### Pattern (Established 2026-01-29)
+
+**Mirror documentation page structure** in `tests-dbr/`:
+
+```
+docs/docs/readers/
+├── overview.mdx
+├── shapefile.mdx
+├── geojson.mdx
+├── geopackage.mdx
+└── filegdb.mdx
+
+docs/tests-dbr/python/readers/
+├── overview/
+│   ├── examples.py       # General integration patterns
+│   └── test_examples.py
+├── shapefile/
+│   ├── examples.py       # Shapefile-specific DBR examples
+│   └── test_examples.py
+├── geojson/
+│   ├── examples.py       # GeoJSON-specific DBR examples
+│   └── test_examples.py
+├── geopackage/
+│   ├── examples.py       # GeoPackage-specific DBR examples
+│   └── test_examples.py
+└── filegdb/
+    ├── examples.py       # FileGDB-specific DBR examples
+    └── test_examples.py
+```
+
+**Benefits**:
+- Clear 1:1 mapping between docs and test code
+- Easy to find DBR examples for specific page
+- Scalable as documentation grows
+- Auto-detection of "databricks" validation level
+
+**Import Pattern in MDX**:
+```jsx
+// Per-page DBR examples
+import shapefileDBR from '!!raw-loader!../../tests-dbr/python/readers/shapefile/examples.py';
+
+// Use in component
+<CodeFromTest 
+  code={shapefileDBR} 
+  functionName="convert_shapefile_to_databricks_geometry"
+  testFile="docs/tests-dbr/python/readers/shapefile/test_examples.py"
+/>
+// → Auto-detects "databricks" level, shows blue ⚡ badge
+```
+
+## Quick Reference Card
+
+### Escaping Cheat Sheet
+
+| Character/Pattern | Context | Escape As | Example |
+|------------------|---------|-----------|---------|
+| `` \` `` | SQL table notation | `\\\`` | `gdal.\\\`path\\\`` |
+| `${}` | String interpolation | `\${}` | `\${variable}` |
+| `$var` | Variable reference | `\$var` | `\$HOME` |
+
+### Component Template
+
+```jsx
+<CodeFromTest 
+  language="[python|scala|sql|bash]"
+  title="[Clear Description]"
+  validationLevel="static"  // Only for untested code
+>
+{`// Your code here
+// Remember to escape:
+// - Backticks: \\\`
+// - Dollar signs: \$
+`}
+</CodeFromTest>
+```
+
+## Status Tracking
+
+### Completed (149 blocks wrapped)
+
+- `docs/docs/quick-start.mdx` (4 blocks)
+- `docs/docs/api/gridx-functions.mdx` (24 blocks)
+- `docs/docs/api/scala.mdx` (19 blocks)
+- `docs/docs/advanced/library-integration.mdx` (16 blocks)
+- `docs/docs/advanced/gdal-cli.mdx` (14 blocks)
+- `docs/docs/advanced/custom-udfs.mdx` (15 blocks)
+- `docs/docs/api/vectorx-functions.mdx` (7 blocks)
+
+### ✅ All Files Converted (100% Coverage)
+
+All documentation files including `api/sql.mdx` and `api/rasterx-functions.mdx` have been successfully converted with proper escaping.
+
+### Remaining (Low Priority)
+
+- `docs/docs/api/overview.mdx` (1 block)
+- `docs/docs/api/tile-structure.mdx` (1 block)
+- `docs/docs/examples/*.mdx` (~3 blocks)
+- `docs/docs/readers/*.mdx` (~6 blocks)
+- `docs/docs/packages/*.mdx` (~8 blocks)
+
+---
+
+## For Documentation Manager Subagent
+
+When asked to work on documentation code validation:
+
+1. **READ THIS RULE FIRST** - Contains all escaping patterns and common errors
+2. **Check for existing import** - Add `import CodeFromTest` if missing
+3. **Scan for special characters** - Backticks and dollar signs
+4. **Use proper escaping** - `\\\`` for backticks, `\$` for dollar signs
+5. **Add blank lines** - Around components in lists/blockquotes
+6. **Build after each file** - Catch errors early
+7. **All files converted** - All .md files successfully converted to .mdx with proper validation labels
+8. **ALWAYS use Cursor commands** - See below for required commands
+
+**Common mistakes to avoid:**
+- ❌ Forgetting import statement
+- ❌ Using `\`` instead of `\\\`` for backticks
+- ❌ Not escaping `$` in string interpolation
+- ❌ Converting files with too many backticks (.md → .mdx)
+- ❌ Not building after changes
+- ❌ **Using raw shell commands instead of Cursor commands**
+
+## CRITICAL: Always Use Cursor Commands
+
+**For all docs server operations, MUST use established Cursor commands:**
+
+### Required Commands
+
+| Task | ✅ Correct Command | ❌ Wrong Command |
+|------|-------------------|------------------|
+| Start server (with build) | `gbx:docs:start` | `npm run build && npm run serve` |
+| Start server (skip build) | `gbx:docs:start --skip-build` | `npm run serve` |
+| Stop server | `gbx:docs:stop` | `pkill -f "docusaurus serve"` |
+| Restart (with build) | `gbx:docs:restart` | Manual stop + start |
+| Restart (skip build) | `gbx:docs:restart --skip-build` | Manual stop + start |
+
+### Why This Matters
+
+1. **Error Handling** - Cursor commands have proper error handling
+2. **Logging** - Consistent log format and location
+3. **PID Management** - Proper process tracking
+4. **User Experience** - Follows established patterns user expects
+5. **Maintainability** - Changes to workflow happen in one place
+
+### CRITICAL: Fix Commands, Don't Work Around Them
+
+**If a Cursor command fails, FIX THE COMMAND immediately, don't work around it!**
+
+**❌ WRONG Approach:**
+```bash
+# Command fails
+gbx:docs:restart
+# Error: Port 3000 already in use
+
+# Agent works around by using raw commands
+pkill -f "docusaurus serve"  # ❌ Working around the issue
+cd docs && npm run serve     # ❌ Not fixing the root cause
+```
+
+**✅ CORRECT Approach:**
+```bash
+# Command fails
+gbx:docs:restart
+# Error: Port 3000 already in use
+
+# Agent investigates and fixes the command
+# 1. Read the command file: .cursor/commands/gbx-docs-restart.sh
+# 2. Identify the issue (e.g., port check logic broken)
+# 3. Fix the command script
+# 4. Verify fix works
+# 5. Document fix in command's .md file
+
+# Then use the fixed command
+gbx:docs:restart  # ✅ Now works correctly
+```
+
+**Philosophy:**
+- Commands are infrastructure - they should work reliably
+- Working around a broken command leaves it broken for next time
+- Fixing commands improves the codebase for everyone
+- User expects agents to improve tooling, not avoid it
+
+**When to Fix vs. Report:**
+- **Fix immediately** if issue is in the command script itself
+- **Fix immediately** if fix is straightforward (e.g., missing flag, wrong path)
+- **Report to user** if requires design decision (e.g., changing command behavior)
+- **Report to user** if external dependency issue (e.g., Docker not running)
+
+### Examples
+
+**✅ CORRECT:**
+```bash
+# After making doc changes
+gbx:docs:restart --skip-build
+
+# Fresh build
+gbx:docs:restart
+
+# Just stop
+gbx:docs:stop
+```
+
+**❌ WRONG:**
+```bash
+# Don't kill processes manually
+pkill -f "docusaurus serve"
+
+# Don't compose commands manually
+cd docs && npm run build && npm run serve
+
+# Don't use npm scripts directly for server operations
+npm run serve
+```
+
+### Build Commands
+
+**Build commands can be used directly** (no Cursor wrapper needed):
+```bash
+cd docs && npm run build   # ✅ OK - direct build
+cd docs && npm install     # ✅ OK - dependency management
+```
+
+**Why?** Build is a one-time operation, not a long-running server. Server operations need the Cursor command wrapper for proper lifecycle management.
+
+---
+
+**Last Updated:** 2026-01-28  
+**Version:** 1.0  
+**Related Rules:** 
+- `docs-test-single-source.mdc` - Single source of truth pattern
+- `function-documentation-standards.mdc` - Documentation standards

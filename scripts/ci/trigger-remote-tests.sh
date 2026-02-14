@@ -71,7 +71,11 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     
     # Try to trigger the main CI workflow
     # Adjust workflow name based on your actual workflow file
-    if gh workflow run "CI" --ref "$CURRENT_BRANCH" 2>/dev/null; then
+    if gh workflow run "build main" --ref "$CURRENT_BRANCH" 2>/dev/null; then
+        echo -e "${GREEN}✅ Main build workflow triggered successfully${NC}"
+    elif gh workflow run "Documentation Tests" --ref "$CURRENT_BRANCH" 2>/dev/null; then
+        echo -e "${GREEN}✅ Documentation Tests workflow triggered successfully${NC}"
+    elif gh workflow run "CI" --ref "$CURRENT_BRANCH" 2>/dev/null; then
         echo -e "${GREEN}✅ Workflow triggered successfully${NC}"
     elif gh workflow run "Test" --ref "$CURRENT_BRANCH" 2>/dev/null; then
         echo -e "${GREEN}✅ Workflow triggered successfully${NC}"

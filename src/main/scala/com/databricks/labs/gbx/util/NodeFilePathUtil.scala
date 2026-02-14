@@ -8,10 +8,12 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.{CompletableFuture, ConcurrentHashMap}
 import scala.util.control.NonFatal
 
+/** Per-node local cache for remote files: read lock copies and refcounts, release removes when zero. */
 object NodeFilePathUtil {
 
     private val hasher = MurmurHash.getInstance()
     private val uuid = this.hashCode().toHexString
+    /** Base directory for this JVM's cached files (/tmp/gdal_local_files/&lt;uuid&gt;). */
     val rootPath: Path = Paths.get(s"/tmp/gdal_local_files/$uuid")
     private val maxRetries = 3
     private val tinyBackoffMs = 2L
@@ -19,6 +21,7 @@ object NodeFilePathUtil {
     private final case class Entry(dir: Path, ready: CompletableFuture[Path], readers: AtomicInteger)
     private val entries = new ConcurrentHashMap[String, Entry]()
 
+    /** Last path segment (file name) of the remote path. */
     private def filename(remote: String): String = {
         val noPrefix = remote.split("://").last
         val i = noPrefix.lastIndexOf("/")
@@ -26,12 +29,19 @@ object NodeFilePathUtil {
         else noPrefix
     }
 
+    /** MurmurHash-based string for cache dir name. */
     private def murmur(s: String): String = s"mm3_${hasher.hash(s.getBytes).toString.replace("-", "_")}"
+    /** Last path component (file or dir name) of remote. */
     private def base(remote: String): String = remote.split("://").last.split('/').last
+    /** Cache directory for this remote path (by content hash). */
     private def cacheDir(remote: String): Path = rootPath.resolve(murmur(remote))
+    /** Primary file path inside cache (for single-file sources). */
     private def primary(remote: String): Path = cacheDir(remote).resolve(base(remote))
+    /** MurmurHash of full remote path (for parent dir naming). */
     private def murmurParent(remote: String): String = s"mm3_${hasher.hash(remote.getBytes).toString.replace("-", "_")}"
+    /** Parent cache dir for multi-file sources. */
     private def parentDir(remote: String): Path = rootPath.resolve(murmurParent(remote))
+    /** Full local path where this remote will be (or was) copied. */
     private def nodeFilePath(remote: String): Path = parentDir(remote).resolve(filename(remote))
 
     /**
@@ -88,20 +98,7 @@ object NodeFilePathUtil {
         throw new RuntimeException(s"Failed to materialize $remotePath after $maxRetries retries.", lastErr)
     }
 
-    /** Release read lock; delete cache dir when refcount hits zero. */
-    def releaseReadLock(remotePath: String, hconf: SerializableConfiguration): Int = {
-        val localPath = nodeFilePath(remotePath)
-        val key = localPath.toString
-        val e = entries.get(key)
-        if (e == null) return 0
-        val n = e.readers.decrementAndGet()
-        if (n <= 0) {
-            scala.util.Try(deleteWithSiblings(localPath.toString))
-            entries.remove(key, e)
-            0
-        } else n
-    }
-
+    /** Deletes the local file and sibling files (e.g. .shp sidecars), then empty parent dir. */
     private def deleteWithSiblings(localPath: String): Unit = {
         val path = Paths.get(localPath)
         val fileName = path.getFileName.toString.split("\\.").head
@@ -114,6 +111,20 @@ object NodeFilePathUtil {
         if (siblings.nonEmpty) siblings.foreach(s => Files.deleteIfExists(s.toPath))
         val remaining = Option(parent.toFile.listFiles()).getOrElse(Array.empty)
         if (remaining.isEmpty) Files.deleteIfExists(parent)
+    }
+
+    /** Release read lock; delete cache dir when refcount hits zero. */
+    def releaseReadLock(remotePath: String, hconf: SerializableConfiguration): Int = {
+        val localPath = nodeFilePath(remotePath)
+        val key = localPath.toString
+        val e = entries.get(key)
+        if (e == null) return 0
+        val n = e.readers.decrementAndGet()
+        if (n <= 0) {
+            scala.util.Try(deleteWithSiblings(localPath.toString))
+            entries.remove(key, e)
+            0
+        } else n
     }
 
 }

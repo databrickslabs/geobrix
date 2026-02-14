@@ -15,6 +15,7 @@ import java.util.UUID
 import scala.util.Try
 import scala.util.hashing.MurmurHash3
 
+/** Writes each InternalRow's tile to a raster file under root (name from column or MurmurHash3), via GDALTranslate. */
 class GDAL_RowWriter(
     schema: StructType,
     root: String,
@@ -29,6 +30,7 @@ class GDAL_RowWriter(
     private val tileIdx = schema.fieldIndex("tile")
     private val nameIdx = nameCol.flatMap(n => Try(schema.fieldIndex(n)).toOption)
 
+    /** Serializes row's tile, translates to local file, then copies to root; releases GDAL datasets. */
     override def write(row: InternalRow): Unit = {
         val tileDt = schema.fields(tileIdx).dataType.asInstanceOf[StructType]
         val tile = row.getStruct(tileIdx, tileDt.length)
@@ -57,9 +59,12 @@ class GDAL_RowWriter(
         Files.deleteIfExists(Paths.get(localPath).getParent)
     }
 
+    /** Returns a commit message carrying any GDAL error strings collected during write. */
+    /** Overrides DataWriter.commit: returns GDAL_WriterMsg with any collected error strings. */
     override def commit(): WriterCommitMessage = GDAL_WriterMsg(errors)
+    /** Overrides DataWriter.abort: no-op. */
     override def abort(): Unit = {}
-
+    /** Overrides DataWriter.close: no-op (resources released per row). */
     override def close(): Unit = {}
 
 }

@@ -4,8 +4,10 @@ import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants._
 import org.gdal.osr.SpatialReference
 
+/** GDAL constants and helpers: WGS84/3857 refs, driver extension, NoData by type, pixel↔geo coordinate conversion. */
 object GDAL {
 
+    /** WGS84 spatial reference (EPSG:4326, traditional axis order). Note: val name is WSG84 (historical typo). */
     val WSG84: SpatialReference = {
         val wsg84 = new SpatialReference()
         wsg84.ImportFromEPSG(4326)
@@ -13,6 +15,7 @@ object GDAL {
         wsg84
     }
 
+    /** Web Mercator spatial reference (EPSG:3857). */
     val EPSG3857: SpatialReference = {
         val epsg3857 = new SpatialReference()
         epsg3857.ImportFromEPSG(3857)
@@ -20,13 +23,7 @@ object GDAL {
         epsg3857
     }
 
-    /**
-      * Returns the extension of the given driver.
-      * @param driverShortName
-      *   The short name of the driver. For example, GTiff.
-      * @return
-      *   Returns the extension of the driver. For example, tif.
-      */
+    /** File extension for the driver (e.g. tif for GTiff); uses FormatLookup when DMD_EXTENSION is null. Driver is deleted before return. */
     def getExtension(driverShortName: String): String = {
         val driver = gdal.GetDriverByName(driverShortName)
         val result = driver.GetMetadataItem("DMD_EXTENSION")
@@ -35,6 +32,7 @@ object GDAL {
         toReturn
     }
 
+    /** Returns a NoData sentinel value for the given GDAL data type constant. */
     def getNoDataConstant(gdalType: Int): Double = {
         gdalType match {
             case GDT_Unknown => 0.0
@@ -51,6 +49,7 @@ object GDAL {
         }
     }
 
+    /** Converts pixel (x, y) to geographic (xGeo, yGeo) using the 6-element geotransform. */
     def toWorldCoord(gt: Array[Double], x: Int, y: Int): (Double, Double) = {
         val offset = 0.5 // offset to center of the pixel
         val xGeo = gt(0) + (x + offset) * gt(1) + (y + offset) * gt(2)
@@ -58,6 +57,7 @@ object GDAL {
         (xGeo, yGeo)
     }
 
+    /** Converts geographic (xGeo, yGeo) to pixel (x, y) using the 6-element geotransform. */
     def fromWorldCoord(gt: Array[Double], xGeo: Double, yGeo: Double): (Int, Int) = {
         val det = gt(1) * gt(5) - gt(2) * gt(4)
         val dx = xGeo - gt(0)

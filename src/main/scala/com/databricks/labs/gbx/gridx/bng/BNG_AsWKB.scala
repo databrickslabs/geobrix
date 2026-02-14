@@ -8,6 +8,7 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+/** Expression that returns the BNG cell geometry as WKB (binary). Case class holding cellID; used as the catalyst node when gbx_bng_aswkb(cellId) is invoked in SQL or DataFrame API. */
 case class BNG_AsWKB(
     cellID: Expression
 ) extends InvokedExpression {
@@ -21,6 +22,7 @@ case class BNG_AsWKB(
 
 }
 
+/** Companion: SQL name gbx_bng_aswkb, builder, and eval. */
 object BNG_AsWKB extends WithExpressionInfo {
 
     def eval(cellID: Long): Array[Byte] = execute(cellID)
@@ -40,12 +42,4 @@ object BNG_AsWKB extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_AsWKB(c(0))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 }

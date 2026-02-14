@@ -2,10 +2,12 @@ package com.databricks.labs.gbx.util
 
 import java.io.{BufferedReader, InputStream, InputStreamReader}
 
+/** Runs external commands (Process/ProcessIO) and scripts; returns (stdout, stdout, stderr) or (exitValue, stdout, stderr). */
 object SysUtils {
 
     import sys.process._
 
+    /** Runs command with ProcessIO; blocks until exit; returns (stdout, stdout, stderr). */
     def runCommand(parts: Seq[String]): (String, String, String) = {
         val outSb = new StringBuilder
         val errSb = new StringBuilder
@@ -27,6 +29,7 @@ object SysUtils {
         (stdout, stdout, errSb.toString)                                         // keep your legacy tuple
     }
 
+    /** Executes cmd via Runtime.exec; returns (exitValue string, stdout, stderr). */
     def runScript(cmd: Array[String]): (String, String, String) = {
         val p = Runtime.getRuntime.exec(cmd)
         val stdinStream = new BufferedReader(new InputStreamReader(p.getInputStream))
@@ -44,6 +47,7 @@ object SysUtils {
         (s"$exitValue", stdinOutput, stderrOutput)
     }
 
+    /** Returns the last line of the second element (stdout) of the (_, stdout, _) tuple. */
     def getLastOutputLine(prompt: (String, String, String)): String = {
         val (_, stdout, _) = prompt
         val lines = stdout.split("\n")

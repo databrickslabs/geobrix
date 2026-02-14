@@ -17,6 +17,7 @@ case class RST_Median(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
@@ -27,7 +28,7 @@ case class RST_Median(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Median extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, StringType)
@@ -66,21 +67,5 @@ object RST_Median extends WithExpressionInfo {
     override def name: String = "gbx_rst_median"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Median(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Returns an array containing median values for each band."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      [42.0]
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 
 }

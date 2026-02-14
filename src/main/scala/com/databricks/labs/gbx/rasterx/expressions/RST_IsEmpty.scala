@@ -16,6 +16,7 @@ case class RST_IsEmpty(
     tileExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = BooleanType
@@ -26,7 +27,7 @@ case class RST_IsEmpty(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_IsEmpty extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, conf: UTF8String): Boolean = eval(row, conf, StringType)
@@ -54,20 +55,4 @@ object RST_IsEmpty extends WithExpressionInfo {
     override def name: String = "gbx_rst_isempty"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_IsEmpty(c(0))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String =
-        "Returns true if the raster tile is empty."
-
-    override def usageArgs: String = "tile"
-
-    override def examples: String = {
-        s"""
-           |    Examples:
-           |      > SELECT _FUNC_(_ARGS_) FROM table;
-           |      false
-           |  """.stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"${_TILE_TYPE_}"
 }

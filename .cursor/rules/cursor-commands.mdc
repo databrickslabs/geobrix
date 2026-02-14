@@ -1,0 +1,576 @@
+# GeoBrix Cursor Commands
+
+## Overview
+
+GeoBrix provides 25 Cursor commands for test execution, code coverage, sample data management, documentation, and Docker container management. All commands follow consistent patterns and best practices.
+
+## Command Structure
+
+Each command consists of two files in `.cursor/commands/`:
+
+- **`.md` file** - Cursor command registration (visible in Cursor command palette via `/` key)
+- **`.sh` file** - Bash script implementation (actual execution logic)
+
+Example:
+```
+.cursor/commands/
+├── gbx-test-scala.md       # Cursor sees this
+├── gbx-test-scala.sh       # This executes when command runs
+└── common.sh               # Shared helper functions
+```
+
+### Invoking commands (agents)
+
+When a **user** invokes a `gbx:*` command (e.g. from the command palette), the default is no timeout—the command runs to completion or until the user stops it. The command scripts do not impose run-time timeouts.
+
+When an **agent** runs a `gbx:*` command via the Shell tool, the agent should use timeouts where sensible to avoid wasting time (e.g. set an appropriate timeout for the operation, or run in background with progress checks per progress-updates.mdc).
+
+---
+
+## Command Naming Convention
+
+**Format**: `gbx:<category>:<action>`
+
+| Category | Purpose | Commands |
+|----------|---------|----------|
+| `test` | Run tests | `scala`, `python`, `scala-docs`, `python-docs`, `sql-docs`, `docs`, `function-info` |
+| `coverage` | Code coverage | `scala`, `scala-docs`, `python`, `python-docs` |
+| `data` | Sample data | `download` |
+| `docs` | Documentation | `start`, `stop`, `restart`, `function-info`, `prompt-session` |
+| `docker` | Container mgmt | `exec`, `start`, `stop`, `restart`, `rebuild`, `attach` |
+
+---
+
+## Available Commands
+
+### Test Commands
+
+1. **`gbx:test:scala`** - Scala unit tests (non-docs)
+   - Location: `src/test/scala/`
+   - Excludes: `tests.docs.scala.*`
+   - Example: `gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'`
+
+2. **`gbx:test:python`** - Python unit tests (non-docs)
+   - Location: `python/geobrix/test/`
+   - Example: `gbx:test:python --path python/geobrix/test/rasterx/`
+
+3. **`gbx:test:scala-docs`** - Scala documentation tests
+   - Location: `docs/tests/scala/`
+   - Options: `--log`, `--suite <pattern>`, `--skip-build`
+   - Example: `gbx:test:scala-docs --log scala-docs.log --suite 'docs.tests.scala.api.*'`
+
+4. **`gbx:test:python-docs`** - Python documentation tests
+   - Location: `docs/tests/python/`
+   - Default: Excludes integration tests
+   - Example: `gbx:test:python-docs --suite api --skip-build --skip-download`
+
+5. **`gbx:test:sql-docs`** - SQL (and Python API) documentation tests
+   - Location: `docs/tests/python/api/` (SQL API Reference examples)
+   - Options: `--log`, `--test`, `--path`, `--skip-build`, `--skip-download`, `--data-bundle`
+   - Example: `gbx:test:sql-docs --skip-build --skip-download --log sql-docs.log`
+
+6. **`gbx:test:docs`** - All documentation tests (Python, Scala, and SQL)
+   - Runs Python doc tests then Scala doc tests (same as run-doc-tests.sh local)
+   - Options: `--log`, `--suite`, `--path`, `--test`, `--skip-build`, `--skip-download`, `--scala-suite`, `--python-only`, `--scala-only`
+   - Example: `gbx:test:docs --skip-build --skip-download --log docs.log`
+
+7. **`gbx:test:function-info`** - Function-info inventory and DESCRIBE/coverage tests
+   - By default: runs `docs/scripts/generate-function-info.py` (and optionally `--add-placeholders` if supported) then pytest in `docs/tests-function-info/`
+   - Tests print DESCRIBE FUNCTION / DESCRIBE FUNCTION EXTENDED per package and assert full coverage of function-info.json
+   - Options: `--skip-generate`, `--log`
+   - Example: `gbx:test:function-info --log function-info.log`
+
+8. **`gbx:test:notebooks`** - Notebook execution tests
+   - Location: `notebooks/tests/` (mirrors `notebooks/` hierarchy)
+   - Default: Excludes integration tests (full-notebook run); use `--include-integration` to run them
+   - Options: `--log`, `--path <path>`, `--include-integration`
+   - Example: `gbx:test:notebooks` or `gbx:test:notebooks --include-integration --log notebooks.log`
+
+### Coverage Commands
+
+**⚠️ IMPORTANT**: Scala coverage is expensive (~10 min). Use strategic approach!
+
+#### Quick Commands (Fast)
+
+5. **`gbx:coverage:gaps`** - Analyze coverage gaps by package ⚡ NEW!
+   - Time: ~5 seconds (uses existing data)
+   - Languages: `scala`, `python`
+   - Purpose: Identify lowest-coverage packages
+   - Example: `gbx:coverage:gaps scala --threshold 90`
+
+#### Package-Targeted Coverage (1-3 min)
+
+6. **`gbx:coverage:scala-package`** - Coverage for specific package ⚡ NEW!
+   - Time: 1-3 minutes (vs 10 min for full)
+   - Packages: `rasterx`, `gridx`, `vectorx`, `ds`, `expressions`, `util`
+   - Purpose: Fast targeted coverage during development
+   - Example: `gbx:coverage:scala-package rasterx --open`
+
+#### Baseline Coverage (Weekly)
+
+7. **`gbx:coverage:baseline`** - Generate baseline coverage ⚡ NEW!
+   - Time: ~10 min (Scala), ~30 sec (Python)
+   - Frequency: Weekly recommended
+   - Purpose: Establish reference point for gap analysis
+   - Example: `gbx:coverage:baseline scala --open`
+
+#### Full Coverage (Use Sparingly for Scala)
+
+8. **`gbx:coverage:scala`** - Scala unit test coverage (scoverage)
+   - Tests: `src/test/scala/` (excludes docs tests)
+   - Time: ~10 minutes ⚠️ Use weekly or via `baseline`
+   - Default threshold: 80%
+   - Output: `target/site/scoverage/index.html`
+   - Example: `gbx:coverage:scala --min-coverage 90 --open`
+   - Example: `gbx:coverage:scala --report-only --open` (5 sec, uses existing data)
+
+9. **`gbx:coverage:scala-docs`** - Scala documentation test coverage
+   - Tests: `docs/tests/scala/` (suite: `tests.docs.scala.*`)
+   - Default threshold: 80%
+   - Output: `target/scoverage-docs-report/index.html`
+   - Example: `gbx:coverage:scala-docs --open`
+
+10. **`gbx:coverage:python`** - Python unit test coverage
+    - Location: `python/geobrix/test/`
+    - Time: ~30 seconds (fast enough to always run)
+    - Output: `python/coverage-report/index.html`
+    - Example: `gbx:coverage:python --min-coverage 90 --open`
+
+11. **`gbx:coverage:python-docs`** - Python docs test coverage
+    - Location: `docs/tests/python/`
+    - Output: `docs/tests/coverage-report/index.html`
+    - Example: `gbx:coverage:python-docs --open`
+
+### Data Commands
+
+9. **`gbx:data:download`** - Download sample data
+   - Bundles: `essential` (~85MB), `complete` (~550MB), `both`
+   - Output: `sample-data/Volumes/main/default/geobrix_samples/`
+   - Example: `gbx:data:download --bundle complete`
+
+### Documentation Commands
+
+10. **`gbx:docs:start`** - Start Docusaurus documentation server
+    - Port: 3000 (default, customizable)
+    - Auto-build: Yes (skip with `--skip-build`)
+    - Example: `gbx:docs:start --port 3001`
+
+11. **`gbx:docs:stop`** - Stop documentation server
+    - Stops all running doc servers
+    - Cleans up PID and log files
+    - Example: `gbx:docs:stop`
+
+12. **`gbx:prompt-session`** - Output agent-context rule for review
+    - Prints `.cursor/rules/00-agent-context.mdc` to stdout so the agent can review topic→subagent, commands, and quick reference
+    - Example: `gbx:prompt-session`
+
+14. **`gbx:docs:restart`** - Restart documentation server
+    - Combines stop + start
+    - Supports all start options
+    - Example: `gbx:docs:restart --skip-build`
+
+15. **`gbx:docs:dev`** - Start Docusaurus dev server (hot reload / dynamic refresh)
+    - Runs `npm run start`; edits to MDX/JS/CSS trigger automatic browser refresh
+    - Use while editing docs. Stop with `gbx:docs:stop`
+    - Example: `gbx:docs:dev --port 3001`
+
+16. **`gbx:docs:serve-local`** - Build (optional) and run `npm run serve` locally
+    - Requires any existing docs server to be stopped first (`gbx:docs:stop`)
+    - By default runs `npm run build` then `npm run serve`; use `--skip-build` to serve existing build only
+    - For dynamic refresh while editing, use `gbx:docs:dev` instead
+    - Example: `gbx:docs:serve-local --skip-build`
+
+17. **`gbx:docs:function-info`** - Generate function-info.json from doc SQL examples
+    - Updates `DESCRIBE FUNCTION EXTENDED` to use the same examples as the API docs (one-copy pattern)
+    - Output: `src/main/resources/com/databricks/labs/gbx/function-info.json`
+    - Run after changing `docs/tests/python/api/rasterx_functions_sql.py` or `gridx_functions_sql.py`; then commit the JSON
+    - Example: `gbx:docs:function-info --log function-info.log`
+
+### Docker Commands
+
+18. **`gbx:docker:exec`** - Execute commands in container
+    - Interactive shells: `--spark`, `--pyspark`, `--python`, `--scala`, `--bash`
+    - Command execution: Direct or via `--command`
+    - Example: `gbx:docker:exec --pyspark` or `gbx:docker:exec "mvn -version"`
+
+19. **`gbx:docker:start`** - Start geobrix-dev container
+    - Auto-mounts volumes
+    - Checks if already running
+    - Example: `gbx:docker:start --attach`
+
+20. **`gbx:docker:stop`** - Stop geobrix-dev container
+    - Graceful shutdown (default timeout: 10s)
+    - Force option available
+    - Example: `gbx:docker:stop --timeout 30`
+
+21. **`gbx:docker:restart`** - Restart geobrix-dev container
+    - Faster than stop + start
+    - Preserves configuration
+    - Example: `gbx:docker:restart --attach`
+
+22. **`gbx:docker:rebuild`** - Rebuild Docker image
+    - Stops/removes container
+    - Rebuilds from Dockerfile
+    - Example: `gbx:docker:rebuild --no-cache --start`
+
+23. **`gbx:docker:attach`** - Attach to running container
+    - Opens interactive bash shell
+    - Container keeps running after detach
+    - Example: `gbx:docker:attach`
+
+---
+
+## Common Parameters
+
+### Log Path Handling
+
+All commands support `--log <path>` with intelligent path resolution:
+
+| Input | Resolved Path | Example |
+|-------|---------------|---------|
+| Filename only | `test-logs/<filename>` | `tests.log` → `test-logs/tests.log` |
+| Relative path | `test-logs/<path>` | `api/tests.log` → `test-logs/api/tests.log` |
+| Absolute path | Used as-is | `/tmp/tests.log` → `/tmp/tests.log` |
+
+**Note**: `test-logs/` is already in `.gitignore`
+
+### HTML Report Opening
+
+Coverage commands support `--open` flag to automatically open HTML reports in the default browser:
+- **macOS**: Uses `open` command
+- **Linux**: Uses `xdg-open` command
+
+---
+
+## Docker Container Management
+
+### Pre-execution Checks
+
+All commands automatically:
+1. Check if Docker is running
+2. Verify `geobrix-dev` container exists
+3. Start container if stopped (waits 2 seconds)
+4. Display clear error messages with remediation steps
+
+### Environment Setup
+
+Commands set required environment variables for Scala/Maven:
+```bash
+unset JAVA_TOOL_OPTIONS      # Clear Java agent warnings
+export JUPYTER_PLATFORM_DIRS=1  # Suppress Jupyter warnings
+```
+
+### Working Directory
+
+All commands assume project root in container: `/root/geobrix`
+
+---
+
+## Volume Mounts
+
+Sample data mount configuration:
+- **Host path**: `<project-root>/sample-data/`
+- **Container path**: `/Volumes/main/default/geobrix_samples/`
+- **Data location**: `/Volumes/main/default/geobrix_samples/geobrix-examples/`
+
+---
+
+## Test Organization
+
+### Scala Tests
+
+**Non-Docs** (`src/test/scala/`):
+- Unit tests for core functionality
+- Pattern: `com.databricks.labs.gbx.*`
+- Maven profile: `-PskipScoverage` (for faster execution)
+- Exclude docs: `-Dsuites='!tests.docs.scala.*'`
+
+**Docs** (`docs/tests/scala/`):
+- Documentation example validation
+- Pattern: `tests.docs.scala.*`
+- Maven suite filter: `-Dsuites='tests.docs.scala.*'`
+
+### Python Tests
+
+**Non-Docs** (`python/geobrix/test/`):
+- Unit tests organized by package:
+  - `python/geobrix/test/rasterx/`
+  - `python/geobrix/test/gridx/`
+  - `python/geobrix/test/vectorx/`
+
+**Docs** (`docs/tests/python/`):
+- Documentation example validation
+- Organized by category:
+  - `docs/tests/python/api/` - API function examples
+  - `docs/tests/python/readers/` - Reader examples with sample data
+  - `docs/tests/python/quickstart/` - Quick start examples
+- Default excludes: Integration tests (`-m 'not integration'`)
+
+---
+
+## Coverage Tools
+
+### Scala: scoverage
+
+**Configuration**: `pom.xml`
+- Plugin: `org.scoverage:scoverage-maven-plugin`
+- Minimum coverage: 80% (configurable)
+- Reports: HTML, XML
+- Command: `mvn clean package` (tests run automatically)
+
+### Python: pytest-cov
+
+**Configuration**: Runtime flags
+- Plugin: `pytest-cov`
+- Reports: HTML (with `--cov-report=html`), Terminal (with `--cov-report=term`)
+- Threshold: Configurable with `--cov-fail-under=<percent>`
+
+---
+
+## Error Handling
+
+### Exit Codes
+- `0` = Success
+- Non-zero = Failure (passes through from Docker/Maven/pytest)
+
+### Error Messages
+All commands provide:
+- Clear error description
+- Specific remediation steps
+- Colored output (red for errors, yellow for warnings, green for success)
+
+### Common Errors
+
+**Docker not running**:
+```
+❌ Error: Docker is not running
+Start Docker and try again.
+```
+
+**Container not found**:
+```
+❌ Error: geobrix-dev container not found
+Start the development container first:
+  ./scripts/docker/start_docker.sh
+```
+
+---
+
+## Output Formatting
+
+### Banners
+```
+╔═══════════════════════════════════════════════════════╗
+║  🧪 GeoBrix: Scala Tests (Non-Docs)
+╚═══════════════════════════════════════════════════════╝
+```
+
+### Separators
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Status Icons
+- ✅ Success
+- ❌ Failure/Error
+- ⚠️  Warning
+- 🎯 Target/Goal
+- 📝 Log output
+- 📊 Report/Coverage
+- 📦 Data/Download
+- 🐢 Slow/Integration tests
+
+---
+
+## Command Script Location
+
+**Path**: `.cursor/commands/`
+
+**Files**:
+- `common.sh` - Shared helper functions
+
+**Test Commands**:
+- `gbx-test-scala.sh` / `.md`
+- `gbx-test-python.sh` / `.md`
+- `gbx-test-scala-docs.sh` / `.md`
+- `gbx-test-python-docs.sh` / `.md`
+- `gbx-test-notebooks.sh` / `.md`
+
+**Coverage Commands**:
+- `gbx-coverage-scala.sh` / `.md`
+- `gbx-coverage-scala-docs.sh` / `.md`
+- `gbx-coverage-python.sh` / `.md`
+- `gbx-coverage-python-docs.sh` / `.md`
+
+**Data Commands**:
+- `gbx-data-download.sh` / `.md`
+
+**Documentation Commands**:
+- `gbx-docs-start.sh` / `.md`
+- `gbx-docs-stop.sh` / `.md`
+- `gbx-docs-restart.sh` / `.md`
+- `gbx-docs-dev.sh` / `.md`
+- `gbx-docs-serve-local.sh` / `.md`
+- `gbx-prompt-session.sh` / `.md`
+
+**Docker Commands**:
+- `gbx-docker-exec.sh` / `.md`
+- `gbx-docker-start.sh` / `.md`
+- `gbx-docker-stop.sh` / `.md`
+- `gbx-docker-restart.sh` / `.md`
+- `gbx-docker-rebuild.sh` / `.md`
+- `gbx-docker-attach.sh` / `.md`
+
+**All scripts are executable**: `chmod +x .cursor/commands/*.sh`
+
+---
+
+## Integration with Existing Scripts
+
+Commands leverage existing CI scripts:
+- `scripts/ci/run-doc-tests.sh` - Doc test patterns
+- `sample-data/download-essential-bundle.py` - Data download
+- `sample-data/download-complete-bundle.py` - Data download
+- `pom.xml` - Maven configuration and scoverage setup
+
+---
+
+## Best Practices
+
+### When to Use Each Command
+
+**Development Workflow**:
+1. Write code
+2. Run unit tests: `gbx:test:scala` or `gbx:test:python`
+3. Update docs
+4. Run doc tests: `gbx:test:scala-docs` or `gbx:test:python-docs`
+5. Check coverage: `gbx:coverage:scala` or `gbx:coverage:python-docs`
+6. Commit changes
+
+**Before PR/Push**:
+```bash
+# Run all tests
+gbx:test:scala --log test-logs/scala-all.log
+gbx:test:python --log test-logs/python-all.log
+gbx:test:scala-docs --log test-logs/scala-docs.log
+gbx:test:python-docs --log test-logs/python-docs.log
+
+# Check coverage
+gbx:coverage:scala --open
+gbx:coverage:python-docs --min-coverage 80 --open
+```
+
+**Setting Up New Environment**:
+```bash
+# Download sample data first
+gbx:data:download --bundle complete --log sample-data/download.log
+
+# Verify with doc tests (they use sample data)
+gbx:test:python-docs
+```
+
+### Log File Organization
+
+Recommended log file naming:
+- `test-logs/<component>-<timestamp>.log`
+- `test-logs/<date>/<component>.log`
+- `test-logs/pr-<number>/<test-type>.log`
+
+Examples:
+```bash
+gbx:test:scala --log "$(date +%Y%m%d)/scala-tests.log"
+gbx:coverage:python-docs --log "pr-123/python-docs-coverage.log"
+```
+
+---
+
+## Troubleshooting
+
+### Tests Fail Due to Missing Sample Data
+
+**Solution**:
+```bash
+gbx:data:download --bundle essential
+# or
+gbx:data:download --bundle complete
+```
+
+### Coverage Report Not Opening
+
+**macOS**: Ensure `open` command works
+**Linux**: Install `xdg-utils` package
+```bash
+# Ubuntu/Debian
+sudo apt-get install xdg-utils
+```
+
+### Maven "JAVA_TOOL_OPTIONS" Warnings
+
+Commands automatically suppress these by running:
+```bash
+unset JAVA_TOOL_OPTIONS
+```
+
+### Container Keeps Stopping
+
+Check Docker Desktop resources (Memory/CPU) and container logs:
+```bash
+docker logs geobrix-dev
+```
+
+---
+
+## Documentation Server Details
+
+### URL Access
+- Default: `http://localhost:3000`
+- Custom port: `http://localhost:<port>`
+
+### Log Files
+- Server logs: `/tmp/docusaurus-<port>.log`
+- PID file: `/tmp/docusaurus-<port>.pid`
+
+### Build Output
+- Location: `docs/build/`
+- Generated by: `npm run build`
+- Served by: `npm run serve`
+
+---
+
+## Docker Container Details
+
+### Interactive Shells
+
+| Shell | Command | Exit Command |
+|-------|---------|--------------|
+| Spark | `spark-shell` | `:quit` or Ctrl+D |
+| PySpark | `pyspark` | `exit()` or Ctrl+D |
+| Python | `python3` | `exit()` or Ctrl+D |
+| Scala | `scala` | `:quit` or Ctrl+D |
+| Bash | `bash` | `exit` or Ctrl+D |
+
+### Volume Mounts
+- `sample-data/Volumes` → `/Volumes`
+- Project root → `/root/geobrix`
+- `scripts/docker/m2` → `/root/geobrix/scripts/docker/m2`
+
+### Container Lifecycle
+1. **Build image**: `gbx:docker:rebuild`
+2. **Start container**: `gbx:docker:start`
+3. **Attach to shell**: `gbx:docker:attach`
+4. **Execute command**: `gbx:docker:exec <command>`
+5. **Restart container**: `gbx:docker:restart`
+6. **Stop container**: `gbx:docker:stop`
+
+---
+
+## Future Enhancements
+
+Potential additions:
+- `gbx:test:all` - Run all tests (Scala + Python, docs + non-docs)
+- `gbx:coverage:all` - Generate all coverage reports
+- `gbx:lint:python` - Run Python linters
+- `gbx:format:scala` - Format Scala code
+- `gbx:clean` - Clean all build artifacts
+- `gbx:docker:logs` - View container logs
+- `gbx:docs:build` - Build docs without serving

@@ -9,12 +9,18 @@ import org.apache.spark.unsafe.types.UTF8String
 
 import scala.util.Try
 
+/**
+  * Wraps raster expression eval so failures produce an error row (with error_message in metadata)
+  * instead of failing the task, unless ExpressionConfig.crashExpressions is true.
+  */
 object RST_ErrorHandler {
 
+    /** True if metadata contains RasterX error keys (e.g. from createErrorMetadata). */
     private def hasError(metadata: Map[String, String]): Boolean = {
         metadata.contains("error_message")
     }
 
+    /** Builds metadata map with error message and class name for safeEval error rows. */
     private def createErrorMetadata(error: Throwable): Map[String, String] = {
         Map(
           "error_message" -> error.getMessage,
@@ -23,7 +29,7 @@ object RST_ErrorHandler {
         )
     }
 
-    // Just wraps eval methods to catch exceptions and check for error propagation
+    /** Run eval; on exception return a tile row with error metadata instead of throwing. */
     def safeEval(eval: () => InternalRow, row: InternalRow, rasterType: DataType): InternalRow = {
         try {
             eval()
@@ -46,6 +52,7 @@ object RST_ErrorHandler {
         }
     }
 
+    /** Like safeEval for single row but for array of rows; returns first row with error metadata or propagates. */
     def safeEval(eval: () => InternalRow, rows: ArrayData, rasterType: DataType): InternalRow = {
         try {
             eval()
@@ -72,6 +79,7 @@ object RST_ErrorHandler {
         }
     }
 
+    /** Runs eval; on exception returns null or throws if ExpressionConfig.crashExpressions is true. */
     def safeEval(eval: () => Any, row: InternalRow, rasterType: DataType, conf: UTF8String): Any = {
         try {
             eval()
@@ -93,6 +101,7 @@ object RST_ErrorHandler {
         }
     }
 
+    /** Runs generator eval; on exception returns single row with error metadata. */
     def safeEval(eval: () => IterableOnce[InternalRow], row: InternalRow, rasterType: DataType): IterableOnce[InternalRow] = {
         try {
             eval()

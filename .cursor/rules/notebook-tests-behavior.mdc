@@ -1,0 +1,15 @@
+---
+description: Notebook test behavior — do not skip on failure or timeout
+globs: notebooks/tests/**/*
+alwaysApply: false
+---
+
+# Notebook Tests: Fail, Don't Skip
+
+**Do not mark failing or timed-out notebook tests as skipped.**
+
+- If the kernel doesn't respond in time or a notebook execution times out, the test must **fail** (exception propagates or assertion fails).
+- Do **not** use `pytest.skip()` for timeout or execution failure so the suite "can still pass."
+- Skipping is only appropriate for conditional availability (e.g. optional data not present), not for real failures or timeouts.
+
+This keeps notebook execution and kernel responsiveness visible as real failures so they get fixed instead of hidden.

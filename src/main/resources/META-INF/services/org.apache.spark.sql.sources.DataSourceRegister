@@ -1,4 +1,5 @@
 com.databricks.labs.gbx.rasterx.ds.gdal.GDAL_DataSource
+com.databricks.labs.gbx.rasterx.ds.gtiff.GTiff_DataSource
 com.databricks.labs.gbx.vectorx.ds.ogr.OGR_DataSource
 com.databricks.labs.gbx.vectorx.ds.shp.ShapeFile_DataSource
 com.databricks.labs.gbx.vectorx.ds.gdb.FileGDB_DataSource

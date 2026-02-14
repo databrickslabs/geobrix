@@ -1,8 +1,9 @@
 package com.databricks.labs.gbx.rasterx.gdal
 
+/** Map from GDAL driver short name to file extension (used when driver does not provide DMD_EXTENSION). */
 object FormatLookup {
 
-    // ShortDriverName -> FormatExtension
+    /** ShortDriverName -> file extension. */
     val formats: Map[String, String] = Map(
         "AAIGrid" -> "asc",
         "ACE2" -> "ace2",

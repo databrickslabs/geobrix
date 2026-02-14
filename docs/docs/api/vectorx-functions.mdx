@@ -1,0 +1,43 @@
+---
+sidebar_position: 7
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import vectorxFunctionsExamples from '!!raw-loader!../../tests/python/api/vectorx_functions.py';
+
+# VectorX Function Reference
+
+VectorX provides a single conversion function for legacy DBLabs Mosaic geometry format.
+
+:::note SQL examples
+Examples on this page use **SQL** (and Python where shown); in SQL, VectorX functions are prefixed with **`gbx_`** (e.g. `gbx_st_legacyaswkb`). For more language-specific tips, see the [Python](./python), [Scala](./scala), and [SQL](./sql) API pages.
+:::
+
+## Common setup
+
+Run this once before the examples below. It registers VectorX so you can use `st_legacyaswkb` in Python and `gbx_st_legacyaswkb` in SQL.
+
+<CodeFromTest code={vectorxFunctionsExamples} functionName="vectorx_setup_example" language="python" source="docs/tests/python/api/vectorx_functions.py" testFile="docs/tests/python/api/test_vectorx_functions.py" outputConstant="vectorx_setup_example_output" />
+
+---
+
+## st_legacyaswkb
+
+Converts legacy Mosaic geometry to Well-Known Binary (WKB).
+
+**Parameters:** `legacyGeometry` — Column containing legacy geometry string (e.g. `{1, [[[x, y]]], [[]]}`).
+
+**Returns:** Binary WKB column.
+
+**Python:**
+
+<CodeFromTest code={vectorxFunctionsExamples} functionName="st_legacyaswkb_python_example" language="python" source="docs/tests/python/api/vectorx_functions.py" testFile="docs/tests/python/api/test_vectorx_functions.py" outputConstant="st_legacyaswkb_python_example_output" />
+
+**SQL:**
+
+<CodeFromTest code={vectorxFunctionsExamples} functionName="ST_LEGACYASWKB_SQL_EXAMPLE" language="sql" source="docs/tests/python/api/vectorx_functions.py" testFile="docs/tests/python/api/test_vectorx_functions.py" outputConstant="ST_LEGACYASWKB_SQL_EXAMPLE_output" />
+
+## Next Steps
+
+- [Quick Start](../quick-start) — Register and use VectorX with the legacy example
+- [API Overview](./overview) — All GeoBrix APIs

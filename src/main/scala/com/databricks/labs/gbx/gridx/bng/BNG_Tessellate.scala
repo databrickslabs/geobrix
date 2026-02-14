@@ -10,6 +10,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
+/** Expression that tessellates a geometry into BNG cells (array of chip structs). Arguments: geom, resolution, keepCoreGeom. */
 case class BNG_Tessellate(
     geom: Expression,
     resolution: Expression,
@@ -25,6 +26,7 @@ case class BNG_Tessellate(
 
 }
 
+/** Companion: SQL name gbx_bng_tessellate, builder, and eval. */
 object BNG_Tessellate extends WithExpressionInfo {
 
     def eval(wkt: UTF8String, resolution: Int, keepCoreGeom: Boolean): Array[InternalRow] = {
@@ -65,13 +67,5 @@ object BNG_Tessellate extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_Tessellate(c(0), c(1), c(2))
 
-    //TODO: ADD EXPRESSION INFO
-    override def usageArgs: String = ""
-
-    override def description: String = ""
-
-    override def extendedUsageArgs: String = ""
-
-    override def examples: String = ""
 
 }

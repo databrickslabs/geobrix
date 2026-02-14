@@ -11,13 +11,14 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Expression for combining rasters using average of pixels. */
+/** Expression that computes a new band by applying a Python UDF to existing band values (tile, pythonCode, funcName). */
 case class RST_DerivedBand(
     tileExpr: Expression,
     pythonFuncExpr: Expression,
     funcNameExpr: Expression
 ) extends InvokedExpression {
 
+    /** Raster DataType from the tile expression. */
     private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, pythonFuncExpr, funcNameExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
@@ -28,7 +29,7 @@ case class RST_DerivedBand(
 
 }
 
-/** Expression info required for the expression registration for spark SQL. */
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_DerivedBand extends WithExpressionInfo {
 
     def evalPath(row: InternalRow, pyFunc: UTF8String, funcName: UTF8String, conf: UTF8String): InternalRow =
@@ -59,29 +60,4 @@ object RST_DerivedBand extends WithExpressionInfo {
     override def name: String = "gbx_rst_derivedband"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_DerivedBand(c(0), c(1), c(2))
-
-    /* FOR `DESCRIBE FUNCTION EXTENDED <_FUNC_>` */
-    override def description: String = "Combine tiles using the provided python function."
-
-    override def usageArgs: String = "tile_expr, pyfunc, func_name"
-
-    override def examples: String = {
-        s"""
-           |SELECT
-           |_FUNC_(array(tile1,tile2,tile3), py_func1, func1_name) AS tile
-           |FROM SELECT (
-           |date, tile1, tile2, tile3,
-           |\"\"\"
-           |import numpy as np
-           |def average(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):
-           |   out_ar[:] = np.sum(in_ar, axis=0) / len(in_ar)
-           |\"\"\" as py_func1,
-           |"average" as func1_name
-           |FROM table
-           |);
-           |${_TILE_RESULT_}
-           |""".stripMargin
-    }
-
-    override def extendedUsageArgs: String = s"tile_expr: <Raster Tile(s)> , pyfunc: String, func_name: String"
 }

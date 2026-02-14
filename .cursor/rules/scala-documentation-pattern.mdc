@@ -1,0 +1,641 @@
+# Scala Documentation Pattern
+
+## Core Principle
+
+Scala code examples in documentation must be **tested** with **real sample data**, just like Python examples.
+
+**Goal**: Scala examples should be as high-quality and reliable as Python examples.
+
+## The Pattern
+
+### Structure
+
+**Scala Examples File** (`docs/tests/scala/readers/ShapefileExamples.scala`):
+```scala
+package tests.docs.scala.readers
+
+import org.apache.spark.sql.{DataFrame, SparkSession}
+
+object ShapefileExamples {
+
+  // Display constants (payload only) - shown in documentation
+  // IMPORTANT: String content is extracted automatically - docs show ONLY the code inside """..."""
+  val READ_SHAPEFILE: String =
+    """val df = spark.read.format("shapefile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")"""
+
+  val READ_WITH_OPTIONS: String =
+    """val df = spark.read.format("shapefile")
+      |  .option("chunkSize", "50000")
+      |  .load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")""".stripMargin
+
+  // Test methods (validate logic) - used by ScalaTest
+  def readShapefile(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip"): DataFrame = {
+    spark.read.format("shapefile").load(path)
+  }
+
+  def readWithOptions(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip"): DataFrame = {
+    spark.read.format("shapefile")
+      .option("chunkSize", "50000")
+      .load(path)
+  }
+}
+```
+
+**What Gets Displayed in Docs**:
+```scala
+// Users see ONLY this (payload extracted from string constant):
+val df = spark.read.format("shapefile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")
+```
+
+**NOT this** (wrapper is hidden):
+```scala
+// Users DO NOT see the val declaration wrapper:
+val READ_SHAPEFILE: String = """..."""
+```
+
+**Test File** (`docs/tests/scala/readers/ReadersDocTest.scala`):
+```scala
+package tests.docs.scala.readers
+
+import org.apache.spark.sql.SparkSession
+import org.scalatest.BeforeAndAfterAll
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.matchers.should.Matchers._
+
+class ReadersDocTest extends AnyFunSuite with BeforeAndAfterAll {
+
+  var spark: SparkSession = _
+
+  override def beforeAll(): Unit = {
+    super.beforeAll()
+    spark = SparkSession.builder()
+      .appName("Readers Doc Test")
+      .master("local[*]")
+      .getOrCreate()
+  }
+
+  override def afterAll(): Unit = {
+    if (spark != null) spark.stop()
+    super.afterAll()
+  }
+
+  test("shapefile: read basic") {
+    val df = ShapefileExamples.readShapefile(spark)
+    df should not be null
+    df.count() should be > 2000L  // NYC subway has 2000+ stations
+    df.columns should contain("geom_0")
+  }
+
+  test("shapefile: constants defined") {
+    ShapefileExamples.READ_SHAPEFILE should not be empty
+    ShapefileExamples.READ_WITH_OPTIONS should not be empty
+  }
+}
+```
+
+**Documentation** (`docs/docs/readers/shapefile.mdx`):
+```mdx
+import shapefileScala from '!!raw-loader!../../tests/scala/readers/ShapefileExamples.scala';
+
+### Scala
+
+<CodeFromTest 
+  code={shapefileScala} 
+  language="scala" 
+  functionName="READ_SHAPEFILE"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+/>
+```
+
+## Scala-Specific Standards
+
+### 1. Object-Based Organization
+
+**✅ CORRECT**: Use singleton objects for examples
+```scala
+object ShapefileExamples {
+  val READ_SHAPEFILE: String = """..."""
+  def readShapefile(spark: SparkSession): DataFrame = { ... }
+}
+```
+
+**❌ WRONG**: Top-level definitions
+```scala
+// Not in an object - hard to test and organize
+val READ_SHAPEFILE: String = """..."""
+```
+
+**Why**: Objects provide namespacing, testability, and organization.
+
+### 1a. Payload-Only Pattern (Critical!)
+
+**✅ CORRECT**: Constants hold the PAYLOAD code (what users type)
+```scala
+// In Scala file:
+val READ_SHAPEFILE: String =
+  """val df = spark.read.format("shapefile").load("/Volumes/...")"""
+
+// What users SEE in docs (payload extracted automatically):
+val df = spark.read.format("shapefile").load("/Volumes/...")
+```
+
+**❌ WRONG**: Constants with wrapper in the string
+```scala
+// WRONG - this would show the val declaration in docs!
+val READ_SHAPEFILE: String =
+  """val READ_SHAPEFILE: String = "val df = ..." """
+```
+
+**Why**: The `CodeFromTest` component extracts string content automatically. Users should see clean, copy-pasteable code, not test infrastructure.
+
+### 2. String Constants with stripMargin
+
+**✅ CORRECT**: Use `stripMargin` for multi-line code
+```scala
+val READ_WITH_OPTIONS: String =
+  """val df = spark.read.format("shapefile")
+    |  .option("chunkSize", "50000")
+    |  .load("/Volumes/.../file.zip")""".stripMargin
+```
+
+**❌ WRONG**: No stripMargin (keeps leading spaces)
+```scala
+val READ_WITH_OPTIONS: String =
+  """val df = spark.read.format("shapefile")
+    .option("chunkSize", "50000")
+    .load("/Volumes/.../file.zip")"""
+```
+
+**Why**: `stripMargin` removes leading whitespace and `|` markers for clean formatting.
+
+### 3. Real Sample Data Paths
+
+**✅ CORRECT**: Use actual sample data
+```scala
+val READ_SHAPEFILE: String =
+  """val df = spark.read.format("shapefile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")"""
+```
+
+**❌ WRONG**: Placeholder paths
+```scala
+val READ_SHAPEFILE: String =
+  """val df = spark.read.format("shapefile").load("/path/to/data")"""
+```
+
+**Why**: Real paths ensure examples are testable and accurate.
+
+### 4. Test Methods Match Constants
+
+**Pattern**: For every string constant, create a test method
+
+```scala
+// Constant for documentation
+val READ_SHAPEFILE: String = """val df = spark.read.format("shapefile").load("/Volumes/.../file.zip")"""
+
+// Method for testing
+def readShapefile(spark: SparkSession, path: String = "/Volumes/.../file.zip"): DataFrame = {
+  spark.read.format("shapefile").load(path)
+}
+```
+
+**Naming Convention**:
+- Constant: `READ_SHAPEFILE` (UPPERCASE)
+- Method: `readShapefile` (camelCase)
+
+### 5. Comprehensive Assertions
+
+**✅ CORRECT**: Test actual results
+```scala
+test("shapefile: read basic") {
+  val df = ShapefileExamples.readShapefile(spark)
+  df should not be null
+  df.count() should be > 2000L
+  df.columns should contain("geom_0")
+}
+```
+
+**❌ WRONG**: Only check constants exist
+```scala
+test("shapefile: constants defined") {
+  ShapefileExamples.READ_SHAPEFILE should not be empty
+}
+```
+
+**Why**: While constant checks are useful, actual execution tests are critical.
+
+## File Organization
+
+### Mirror Python Structure
+
+```
+docs/tests/
+├── python/readers/
+│   ├── shapefile_examples.py
+│   ├── geojson_examples.py
+│   └── geopackage_examples.py
+└── scala/readers/
+    ├── ShapefileExamples.scala  (mirrors shapefile_examples.py)
+    ├── GeoJSONExamples.scala    (mirrors geojson_examples.py)
+    ├── GeoPackageExamples.scala (mirrors geopackage_examples.py)
+    └── ReadersDocTest.scala     (unified test file)
+```
+
+**Benefits**:
+- ✅ Easy to find corresponding examples
+- ✅ Consistent structure across languages
+- ✅ Single test file for all reader examples
+
+### Package Convention
+
+**Pattern**: `tests.docs.scala.{category}`
+
+**Examples**:
+- `tests.docs.scala.readers` - Reader examples
+- `tests.docs.scala.api` - API examples
+- `tests.docs.scala.advanced` - Advanced patterns
+- `tests.docs.scala.packages` - Package examples
+
+## Running Tests
+
+### Compile Only (Fast)
+```bash
+mvn test-compile -Dsuites='tests.docs.scala.readers.*'
+```
+
+### Execute Tests
+```bash
+mvn test -Dsuites='tests.docs.scala.readers.ReadersDocTest'
+```
+
+### Using Cursor Commands
+```bash
+gbx:test:scala-docs
+```
+
+## Documentation Integration
+
+### Import Pattern
+
+```mdx
+import shapefileScala from '!!raw-loader!../../tests/scala/readers/ShapefileExamples.scala';
+```
+
+**Path from docs/docs/readers/**:
+- `../../tests/scala/` → goes up to `docs/` → then to `tests/scala/`
+
+### CodeFromTest Usage
+
+```jsx
+<CodeFromTest 
+  code={shapefileScala} 
+  language="scala" 
+  functionName="READ_SHAPEFILE"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+/>
+```
+
+**How It Works**:
+1. `functionName="READ_SHAPEFILE"` finds the constant in the Scala file
+2. Extracts ONLY the string content (between `"""` and `"""`)
+3. Displays the payload code (e.g., `val df = spark.read.format(...)`)
+4. Hides the wrapper (`val READ_SHAPEFILE: String = """..."""`)
+
+**Validation Level**: Automatically detected as "Fully Validated" (tests passing)
+
+**Result**: Users see clean, copy-pasteable Scala code without test infrastructure
+
+## Benefits
+
+### ✅ Parity with Python
+- Scala examples are tested, not just "static"
+- Both languages use real sample data
+- Consistent quality across languages
+
+### ✅ Reliability
+- Examples are validated to work
+- Compile-time AND runtime testing
+- Catches breaking changes early
+
+### ✅ Maintainability
+- Single source of truth pattern
+- Easy to update (one place)
+- Clear organization
+
+## Common Patterns
+
+### Pattern 1: Basic Reader Example
+
+```scala
+object FormatExamples {
+  val READ_FORMAT: String =
+    """val df = spark.read.format("format_name").load("/Volumes/.../file.ext")"""
+  
+  def readFormat(spark: SparkSession, path: String = "/Volumes/.../file.ext"): DataFrame = {
+    spark.read.format("format_name").load(path)
+  }
+}
+```
+
+### Pattern 2: Reader with Options
+
+```scala
+object FormatExamples {
+  val READ_WITH_OPTIONS: String =
+    """val df = spark.read.format("format_name")
+      |  .option("optionName", "value")
+      |  .load("/Volumes/.../file.ext")""".stripMargin
+  
+  def readWithOptions(spark: SparkSession, path: String = "/Volumes/.../file.ext"): DataFrame = {
+    spark.read.format("format_name")
+      .option("optionName", "value")
+      .load(path)
+  }
+}
+```
+
+### Pattern 3: SQL Examples
+
+```scala
+object FormatExamples {
+  val SQL_FORMAT: String =
+    """SELECT * FROM format_name.`/Volumes/.../file.ext`;"""
+}
+```
+
+**Note**: SQL constants don't need test methods (just verify they're defined).
+
+## Migration Checklist
+
+When converting existing Scala examples from "static" to "tested":
+
+- [ ] **Create Examples object** in `docs/tests/scala/readers/{Format}Examples.scala`
+  - Use singular object (e.g., `ShapefileExamples`, not `ShapefilesExamples`)
+  - Add string constants (UPPERCASE) for display
+  - Add methods (camelCase) for testing
+  - Use real sample data paths
+
+- [ ] **Add tests** to `ReadersDocTest.scala`
+  - Test each method with real data
+  - Assert on row counts, columns, data types
+  - Add constant definition checks
+
+- [ ] **Update documentation** to import Scala file
+  - Add raw-loader import
+  - Update `CodeFromTest` component
+  - Change `validationLevel` from "static" to auto-detect (remove prop)
+
+- [ ] **Run tests** to verify
+  - Compile: `mvn test-compile`
+  - Execute: `mvn test -Dsuites='tests.docs.scala.readers.ReadersDocTest'`
+
+- [ ] **Build docs** to verify display
+  - `gbx:docs:restart`
+  - Check validation badges (should show "Fully Validated")
+
+## Format Name Accuracy
+
+**CRITICAL**: Use the exact registered format name, not aliases or shortcuts.
+
+### Verify Format Names
+
+**Check Scala Source**:
+```bash
+grep "override def shortName" src/main/scala/com/databricks/labs/gbx/vectorx/ds/**/*.scala
+```
+
+**Result**:
+```
+shapefile → "shapefile" ✅
+geojson → "geojson" ✅
+geopackage → "ogr_gpkg" ⚠️ (NOT "gpkg")
+filegdb → "file_gdb" ⚠️ (NOT "filegdb")
+ogr → "ogr" ✅
+```
+
+**Rule**: Always use the registered `shortName()` value in examples.
+
+## Common Mistakes
+
+### ❌ Mistake 1: Wrong Format Name
+```scala
+// WRONG - uses "gpkg"
+val df = spark.read.format("gpkg").load("/path")
+```
+**Fix**: Use registered name `ogr_gpkg`
+
+### ❌ Mistake 2: Placeholder Paths
+```scala
+// WRONG - not testable
+val READ_EXAMPLE = """val df = spark.read.format("shapefile").load("/path/to/data")"""
+```
+**Fix**: Use actual sample data path
+
+### ❌ Mistake 3: Missing stripMargin
+```scala
+// WRONG - preserves leading whitespace
+val READ_EXAMPLE: String =
+  """val df = spark.read.format("shapefile")
+      .option("key", "value")
+      .load("/path")"""
+```
+**Fix**: Add `.stripMargin` and use `|` markers
+
+### ❌ Mistake 4: No Test Method
+```scala
+// WRONG - only constant, no validation
+val READ_SHAPEFILE: String = """..."""
+// Missing: def readShapefile(spark: SparkSession): DataFrame = { ... }
+```
+**Fix**: Add corresponding test method
+
+## Test Organization
+
+### Single Test File Per Category
+
+```scala
+// docs/tests/scala/readers/ReadersDocTest.scala
+class ReadersDocTest extends AnyFunSuite {
+  // All reader tests in one file
+  test("shapefile: read basic") { ... }
+  test("geojson: read basic") { ... }
+  test("geopackage: read basic") { ... }
+}
+```
+
+**Why**:
+- Shared Spark session setup
+- Faster test execution
+- Easier to maintain
+
+### Test Naming Convention
+
+**Pattern**: `{format}: {feature}`
+
+**Examples**:
+- `shapefile: read basic`
+- `shapefile: read with chunk size option`
+- `shapefile: constants defined`
+- `geojson: read standard format`
+- `geopackage: read specific layer`
+
+## Running Tests
+
+### All Reader Docs Tests
+```bash
+docker exec geobrix-dev bash -c "cd /root/geobrix && unset JAVA_TOOL_OPTIONS && mvn test -Dsuites='tests.docs.scala.readers.ReadersDocTest'"
+```
+
+### Specific Test
+```bash
+docker exec geobrix-dev bash -c "cd /root/geobrix && unset JAVA_TOOL_OPTIONS && mvn test -Dsuites='tests.docs.scala.readers.ReadersDocTest' -Dtest='shapefile: read basic'"
+```
+
+### With Cursor Command
+```bash
+gbx:test:scala-docs
+```
+
+## Reference
+
+Based on Scala reader examples implementation (2026-01-29) that achieved:
+- ✅ Tested Scala examples for 3 readers (shapefile, geojson, geopackage)
+- ✅ 9/9 tests passing
+- ✅ Real sample data usage
+- ✅ Parity with Python examples
+- ✅ Format name accuracy (discovered `ogr_gpkg` not `gpkg`)
+
+See also:
+- `.cursor/rules/documentation-payload-pattern.mdc` - Python/SQL payload pattern
+- `.cursor/rules/docs-test-single-source.mdc` - Single-copy pattern
+- `.cursor/rules/documentation-code-validation.mdc` - Validation labels
+- `docs/tests/READERS-PAYLOAD-PATTERN-MIGRATION-PLAN.md` - Migration plan
+
+---
+
+## Quick Reference
+
+### Create New Scala Reader Example
+
+**1. Create Examples Object**:
+```bash
+touch docs/tests/scala/readers/FormatExamples.scala
+```
+
+```scala
+package tests.docs.scala.readers
+
+import org.apache.spark.sql.{DataFrame, SparkSession}
+
+object FormatExamples {
+  val READ_FORMAT: String = """..."""
+  def readFormat(spark: SparkSession, path: String = "/Volumes/..."): DataFrame = { ... }
+}
+```
+
+**2. Add Tests** to `ReadersDocTest.scala`:
+```scala
+test("format: read basic") {
+  val df = FormatExamples.readFormat(spark)
+  df should not be null
+  df.count() should be > 0L
+}
+```
+
+**3. Update Documentation**:
+```mdx
+import formatScala from '!!raw-loader!../../tests/scala/readers/FormatExamples.scala';
+
+<CodeFromTest 
+  code={formatScala} 
+  language="scala" 
+  functionName="READ_FORMAT"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+/>
+```
+
+**4. Test**:
+```bash
+mvn test-compile  # Verify compiles
+mvn test -Dsuites='tests.docs.scala.readers.ReadersDocTest'  # Run tests
+gbx:docs:restart  # Build docs
+```
+
+### Naming Conventions
+
+| Element | Convention | Example |
+|---------|------------|---------|
+| **Object name** | PascalCase, singular | `ShapefileExamples` |
+| **Constant** | UPPERCASE | `READ_SHAPEFILE` |
+| **Method** | camelCase | `readShapefile` |
+| **SQL constant** | UPPERCASE, `SQL_` prefix | `SQL_SHAPEFILE` |
+| **Package** | `tests.docs.scala.{category}` | `tests.docs.scala.readers` |
+
+### File Locations
+
+| Item | Location |
+|------|----------|
+| **Scala example objects** | `docs/tests/scala/readers/{Format}Examples.scala` |
+| **Scala test file** | `docs/tests/scala/readers/ReadersDocTest.scala` |
+| **Documentation** | `docs/docs/readers/{format}.mdx` |
+| **Sample data** | `/Volumes/main/default/geobrix_samples/geobrix-examples/` |
+
+---
+
+## Status
+
+**Implemented** (2026-01-29):
+- ✅ Shapefile reader (3 constants, 2 methods, 3 tests)
+- ✅ GeoJSON reader (3 constants, 2 methods, 3 tests)
+- ✅ GeoPackage reader (3 constants, 2 methods, 3 tests)
+
+**Total**: 9 constants, 6 methods, 9 tests - all passing ✅
+
+**Next**: Apply to GDAL, FileGDB, OGR readers
+
+---
+
+## Pattern Comparison: Python vs Scala
+
+### Python Pattern
+```python
+# Constants for display (payload only)
+READ_SHAPEFILE = """df = spark.read.format("shapefile").load("/Volumes/...")"""
+
+# Functions for testing
+def read_shapefile(spark, path="/Volumes/..."):
+    return spark.read.format("shapefile").load(path)
+```
+
+**What users see in docs**:
+```python
+df = spark.read.format("shapefile").load("/Volumes/...")
+```
+
+### Scala Pattern
+```scala
+object ShapefileExamples {
+  // Constants for display (payload only)
+  val READ_SHAPEFILE: String = """val df = spark.read.format("shapefile").load("/Volumes/...")"""
+  
+  // Methods for testing
+  def readShapefile(spark: SparkSession, path: String = "/Volumes/..."): DataFrame = {
+    spark.read.format("shapefile").load(path)
+  }
+}
+```
+
+**What users see in docs**:
+```scala
+val df = spark.read.format("shapefile").load("/Volumes/...")
+```
+
+### Key Insight
+
+**Both patterns show PAYLOAD ONLY in documentation**:
+- ✅ Python: `READ_SHAPEFILE = """code"""` → docs show `code`
+- ✅ Scala: `val READ_SHAPEFILE: String = """code"""` → docs show `code`
+- ✅ SQL: `SQL_EXAMPLE = """code"""` → docs show `code`
+
+**The wrapper is HIDDEN** from users (extracted automatically by `CodeFromTest`)
+
+**Result**: Clean, copy-pasteable code across all languages! 🎉

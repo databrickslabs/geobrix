@@ -1,0 +1,59 @@
+---
+sidebar_position: 1
+title: Setup
+---
+
+import NotebookPreview from '@site/src/components/NotebookPreview';
+import setupNotebook from '!!raw-loader!../../../notebooks/sample-data/setup_sample_data.ipynb';
+
+## Overview
+
+Use the **notebook** below on a Databricks cluster to download the Essential and Complete sample-data bundles into a Unity Catalog Volume. The notebook uses the GeoBrix **`sample`** module (packaged with the GeoBrix WHL), so you only need to install GeoBrix and run the cells.
+
+:::note Prerequisites
+- **Unity Catalog Volume must already exist**: `{CATALOG}.{SCHEMA}.{VOLUME}`
+- Create volume in Databricks UI or via SQL: `CREATE VOLUME IF NOT EXISTS {CATALOG}.{SCHEMA}.{VOLUME}`
+- Volumes paths (`/Volumes/...`) work directly with GDAL, rasterio, and other libraries
+- No `/dbfs` translation needed in modern Databricks
+:::
+
+:::tip Databricks vs local use
+This configuration is intended for use with [Databricks Unity Catalog volumes](https://docs.databricks.com/aws/en/volumes/). The path format `/Volumes/<catalog>/<schema>/<volume>/...` can also be mimicked for local development—for example, use a local path such as `./Volumes/main/default/geobrix_samples/geobrix-examples` and set the base path to that so the same code and examples work outside Databricks.
+:::
+
+---
+
+## Notebook
+
+Run the cells in order. The notebook uses `databricks.labs.gbx.sample` (included in the GeoBrix package): `get_volumes_path`, `run_essential_bundle`, and `run_complete_bundle`. Skips datasets that already exist; uses a temp directory for interim downloads; copies only final files to the Volume.
+
+:::tip Download notebook
+**[setup_sample_data.ipynb](https://github.com/databrickslabs/geobrix/blob/main/notebooks/sample-data/setup_sample_data.ipynb)** — download and import into your Databricks workspace to run the setup.
+:::
+
+<NotebookPreview notebookJson={setupNotebook} showOutputs={false} />
+
+---
+
+## Output
+
+After running the notebook, the Volume (or your configured base path) contains the following files under `geobrix-examples/`. The table is ordered by bundle (Essential, then Complete) and within each by region (NYC, then London).
+
+| Bundle | Source | Path | Size | Format & use |
+|--------|--------|------|------|---------------|
+| Essential | NYC Boroughs | `nyc/boroughs/nyc_boroughs.geojson` | 3.0 MB | **GeoJSON** — vector boundaries; joins, overlay, mapping. Driver: GeoJSON |
+| Essential | NYC Taxi Zones | `nyc/taxi-zones/nyc_taxi_zones.geojson` | 3.7 MB | **GeoJSON** — vector zones; spatial joins, aggregation. Driver: GeoJSON |
+| Essential | SRTM NYC | `nyc/elevation/srtm_n40w074.hgt` | 24.7 MB | **SRTM HGT** — elevation DEM; slope, aspect, hillshade. Driver: SRTMHGT |
+| Essential | NYC Sentinel-2 | `nyc/sentinel2/nyc_sentinel2_red.tif` | 205.4 MB | **GeoTIFF** — optical raster (red band); band math, indices. Driver: GTiff |
+| Essential | London Postcodes | `london/postcodes/london_postcodes.geojson` | 0.9 MB | **GeoJSON** — vector postcode areas; point-in-polygon, mapping. Driver: GeoJSON |
+| Essential | SRTM London | `london/elevation/srtm_n51w001.hgt` | 24.7 MB | **SRTM HGT** — elevation DEM; terrain analysis. Driver: SRTMHGT |
+| Essential | London Sentinel-2 | `london/sentinel2/london_sentinel2_red.tif` | 92.7 MB | **GeoTIFF** — optical raster; NDVI, classification. Driver: GTiff |
+| Complete | NYC Neighborhoods | `nyc/neighborhoods/nyc_nta.geojson` | 4.1 MB | **GeoJSON** — vector neighborhoods (NTA); aggregation, mapping. Driver: GeoJSON |
+| Complete | SRTM NYC East | `nyc/elevation/srtm_n40w073.hgt` | 24.7 MB | **SRTM HGT** — elevation DEM; extended terrain. Driver: SRTMHGT |
+| Complete | HRRR Weather | `nyc/hrrr-weather/hrrr_nyc_20260213_12z.grib2` | 131.2 MB | **GRIB2** — weather model; temperature, wind, precipitation. Driver: GRIB |
+| Complete | NYC Parks | `nyc/parks/nyc_parks.shp.zip` | 2.1 MB | **Shapefile** (zip) — vector polygons; overlay, area stats. Driver: ESRI Shapefile (use `/vsizip/` path) |
+| Complete | NYC Subway | `nyc/subway/nyc_subway.shp.zip` | 0.1 MB | **Shapefile** (zip) — vector points (stations); proximity, routing. Driver: ESRI Shapefile (use `/vsizip/` path) |
+| Complete | Multi-Layer GeoPackage | `nyc/geopackage/nyc_complete.gpkg` | 7.0 MB | **GeoPackage** — multi-layer vector (boroughs, zones, parks, subway); single-file DB. Driver: GPKG |
+| Complete | London Boroughs | `london/boroughs/london_boroughs.geojson` | 1.9 MB | **GeoJSON** — vector boundaries; joins, overlay. Driver: GeoJSON |
+
+Exact sizes may vary slightly; the HRRR filename date reflects the run date at download time.

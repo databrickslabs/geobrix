@@ -4,18 +4,10 @@ import com.databricks.labs.gbx.rasterx.gdal.GDAL
 import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
 import org.gdal.gdal.Dataset
 
+/** Re-encodes a raster to a new GDAL format (e.g. COG, Zarr) via gdal_translate. */
 object TranslateFormat {
 
-    /**
-      * Converts the data type of a raster's bands
-      *
-      * @param raster
-      *   The raster to update.
-      * @param newFormat
-      *   The new format of the raster.
-      * @return
-      *   A Raster object.
-      */
+    /** Converts the raster to newFormat; returns (new Dataset, metadata). Caller must release the Dataset. */
     def update(
         raster: Dataset,
         options: Map[String, String],

@@ -9,17 +9,10 @@ import java.io.File
 import java.nio.file.{Files, Paths}
 import scala.xml.{Elem, UnprefixedAttribute, XML}
 
-/** MergeRasters is a helper object for merging rasters. */
+/** Combines multiple rasters with a Python pixel function (e.g. average) via VRT and gdal_translate. */
 object PixelCombineRasters {
 
-    /**
-      * Merges the rasters into a single raster.
-      *
-      * @param dss
-      *   The rasters to merge.
-      * @return
-      *   A Raster object.
-      */
+    /** Builds VRT, injects Python pixel function, translates to raster; returns (Dataset, metadata). Caller must release. */
     def combine(
         dss: Array[Dataset],
         options: Map[String, String],
@@ -55,18 +48,7 @@ object PixelCombineRasters {
         result
     }
 
-    /**
-      * Adds a pixel function to the VRT file. The pixel function is a Python
-      * function that is applied to each pixel in the VRT file. The pixel
-      * function is set for all bands in the VRT file.
-      *
-      * @param vrtPath
-      *   The path to the VRT file.
-      * @param pixFuncCode
-      *   The pixel function code.
-      * @param pixFuncName
-      *   The pixel function name.
-      */
+    /** Injects PixelFunctionType, PixelFunctionLanguage=Python, and PixelFunctionCode into the VRT XML at vrtPath. */
     def addPixelFunction(vrtPath: String, pixFuncCode: String, pixFuncName: String): Unit = {
         val pixFuncTypeEl = <PixelFunctionType>{pixFuncName}</PixelFunctionType>
         val pixFuncLangEl = <PixelFunctionLanguage>Python</PixelFunctionLanguage>

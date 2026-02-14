@@ -6,21 +6,10 @@ import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.CollectionHasAsScala
 import scala.util.Try
 
-/** GDALTranslate is a wrapper for the GDAL Translate command. */
+/** Runs gdal.Translate to write a Dataset to outputPath; returns (Dataset, metadata). Caller must release the returned Dataset. */
 object GDALTranslate {
 
-    /**
-      * Executes the GDAL Translate command.
-      *
-      * @param outputPath
-      *   The output path of the translated file.
-      * @param raster
-      *   The raster to translate.
-      * @param command
-      *   The GDAL Translate command.
-      * @return
-      *   A Raster object.
-      */
+    /** Translates raster to outputPath; appends options via OperatorOptions. Returns (Dataset, metadata). */
     def executeTranslate(
         outputPath: String,
         raster: Dataset,

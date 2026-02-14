@@ -15,35 +15,13 @@ import java.util.{Vector => JVector}
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 
+/** Burns geometries and values into a raster via OGR in-memory layer and gdal.RasterizeLayer. */
 object GDALRasterize {
 
     private val layerName = "FEATURES"
     private val valueFieldName = "VALUES"
 
-    /**
-      * Rasterize the geometries and values and writes these into a new raster
-      * file.
-      *
-      * @param geoms
-      *   The geometries to rasterize.
-      * @param values
-      *   The values to burn into the raster. If not supplied, the Z values of
-      *   the geometries will be used.
-      * @param origin
-      *   The origin (top left-hand coordinate) of the raster.
-      * @param xWidth
-      *   The width of the raster in pixels.
-      * @param yWidth
-      *   The height of the raster in pixels.
-      * @param xSize
-      *   The pixel size for x-axis pixels.
-      * @param ySize
-      *   The pixel size of y-axis pixels.
-      * @param noDataValue
-      *   The NoData value to use.
-      * @return
-      *   A Raster object containing the generated raster.
-      */
+    /** Burns geoms (and values or Z) into a new raster at origin with given pixel dimensions; returns (Dataset, metadata). Caller must release. */
     def executeRasterize(
         geoms: Seq[Geometry],
         values: Option[Seq[Double]],
@@ -118,20 +96,7 @@ object GDALRasterize {
         (newRaster, newOptions)
     }
 
-    /**
-      * Writes the geometries and values to a DataSource object.
-      *
-      * @param geoms
-      *   The geometries to write to the DataSource.
-      * @param valuesToBurn
-      *   The values to burn into the raster.
-      * @param format
-      *   The format of the DataSource (driver that should be used).
-      * @param path
-      *   The path to write the DataSource to.
-      * @return
-      *   A DataSource object containing the geometries and values.
-      */
+    /** Creates an OGR in-memory (or file) DataSource with a layer of geoms and value field; caller must dispose. */
     private def writeToDataSource(
         geoms: Seq[Geometry],
         valuesToBurn: Seq[Double],

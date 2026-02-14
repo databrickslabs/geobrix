@@ -1,0 +1,162 @@
+---
+sidebar_position: 16
+title: Developers
+---
+
+# Developers
+
+This page is for contributors and developers working in the GeoBrix repository. It describes how the project is organized and how to use the Cursor integration (rules, commands, agents, and skills) effectively.
+
+## How the project is organized
+
+GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and tooling share the same root and are wired for Databricks and local development.
+
+### Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `src/main/scala/com/databricks/labs/gbx/` | Core implementation: readers, expressions, RasterX, GridX, VectorX |
+| `src/test/scala/` | Scala unit and integration tests |
+| `python/geobrix/` | Python package: PySpark bindings and sample-data bundle |
+| `docs/` | Docusaurus site: `docs/` (content), `src/` (components), tests under `docs/tests/` |
+| `notebooks/` | Sample notebooks (e.g. `sample-data/setup_sample_data.ipynb`) and `notebooks/tests/` |
+| `scripts/` | CI, Docker, and one-off scripts |
+| `sample-data/` | Scripts and outputs for sample data (host); in-cluster uses Volumes path |
+| `.cursor/` | Cursor integration: **rules**, **commands**, **agents**, **skills** (see below) |
+
+### Packages and readers
+
+- **RasterX** — Raster operations and expressions (GDAL-backed); `rst_*` / `gbx_rst_*`.
+- **GridX** — Grid systems (BNG, H3); `bng_*` / `gbx_bng_*`.
+- **VectorX** — Vector geometry and OGR-backed readers; `st_*` / `gbx_st_*`.
+- **Readers** — Format-specific data sources (GDAL, OGR, GeoTIFF, Shapefile, GeoJSON, GeoPackage, etc.) registered as Spark data sources.
+
+### Tests and docs
+
+- **Unit tests**: `src/test/scala/` (Scala), `python/geobrix/test/` (Python).
+- **Documentation tests**: `docs/tests/python/`, `docs/tests/scala/` — validate code examples used in the docs; single source of truth.
+- **Notebook tests**: `notebooks/tests/` mirrors `notebooks/`; run via Cursor commands or CI.
+
+Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; many Cursor commands run inside that container.
+
+---
+
+## Cursor
+
+The repo includes a full Cursor setup so that both humans and AI agents can run tests, coverage, docs, and Docker in a consistent way. The main pieces are **rules**, **commands**, **agents**, and **skills**.
+
+### Rules
+
+**Rules** are persistent guidance that shape how agents (and developers) should behave. They live in `.cursor/rules/` as `.mdc` files.
+
+- **Always-applied rules** — Loaded every session (e.g. `00-agent-context.mdc`, behavior and progress rules).
+- **Topic- or file-scoped rules** — Applied when relevant (e.g. test organization, docs single-source, GDAL resource management, Maven config).
+
+The **entry point** is `00-agent-context.mdc`: it defines how to delegate work (topic → subagent), where to find finer rule detail (topic → rule files), and the difference between commands, skills, and rules. When in doubt, check that rule and the topic→rule table there.
+
+### Commands
+
+**Commands** are invocable actions. Prefer them over ad-hoc shell for tests, coverage, docs, Docker, and data so behavior is consistent and reproducible.
+
+#### How to invoke
+
+- **From Cursor UI** — Use the command palette (e.g. type `/` or the command name) and run the desired `gbx:*` command. Each command is backed by a `.md` (registration) and a `.sh` (implementation) in `.cursor/commands/`.
+- **From a shell** — Run the script directly, e.g. `bash .cursor/commands/gbx-test-scala.sh [OPTIONS]`. Useful in terminals or when an agent runs them via the Shell tool.
+
+#### Naming
+
+Commands follow **`gbx:<category>:<action>`**:
+
+| Category | Purpose |
+|----------|---------|
+| `test` | Run tests (Scala, Python, docs, SQL docs, notebooks, function-info) |
+| `coverage` | Code coverage (Scala/Python, unit/docs, gaps, baseline, package-targeted) |
+| `data` | Sample data download (essential / complete bundle) |
+| `docs` | Documentation server (start, stop, restart, dev, serve-local, function-info, prompt-session) |
+| `docker` | Container lifecycle (exec, start, stop, restart, rebuild, attach) |
+
+#### When to use which command
+
+Use the following by task; always prefer the command over manual shell for these operations.
+
+**Testing**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:test:scala` | After Scala changes, before commit | Runs Scala unit tests (excludes doc tests); supports `--suite` |
+| `gbx:test:python` | After Python changes | Runs Python unit tests in `python/geobrix/test/` |
+| `gbx:test:scala-docs` | After changing Scala doc examples | Runs Scala doc tests in `docs/tests/scala/` |
+| `gbx:test:python-docs` | After changing Python doc examples | Runs Python doc tests in `docs/tests/python/` (default: no integration) |
+| `gbx:test:sql-docs` | After changing SQL API examples | Runs SQL (and Python API) doc tests in `docs/tests/python/api/` |
+| `gbx:test:docs` | Before PR that touches docs | Runs all doc tests (Python + Scala) |
+| `gbx:test:function-info` | After changing function-info or doc SQL | Regenerates function-info and runs DESCRIBE/coverage tests |
+| `gbx:test:notebooks` | After changing sample-data or notebook runner | Runs notebook tests; use `--include-integration` for full run |
+
+**Coverage** (Scala coverage is slow; use strategically)
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:coverage:gaps` | See where to focus | Shows package-level gaps (no test run) |
+| `gbx:coverage:scala-package` | After changes in one package | Runs coverage for one package (e.g. `rasterx`, `gridx`) |
+| `gbx:coverage:baseline` | Weekly or before release | Full Scala or Python baseline |
+| `gbx:coverage:scala` | Full Scala coverage (sparingly) | Full scoverage; use `--report-only` to view last run |
+| `gbx:coverage:python` | After Python changes | Python unit test coverage (fast) |
+| `gbx:coverage:scala-docs` / `gbx:coverage:python-docs` | After doc test changes | Coverage for doc test suites |
+
+**Data**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:data:download` | Need sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
+
+**Documentation**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:docs:start` | Serve docs (one-off) | Builds (optional) and starts server on port 3000 |
+| `gbx:docs:stop` | Free port or before another docs command | Stops any running docs server |
+| `gbx:docs:dev` | While editing docs | Dev server with hot reload |
+| `gbx:docs:serve-local` | Preview production build | Build then serve static site |
+| `gbx:docs:restart` | Restart after stop | Stop + start with same options |
+| `gbx:docs:function-info` | After changing doc SQL examples | Regenerates `function-info.json` from doc SQL |
+| `gbx:prompt-session` | Start of session or context switch | Prints agent-context rule for review |
+
+**Docker**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:docker:start` | First time or after stop | Starts `geobrix-dev` container |
+| `gbx:docker:stop` | When done developing | Stops container |
+| `gbx:docker:exec` | Run Maven, pytest, etc. | Runs a command (or interactive shell) in container |
+| `gbx:docker:attach` | Interactive shell in container | Attach to running container |
+| `gbx:docker:restart` | After config change | Restart container |
+| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image and optionally start |
+
+Most commands accept `--help`. Common options: `--log <path>` for test/output logs, `--open` for coverage reports, and command-specific flags (e.g. `--suite`, `--path`, `--skip-build`).
+
+### Agents (subagents)
+
+**Agents** (subagents) are topic-owned “specialists” defined under `.cursor/agents/`. Each has an `.md` file (e.g. `test.md`, `coverage.md`, `docs.md`, `docker.md`, `rasterx.md`, `gridx.md`, `vectorx.md`, `gdal.md`, `data.md`, `function-info.md`).
+
+- They **own** the `gbx:*` commands for their topic and hold detailed knowledge for that area.
+- **When to delegate**: Use them for domain work (e.g. “run tests”, “fix coverage”, “docs server”, “Docker”, “RasterX API”, “GDAL drivers”). The topic → subagent table in `00-agent-context.mdc` is the canonical list.
+- Invoking a subagent should include the root Cursor rule (or `00-agent-context`) so the invoked agent has project context.
+
+### Skills
+
+**Skills** are reusable **procedures** (step-by-step guidance), not runnable commands. They live under `.cursor/skills/` (e.g. `add-or-fix-gbx-command/`, `create-cursor-rule/`).
+
+- **When to use**: For “how to do X in a standard way” — e.g. “add or fix a GeoBrix command”, “create or update a Cursor rule”. An agent (or you) follows the skill’s instructions.
+- **Add/fix command**: Use the **add-or-fix-gbx-command** skill when adding a new `gbx:*` command or fixing an existing one; then the subagent for that command’s topic can own further improvements.
+- **Create/update rule**: Use the **create-cursor-rule** skill when creating or updating a rule; then update `00-agent-context` (topic→rules) and the owning subagent if needed.
+
+---
+
+## Quick reference
+
+- **Run tests**: `gbx:test:*` (pick the scope: scala, python, docs, notebooks, etc.).
+- **Coverage**: Prefer `gbx:coverage:gaps` and `gbx:coverage:scala-package` for Scala; `gbx:coverage:python` is fast.
+- **Docs**: `gbx:docs:dev` while editing; `gbx:docs:stop` to stop.
+- **Docker**: `gbx:docker:start` then `gbx:docker:exec` (or `attach`) for builds and tests.
+- **Context**: `gbx:prompt-session` to print the agent-context rule.
+- **Full command list and options**: See `.cursor/rules/cursor-commands.mdc` in the repo.

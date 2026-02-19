@@ -24,13 +24,12 @@ show_help() {
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers (e.g. \"not slow\")"
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
     echo -e "  ${GREEN}--skip-build${NC}           Skip Maven and Python build"
-    echo -e "  ${GREEN}--skip-download${NC}        Skip sample-data download"
-    echo -e "  ${GREEN}--data-bundle <type>${NC}   essential|complete|both (default: complete)"
+    echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
     echo -e "  ${GREEN}--help${NC}                 This help"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
-    echo -e "  ${YELLOW}gbx:test:sql-docs --skip-build --skip-download${NC}"
-    echo -e "  ${YELLOW}gbx:test:sql-docs --test api/test_sql_api.py --skip-build --skip-download${NC}"
+    echo -e "  ${YELLOW}gbx:test:sql-docs --skip-build${NC}"
+    echo -e "  ${YELLOW}gbx:test:sql-docs --test api/test_sql_api.py --skip-build${NC}"
     echo -e "  ${YELLOW}gbx:test:sql-docs --log sql-docs.log${NC}"
     echo ""
 }
@@ -41,8 +40,8 @@ LOG_PATH=""
 MARKERS="-m 'not integration'"
 INCLUDE_INTEGRATION=false
 SKIP_BUILD=false
-SKIP_DOWNLOAD=false
-DATA_BUNDLE="complete"
+# Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
+SET_SAMPLE_DATA_ROOT=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -71,17 +70,9 @@ while [[ $# -gt 0 ]]; do
             SKIP_BUILD=true
             shift
             ;;
-        --skip-download)
-            SKIP_DOWNLOAD=true
+        --no-sample-data-root)
+            SET_SAMPLE_DATA_ROOT=false
             shift
-            ;;
-        --data-bundle)
-            DATA_BUNDLE="$2"
-            if [[ ! "$DATA_BUNDLE" =~ ^(essential|complete|both)$ ]]; then
-                echo -e "${RED}❌ Invalid data bundle: $DATA_BUNDLE${NC}"
-                exit 1
-            fi
-            shift 2
             ;;
         --help|-h)
             show_help
@@ -107,26 +98,18 @@ if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
     exit 1
 fi
 
-if [ "$SKIP_DOWNLOAD" = false ]; then
-    echo -e "${CYAN}📥 Ensuring sample data (--data-bundle $DATA_BUNDLE)...${NC}"
-    show_separator
-    if ! bash "$SCRIPT_DIR/gbx-data-download.sh" --bundle "$DATA_BUNDLE"; then
-        echo -e "${RED}❌ Sample data download failed. Use --skip-download if data is present.${NC}"
-        exit 1
-    fi
-    show_separator
-    echo ""
-else
-    echo -e "${CYAN}⏭️  Skipping sample-data download (--skip-download)${NC}"
-fi
-
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
 [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build (--skip-build)${NC}"
 echo ""
 
+# Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
+SAMPLE_DATA_ROOT_EXPORT=""
+[ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data"
+
 RUN_CMD="set -e
 unset JAVA_TOOL_OPTIONS
 export JUPYTER_PLATFORM_DIRS=1
+$SAMPLE_DATA_ROOT_EXPORT
 cd /root/geobrix
 if [ ! -d /Volumes ]; then echo '❌ /Volumes not found'; exit 1; fi
 if [ \"$SKIP_BUILD\" != 'true' ]; then
@@ -148,6 +131,13 @@ docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""
+# Short test summary when logging (pytest-style: FAILED/SKIPPED + totals)
+if [ -n "$LOG_PATH" ] && [ -f "$LOG_PATH" ]; then
+    echo -e "${BLUE}=== Short test summary (SQL) ===${NC}"
+    (grep -E '^FAILED |^SKIPPED ' "$LOG_PATH" 2>/dev/null || true)
+    (grep -E '(failed|passed|skipped|deselected).* in [0-9]+\.' "$LOG_PATH" 2>/dev/null | tail -1 || true)
+    echo ""
+fi
 show_separator
 if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}✅ SQL documentation tests passed!${NC}"

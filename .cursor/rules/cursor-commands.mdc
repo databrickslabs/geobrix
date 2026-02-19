@@ -62,17 +62,17 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 4. **`gbx:test:python-docs`** - Python documentation tests
    - Location: `docs/tests/python/`
    - Default: Excludes integration tests
-   - Example: `gbx:test:python-docs --suite api --skip-build --skip-download`
+   - Example: `gbx:test:python-docs --suite api --skip-build`
 
 5. **`gbx:test:sql-docs`** - SQL (and Python API) documentation tests
    - Location: `docs/tests/python/api/` (SQL API Reference examples)
-   - Options: `--log`, `--test`, `--path`, `--skip-build`, `--skip-download`, `--data-bundle`
-   - Example: `gbx:test:sql-docs --skip-build --skip-download --log sql-docs.log`
+   - Options: `--log`, `--test`, `--path`, `--skip-build`
+   - Example: `gbx:test:sql-docs --skip-build --log sql-docs.log`
 
 6. **`gbx:test:docs`** - All documentation tests (Python, Scala, and SQL)
-   - Runs Python doc tests then Scala doc tests (same as run-doc-tests.sh local)
-   - Options: `--log`, `--suite`, `--path`, `--test`, `--skip-build`, `--skip-download`, `--scala-suite`, `--python-only`, `--scala-only`
-   - Example: `gbx:test:docs --skip-build --skip-download --log docs.log`
+   - Runs Python doc tests then Scala doc tests (same as run-doc-tests.sh local). Uses in-repo minimal bundle; no download step.
+   - Options: `--log`, `--suite`, `--path`, `--test`, `--skip-build`, `--scala-suite`, `--python-only`, `--scala-only`
+   - Example: `gbx:test:docs --skip-build --log docs.log`
 
 7. **`gbx:test:function-info`** - Function-info inventory and DESCRIBE/coverage tests
    - By default: runs `docs/scripts/generate-function-info.py` (and optionally `--add-placeholders` if supported) then pytest in `docs/tests-function-info/`
@@ -156,9 +156,19 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
    - Output: `sample-data/Volumes/main/default/geobrix_samples/`
    - Example: `gbx:data:download --bundle complete`
 
-10. **`gbx:data:push-wheel`** - Build Python wheel and upload to Volume
-    - Builds wheel from `python/geobrix`, uploads to **GBX_BUNDLE_WHEEL_VOLUME_PATH** (overwrite)
-    - Config: `databricks_cluster_config.env` with GBX_BUNDLE_WHEEL_VOLUME_PATH, DATABRICKS_HOST, DATABRICKS_TOKEN
+10. **`gbx:data:generate-minimal-bundle`** - Generate minimal doc-test bundle from full sample-data
+   - Extracts by bbox around NYC (default: Manhattan center) and London (default: London center); vector max-rows (default 10), raster clipped to bbox
+   - Output: `sample-data/Volumes/main/default/test-data/geobrix-examples/`; use path token for doc tests
+   - Options: `--nyc-lon`, `--nyc-lat`, `--london-lon`, `--london-lat`, `--bbox-size`, `--max-rows`, `--source`, `--out`
+   - Example: `gbx:data:generate-minimal-bundle` (run after full bundle download)
+
+11. **`gbx:data:push-wheel`** - Build wheel and upload to Volume
+   - Builds JAR first (unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1), then **python3 -m build** and uploads wheel to **GBX_ARTIFACT_VOLUME**/ (overwrite if exists)
+   - Config: **GBX_ARTIFACT_VOLUME**, DATABRICKS_*; optional GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1, GBX_BUNDLE_SKIP_JAR_UPLOAD=1
+
+12. **`gbx:data:push-jar`** - Build JAR and upload to Volume
+   - Runs **mvn clean package -DskipTests**, uploads *-jar-with-dependencies.jar to **GBX_ARTIFACT_VOLUME**/ (overwrite if exists)
+   - Config: **GBX_ARTIFACT_VOLUME**, DATABRICKS_*; optional GBX_BUNDLE_SKIP_JAR_UPLOAD=1
 
 ### Documentation Commands
 
@@ -421,7 +431,9 @@ Start the development container first:
 
 **Data Commands**:
 - `gbx-data-download.sh` / `.md`
+- `gbx-data-generate-minimal-bundle.sh` / `.md`
 - `gbx-data-push-wheel.sh` / `.md`
+- `gbx-data-push-jar.sh` / `.md`
 
 **Documentation Commands**:
 - `gbx-docs-start.sh` / `.md`

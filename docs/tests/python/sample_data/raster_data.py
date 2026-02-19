@@ -199,22 +199,25 @@ output_dir = Path(f"{sample_path}/nyc-elevation")
 output_dir.mkdir(parents=True, exist_ok=True)
 
 for tile in tiles:
-    # AWS SRTM format: .hgt.gz (gzipped raw binary elevation)
+    # AWS SRTM format: .hgt.gz; we convert to GeoTIFF so GDAL (GTiff) works everywhere
     lat_dir = tile[:3]  # e.g., "N40"
     url = f'https://elevation-tiles-prod.s3.amazonaws.com/skadi/{lat_dir}/{tile}.hgt.gz'
-    output_file = output_dir / f"srtm_{tile.lower()}.hgt"
+    hgt_file = output_dir / f"srtm_{tile.lower()}.hgt"
+    tif_file = output_dir / f"srtm_{tile.lower()}.tif"
     
     print(f"Downloading SRTM {tile}...")
     response = requests.get(url, stream=True)
     response.raise_for_status()
-    
-    # Decompress gzip on the fly
     with gzip.open(io.BytesIO(response.content), 'rb') as f_in:
-        with open(output_file, 'wb') as f_out:
+        with open(hgt_file, 'wb') as f_out:
             shutil.copyfileobj(f_in, f_out)
-    
-    file_size = output_file.stat().st_size / (1024 * 1024)
-    print(f"✅ Downloaded SRTM {tile} ({file_size:.1f} MB)")
+    # Convert to GeoTIFF (GDAL supports GTiff; .hgt/SRTMHGT is optional)
+    import subprocess
+    subprocess.run(["gdal_translate", "-q", "-of", "GTiff", str(hgt_file), str(tif_file)], check=True)
+    if tif_file.exists():
+        file_size = tif_file.stat().st_size / (1024 * 1024)
+        print(f"✅ Downloaded SRTM {tile} ({file_size:.1f} MB GeoTIFF)")
+    hgt_file.unlink(missing_ok=True)
 
 print(f"\\n✅ NYC elevation data ready at: {output_dir}")
 
@@ -222,7 +225,7 @@ print(f"\\n✅ NYC elevation data ready at: {output_dir}")
 from databricks.labs.gbx.rasterx import functions as rx
 rx.register(spark)
 
-elevation = spark.read.format("gdal").load(f"{output_dir}/*.hgt")
+elevation = spark.read.format("gdal").load(f"{output_dir}/*.tif")
 elevation.select(
     "path",
     rx.rst_min("tile").alias("min_elevation"),
@@ -238,12 +241,12 @@ Downloading SRTM N40W073...
 +--------------------+-------------+-------------+-------------+
 |path                |min_elevation|max_elevation|avg_elevation|
 +--------------------+-------------+-------------+-------------+
-|.../srtm_n40w074.hgt|-2.0         |389.0        |45.2         |
-|.../srtm_n40w073.hgt|-1.0         |124.0        |18.1         |
+|.../srtm_n40w074.tif|-2.0         |389.0        |45.2         |
+|.../srtm_n40w073.tif|-1.0         |124.0        |18.1         |
 +--------------------+-------------+-------------+-------------+"""
 
 USAGE_SRTM_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-elevation = spark.read.format("gdal").load(f"{sample_path}/nyc-elevation/srtm_n40w074.hgt")"""
+elevation = spark.read.format("gdal").load(f"{sample_path}/nyc-elevation/srtm_n40w074.tif")"""
 
 DOWNLOAD_SRTM_LONDON = """# Download SRTM Elevation Tile for London (from AWS Public Data)
 import requests
@@ -261,26 +264,27 @@ url = f'https://elevation-tiles-prod.s3.amazonaws.com/skadi/{lat_dir}/{tile}.hgt
 # Output directory (each dataset in its own subfolder)
 output_dir = Path(f"{sample_path}/london-elevation")
 output_dir.mkdir(parents=True, exist_ok=True)
-output_file = output_dir / "srtm_n51w001.hgt"
+hgt_file = output_dir / "srtm_n51w001.hgt"
+tif_file = output_dir / "srtm_n51w001.tif"
 
 print("Downloading SRTM London area...")
 response = requests.get(url, stream=True)
 response.raise_for_status()
-
-# Decompress gzip on the fly
 with gzip.open(io.BytesIO(response.content), 'rb') as f_in:
-    with open(output_file, 'wb') as f_out:
+    with open(hgt_file, 'wb') as f_out:
         shutil.copyfileobj(f_in, f_out)
-
-file_size = output_file.stat().st_size / (1024 * 1024)
-print(f"✅ Downloaded SRTM London ({file_size:.1f} MB)")
-print(f"   Path: {output_file}")
+import subprocess
+subprocess.run(["gdal_translate", "-q", "-of", "GTiff", str(hgt_file), str(tif_file)], check=True)
+hgt_file.unlink(missing_ok=True)
+file_size = tif_file.stat().st_size / (1024 * 1024)
+print(f"✅ Downloaded SRTM London ({file_size:.1f} MB GeoTIFF)")
+print(f"   Path: {tif_file}")
 
 # Verify
 from databricks.labs.gbx.rasterx import functions as rx
 rx.register(spark)
 
-elevation = spark.read.format("gdal").load(str(output_file))
+elevation = spark.read.format("gdal").load(str(tif_file))
 elevation.select(
     rx.rst_min("tile").alias("min_elevation"),
     rx.rst_max("tile").alias("max_elevation")
@@ -288,7 +292,7 @@ elevation.select(
 
 DOWNLOAD_SRTM_LONDON_output = """Downloading SRTM London area...
 ✅ Downloaded SRTM London (24.7 MB)
-   Path: .../london-elevation/srtm_n51w001.hgt
+   Path: .../london-elevation/srtm_n51w001.tif
 +-------------+-------------+
 |min_elevation|max_elevation|
 +-------------+-------------+
@@ -296,7 +300,7 @@ DOWNLOAD_SRTM_LONDON_output = """Downloading SRTM London area...
 +-------------+-------------+"""
 
 USAGE_SRTM_LONDON = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
-elevation_london = spark.read.format("gdal").load(f"{sample_path}/london-elevation/srtm_n51w001.hgt")"""
+elevation_london = spark.read.format("gdal").load(f"{sample_path}/london-elevation/srtm_n51w001.tif")"""
 
 DOWNLOAD_HRRR_NYC = """# Download NOAA HRRR NetCDF for NYC area
 import requests

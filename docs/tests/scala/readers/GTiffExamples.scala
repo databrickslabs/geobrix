@@ -1,6 +1,7 @@
 package tests.docs.scala.readers
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import tests.docs.scala.SampleDataPath
 
 /**
   * GeoTIFF Reader Examples - Single Source of Truth
@@ -31,11 +32,11 @@ object GTiffExamples {
     """SELECT * FROM gtiff_gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif` LIMIT 10;"""
 
   // Test methods (validate logic) - used by ScalaTest
-  def readGTiff(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"): DataFrame = {
+  def readGTiff(spark: SparkSession, path: String = SampleDataPath.nycSentinel2): DataFrame = {
     spark.read.format("gtiff_gdal").load(path)
   }
 
-  def readWithOptions(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"): DataFrame = {
+  def readWithOptions(spark: SparkSession, path: String = SampleDataPath.nycSentinel2): DataFrame = {
     spark.read.format("gtiff_gdal")
       .option("readSubdatasets", "false")
       .load(path)

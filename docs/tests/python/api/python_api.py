@@ -8,11 +8,12 @@ All paths use sample data from the mounted Volumes (see docs/docs/sample-data.md
 Run doc tests in Docker where /Volumes/main/default/geobrix_samples/geobrix-examples/ is available.
 """
 
-# Sample data paths (mounted Volumes; match conftest.SAMPLE_DATA_BASE)
-SAMPLE_DATA_BASE = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+# Sample data paths at runtime (path_config: minimal bundle or GBX_SAMPLE_DATA_ROOT)
+from path_config import SAMPLE_DATA_BASE
+
 SAMPLE_NYC_RASTER = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 SAMPLE_NYC_RASTERS = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/*.tif"
-SAMPLE_NYC_ELEVATION = f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.hgt"
+SAMPLE_NYC_ELEVATION = f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.tif"
 
 # Conditional imports for documentation testing
 try:
@@ -49,7 +50,7 @@ def import_pattern_rasterx(spark):
     # Register functions
     rx.register(spark)
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     
     # Use functions
@@ -90,7 +91,7 @@ def rst_boundingbox_example(spark):
     """Get the bounding box of a raster."""
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     bbox_df = rasters.select(
         "path",
@@ -104,7 +105,7 @@ def rst_width_example(spark):
     """Get raster width in pixels."""
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     width_df = rasters.select(rx.rst_width("tile").alias("width"))
     width_df.limit(1).show()
@@ -115,7 +116,7 @@ def rst_height_example(spark):
     """Get raster height in pixels."""
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     height_df = rasters.select(rx.rst_height("tile").alias("height"))
     height_df.limit(1).show()
@@ -126,7 +127,7 @@ def rst_numbands_example(spark):
     """Get number of bands in raster."""
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     bands_df = rasters.select(rx.rst_numbands("tile").alias("num_bands"))
     bands_df.limit(1).show()
@@ -137,7 +138,7 @@ def rst_metadata_example(spark):
     """Get raster metadata."""
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     metadata_df = rasters.select(rx.rst_metadata("tile").alias("metadata"))
     metadata_df.limit(1).show(truncate=False)
@@ -148,7 +149,7 @@ def rst_srid_example(spark):
     """Get spatial reference identifier."""
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     srid_df = rasters.select(rx.rst_srid("tile").alias("srid"))
     srid_df.limit(1).show()
@@ -161,7 +162,7 @@ def rst_clip_example(spark):
     from pyspark.sql.functions import lit
     
     rx.register(spark)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     clip_wkt = "POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))"
     clipped = rasters.select(
@@ -179,7 +180,7 @@ def rasterx_complete_example(spark):
     # Register functions
     rx.register(spark)
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     
     # Extract metadata and process
@@ -277,7 +278,7 @@ def dataframe_select_operations(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     df = spark.read.format("gdal").load(raster_path)
     
     # Single function
@@ -303,7 +304,7 @@ def dataframe_filter_operations(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     df = spark.read.format("gdal").load(raster_path)
     
     # Filter based on GeoBrix function results
@@ -325,7 +326,7 @@ def dataframe_withcolumn_operations(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     df = spark.read.format("gdal").load(raster_path)
     
     # Add new columns
@@ -348,7 +349,7 @@ def using_with_sql(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     # Create temp view
     rasters.createOrReplaceTempView("rasters")
@@ -390,7 +391,7 @@ def type_hints_and_ide_support(spark):
             rx.rst_height("tile").alias("height")
         )
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     rasters = spark.read.format("gdal").load(raster_path)
     result = process_rasters(rasters)
     return result
@@ -400,7 +401,7 @@ def error_handling_example(spark):
     """Error handling example."""
     from databricks.labs.gbx.rasterx import functions as rx
     
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_NYC_RASTER
     df = spark.read.format("gdal").load(raster_path)
     
     try:

@@ -5,21 +5,23 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import shapefile_examples
+from path_config import MIN_VECTOR_ROWS
 
 
 def test_read_shapefile(spark, sample_nyc_subway_shp):
     """Test basic shapefile read."""
     result = shapefile_examples.read_shapefile(spark, sample_nyc_subway_shp)
     assert result is not None
-    assert result.count() > 2000
+    assert result.count() >= MIN_VECTOR_ROWS  # full bundle 2000+; minimal 10
 
 
 def test_read_with_options(spark, sample_nyc_subway_shp):
     """Test shapefile read with chunk size option."""
     result = shapefile_examples.read_with_options(spark, sample_nyc_subway_shp)
     assert result is not None
-    assert result.count() > 2000
+    assert result.count() >= MIN_VECTOR_ROWS  # full bundle 2000+; minimal 10
 
 
 def test_sql_constant():

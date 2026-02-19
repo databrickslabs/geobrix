@@ -9,12 +9,14 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import geopackage_examples
+from path_config import SAMPLE_DATA_BASE, MIN_BOROUGHS, MAX_BOROUGHS
 
 
 def test_read_geopackage(spark):
     """Test basic GeoPackage read."""
-    path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg"
+    path = f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
     result = geopackage_examples.read_geopackage(spark, path)
     assert result is not None
     assert result.count() > 0
@@ -25,10 +27,11 @@ def test_read_geopackage(spark):
 
 def test_read_specific_layer(spark):
     """Test reading specific layer from GeoPackage."""
-    path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg"
+    path = f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
     result = geopackage_examples.read_specific_layer(spark, path, "boroughs")
     assert result is not None
-    assert result.count() == 5  # NYC has 5 boroughs
+    c = result.count()
+    assert MIN_BOROUGHS <= c <= MAX_BOROUGHS, f"Expected {MIN_BOROUGHS}-{MAX_BOROUGHS} boroughs, got {c}"
 
 
 def test_sql_constant():

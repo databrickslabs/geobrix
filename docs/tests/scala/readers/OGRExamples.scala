@@ -1,6 +1,7 @@
 package tests.docs.scala.readers
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import tests.docs.scala.SampleDataPath
 
 /**
   * OGR Reader Examples - Single Source of Truth
@@ -32,11 +33,11 @@ object OGRExamples {
     """SELECT * FROM ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson`;"""
 
   // Test methods (validate logic) - used by ScalaTest
-  def readOGR(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson"): DataFrame = {
+  def readOGR(spark: SparkSession, path: String = SampleDataPath.nycBoroughs): DataFrame = {
     spark.read.format("ogr").load(path)
   }
 
-  def readWithDriver(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson"): DataFrame = {
+  def readWithDriver(spark: SparkSession, path: String = SampleDataPath.nycBoroughs): DataFrame = {
     spark.read.format("ogr")
       .option("driverName", "GeoJSON")
       .load(path)

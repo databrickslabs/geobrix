@@ -18,6 +18,7 @@ try:
         _ensure_dir,
         download_to_path,
         download_srtm_to_path,
+        srtm_hgt_to_geotiff,
     )
 except ImportError as e:
     raise RuntimeError(
@@ -29,6 +30,7 @@ __all__ = [
     "_ensure_dir",
     "download_to_path",
     "download_srtm_to_path",
+    "srtm_hgt_to_geotiff",
     "get_temp_dir",
     "get_volumes_path",
     "run_complete_bundle",

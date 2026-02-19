@@ -6,12 +6,13 @@ Uses sample-data Volumes path; output constants for Example output blocks.
 """
 
 # Sample-data Volumes paths (same as other reader/sample-data docs)
-SAMPLE_RASTER_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
-SAMPLE_HRRR_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/hrrr-weather/hrrr_nyc_*.grib2"
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
+SAMPLE_HRRR_PATH = f"{SAMPLE_DATA_BASE}/nyc/hrrr-weather/hrrr_nyc_*.grib2"
 
 # Display constants (payload only)
 READ_GDAL = """# Read raster file (sample-data Volumes path)
-df = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+df = spark.read.format("gdal").load("{SAMPLE_RASTER_PATH}")
 df.show()"""
 
 READ_GDAL_output = """+--------------------------------------------------+-----+
@@ -23,7 +24,7 @@ READ_GDAL_output = """+--------------------------------------------------+-----+
 READ_WITH_DRIVER = """# Read with explicit driver (sample-data Volumes path)
 df = spark.read.format("gdal") \\
     .option("driver", "GTiff") \\
-    .load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+    .load("{SAMPLE_RASTER_PATH}")
 df.show()"""
 
 READ_WITH_DRIVER_output = """+--------------------------------------------------+-----+
@@ -33,7 +34,7 @@ READ_WITH_DRIVER_output = """+--------------------------------------------------
 +--------------------------------------------------+-----+"""
 
 SQL_GDAL = """-- Read raster in SQL (sample-data Volumes path)
-SELECT * FROM gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif` LIMIT 10;"""
+SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}` LIMIT 10;"""
 
 SQL_GDAL_output = """+--------------------------------------------------+-----+
 |path                                              |tile |
@@ -45,7 +46,7 @@ SQL_GDAL_output = """+--------------------------------------------------+-----+
 READ_GRIB2 = """# GRIB2 weather data (sample-data HRRR)
 df = spark.read.format("gdal") \\
     .option("driver", "GRIB") \\
-    .load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/hrrr-weather/hrrr_nyc_*.grib2")"""
+    .load("{SAMPLE_HRRR_PATH}")"""
 
 READ_GRIB2_output = """+--------------------------------------------------+-----+
 |path                                              |tile |

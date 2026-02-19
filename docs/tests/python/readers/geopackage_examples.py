@@ -5,8 +5,9 @@ All code examples shown in docs/docs/readers/geopackage.mdx are imported from th
 Uses sample-data Volumes path; output constants for Example output blocks.
 """
 
-# Sample-data Volumes path (NYC complete GeoPackage)
-SAMPLE_GEOPACKAGE_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg"
+# Sample-data path at runtime (path_config)
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_GEOPACKAGE_PATH = f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
 
 # Display constants (payload only)
 READ_GEOPACKAGE = """# Read GeoPackage (sample-data Volumes path)

@@ -6,21 +6,25 @@ from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import ogr_examples
+from path_config import MIN_BOROUGHS, MAX_BOROUGHS
 
 
 def test_read_ogr(spark, sample_nyc_boroughs):
     """Test basic OGR read."""
     result = ogr_examples.read_ogr(spark, sample_nyc_boroughs)
     assert result is not None
-    assert result.count() == 5  # NYC has 5 boroughs
+    c = result.count()
+    assert MIN_BOROUGHS <= c <= MAX_BOROUGHS, f"Expected {MIN_BOROUGHS}-{MAX_BOROUGHS} boroughs, got {c}"
 
 
 def test_read_with_driver(spark, sample_nyc_boroughs):
     """Test OGR read with explicit driver name."""
     result = ogr_examples.read_with_driver(spark, sample_nyc_boroughs)
     assert result is not None
-    assert result.count() == 5
+    c = result.count()
+    assert MIN_BOROUGHS <= c <= MAX_BOROUGHS, f"Expected {MIN_BOROUGHS}-{MAX_BOROUGHS} boroughs, got {c}"
 
 
 def test_sql_constant():

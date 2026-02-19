@@ -73,9 +73,9 @@ pytest docs/tests/python/rasterx/ -v  # Wastes 3-5 minutes!
 - ❌ After every single test fix (too slow!)
 
 **Python doc tests (10+ min full suite):** use pinpointed runs for day-to-day work:
-- Single test: `gbx:test:python-docs --test quickstart/test_examples.py::test_foo --skip-build --skip-download`
+- Single test: `gbx:test:python-docs --test quickstart/test_examples.py::test_foo --skip-build`
 - Subset: `gbx:test:python-docs --suite quickstart` (or `api`, `readers`, `rasterx`, `advanced`, `setup`)
-- One file: `gbx:test:python-docs --path api/test_rasterx_functions_sql.py --skip-build --skip-download`
+- One file: `gbx:test:python-docs --path api/test_rasterx_functions_sql.py --skip-build`
 - Always use `--log test-logs/<name>-$(date +%Y%m%d-%H%M%S).log` for tracking long runs. See `.cursor/commands/gbx-test-python-docs.md` for suite timing and options.
 
 **Time Savings:**

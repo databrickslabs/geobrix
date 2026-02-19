@@ -23,7 +23,7 @@ Runs Python documentation tests from `docs/tests/python/` using pytest **inside 
 | One file | `--path api/test_rasterx_functions_sql.py` | varies |
 | Full suite | (no `--test`/`--suite`/`--path`) | **10+ min** |
 
-Use `--skip-build --skip-download` when the tree and sample data are already in place to avoid extra time.
+Use `--skip-build` when the tree is already built to avoid extra time. Doc tests use the in-repo minimal bundle (no download step).
 
 **Unit vs integration:** By default, integration tests are **excluded** (`-m "not integration"`). They require DBR or specific data paths. Use `--include-integration` to run them (e.g. on Databricks or when validating those flows). See `docs/tests/SKIPPED-TESTS-INVENTORY.md` for the list.
 
@@ -38,7 +38,7 @@ Use `--skip-build --skip-download` when the tree and sample data are already in 
 ## Default behavior (before pytest)
 
 1. **Volumes check** – Ensures `/Volumes` exists in the container. If not, script exits with instructions to run `./scripts/docker/start_docker_with_volumes.sh`.
-2. **Sample-data download** – Runs **gbx:data:download** with default `--bundle complete` (~795MB). Use `--skip-download` when data is already at `/Volumes/main/default/geobrix_samples/geobrix-examples/`. Doc tests require this data.
+2. **Sample data** – By default the command sets `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container so doc tests use the minimal bundle (host path `sample-data/Volumes/main/default/test-data`). This is required for remote/CI. Use `--no-sample-data-root` to leave it unset. No download step; use `gbx:data:generate-minimal-bundle` once if needed.
 3. **Maven** – `mvn package -DskipTests`.
 4. **Python build** – `python3 -m build` in `python/geobrix/`, then `pip install -e python/geobrix`. Use `--skip-build` when already built.
 
@@ -62,30 +62,29 @@ bash .cursor/commands/gbx-test-python-docs.sh [OPTIONS]
 - `--markers <markers>` – Pytest markers (e.g. `"not slow"`).
 - `--include-integration` – Include integration tests (excluded by default).
 - `--skip-build` – Skip Maven and Python build.
-- `--skip-download` – Skip sample-data download.
-- `--data-bundle <type>` – `essential` | `complete` (default) | `both`.
+- `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use your env or path_config default).
 - `--help` – Help and suite timing.
 
 ## Examples
 
 ```bash
-# Quickstart only, no build/download, with log (typical during edits)
-bash .cursor/commands/gbx-test-python-docs.sh --suite quickstart --skip-build --skip-download --log quickstart.log
+# Quickstart only, no build, with log (typical during edits)
+bash .cursor/commands/gbx-test-python-docs.sh --suite quickstart --skip-build --log quickstart.log
 
 # Single failing test
-bash .cursor/commands/gbx-test-python-docs.sh --test quickstart/test_examples.py::test_convert_to_databricks_geometry_with_nyc_data --skip-build --skip-download
+bash .cursor/commands/gbx-test-python-docs.sh --test quickstart/test_examples.py::test_convert_to_databricks_geometry_with_nyc_data --skip-build
 
 # One test file
-bash .cursor/commands/gbx-test-python-docs.sh --path api/test_rasterx_functions_sql.py --skip-build --skip-download
+bash .cursor/commands/gbx-test-python-docs.sh --path api/test_rasterx_functions_sql.py --skip-build
 
 # Full suite with timestamped log (e.g. before commit)
-bash .cursor/commands/gbx-test-python-docs.sh --skip-build --skip-download --log test-logs/python-docs-$(date +%Y%m%d-%H%M%S).log
+bash .cursor/commands/gbx-test-python-docs.sh --skip-build --log test-logs/python-docs-$(date +%Y%m%d-%H%M%S).log
 
-# Full run (build + download + all tests)
+# Full run (build + all tests; uses in-repo minimal bundle)
 bash .cursor/commands/gbx-test-python-docs.sh
 
 # Include integration tests (DBR / integration env)
-bash .cursor/commands/gbx-test-python-docs.sh --include-integration --skip-build --skip-download
+bash .cursor/commands/gbx-test-python-docs.sh --include-integration --skip-build
 ```
 
 ## Test layout and log location

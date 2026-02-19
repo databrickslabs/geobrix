@@ -5,8 +5,9 @@ All code examples shown in docs/docs/readers/filegdb.mdx are imported from this 
 Uses sample-data Volumes path; output constants for Example output blocks.
 """
 
-# Sample-data Volumes path (.gdb.zip; reader supports it via vsizip)
-FILEGDB_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/filegdb/NYC_Sample.gdb.zip"
+# Sample-data path at runtime (path_config)
+from path_config import SAMPLE_DATA_BASE
+FILEGDB_PATH = f"{SAMPLE_DATA_BASE}/nyc/filegdb/NYC_Sample.gdb.zip"
 
 # Display constants (payload only)
 READ_FILEGDB = """# Read File Geodatabase (sample-data Volumes path)

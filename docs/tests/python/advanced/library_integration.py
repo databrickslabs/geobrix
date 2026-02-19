@@ -16,7 +16,8 @@ xarray_install_snippet = """%pip install xarray rioxarray"""
 pdal_install_snippet = """%pip install pdal python-pdal"""
 
 # Sample-data Volumes path for runnable examples (same as gdal-cli)
-SAMPLE_RASTER_VOLUMES_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_RASTER_VOLUMES_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 # Conditional imports
 try:
@@ -49,7 +50,7 @@ def rasterio_compute_statistics(spark):
     Convert GeoBrix tiles to rasterio datasets for NumPy-based processing.
     """
     # Sample-data Volumes path (used by all rasterio examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
     from rasterio.io import MemoryFile
     from databricks.labs.gbx.rasterx import functions as rx
@@ -108,7 +109,7 @@ def rasterio_extract_metadata(spark):
     Access raster data and metadata within UDFs.
     """
     # Sample-data Volumes path (used by all rasterio examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
     from rasterio.io import MemoryFile
     import json
@@ -182,7 +183,7 @@ def rasterio_normalize_raster(spark):
     Normalize raster values using rasterio and NumPy. Uses sample-data Volumes path; runs UDF and shows results.
     """
     # Sample-data Volumes path (used by all rasterio examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
     from rasterio.io import MemoryFile
     import numpy as np
@@ -236,7 +237,7 @@ def rasterio_compute_ndvi(spark):
     (Sample NYC sentinel2 red is single-band so NDVI may be null; use multiband data for non-null.)
     """
     # Sample-data Volumes path (used by all rasterio examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
     from rasterio.io import MemoryFile
     import numpy as np
@@ -284,7 +285,7 @@ def rasterio_window_operations(spark):
     Process large rasters in windows. Uses sample-data Volumes path; runs UDF and shows results.
     """
     # Sample-data Volumes path (used by all rasterio examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
     from rasterio.io import MemoryFile
     from rasterio.windows import Window
@@ -359,7 +360,7 @@ def xarray_integration_basic(spark):
     Basic xarray integration with GeoBrix. Uses sample-data Volumes path; runs UDF and shows results.
     """
     # Sample-data Volumes path (used by all xarray examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import json
     from databricks.labs.gbx.rasterx import functions as rx
     from rasterio.io import MemoryFile
@@ -409,7 +410,7 @@ def xarray_multitemporal_analysis(spark):
     (Demo uses same raster as before/after; use two paths for real change detection.)
     """
     # Sample-data Volumes path (used by all xarray examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     from databricks.labs.gbx.rasterx import functions as rx
 
     @f.udf(StructType([
@@ -449,7 +450,7 @@ def xarray_resampling_aggregation(spark):
     Spatial resampling and aggregation with xarray. Uses sample-data Volumes path; runs UDF and shows results.
     """
     # Sample-data Volumes path (used by all xarray examples on this page)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
     from rasterio.io import MemoryFile
     from databricks.labs.gbx.rasterx import functions as rx
 
@@ -498,7 +499,7 @@ def pdal_integration_basic(spark):
     Process point cloud data from sample-data Volumes path; apply UDF to extract metadata.
     """
     # Sample-data Volumes path for point cloud (use your LAS/LAZ path if different)
-    point_cloud_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/pointcloud/sample.las"
+    point_cloud_path = f"{SAMPLE_DATA_BASE}/nyc/pointcloud/sample.las"
 
     @f.udf(StructType([
         StructField("point_count", IntegerType()),
@@ -561,8 +562,8 @@ def pdal_raster_integration_pattern(spark):
     Combined workflow: load raster from sample path, show pattern for adding PDAL (point cloud) path.
     """
     # Sample-data Volumes paths
-    point_cloud_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/pointcloud/sample.las"
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    point_cloud_path = f"{SAMPLE_DATA_BASE}/nyc/pointcloud/sample.las"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
 
     from databricks.labs.gbx.rasterx import functions as rx
 
@@ -602,7 +603,7 @@ def numpy_advanced_operations(spark):
     Load from sample path, apply convolution/gradient UDF via rasterio, show result.
     """
     # Sample-data Volumes path
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_VOLUMES_PATH
 
     import numpy as np
     import rasterio

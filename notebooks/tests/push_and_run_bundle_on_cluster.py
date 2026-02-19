@@ -6,15 +6,14 @@ Use this to test the bundle (or an updated _bundle.py) on a live Databricks clus
 the script uploads a small notebook that runs run_essential_bundle() on the cluster,
 then runs that notebook as a one-off job. The cluster must have GeoBrix installed
 (e.g. as a cluster library or via init script), or you can build a wheel and upload
-it to a Volume and set GBX_BUNDLE_WHEEL_VOLUME_PATH so the notebook installs it first.
+it to a Volume; set GBX_ARTIFACT_VOLUME (or GBX_BUNDLE_WHEEL_VOLUME_PATH) so the notebook installs it first.
 
 Requires: databricks-sdk, and env config (see databricks_cluster_config.example.env).
 
 Usage:
   1. Copy databricks_cluster_config.example.env to databricks_cluster_config.env.
   2. Set DATABRICKS_HOST, DATABRICKS_TOKEN (or profile), CLUSTER_ID, GBX_BUNDLE_VOLUME_*.
-  3. Optional: set GBX_BUNDLE_WHEEL_VOLUME_PATH to a wheel path on a Volume; script will
-     build wheel, upload there, and the runner notebook will %pip install it.
+  3. Optional: set GBX_ARTIFACT_VOLUME (or GBX_BUNDLE_WHEEL_VOLUME_PATH) for wheel; notebook will %pip install from that path.
   4. Run: python push_and_run_bundle_on_cluster.py [--no-wait]
 """
 from __future__ import annotations
@@ -47,6 +46,22 @@ if _env_file.exists():
                 k, v = k.strip(), v.strip()
                 if k and v and not os.environ.get(k):
                     os.environ[k] = _strip_invisible(v)
+
+
+def _geobrix_version() -> str:
+    """Read version from python package __init__.py (avoid heavy imports)."""
+    init_py = TESTS_DIR.parent.parent / "python" / "geobrix" / "src" / "databricks" / "labs" / "gbx" / "__init__.py"
+    if init_py.exists():
+        with open(init_py) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("__version__"):
+                    # __version__ = "0.2.0"
+                    if "=" in line:
+                        v = line.split("=", 1)[1].strip().strip("'\"").strip()
+                        if v:
+                            return v
+    return "0.2.0"
 
 
 def _notebook_json(
@@ -175,7 +190,13 @@ def main() -> int:
     if not bundle_notebook.endswith(".ipynb"):
         bundle_notebook = bundle_notebook.rstrip("/") + ".ipynb"
     notebook_path_from_env = (runner_dir.rstrip("/") + "/" + bundle_notebook) if (runner_dir and bundle_notebook) else os.environ.get("GBX_BUNDLE_RUNNER_NOTEBOOK_PATH")
-    wheel_volume_path = _strip_invisible(os.environ.get("GBX_BUNDLE_WHEEL_VOLUME_PATH") or "").strip() or None  # e.g. /Volumes/.../geobrix-0.2.0-py3-none-any.whl
+    # Wheel path for notebook pip cells: explicit path or derived from GBX_ARTIFACT_VOLUME
+    wheel_volume_path = _strip_invisible(os.environ.get("GBX_BUNDLE_WHEEL_VOLUME_PATH") or "").strip() or None
+    if not wheel_volume_path:
+        artifact_volume = _strip_invisible(os.environ.get("GBX_ARTIFACT_VOLUME") or "").strip().rstrip("/")
+        if artifact_volume:
+            ver = _geobrix_version()
+            wheel_volume_path = f"{artifact_volume}/geobrix-{ver}-py3-none-any.whl"
     skip_wheel_upload = os.environ.get("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     try:
@@ -190,16 +211,16 @@ def main() -> int:
     w = WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)
 
     if wheel_volume_path and not skip_wheel_upload:
-        # Build wheel and upload to Volume (optional; set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to use existing wheel)
+        # Build wheel (python3 -m build) and upload to Volume; set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to use existing
         project_root = TESTS_DIR.parent.parent
-        dist = project_root / "python" / "geobrix" / "dist"
+        pkg_dir = project_root / "python" / "geobrix"
+        dist = pkg_dir / "dist"
         dist.mkdir(parents=True, exist_ok=True)
-        print("Building wheel...")
-        subprocess.run(
-            [sys.executable, "-m", "pip", "wheel", "--no-deps", "-w", str(dist), str(project_root / "python" / "geobrix")],
-            check=True,
-            capture_output=True,
-        )
+        print("Building wheel (python3 -m build)...")
+        rc = subprocess.run([sys.executable, "-m", "build", str(pkg_dir)], cwd=project_root, capture_output=True)
+        if rc.returncode != 0:
+            print("Wheel build failed", file=sys.stderr)
+            return 1
         whl = next((f for f in dist.glob("geobrix-*.whl")), None)
         if not whl:
             print("No wheel produced", file=sys.stderr)

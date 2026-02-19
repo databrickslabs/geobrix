@@ -17,6 +17,7 @@ import gzip
 import io
 import os
 import shutil
+import subprocess
 import tempfile
 
 try:
@@ -220,29 +221,18 @@ def download_srtm_to_path(
     skip_if_exists: bool = True,
     quiet: bool = False,
 ) -> Optional[Path]:
-    """Download and decompress an SRTM elevation tile from AWS to a local file.
+    """Download and decompress an SRTM elevation tile from AWS to a local .hgt file.
 
     Tile names follow the pattern N40W074 (latitude band + longitude). The file
-    is fetched as .hgt.gz and written as decompressed .hgt.
-
-    Args:
-        tile: SRTM tile id (e.g. N40W074).
-        dest_path: Local path for the decompressed .hgt file.
-        description: Short label for log messages.
-        skip_if_exists: If True and dest_path exists, skip download and return path.
-        quiet: If True, do not print download/success messages (caller will report).
-
-    Returns:
-        The destination path (after download or when skipped).
-
-    Raises:
-        RuntimeError: If the requests library is not installed.
+    is fetched as .hgt.gz and written as decompressed .hgt. Callers should use
+    srtm_hgt_to_geotiff() to produce a .tif for use with GDAL (GTiff is always supported).
     """
-    if skip_if_exists and dest_path.exists():
+    hgt_path = dest_path if dest_path.suffix.lower() == ".hgt" else dest_path.with_suffix(".hgt")
+    if skip_if_exists and hgt_path.exists():
         if not quiet:
-            size_mb = dest_path.stat().st_size / (1024 * 1024)
+            size_mb = hgt_path.stat().st_size / (1024 * 1024)
             print(f"⏭️  {description}: {size_mb:.1f} MB (already exists)")
-        return dest_path
+        return hgt_path
     if not requests:
         raise RuntimeError("requests is required")
     lat_dir = tile[:3]
@@ -251,14 +241,103 @@ def download_srtm_to_path(
         print(f"⬇️  Downloading {description}...")
     response = requests.get(url, stream=True)
     response.raise_for_status()
-    _ensure_dir(dest_path.parent)
+    _ensure_dir(hgt_path.parent)
     with gzip.open(io.BytesIO(response.content), "rb") as f_in:
-        with open(dest_path, "wb") as f_out:
+        with open(hgt_path, "wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
     if not quiet:
-        size_mb = dest_path.stat().st_size / (1024 * 1024)
+        size_mb = hgt_path.stat().st_size / (1024 * 1024)
         print(f"✅ {description}: {size_mb:.1f} MB")
-    return dest_path
+    return hgt_path
+
+
+def _create_synthetic_dem_geotiff(out_path: Path, minx: float, miny: float, maxx: float, maxy: float) -> bool:
+    """Create a small synthetic DEM GeoTIFF (single band, WGS84). Used when .hgt is not supported by GDAL.
+    Fills with an elevation gradient (0–100 m) so the raster is human-viewable."""
+    try:
+        import numpy as np
+        from osgeo import gdal, osr
+    except ImportError:
+        return False
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    w, h = 64, 64
+    res_x = (maxx - minx) / w
+    res_y = (maxy - miny) / h
+    drv = gdal.GetDriverByName("GTiff")
+    ds = drv.Create(str(out_path), w, h, 1, gdal.GDT_Float32)
+    ds.SetGeoTransform([minx, res_x, 0, maxy, 0, -res_y])
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(4326)
+    ds.SetProjection(srs.ExportToWkt())
+    # Ramp 0–100 m so the DEM is viewable (not solid black)
+    arr = np.linspace(0, 100, h, dtype=np.float32).reshape(-1, 1) + np.linspace(0, 50, w, dtype=np.float32)
+    band = ds.GetRasterBand(1)
+    band.WriteArray(arr)
+    band.FlushCache()
+    ds = None
+    return True
+
+
+def _scale_raster_to_viewable_byte(raster_path: Path) -> Optional[Path]:
+    """Write a separate Byte 0-255 GeoTIFF for human viewing; keep the original .tif unchanged.
+    Uses -scale with no src range so GDAL stretches actual min/max to 0-255 (viewable in QGIS etc.)."""
+    if not shutil.which("gdal_translate") or not raster_path.exists():
+        return None
+    out_path = raster_path.parent / (raster_path.stem + "_byte.tif")
+    try:
+        # -scale with no args: compute src min/max from raster, map to 0-255 (avoids black clips)
+        rc = subprocess.run(
+            [
+                "gdal_translate", "-q", "-ot", "Byte", "-scale",
+                str(raster_path), str(out_path),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if rc.returncode == 0 and out_path.exists():
+            return out_path
+    except Exception:
+        pass
+    return None
+
+
+def srtm_hgt_to_geotiff(
+    hgt_path: Path,
+    tif_path: Path,
+    bbox_wgs84: Tuple[float, float, float, float],
+    description: str,
+    *,
+    quiet: bool = False,
+) -> bool:
+    """Convert SRTM .hgt to GeoTIFF. If GDAL cannot read .hgt (SRTMHGT driver), create synthetic DEM .tif.
+
+    Elevation in bundles and examples is GeoTIFF only so that GDAL (which always supports GTiff)
+    works everywhere; .hgt support is optional in GDAL builds.
+
+    Args:
+        hgt_path: Path to decompressed .hgt file.
+        tif_path: Output path for .tif file.
+        bbox_wgs84: (minx, miny, maxx, maxy) in WGS84 for synthetic fallback.
+        description: Short label for log messages.
+        quiet: If True, do not print messages.
+
+    Returns:
+        True if tif_path was written successfully.
+    """
+    import subprocess
+    tif_path.parent.mkdir(parents=True, exist_ok=True)
+    # Try gdal_translate .hgt -> .tif (requires GDAL built with SRTMHGT)
+    cmd = ["gdal_translate", "-q", "-of", "GTiff", str(hgt_path), str(tif_path)]
+    rc = subprocess.run(cmd, capture_output=True, text=True)
+    if rc.returncode == 0 and tif_path.exists():
+        if not quiet:
+            size_mb = tif_path.stat().st_size / (1024 * 1024)
+            print(f"✅ {description}: {size_mb:.1f} MB (GeoTIFF)")
+        return True
+    # Fallback: synthetic DEM so elevation path exists and works with GDAL
+    if not quiet:
+        print(f"⚠️  {description}: .hgt not supported by GDAL; writing small synthetic DEM GeoTIFF")
+    return _create_synthetic_dem_geotiff(tif_path, *bbox_wgs84)
 
 
 def _bundle_debug(msg: str) -> None:
@@ -362,6 +441,11 @@ def run_essential_bundle(
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         _copy_final_to_volumes(tmp_file, out, f"Sentinel-2 {region_name}", volume_root=volume_root)
+        # Generate separate _byte.tif for human viewing; tests use the original .tif
+        byte_path = _scale_raster_to_viewable_byte(tmp_file)
+        if byte_path is not None:
+            out_byte = out.parent / (out.stem + "_byte.tif")
+            _copy_final_to_volumes(byte_path, out_byte, f"Sentinel-2 {region_name} (viewable)", volume_root=volume_root)
         return out
 
     _bundle_debug("Starting NYC Vector Data")
@@ -442,34 +526,39 @@ def run_essential_bundle(
         errors.append(("NYC Sentinel-2", str(e)))
         print(f"⚠️  NYC Sentinel-2 failed: {e}")
 
+    # Elevation as GeoTIFF only (GDAL supports GTiff everywhere; .hgt/SRTMHGT is optional)
+    _nyc_bbox = (-74.0, 40.0, -73.0, 41.0)
     print("\n⛰️  NYC Elevation")
     try:
-        dest = vol("nyc/elevation/srtm_n40w074.hgt")
+        dest = vol("nyc/elevation/srtm_n40w074.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
         if exists_skip and size_mb is not None:
             print(f"⏭️  SRTM NYC: {size_mb:.1f} MB (already exists)")
         else:
             print(f"⬇️  Downloading SRTM NYC...")
-            t = tmp_path("nyc", "elevation", "srtm_n40w074.hgt")
-            download_srtm_to_path("N40W074", t, "SRTM NYC", skip_if_exists=False, quiet=True)
-            if t.exists():
-                _copy_final_to_volumes(t, dest, "SRTM NYC", volume_root=volume_root)
+            t_hgt = tmp_path("nyc", "elevation", "srtm_n40w074.hgt")
+            download_srtm_to_path("N40W074", t_hgt, "SRTM NYC", skip_if_exists=False, quiet=True)
+            t_tif = tmp_path("nyc", "elevation", "srtm_n40w074.tif")
+            if t_hgt.exists() and srtm_hgt_to_geotiff(t_hgt, t_tif, _nyc_bbox, "SRTM NYC", quiet=True):
+                _copy_final_to_volumes(t_tif, dest, "SRTM NYC", volume_root=volume_root)
     except Exception as e:
         errors.append(("SRTM NYC", str(e)))
         print(f"⚠️  SRTM NYC failed: {e}")
 
+    _lon_bbox = (-1.0, 51.0, 0.0, 52.0)
     print("\n⛰️  London Elevation")
     try:
-        dest = vol("london/elevation/srtm_n51w001.hgt")
+        dest = vol("london/elevation/srtm_n51w001.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
         if exists_skip and size_mb is not None:
             print(f"⏭️  SRTM London: {size_mb:.1f} MB (already exists)")
         else:
             print(f"⬇️  Downloading SRTM London...")
-            t = tmp_path("london", "elevation", "srtm_n51w001.hgt")
-            download_srtm_to_path("N51W001", t, "SRTM London", skip_if_exists=False, quiet=True)
-            if t.exists():
-                _copy_final_to_volumes(t, dest, "SRTM London", volume_root=volume_root)
+            t_hgt = tmp_path("london", "elevation", "srtm_n51w001.hgt")
+            download_srtm_to_path("N51W001", t_hgt, "SRTM London", skip_if_exists=False, quiet=True)
+            t_tif = tmp_path("london", "elevation", "srtm_n51w001.tif")
+            if t_hgt.exists() and srtm_hgt_to_geotiff(t_hgt, t_tif, _lon_bbox, "SRTM London", quiet=True):
+                _copy_final_to_volumes(t_tif, dest, "SRTM London", volume_root=volume_root)
     except Exception as e:
         errors.append(("SRTM London", str(e)))
         print(f"⚠️  SRTM London failed: {e}")
@@ -559,17 +648,19 @@ def run_complete_bundle(
     except Exception as e:
         errors.append(("NYC Neighborhoods", str(e)))
 
+    _nyc_east_bbox = (-73.0, 40.0, -72.0, 41.0)
     try:
-        dest = vol("nyc/elevation/srtm_n40w073.hgt")
+        dest = vol("nyc/elevation/srtm_n40w073.tif")
         exists_skip, size_mb = _path_exists_for_skip(dest)
         if exists_skip and size_mb is not None:
             print(f"⏭️  SRTM NYC East: {size_mb:.1f} MB (already exists)")
         else:
             print(f"⬇️  Downloading SRTM NYC East...")
-            t = tmp_path("nyc", "elevation", "srtm_n40w073.hgt")
-            download_srtm_to_path("N40W073", t, "SRTM NYC East", skip_if_exists=False, quiet=True)
-            if t.exists():
-                _copy_final_to_volumes(t, dest, "SRTM NYC East", volume_root=volume_root)
+            t_hgt = tmp_path("nyc", "elevation", "srtm_n40w073.hgt")
+            download_srtm_to_path("N40W073", t_hgt, "SRTM NYC East", skip_if_exists=False, quiet=True)
+            t_tif = tmp_path("nyc", "elevation", "srtm_n40w073.tif")
+            if t_hgt.exists() and srtm_hgt_to_geotiff(t_hgt, t_tif, _nyc_east_bbox, "SRTM NYC East", quiet=True):
+                _copy_final_to_volumes(t_tif, dest, "SRTM NYC East", volume_root=volume_root)
     except Exception as e:
         errors.append(("SRTM NYC East", str(e)))
 

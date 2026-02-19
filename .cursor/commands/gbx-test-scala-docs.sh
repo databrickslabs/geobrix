@@ -15,6 +15,7 @@ show_help() {
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (filename → test-logs/<name>)"
     echo -e "  ${GREEN}--suite <pattern>${NC}      Maven suite pattern (default: tests.docs.scala.*)"
     echo -e "  ${GREEN}--skip-build${NC}           Skip Maven compile before test (mvn test still compiles)"
+    echo -e "  ${GREEN}--no-sample-data-root${NC}  Do not set GBX_SAMPLE_DATA_ROOT (use env or full-bundle default)"
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Log path:${NC}"
@@ -31,6 +32,8 @@ show_help() {
 LOG_PATH=""
 SUITE_PATTERN="tests.docs.scala.*"
 SKIP_BUILD=false
+# Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
+SET_SAMPLE_DATA_ROOT=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -44,6 +47,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-build)
             SKIP_BUILD=true
+            shift
+            ;;
+        --no-sample-data-root)
+            SET_SAMPLE_DATA_ROOT=false
             shift
             ;;
         --help|-h)
@@ -73,12 +80,26 @@ echo -e "${CYAN}Running Scala doc tests...${NC}"
 show_separator
 echo ""
 
-MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
+# Use minimal bundle path in container unless --no-sample-data-root (then Scala uses full-bundle default)
+SAMPLE_DATA_ROOT_MAVEN=""
+[ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_MAVEN="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data && "
+
+MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
 
 docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
 EXIT_CODE=$?
 
 echo ""
+# pytest-style short summary when logging (dedupe by test name, explain minimal bundle)
+if [ -n "$LOG_PATH" ] && [ -f "$LOG_PATH" ]; then
+    echo -e "${BLUE}=== Short test summary (Scala) ===${NC}"
+    echo -e "${CYAN}Note: Canceled/failed tests on the minimal bundle usually mean missing rasters or data (e.g. FileGDB, Sentinel-2). Use full bundle or \`gbx:data:generate-minimal-bundle\` if you need these to pass.${NC}"
+    echo ""
+    (grep -E '\*\*\* FAILED \*\*\*' "$LOG_PATH" 2>/dev/null | sed -E 's/^[[:space:]]*- (.*) \*\*\* FAILED \*\*\*/\1/' | sort -u | while read -r name; do echo "FAILED   - $name"; done)
+    (grep -E '!!! CANCELED !!!' "$LOG_PATH" 2>/dev/null | sed -E 's/^[[:space:]]*- (.*) !!! CANCELED !!!/\1/' | sort -u | while read -r name; do echo "CANCELED - $name"; done)
+    (grep -E '^Tests: succeeded' "$LOG_PATH" 2>/dev/null | tail -1)
+    echo ""
+fi
 show_separator
 if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}✅ Scala documentation tests passed!${NC}"

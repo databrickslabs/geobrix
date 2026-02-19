@@ -14,6 +14,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
 GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.2.0-jar-with-dependencies.jar"
 
+# Sample data root: from path_config (defaults to test-data minimal bundle at runtime)
+from path_config import SAMPLE_DATA_BASE  # noqa: E402
+
 
 @pytest.fixture(scope="session")
 def spark_with_geobrix():
@@ -122,10 +125,6 @@ def pytest_collection_modifyitems(config, items):
         # Auto-mark slow tests
         if "slow" in item.name.lower() or "batch" in item.name.lower():
             item.add_marker(pytest.mark.slow)
-
-
-# Sample data paths (centralized)
-SAMPLE_DATA_BASE = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 
 
 @pytest.fixture

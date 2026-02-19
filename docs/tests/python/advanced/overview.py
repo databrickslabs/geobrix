@@ -23,7 +23,8 @@ except ImportError:
 
 
 # Sample data path (same as quick-start / sample-data)
-_RASTER_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+from path_config import SAMPLE_DATA_BASE
+_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 
 def spark_expressions_standard_usage(spark):

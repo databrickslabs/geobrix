@@ -23,20 +23,21 @@ bash .cursor/commands/gbx-test-sql-docs.sh [OPTIONS]
 - `--markers <markers>` – Pytest markers (e.g. `"not slow"`).
 - `--include-integration` – Include integration tests (excluded by default).
 - `--skip-build` – Skip Maven and Python build.
-- `--skip-download` – Skip sample-data download.
-- `--data-bundle <type>` – `essential` | `complete` (default) | `both`.
+- `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use your env or path_config default).
 - `--help` – Help and examples.
+
+**Sample data (default):** Like `gbx:test:python-docs`, this command sets `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container for the minimal bundle (required for remote/CI). Use `--no-sample-data-root` to leave it unset.
 
 ## Examples
 
 ```bash
-# API/SQL doc tests only, skip build and download
-bash .cursor/commands/gbx-test-sql-docs.sh --skip-build --skip-download
+# API/SQL doc tests only, skip build (uses in-repo minimal bundle)
+bash .cursor/commands/gbx-test-sql-docs.sh --skip-build
 
 # Single test file with log
-bash .cursor/commands/gbx-test-sql-docs.sh --path api/test_sql_api.py --skip-build --skip-download --log sql-docs.log
+bash .cursor/commands/gbx-test-sql-docs.sh --path api/test_sql_api.py --skip-build --log sql-docs.log
 
-# Full run (build + download + api tests)
+# Full run (build + api tests)
 bash .cursor/commands/gbx-test-sql-docs.sh
 ```
 

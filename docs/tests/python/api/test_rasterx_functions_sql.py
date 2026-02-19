@@ -8,7 +8,7 @@ from pyspark.sql import functions as F
 from . import rasterx_functions_sql
 
 # Sample data base path (must match conftest.SAMPLE_DATA_BASE for doc test env)
-SAMPLE_DATA_BASE = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+from path_config import SAMPLE_DATA_BASE
 
 
 @pytest.fixture(scope="module")
@@ -20,7 +20,7 @@ def sample_rasters(spark):
     # Use Volumes path (standardized; run in Docker with sample-data mount)
     raster_paths = [
         f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif",
-        f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.hgt",
+        f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.tif",
     ]
     for path in raster_paths:
         try:

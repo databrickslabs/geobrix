@@ -8,15 +8,17 @@ Run Common setup first (Python/Scala) to register RasterX; then create the
 view below so SQL examples can use FROM rasters.
 """
 
-# Sample path for doc examples (match rasterx_functions.py)
-SAMPLE_RASTER_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+# Sample path at runtime (path_config)
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 # Common setup: create temp view so SQL examples can use FROM rasters
-RASTERX_SQL_SETUP = """
--- After registering RasterX (Python: rx.register(spark)), create the view:
+def _rasterx_sql_setup_content():
+    return f"""-- After registering RasterX (Python: rx.register(spark)), create the view:
 CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif`;
-"""
+SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;"""
+
+RASTERX_SQL_SETUP = _rasterx_sql_setup_content()
 
 RASTERX_SQL_SETUP_output = """
 View `rasters` created. You can now run SELECT ... FROM rasters; for each example.

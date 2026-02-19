@@ -10,7 +10,7 @@ Tested by: docs/tests/python/sample_data/test_overview.py
 GEOGRAPHIC_COHERENCE_NYC_ZONAL = """# Zonal statistics: Average elevation per borough
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 boroughs = spark.read.format("geojson_ogr").load(f"{sample_path}/nyc/boroughs/nyc_boroughs.geojson")
-elevation = spark.read.format("gdal").load(f"{sample_path}/nyc/elevation/srtm_n40w074.hgt")
+elevation = spark.read.format("gdal").load(f"{sample_path}/nyc/elevation/srtm_n40w074.tif")
 
 # Spatial join and compute statistics
 borough_elevation = boroughs.join(elevation, "spatial_intersect") \\

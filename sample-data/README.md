@@ -10,11 +10,17 @@ sample-data/Volumes/main/default/
 │   ├── nyc/           (New York City datasets)
 │   ├── london/        (London datasets)
 │   └── test-subfolder/
-└── test-data/         (Generic test datasets - committed to git)
-    └── generic_features.geojson
+└── test-data/         (Test datasets - committed to git)
+    ├── generic_features.geojson
+    └── geobrix-examples/   (Minimal doc-test bundle, same layout as above)
+        └── nyc/
+            ├── boroughs/   (nyc_boroughs.geojson, nyc_boroughs.geojsonl)
+            ├── subway/     (nyc_subway.shp.zip)
+            ├── geopackage/ (nyc_complete.gpkg)
+            └── sentinel2/  (nyc_sentinel2_red.tif, small)
 ```
 
-This structure mirrors Unity Catalog Volumes in Databricks.
+**Path token for doc tests:** Use `sample-data/Volumes/main/default/test-data` in place of `/Volumes/main/default/geobrix_samples` so examples work with the minimal bundle (e.g. `sample-data/Volumes/main/default/test-data/geobrix-examples/nyc/subway/nyc_subway.shp.zip`). This structure mirrors Unity Catalog Volumes in Databricks.
 
 ## Data Inventory
 
@@ -35,8 +41,8 @@ This structure mirrors Unity Catalog Volumes in Databricks.
 | **Raster - Imagery** |
 | Sentinel-2 | `nyc_sentinel2_red.tif` | GeoTIFF | 205 MB | - | Red band imagery |
 | **Raster - Elevation** |
-| Elevation West | `srtm_n40w074.hgt` | SRTM | 24.7 MB | - | SRTM 90m DEM |
-| Elevation East | `srtm_n40w073.hgt` | SRTM | 24.7 MB | - | SRTM 90m DEM |
+| Elevation West | `srtm_n40w074.tif` | GeoTIFF | 24.7 MB | - | SRTM 90m DEM (GeoTIFF) |
+| Elevation East | `srtm_n40w073.tif` | GeoTIFF | 24.7 MB | - | SRTM 90m DEM (GeoTIFF) |
 | **Multi-Format** |
 | Complete Package | `nyc_complete.gpkg` | GeoPackage | 7.1 MB | - | Multi-layer (boroughs, zones, parks, subway) |
 | Complete FileGDB | `NYC_Sample.gdb/` | FileGDB | ~1 MB | - | Multi-feature class geodatabase |
@@ -49,7 +55,29 @@ This structure mirrors Unity Catalog Volumes in Databricks.
 |----------|------|--------|------|----------|-------|
 | Postcodes | `london_postcodes.geojson` | GeoJSON | 0.9 MB | - | London postcode boundaries |
 | Sentinel-2 | `london_sentinel2_red.tif` | GeoTIFF | 92.7 MB | - | Red band imagery |
-| Elevation | `srtm_n51w001.hgt` | SRTM | 24.7 MB | - | SRTM 90m DEM |
+| Elevation | `srtm_n51w001.tif` | GeoTIFF | 24.7 MB | - | SRTM 90m DEM (GeoTIFF) |
+
+### Minimal doc-test bundle (`test-data/geobrix-examples/`)
+
+**Purpose**: Small versions of all complete-bundle formats for CI and doc tests. Same relative paths as full bundle. Extracted by bounding box so joins and spatial operations match (NYC: center of Manhattan; London: center of London).
+
+**Generate**: Run after full bundle download:
+```bash
+gbx:data:generate-minimal-bundle
+```
+Or: `python3 sample-data/generate-minimal-bundle.py` (in Docker or with geopandas/GDAL).
+
+**Options** (defaults can be overridden):
+- **NYC center**: `--nyc-lon`, `--nyc-lat` (default: -73.9857, 40.7484, Manhattan)
+- **London center**: `--london-lon`, `--london-lat` (default: -0.1276, 51.5074)
+- **Bbox size**: `--bbox-size` half-width/height in degrees (default: 0.02)
+- **Vector row limit**: `--max-rows` (default: 10); raster is full data within bbox
+
+**Contents**: NYC (boroughs, taxi-zones, neighborhoods, subway, parks, sentinel2, elevation, geopackage, filegdb, hrrr), London (postcodes, boroughs, sentinel2, elevation).
+
+**London CRS:** London data may be in BNG (British National Grid, EPSG:27700) rather than WGS84 (4326). The generator passes London center in WGS84 and transforms the clip bbox to the source CRS when clipping (so BNG rasters are clipped correctly). Vector output is always WGS84; raster output keeps the source CRS (e.g. London rasters stay BNG if the source is BNG).
+
+**Path token for doc tests**: Set `GBX_SAMPLE_DATA_ROOT` to the minimal bundle root (e.g. `sample-data/Volumes/main/default/test-data` or absolute path) so tests use the minimal bundle; otherwise they use `/Volumes/main/default/geobrix_samples`.
 
 ### Test Data (Generic Schemas) (~1 KB)
 

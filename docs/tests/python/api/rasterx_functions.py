@@ -10,8 +10,9 @@ try:
 except ImportError:
     rx = None
 
-# Sample data path for doc examples (mounted Volumes)
-SAMPLE_RASTER_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+# Sample data path at runtime (path_config)
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 
 def rasterx_setup_example(spark):

@@ -5,8 +5,9 @@ All code examples shown in docs/docs/readers/gtiff.mdx are imported from this fi
 Uses sample-data Volumes path; output constants for Example output blocks.
 """
 
-# Sample-data Volumes path (same as other reader docs)
-SAMPLE_GTIFF_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+# Sample-data path at runtime (path_config)
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_GTIFF_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 # Display constants (payload only)
 READ_GTIFF = """# Read GeoTIFF file (sample-data Volumes path)

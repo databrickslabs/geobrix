@@ -1,6 +1,7 @@
 package tests.docs.scala.readers
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import tests.docs.scala.SampleDataPath
 
 /**
   * GeoJSON Reader Examples - Single Source of Truth
@@ -32,13 +33,13 @@ object GeoJSONExamples {
     """SELECT * FROM geojson_ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson`;"""
 
   // Test methods (validate logic) - used by ScalaTest
-  def readGeoJSON(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson"): DataFrame = {
+  def readGeoJSON(spark: SparkSession, path: String = SampleDataPath.nycBoroughs): DataFrame = {
     spark.read.format("geojson_ogr")
       .option("multi", "false")
       .load(path)
   }
 
-  def readGeoJSONSeq(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojsonl"): DataFrame = {
+  def readGeoJSONSeq(spark: SparkSession, path: String = SampleDataPath.nycBoroughsGeojsonl): DataFrame = {
     spark.read.format("geojson_ogr").load(path)
   }
 }

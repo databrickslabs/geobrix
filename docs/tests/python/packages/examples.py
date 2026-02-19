@@ -6,12 +6,21 @@ All examples are tested and serve as the single source of truth for docs.
 """
 
 import os
+import sys
+from pathlib import Path
 
-# Sample data path for doc examples (override with GEOBRIX_SAMPLE_RASTER for tests)
-SAMPLE_RASTER_PATH = os.environ.get(
-    "GEOBRIX_SAMPLE_RASTER",
-    "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif",
-)
+# Ensure path_config is importable when run from packages/
+_python = Path(__file__).resolve().parent.parent
+if str(_python) not in sys.path:
+    sys.path.insert(0, str(_python))
+
+# Sample data path at runtime (path_config or GEOBRIX_SAMPLE_RASTER env)
+try:
+    from path_config import SAMPLE_DATA_BASE
+    _default_raster = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
+except ImportError:
+    _default_raster = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+SAMPLE_RASTER_PATH = os.environ.get("GEOBRIX_SAMPLE_RASTER", _default_raster)
 
 # Conditional imports for compatibility
 try:
@@ -84,7 +93,7 @@ def rasterx_basic_usage(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     # Sample data path (see Sample Data guide; use your Volume path if different)
-    raster_path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+    raster_path = SAMPLE_RASTER_PATH
 
     rx.register(spark)
 
@@ -715,12 +724,12 @@ def gridx_vectorx_integration(spark):
 
 
 # SQL Constants (used in packages/rasterx.mdx; tests run these when sample data available)
-SQL_RASTERX_USAGE = """-- Register functions first in Python/Scala notebook
+SQL_RASTERX_USAGE = f"""-- Register functions first in Python/Scala notebook
 -- Then use in SQL
 
 -- Read raster data (sample data path; see Sample Data guide)
 CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif`;
+SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;
 
 -- Extract metadata
 SELECT

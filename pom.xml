@@ -259,7 +259,9 @@
                     <forkMode>once</forkMode>
                     <logForkedProcessCommand>true</logForkedProcessCommand>
                     <reportsDirectory>${project.build.directory}/test-reports</reportsDirectory>
+                    <!-- Quiet Spark/GDAL in tests; use log4j2-test.xml from test-classes -->
                     <argLine>
+                        -Dlog4j.configurationFile=log4j2-test.xml
                         -Djava.library.path=/usr/local/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib:/usr/local/hadoop/lib/native
                         -Xms2g -Xmx4g
                         -XX:+UseG1GC -XX:MaxGCPauseMillis=200
@@ -268,6 +270,8 @@
                         -XX:MaxMetaspaceSize=1024m
                         ${agentLib}
                     </argLine>
+                    <!-- Stdout: F = show failures, S = show summary (pytest-style: failures + short summary) -->
+                    <stdout>FS</stdout>
                 </configuration>
                 <executions>
                     <execution>

@@ -6,7 +6,8 @@ Uses sample-data Volumes path; output constants for Example output blocks.
 """
 
 # Sample-data Volumes path (NYC boroughs GeoJSON - same as other reader docs)
-SAMPLE_VECTOR_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson"
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_VECTOR_PATH = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojson"
 
 # Display constants (payload only)
 READ_OGR = """# OGR reader (sample-data Volumes path)

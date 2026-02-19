@@ -1,6 +1,7 @@
 package tests.docs.scala.readers
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import tests.docs.scala.SampleDataPath
 
 /**
   * Shapefile Reader Examples - Single Source of Truth
@@ -32,11 +33,11 @@ object ShapefileExamples {
     """SELECT * FROM shapefile_ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip`;"""
 
   // Test methods (validate logic) - used by ScalaTest
-  def readShapefile(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip"): DataFrame = {
+  def readShapefile(spark: SparkSession, path: String = SampleDataPath.nycSubwayShp): DataFrame = {
     spark.read.format("shapefile_ogr").load(path)
   }
 
-  def readWithOptions(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip"): DataFrame = {
+  def readWithOptions(spark: SparkSession, path: String = SampleDataPath.nycSubwayShp): DataFrame = {
     spark.read.format("shapefile_ogr")
       .option("chunkSize", "50000")
       .load(path)

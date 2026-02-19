@@ -1,6 +1,7 @@
 package tests.docs.scala.readers
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
+import tests.docs.scala.SampleDataPath
 
 /**
   * GeoPackage Reader Examples - Single Source of Truth
@@ -32,11 +33,11 @@ object GeoPackageExamples {
     """SELECT * FROM gpkg_ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg`;"""
 
   // Test methods (validate logic) - used by ScalaTest
-  def readGeoPackage(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg"): DataFrame = {
+  def readGeoPackage(spark: SparkSession, path: String = SampleDataPath.nycGeoPackage): DataFrame = {
     spark.read.format("gpkg_ogr").load(path)
   }
 
-  def readSpecificLayer(spark: SparkSession, path: String = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg", layer: String = "boroughs"): DataFrame = {
+  def readSpecificLayer(spark: SparkSession, path: String = SampleDataPath.nycGeoPackage, layer: String = "boroughs"): DataFrame = {
     spark.read.format("gpkg_ogr")
       .option("layerName", layer)
       .load(path)

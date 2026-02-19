@@ -48,8 +48,10 @@ You can run the **Essential bundle** and **primitive Volume tests** on a live Da
 - `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or `DATABRICKS_CONFIG_PROFILE`)
 - `CLUSTER_ID` (existing cluster to run the job)
 - `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME` — Volume root is `/Volumes/<catalog>/<schema>/<volume_name>`. The volume name must match Data Explorer exactly (e.g. `sample-data` not `sample_data`).
-- Optional: `GBX_BUNDLE_WHEEL_VOLUME_PATH` — path to a GeoBrix wheel on a Volume (e.g. `.../geobrix-0.2.0-py3-none-any.whl`). When set, the bundle runner notebook gets two pip cells plus `dbutils.library.restartPython()` so the cluster loads the latest code.
-- Optional: `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` — use an existing wheel (no build/upload); notebook still gets the pip and restart cells.
+- **GBX_ARTIFACT_VOLUME** — directory for artifacts (e.g. `/Volumes/.../artifacts`). JAR and wheel are uploaded directly here (no subpaths). Wheel path for the notebook is derived as `GBX_ARTIFACT_VOLUME/geobrix-<version>-py3-none-any.whl` unless overridden.
+- Optional: `GBX_BUNDLE_WHEEL_VOLUME_PATH` — override full wheel path for the notebook pip cells.
+- Optional: `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` — use existing wheel (no build/upload); notebook still gets the pip and restart cells.
+- Optional: `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` — when running push-wheel, skip JAR build/upload; when running push-jar alone, skip JAR build/upload.
 - Optional: `GBX_RUNNER_DIR`, `GBX_BUNDLE_RUNNER_NOTEBOOK`, `GBX_PRIMITIVE_RUNNER_NOTEBOOK` — where to upload the runner notebooks.
 
 **Commands** — From the repo root:
@@ -91,7 +93,7 @@ Commands follow **`gbx:<category>:<action>`**:
 |----------|---------|
 | `test` | Run tests (Scala, Python, docs, SQL docs, notebooks, function-info) |
 | `coverage` | Code coverage (Scala/Python, unit/docs, gaps, baseline, package-targeted) |
-| `data` | Sample data download (essential / complete bundle) |
+| `data` | Sample data: download (essential/complete bundle), generate minimal bundle, push JAR/wheel to Volume |
 | `docs` | Documentation server (start, stop, restart, dev, serve-local, static-build, function-info, prompt-session) |
 | `docker` | Container lifecycle (exec, start, stop, restart, rebuild, attach) |
 
@@ -108,9 +110,10 @@ Use the following by task; always prefer the command over manual shell for these
 | `gbx:test:scala-docs` | After changing Scala doc examples | Runs Scala doc tests in `docs/tests/scala/` |
 | `gbx:test:python-docs` | After changing Python doc examples | Runs Python doc tests in `docs/tests/python/` (default: no integration) |
 | `gbx:test:sql-docs` | After changing SQL API examples | Runs SQL (and Python API) doc tests in `docs/tests/python/api/` |
-| `gbx:test:docs` | Before PR that touches docs | Runs all doc tests (Python + Scala) |
+| `gbx:test:docs` | Before PR that touches docs | Runs all doc tests by invoking **python-docs**, **sql-docs**, and **scala-docs** in sequence; sets `GBX_SAMPLE_DATA_ROOT` to minimal bundle by default (use `--no-sample-data-root` for full bundle) |
 | `gbx:test:function-info` | After changing function-info or doc SQL | Regenerates function-info and runs DESCRIBE/coverage tests |
 | `gbx:test:notebooks` | After changing sample-data or notebook runner | Runs notebook tests; use `--include-integration` for full run |
+| `gbx:test:python-dbr` | Validate Python on Databricks Runtime | DBR integration tests (spatial SQL, readers); excluded from regular CI; requires DBR environment |
 | `gbx:test:bundle-databricks` | Validate Essential bundle on a live cluster | Pushes runner notebook and runs it on `CLUSTER_ID`; use `--local` to run bundle on host |
 | `gbx:test:primitive-databricks` | Validate Volume access on cluster (FUSE) | Pushes primitive notebook; tests volume exists, create subdirs, read/write/copy via pathlib |
 
@@ -127,10 +130,14 @@ Use the following by task; always prefer the command over manual shell for these
 
 **Data**
 
+Doc tests use the **in-repo minimal bundle** (no download step). Generate it once with `gbx:data:generate-minimal-bundle`; the Docker Volumes mount makes it available to tests. For full sample data locally, use `gbx:data:download`. Minimal-bundle Sentinel-2 rasters (and `*_byte.tif` variants) may appear black in QGIS or other viewers; the full-size Essential/Complete bundle rasters are the ones suited for visual inspection.
+
 | Command | When to use | What it does |
 |---------|-------------|--------------|
-| `gbx:data:download` | Need sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
-| `gbx:data:push-wheel` | Put built wheel on a Volume for cluster install | Builds Python wheel and uploads to `GBX_BUNDLE_WHEEL_VOLUME_PATH` |
+| `gbx:data:download` | Need full sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
+| `gbx:data:generate-minimal-bundle` | CI or doc tests; after full bundle if needed | Generates minimal bundle under `sample-data/Volumes/.../test-data/geobrix-examples/` by bbox extraction (NYC/London, `--bbox-size`, `--max-rows`); doc test commands use this, not a download step |
+| `gbx:data:push-wheel` | Put built JAR and wheel on Volume | Builds JAR first (push-jar) unless `GBX_BUNDLE_SKIP_JAR_UPLOAD=1`, then clears `python/geobrix/dist`, runs `python3 -m build`, uploads wheel to `GBX_ARTIFACT_VOLUME/` (overwrite if exists); set `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` to skip wheel |
+| `gbx:data:push-jar` | Put built JAR on a Volume | Runs `mvn clean package -DskipTests`, uploads JAR to `GBX_ARTIFACT_VOLUME/` (overwrite if exists); set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to skip |
 
 **Documentation**
 
@@ -155,8 +162,9 @@ Use the following by task; always prefer the command over manual shell for these
 | `gbx:docker:attach` | Interactive shell in container | Attach to running container |
 | `gbx:docker:restart` | After config change | Restart container |
 | `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image and optionally start |
+| `gbx:docker:clear-pycache` | After editing Python code, stale imports | Clears `.pyc` and `__pycache__` in container so tests see fresh code |
 
-Most commands accept `--help`. Common options: `--log <path>` for test/output logs, `--open` for coverage reports, and command-specific flags (e.g. `--suite`, `--path`, `--skip-build`).
+Most commands accept `--help`. Common options: `--log <path>` for test/output logs (truncated each run), `--open` for coverage reports, and command-specific flags (e.g. `--suite`, `--path`, `--skip-build`). **Doc test commands** set `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container by default so the minimal bundle is used (required for remote/CI); use `--no-sample-data-root` to leave it unset and use the full-bundle path or your own env. They do not run a sample-data download; the minimal or full bundle must be present via the Volumes mount.
 
 ### Agents (subagents)
 
@@ -185,3 +193,21 @@ Most commands accept `--help`. Common options: `--log <path>` for test/output lo
 - **Databricks cluster**: `gbx:test:primitive-databricks` then `gbx:test:bundle-databricks` with `databricks_cluster_config.env` set.
 - **Context**: `gbx:prompt-session` to print the agent-context rule.
 - **Full command list and options**: See `.cursor/rules/cursor-commands.mdc` in the repo.
+
+---
+
+## CI / GitHub Actions
+
+Workflows live in **`.github/workflows/`**. They define when and how tests and builds run on GitHub.
+
+### When things run
+
+- **Documentation tests** (`doc-tests.yml`) — Run **after the "build main" workflow completes** (on the same ref), so failing doc tests do not block the main build. Also triggerable manually via workflow_dispatch.
+- **Main build** (`build_main.yml`) — Runs on push (except to `python/**` and `scala/**`) and on pull requests; builds Scala and Python.
+- **Branch-specific builds** — `build_python.yml` runs on push to `python/**`; `build_scala.yml` runs on push to `scala/**`.
+- **CodeQL** (`codeql-analysis.yml`) — Security analysis on push and pull_request to `main`.
+- **Publish / release** — Triggered by release or publish events (see the workflow files).
+
+### Summary
+
+Doc tests are **unit-tested on PRs to main** (with path filters) so that documentation changes are validated before merge without running doc tests on every commit or on feature branches. For full details and triggers, see the YAML files in `.github/workflows/`.

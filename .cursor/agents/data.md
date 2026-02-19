@@ -73,8 +73,8 @@ sample-data/Volumes/main/default/geobrix_samples/geobrix-examples/
 │   ├── sentinel2/
 │   │   └── nyc_sentinel2_red.tif        (GeoTIFF, 205 MB)
 │   ├── elevation/
-│   │   ├── srtm_n40w073.hgt             (SRTM, 24.7 MB)
-│   │   └── srtm_n40w074.hgt             (SRTM, 24.7 MB)
+│   │   ├── srtm_n40w073.tif             (GeoTIFF DEM, 24.7 MB)
+│   │   └── srtm_n40w074.tif             (GeoTIFF DEM, 24.7 MB)
 │   ├── geopackage/
 │   │   └── nyc_complete.gpkg            (multi-layer, 7.1 MB)
 │   ├── filegdb/
@@ -89,7 +89,7 @@ sample-data/Volumes/main/default/geobrix_samples/geobrix-examples/
 │   ├── sentinel2/
 │   │   └── london_sentinel2_red.tif     (GeoTIFF, 92.7 MB)
 │   └── elevation/
-│       └── srtm_n51w001.hgt             (SRTM, 24.7 MB)
+│       └── srtm_n51w001.tif             (GeoTIFF DEM, 24.7 MB)
 └── test-subfolder/
 ```
 
@@ -111,7 +111,7 @@ sample-data/Volumes/main/default/geobrix_samples/geobrix-examples/
 "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 # SRTM Elevation
-"/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/elevation/srtm_n40w073.hgt"
+"/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/elevation/srtm_n40w073.tif"
 ```
 
 ### On Host Machine
@@ -132,7 +132,7 @@ sample-data/Volumes/main/default/geobrix_samples/geobrix-examples/
 | Format | Extension | Use Case | Example |
 |--------|-----------|----------|---------|
 | **GeoTIFF** | `.tif` | Satellite imagery | Sentinel-2 |
-| **SRTM** | `.hgt` | Elevation data | SRTM tiles |
+| **Elevation** | `.tif` (GeoTIFF) | DEM | SRTM-derived GeoTIFF |
 | **GRIB2** | `.grib2` | Weather data | HRRR forecast |
 
 ## Data Format Notes
@@ -289,7 +289,7 @@ def sample_nyc_sentinel2():
 @pytest.fixture
 def sample_srtm():
     """SRTM elevation data path."""
-    return f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.hgt"
+    return f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.tif"
 ```
 
 ## Data Management Best Practices

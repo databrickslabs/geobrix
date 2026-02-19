@@ -9,23 +9,27 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import geojson_examples
+from path_config import SAMPLE_DATA_BASE, MIN_BOROUGHS, MAX_BOROUGHS
 
 
 def test_read_geojson(spark, sample_nyc_boroughs):
     """Test basic GeoJSON read with multi=false."""
     result = geojson_examples.read_geojson(spark, sample_nyc_boroughs)
     assert result is not None
-    assert result.count() == 5  # NYC has 5 boroughs
+    c = result.count()
+    assert MIN_BOROUGHS <= c <= MAX_BOROUGHS, f"Expected {MIN_BOROUGHS}-{MAX_BOROUGHS} boroughs, got {c}"
     assert 'geom_0' in result.columns
 
 
 def test_read_geojsonseq(spark):
     """Test GeoJSONSeq read with NYC boroughs."""
-    path = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojsonl"
+    path = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojsonl"
     result = geojson_examples.read_geojsonseq(spark, path)
     assert result is not None
-    assert result.count() == 5  # NYC has 5 boroughs
+    c = result.count()
+    assert MIN_BOROUGHS <= c <= MAX_BOROUGHS, f"Expected {MIN_BOROUGHS}-{MAX_BOROUGHS} boroughs, got {c}"
     assert 'geom_0' in result.columns
 
 

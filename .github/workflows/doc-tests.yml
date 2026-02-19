@@ -9,24 +9,17 @@ name: Documentation Tests
 # - Regular CI/CD pipelines
 # - Coverage reporting
 # - Automated test runs
+#
+# Runs at the end: triggered after "build main" completes on PRs to main, so
+# failing doc tests do not interrupt build, test, or coverage. Also runnable
+# manually via workflow_dispatch.
 
 on:
-  push:
-    branches:
-      - main
-      - develop
-    paths:
-      - 'docs/tests/**'
-      - '!docs/tests-dbr/**'  # Exclude DBR integration tests
-      - 'docs/docs/**'
-      - 'scripts/**'
-      - '.github/workflows/doc-tests.yml'
-  pull_request:
-    paths:
-      - 'docs/tests/**'
-      - '!docs/tests-dbr/**'  # Exclude DBR integration tests
-      - 'docs/docs/**'
-      - 'scripts/**'
+  # Run after build main completes (PR or push to any branch). Doc tests run
+  # last so failing doc tests do not interrupt build, test, or coverage.
+  workflow_run:
+    workflows: ["build main"]
+    types: [completed]
   workflow_dispatch:  # Allow manual triggering from CI scripts
 
 permissions:
@@ -36,10 +29,14 @@ jobs:
   test-python-docs:
     name: Python Documentation Tests
     runs-on: ubuntu-latest
-    
+    # When triggered by workflow_run, use the same ref as the build that completed
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
@@ -105,10 +102,13 @@ jobs:
   validate-structure:
     name: Validate Documentation Structure
     runs-on: ubuntu-latest
-    
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       
       - name: Verify test structure
         run: |

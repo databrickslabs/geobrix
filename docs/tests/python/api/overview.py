@@ -7,7 +7,7 @@ Functions demonstrate registration, usage patterns, and common operations.
 Paths use sample data from mounted Volumes (see docs/docs/sample-data.mdx).
 """
 
-SAMPLE_DATA_BASE = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+from path_config import SAMPLE_DATA_BASE
 SAMPLE_NYC_RASTER = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 # Conditional imports for documentation testing

@@ -74,9 +74,9 @@ if [ -n "$SUITE_PATTERN" ]; then
     echo -e "${CYAN}🎯 Running suite: ${YELLOW}$SUITE_PATTERN${NC}"
     MVN_CMD="$MVN_CMD -Dsuites='$SUITE_PATTERN'"
 else
-    echo -e "${CYAN}🎯 Running all Scala unit tests (excluding docs)${NC}"
-    # Exclude docs tests by pattern
-    MVN_CMD="$MVN_CMD -Dsuites='!tests.docs.scala.*'"
+    echo -e "${CYAN}🎯 Running all Scala unit tests (src/test/scala; excludes docs)${NC}"
+    # Unit tests only: com.databricks.labs.gbx.* (scalatest-maven-plugin doesn't support !exclusion)
+    MVN_CMD="$MVN_CMD -Dsuites='com.databricks.labs.gbx.*'"
 fi
 
 if [ -n "$VERBOSE" ]; then

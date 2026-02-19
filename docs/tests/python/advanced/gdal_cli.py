@@ -75,7 +75,7 @@ gdalbuildvrt_cli_command = """gdalbuildvrt -resolution highest /tmp/mosaic.vrt /
 gdalbuildvrt_cli_output = """0...10...20...30...40...50...60...70...80...90...100 - done."""
 
 # gdaldem: command (code block) + shell output (Example output); uses elevation from sample-data
-gdaldem_cli_command = """gdaldem hillshade -z 2 /Volumes/main/default/geobrix_samples/geobrix-examples/nyc/elevation/srtm_n40w073.hgt /tmp/hillshade.tif"""
+gdaldem_cli_command = """gdaldem hillshade -z 2 /Volumes/main/default/geobrix_samples/geobrix-examples/nyc/elevation/srtm_n40w073.tif /tmp/hillshade.tif"""
 
 gdaldem_cli_output = """0...10...20...30...40...50...60...70...80...90...100 - done."""
 

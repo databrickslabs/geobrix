@@ -28,7 +28,15 @@ from pathlib import Path
 CATALOG = "main"
 SCHEMA = "default"
 VOLUME = "geobrix_samples"
-SAMPLE_DATA_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/geobrix-examples"
+# Use path_config at runtime so tests use minimal bundle when present
+try:
+    _p = Path(__file__).resolve().parent.parent
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
+    from path_config import SAMPLE_DATA_BASE
+    SAMPLE_DATA_PATH = SAMPLE_DATA_BASE
+except ImportError:
+    SAMPLE_DATA_PATH = f"/Volumes/{CATALOG}/{SCHEMA}/{VOLUME}/geobrix-examples"
 
 # Re-export bundle_lib helpers with script-style signatures (url, subfolder, filename, description)
 # so docs and tests can keep using download_file(..., "nyc/boroughs", "nyc_boroughs.geojson", ...)
@@ -40,9 +48,19 @@ def download_file(url, subfolder, filename, description):
 
 
 def download_srtm_aws(tile, subfolder, filename, description):
-    """Download and decompress SRTM data from AWS. Used by docs/tests."""
+    """Download SRTM from AWS and write as GeoTIFF. Used by docs/tests. filename should be .tif."""
     import bundle_lib
     out = Path(SAMPLE_DATA_PATH) / subfolder / filename
+    if out.suffix.lower() == ".tif":
+        hgt = Path(SAMPLE_DATA_PATH) / subfolder / (out.stem + ".hgt")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        bundle_lib.download_srtm_to_path(tile, hgt, description)
+        if hgt.exists():
+            # NYC/London bboxes for synthetic fallback if GDAL can't read .hgt
+            bbox = (-74.0, 40.0, -73.0, 41.0) if "n40" in out.stem else (-1.0, 51.0, 0.0, 52.0)
+            bundle_lib.srtm_hgt_to_geotiff(hgt, out, bbox, description, quiet=True)
+            hgt.unlink(missing_ok=True)
+        return out if out.exists() else hgt
     return bundle_lib.download_srtm_to_path(tile, out, description)
 
 

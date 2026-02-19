@@ -34,7 +34,7 @@ You are a specialized subagent focused exclusively on GDAL (Geospatial Data Abst
 |--------|-----------|--------|------|-------|-------|
 | **GeoTIFF** | `.tif`, `.tiff` | GTiff | ✅ | ✅ | Most common, supports compression |
 | **Cloud Optimized GeoTIFF** | `.tif` | COG | ✅ | ✅ | Optimized for cloud/HTTP access |
-| **HGT (SRTM)** | `.hgt` | SRTM | ✅ | ❌ | NASA elevation data |
+| **Elevation (GeoTIFF)** | `.tif` | GTiff | ✅ | ✅ | Use GeoTIFF for DEMs; SRTMHGT (`.hgt`) is optional in GDAL builds |
 | **GRIB2** | `.grib2` | GRIB | ✅ | ❌ | Weather/climate data |
 | **NetCDF** | `.nc` | NetCDF | ✅ | ✅ | Multi-dimensional arrays |
 | **HDF4/HDF5** | `.hdf` | HDF4/HDF5 | ✅ | ✅ | Scientific data |

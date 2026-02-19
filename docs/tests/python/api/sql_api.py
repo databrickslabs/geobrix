@@ -5,8 +5,9 @@ All snippets are string constants. Tests in test_sql_api.py validate registratio
 and compile/execute where possible. Use sample-data paths per cursor rules.
 """
 
-# Sample data base (mounted Volumes)
-SAMPLE_DATA_BASE = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+# Sample data base at runtime (path_config)
+from path_config import SAMPLE_DATA_BASE
+
 SAMPLE_NYC_RASTERS = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 SAMPLE_NYC_SHAPEFILE = f"{SAMPLE_DATA_BASE}/nyc/subway/nyc_subway.shp.zip"
 SAMPLE_NYC_GEOJSON = f"{SAMPLE_DATA_BASE}/nyc/taxi-zones/nyc_taxi_zones.geojson"
@@ -53,9 +54,9 @@ DESCRIBE FUNCTION gbx_rst_boundingbox;
 -- Get extended information
 DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;"""
 
-SQL_READ_AND_QUERY_RASTERS = """-- Read rasters (use your sample data path)
+SQL_READ_AND_QUERY_RASTERS = f"""-- Read rasters (use your sample data path)
 CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif`;
+SELECT * FROM gdal.`{SAMPLE_NYC_RASTERS}`;
 
 -- Extract metadata
 SELECT
@@ -172,9 +173,9 @@ FROM legacy_features;
 
 SELECT * FROM features_analyzed WHERE area > 1000;"""
 
-SQL_READ_GEOJSON = """-- Read GeoJSON (use your path)
+SQL_READ_GEOJSON = f"""-- Read GeoJSON (use your path)
 CREATE OR REPLACE TEMP VIEW features AS
-SELECT * FROM geojson_ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/taxi-zones/nyc_taxi_zones.geojson`;
+SELECT * FROM geojson_ogr.`{SAMPLE_NYC_GEOJSON}`;
 
 -- Query with geometry
 SELECT

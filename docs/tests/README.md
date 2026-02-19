@@ -53,9 +53,9 @@ pytest docs/tests/python/ -v -m "not integration"
 
 **Run including integration tests** (e.g. on DBR or when you need those tests):
 ```bash
-bash .cursor/commands/gbx-test-python-docs.sh --include-integration --skip-build --skip-download
+bash .cursor/commands/gbx-test-python-docs.sh --include-integration --skip-build
 # or run only the integration suite (physical split under docs/tests/python/integration/)
-bash .cursor/commands/gbx-test-python-docs.sh --suite integration --skip-build --skip-download
+bash .cursor/commands/gbx-test-python-docs.sh --suite integration --skip-build
 # or
 pytest docs/tests/python/ -v -m integration
 ```

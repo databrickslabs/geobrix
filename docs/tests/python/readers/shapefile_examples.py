@@ -4,11 +4,12 @@ Uses sample-data Volumes path; output constants for Example output blocks.
 """
 
 # Sample-data Volumes path
-SAMPLE_SHAPEFILE_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip"
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_SHAPEFILE_PATH = f"{SAMPLE_DATA_BASE}/nyc/subway/nyc_subway.shp.zip"
 
 # Display constants (payload only)
 READ_SHAPEFILE = """# Read shapefile (sample-data Volumes path)
-df = spark.read.format("shapefile_ogr").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")
+df = spark.read.format("shapefile_ogr").load("{SAMPLE_SHAPEFILE_PATH}")
 df.show()"""
 
 READ_SHAPEFILE_output = """+--------------------+-----------+----+
@@ -21,7 +22,7 @@ READ_SHAPEFILE_output = """+--------------------+-----------+----+
 READ_WITH_OPTIONS = """# Adjust chunk size (sample-data Volumes path)
 df = spark.read.format("shapefile_ogr") \\
     .option("chunkSize", "50000") \\
-    .load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")
+    .load("{SAMPLE_SHAPEFILE_PATH}")
 df.show()"""
 
 READ_WITH_OPTIONS_output = """+--------------------+-----------+----+
@@ -32,7 +33,7 @@ READ_WITH_OPTIONS_output = """+--------------------+-----------+----+
 +--------------------+-----------+----+"""
 
 SQL_SHAPEFILE = """-- Read shapefile in SQL (sample-data Volumes path)
-SELECT * FROM shapefile_ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip`;"""
+SELECT * FROM shapefile_ogr.`{SAMPLE_SHAPEFILE_PATH}`;"""
 
 SQL_SHAPEFILE_output = """+--------------------+-----------+----+
 |geom_0              |geom_0_srid|name|

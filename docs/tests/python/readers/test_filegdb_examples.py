@@ -12,10 +12,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
 import filegdb_examples
+from path_config import SAMPLE_DATA_BASE
 
-# Sample data path (.gdb.zip; reader supports it via vsizip)
-SAMPLE_FILEGDB = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/filegdb/NYC_Sample.gdb.zip"
+# Sample data path at runtime (path_config)
+SAMPLE_FILEGDB = f"{SAMPLE_DATA_BASE}/nyc/filegdb/NYC_Sample.gdb.zip"
 
 @pytest.fixture(scope="module")
 def spark():

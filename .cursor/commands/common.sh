@@ -54,11 +54,15 @@ resolve_log_path() {
     echo "test-logs/$log_arg"
 }
 
+# Central logging: truncate log on each run so every command gets a fresh file.
+# Commands that use --log should call this (or setup_log); the only exception is
+# scripts that tee a subprocess only—those must truncate explicitly (: > "$LOG_PATH").
 setup_log_file() {
     local log_path="$1"
     
     if [ -n "$log_path" ]; then
         mkdir -p "$(dirname "$log_path")"
+        : > "$log_path"
         echo -e "${CYAN}📝 Logging to: ${YELLOW}$log_path${NC}"
         exec > >(tee -a "$log_path") 2>&1
     fi

@@ -43,13 +43,13 @@ After running the notebook, the Volume (or your configured base path) contains t
 |--------|--------|------|------|---------------|
 | Essential | NYC Boroughs | `nyc/boroughs/nyc_boroughs.geojson` | 3.0 MB | **GeoJSON** — vector boundaries; joins, overlay, mapping. Driver: GeoJSON |
 | Essential | NYC Taxi Zones | `nyc/taxi-zones/nyc_taxi_zones.geojson` | 3.7 MB | **GeoJSON** — vector zones; spatial joins, aggregation. Driver: GeoJSON |
-| Essential | SRTM NYC | `nyc/elevation/srtm_n40w074.hgt` | 24.7 MB | **SRTM HGT** — elevation DEM; slope, aspect, hillshade. Driver: SRTMHGT |
+| Essential | SRTM NYC | `nyc/elevation/srtm_n40w074.tif` | 24.7 MB | **GeoTIFF** — elevation DEM; slope, aspect, hillshade. Driver: GTiff |
 | Essential | NYC Sentinel-2 | `nyc/sentinel2/nyc_sentinel2_red.tif` | 205.4 MB | **GeoTIFF** — optical raster (red band); band math, indices. Driver: GTiff |
 | Essential | London Postcodes | `london/postcodes/london_postcodes.geojson` | 0.9 MB | **GeoJSON** — vector postcode areas; point-in-polygon, mapping. Driver: GeoJSON |
-| Essential | SRTM London | `london/elevation/srtm_n51w001.hgt` | 24.7 MB | **SRTM HGT** — elevation DEM; terrain analysis. Driver: SRTMHGT |
+| Essential | SRTM London | `london/elevation/srtm_n51w001.tif` | 24.7 MB | **GeoTIFF** — elevation DEM; terrain analysis. Driver: GTiff |
 | Essential | London Sentinel-2 | `london/sentinel2/london_sentinel2_red.tif` | 92.7 MB | **GeoTIFF** — optical raster; NDVI, classification. Driver: GTiff |
 | Complete | NYC Neighborhoods | `nyc/neighborhoods/nyc_nta.geojson` | 4.1 MB | **GeoJSON** — vector neighborhoods (NTA); aggregation, mapping. Driver: GeoJSON |
-| Complete | SRTM NYC East | `nyc/elevation/srtm_n40w073.hgt` | 24.7 MB | **SRTM HGT** — elevation DEM; extended terrain. Driver: SRTMHGT |
+| Complete | SRTM NYC East | `nyc/elevation/srtm_n40w073.tif` | 24.7 MB | **GeoTIFF** — elevation DEM; extended terrain. Driver: GTiff |
 | Complete | HRRR Weather | `nyc/hrrr-weather/hrrr_nyc_20260213_12z.grib2` | 131.2 MB | **GRIB2** — weather model; temperature, wind, precipitation. Driver: GRIB |
 | Complete | NYC Parks | `nyc/parks/nyc_parks.shp.zip` | 2.1 MB | **Shapefile** (zip) — vector polygons; overlay, area stats. Driver: ESRI Shapefile (use `/vsizip/` path) |
 | Complete | NYC Subway | `nyc/subway/nyc_subway.shp.zip` | 0.1 MB | **Shapefile** (zip) — vector points (stations); proximity, routing. Driver: ESRI Shapefile (use `/vsizip/` path) |

@@ -8,7 +8,7 @@ and various tile manipulation patterns.
 Paths use sample data from mounted Volumes (see docs/docs/sample-data.mdx).
 """
 
-SAMPLE_DATA_BASE = "/Volumes/main/default/geobrix_samples/geobrix-examples"
+from path_config import SAMPLE_DATA_BASE
 SAMPLE_NYC_RASTER = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 SAMPLE_NYC_RASTERS = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/*.tif"
 
@@ -28,16 +28,16 @@ except ImportError:
 
 
 # SQL constant for cellid example (use your sample raster path)
-SQL_CELLID_NON_TESSELLATED = """-- Non-tessellated: cellid is null
+SQL_CELLID_NON_TESSELLATED = f"""-- Non-tessellated: cellid is null
 SELECT tile.cellid 
-FROM gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif`;
+FROM gdal.`{SAMPLE_NYC_RASTER}`;
 -- Returns: null"""
 
-SQL_CELLID_TESSELLATED = """-- Tessellated: cellid contains H3 cell ID
+SQL_CELLID_TESSELLATED = f"""-- Tessellated: cellid contains H3 cell ID
 SELECT tile.cellid 
 FROM (
   SELECT explode(gbx_rst_h3_tessellate(tile, 7)) as tile
-  FROM gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif`
+  FROM gdal.`{SAMPLE_NYC_RASTER}`
 );
 -- Returns: 604189641255419903, 604189641255420159, ..."""
 
@@ -98,12 +98,12 @@ def accessing_tile_fields_python(spark):
     return df
 
 
-SQL_ACCESSING_TILE_FIELDS = """SELECT 
+SQL_ACCESSING_TILE_FIELDS = f"""SELECT 
     tile.cellid,
     tile.raster,
     tile.metadata,
     tile.metadata['driver'] as driver
-FROM gdal.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif`;"""
+FROM gdal.`{SAMPLE_NYC_RASTER}`;"""
 
 
 def filtering_by_metadata(spark):

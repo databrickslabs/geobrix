@@ -11,6 +11,27 @@ permissions:
   contents: read
   id-token: write
 jobs:
+  # Regenerate doc-snippet-inventory and push to the PR branch (not main). Only for PRs targeting main.
+  update-doc-inventory:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout PR head branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Rebuild doc-snippet-inventory
+        run: python3 scripts/ci/inventory-doc-snippets.py
+      - name: Commit and push if inventory changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/doc-snippet-inventory.json
+          git diff --staged --quiet && echo "No changes to doc-snippet-inventory.json" && exit 0
+          git commit -m "chore(docs): rebuild doc-snippet-inventory.json [skip ci]"
+          git push origin HEAD:${{ github.head_ref }}
   build:
     runs-on: linux-ubuntu-latest
     env:
@@ -31,5 +52,7 @@ jobs:
           enable_coverage: "false"
       - name: build python
         uses: ./.github/actions/python_build
+      - name: Rebuild doc-snippet-inventory
+        run: python3 scripts/ci/inventory-doc-snippets.py
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts

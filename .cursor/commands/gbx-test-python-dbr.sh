@@ -159,6 +159,8 @@ print_section "Running DBR Integration Tests"
 # Execute tests
 if [ -n "$LOG_FILE" ]; then
     LOG_PATH=$(resolve_log_path "$LOG_FILE")
+    mkdir -p "$(dirname "$LOG_PATH")"
+    : > "$LOG_PATH"
     echo -e "${CYAN}📝 Logging to: ${LOG_PATH}${NC}"
     docker exec geobrix-dev bash -c "$PYTEST_CMD" 2>&1 | tee "$LOG_PATH"
     EXIT_CODE=${PIPESTATUS[0]}

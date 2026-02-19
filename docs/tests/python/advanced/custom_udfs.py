@@ -29,7 +29,7 @@ def eval_method_standard_usage(spark):
 
     rx.register(spark)
     rasters = spark.read.format("gdal").load(
-        "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+        _RASTER_PATH
     )
     df = rasters.select(rx.rst_boundingbox("tile").alias("bbox"))
     df.limit(2).show(truncate=40)
@@ -87,7 +87,7 @@ def basic_python_udf_example(spark):
             return {"error": str(e)}
     
     rasters = spark.read.format("gdal").load(
-        "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+        _RASTER_PATH
     )
     enriched = rasters.withColumn("custom_metadata", extract_custom_metadata("tile"))
     enriched.select("path", "custom_metadata").limit(2).show(truncate=30)
@@ -105,7 +105,8 @@ basic_python_udf_example_output = """
 
 
 # Sample path for common-pattern examples (one-copy, display results)
-_RASTER_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"
+from path_config import SAMPLE_DATA_BASE
+_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 
 def conditional_processing_example(spark):

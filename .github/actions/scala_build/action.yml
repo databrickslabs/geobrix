@@ -73,7 +73,6 @@ runs:
         - name: Copy user artifacts local staging
           shell: bash
           run: |
-            # add user-guide and zipped examples (for now)
+            # add zipped resources (for now)
             mkdir -p staging/user-artifacts
-            cp resources/user-guide/*.pdf staging/user-artifacts 2>/dev/null || true
-            cp resources/beta-dist/examples.zip staging/user-artifacts 2>/dev/null || true
+            cp resources/static/geobrix-docs-*.zip staging/user-artifacts 2>/dev/null || true

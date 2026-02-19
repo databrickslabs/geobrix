@@ -1,6 +1,6 @@
 # Run All Documentation Tests
 
-Runs **all** documentation examples: **Python** (including SQL API and readers), then **Scala**. Uses the same Docker container and common options as `gbx:test:python-docs` and `gbx:test:scala-docs`. Use for pre-commit or CI-style validation.
+Runs **all** documentation tests by invoking **gbx-test-python-docs**, **gbx-test-sql-docs**, and **gbx-test-scala-docs** in sequence. Pass-through options (e.g. `--skip-build`, `--no-sample-data-root`) are forwarded so `GBX_SAMPLE_DATA_ROOT` and build behavior are consistent. Use for pre-commit or CI-style validation.
 
 ---
 
@@ -24,24 +24,25 @@ bash .cursor/commands/gbx-test-docs.sh [OPTIONS]
 - `--markers <markers>` – Pytest markers for Python (e.g. `"not slow"`).
 - `--include-integration` – Include Python integration tests (excluded by default).
 - `--skip-build` – Skip Maven and Python build before Python tests.
-- `--skip-download` – Skip sample-data download.
-- `--data-bundle <type>` – `essential` | `complete` (default) | `both`.
 - `--scala-suite <pattern>` – Scala test suite pattern (default: `tests.docs.scala.*`).
 - `--python-only` – Run only Python doc tests (skip Scala).
 - `--scala-only` – Run only Scala doc tests (skip Python).
+- `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use your env or path_config default; e.g. full bundle).
 - `--help` – Help and examples.
+
+**Sample data (default):** The command sets `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` inside the container so doc tests use the minimal bundle (host path `sample-data/Volumes/main/default/test-data`). This is required for running docs unit tests on remote/CI. Use `--no-sample-data-root` to leave it unset (e.g. to use a full bundle or your own env).
 
 ## Examples
 
 ```bash
-# Full run with build and download
+# Full run with build
 bash .cursor/commands/gbx-test-docs.sh
 
-# Fast run (skip build and download), with log
-bash .cursor/commands/gbx-test-docs.sh --skip-build --skip-download --log docs.log
+# Fast run (skip build), with log. Uses in-repo minimal bundle; no download.
+bash .cursor/commands/gbx-test-docs.sh --skip-build --log docs.log
 
 # Python doc tests only (e.g. API suite)
-bash .cursor/commands/gbx-test-docs.sh --python-only --suite api --skip-build --skip-download
+bash .cursor/commands/gbx-test-docs.sh --python-only --suite api --skip-build
 
 # Scala doc tests only
 bash .cursor/commands/gbx-test-docs.sh --scala-only --log scala-docs.log
@@ -52,7 +53,8 @@ bash .cursor/commands/gbx-test-docs.sh --scala-only --scala-suite 'docs.tests.sc
 
 ## Order and scope
 
-1. **Python** – `docs/tests/python/` (or subset via `--suite` / `--path` / `--test`). Includes SQL API and Python API examples.
-2. **Scala** – `docs/tests/scala/` via Maven suite (default `tests.docs.scala.*`).
+1. **Python** – `gbx-test-python-docs` (default: all of `docs/tests/python/` except `api/`; use `--suite` / `--path` / `--test` for subsets).
+2. **SQL/API** – `gbx-test-sql-docs` (docs/tests/python/api/).
+3. **Scala** – `gbx-test-scala-docs` (Maven suite default `tests.docs.scala.*`).
 
-If either phase fails, the command exits with a non-zero code. With `--log`, all output is appended to the given file.
+If any phase fails, the command exits with a non-zero code. With `--log`, the log file is truncated at the start of the run and all output is written to it.

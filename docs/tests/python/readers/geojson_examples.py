@@ -5,8 +5,10 @@ All code examples shown in docs/docs/readers/geojson.mdx are imported from this 
 Uses sample-data Volumes path; output constants for Example output blocks.
 """
 
-# Sample-data Volumes path (NYC boroughs)
-SAMPLE_GEOJSON_PATH = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojson"
+# Sample-data path at runtime (path_config)
+from path_config import SAMPLE_DATA_BASE
+SAMPLE_GEOJSON_PATH = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojson"
+SAMPLE_GEOJSONL_PATH = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojsonl"
 
 # Display constants (payload only)
 READ_GEOJSON = """# Read standard GeoJSON (sample-data Volumes path)
@@ -50,6 +52,6 @@ def read_geojson(spark, path=None):
     return spark.read.format("geojson_ogr").option("multi", "false").load(path or SAMPLE_GEOJSON_PATH)
 
 
-def read_geojsonseq(spark, path="/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/boroughs/nyc_boroughs.geojsonl"):
+def read_geojsonseq(spark, path=None):
     """Verify READ_GEOJSONSEQ pattern works."""
-    return spark.read.format("geojson_ogr").load(path)
+    return spark.read.format("geojson_ogr").load(path or SAMPLE_GEOJSONL_PATH)

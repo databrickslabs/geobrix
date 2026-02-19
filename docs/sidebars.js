@@ -23,6 +23,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Sample Data',
+      collapsed: false,
       items: [
         'sample-data/overview',
         'sample-data/setup',
@@ -34,6 +35,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Packages',
+      collapsed: false,
       items: [
         'packages/overview',
         'packages/rasterx',
@@ -44,6 +46,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Readers',
+      collapsed: false,
       items: [
         'readers/overview',
         'readers/gdal',
@@ -58,12 +61,14 @@ const sidebars = {
     {
       type: 'category',
       label: 'API Reference',
+      collapsed: false,
       items: [
         'api/overview',
         'api/tile-structure',
         {
           type: 'category',
           label: 'Function Reference',
+          collapsed: false,
           items: [
             'api/rasterx-functions',
             'api/gridx-functions',
@@ -86,6 +91,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Advanced Usage',
+      collapsed: false,
       items: [
         'advanced/overview',
         'advanced/custom-udfs',

@@ -1,0 +1,71 @@
+---
+description: How to handle Unity Catalog Volumes in GeoBrix (FUSE on cluster, pathlib, no SDK for I/O).
+globs: ["**/sample/_bundle.py", "**/push_and_run_*_on_cluster.py", "**/databricks_cluster_config*"]
+alwaysApply: false
+---
+
+# Unity Catalog Volumes in GeoBrix
+
+Use this when working with Unity Catalog Volume paths in sample-data bundles, primitive/bundle runner notebooks, or Databricks cluster config.
+
+## Core facts
+
+1. **On a Databricks cluster**, `/Volumes/<catalog>/<schema>/<volume_name>/...` is **FUSE-mounted**. Python sees it as the normal filesystem: `Path`, `os.path.exists`, `os.listdir`, `os.makedirs(..., exist_ok=True)`, `open().read()`, `shutil.copy` all work.
+2. **The Volume itself must pre-exist.** You cannot create the volume root by code; only paths *under* it (e.g. `.../volume_name/geobrix-examples/nyc`) can be created. Calling `os.makedirs(volume_root, exist_ok=True)` does **not** throw; it is idempotent.
+3. **Prefer pathlib** where possible: `Path(volumes_path)`, `path.mkdir(parents=True, exist_ok=True)`, `path.exists()`, `path.stat().st_size`.
+4. **Avoid random access (seek)** on files stored on the volume. Use sequential read/write; for writes, use a temp file then `shutil.copy` to the volume path.
+5. **Do not rely on the Databricks Files API (SDK)** for volume I/O when running on the cluster. The Files API can report "Volume does not exist" even when the path exists via FUSE. Use FUSE path operations only for bundle and primitive logic that runs on the cluster.
+
+## Volume path shape
+
+- **Root** (5 segments): `/Volumes/<catalog>/<schema>/<volume_name>` — must already exist.
+- **Under the root**: any path like `.../volume_name/geobrix-examples/nyc/...` can be created with `path.mkdir(parents=True, exist_ok=True)` and files written with `shutil.copy` or normal `open(path, 'wb').write(...)` (sequential).
+
+## Config and naming
+
+- **Env vars**: `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME`.
+- **Name must match Data Explorer exactly**: hyphen vs underscore matters (e.g. `sample-data` not `sample_data`). Wrong name leads to "path does not exist" or "Volume does not exist".
+- Sanitize env-derived strings (strip BOM and invisible Unicode) before building paths or injecting into notebooks; see `_strip_invisible` in the push scripts.
+
+## Patterns
+
+### Check existence (skip-if-exists)
+
+```python
+path = Path(volumes_subpath)
+try:
+    if path.exists():
+        size_mb = path.stat().st_size / (1024 * 1024)
+        return True, size_mb
+    return False, None
+except OSError as e:
+    if e.errno == errno.ENOENT:
+        return False, None
+    if e.errno == 95 and _is_volume_path(path):  # EOPNOTSUPP
+        if path.name in os.listdir(path.parent):
+            return True, None
+        return False, None
+    raise
+```
+
+### Create directory under volume
+
+```python
+# volume_root = Path("/Volumes/catalog/schema/volume_name")
+# Do not create volume_root; only paths under it
+if path != volume_root:
+    path.mkdir(parents=True, exist_ok=True)
+```
+
+### Copy file to volume
+
+```python
+_ensure_dir(volumes_subpath.parent, volume_root=volume_root)
+shutil.copy2(temp_file, volumes_subpath)
+```
+
+## References
+
+- Primitive runner: `notebooks/tests/push_and_run_primitive_on_cluster.py` (FUSE-only cells).
+- Bundle: `python/geobrix/src/databricks/labs/gbx/sample/_bundle.py` (`_ensure_dir`, `_path_exists_for_skip`, `_copy_final_to_volumes`).
+- Config example: `notebooks/tests/databricks_cluster_config.example.env`.

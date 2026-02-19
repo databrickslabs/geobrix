@@ -54,6 +54,7 @@ Use these when you need rule-level detail; subagents hold the rest.
 | Build / Maven | `maven-configuration.mdc` |
 | GDAL resources & API | `gdal-resource-management.mdc` |
 | Naming (Scala/Python/SQL) | `cross-language-naming-consistency.mdc`, `reader-naming-convention.mdc` |
+| Unity Catalog Volumes (FUSE, pathlib, bundle) | `unity-catalog-volumes.mdc` |
 | GridX/BNG API (resolutions, ported-code consistency) | `gridx-bng-api.mdc` |
 | Commands list & usage | `cursor-commands.mdc` |
 | Progress, required behavior | `progress-updates.mdc`, `Required-behavior.mdc` |

@@ -31,6 +31,11 @@ gbx:docs:stop                       # Stop all servers
 gbx:docs:restart                    # Stop + start with rebuild
 gbx:docs:restart --skip-build       # Restart without rebuild
 gbx:docs:restart --port 3001        # Restart on custom port
+
+# Static build for offline zip (relative paths + hash router; zip to resources/static by default)
+gbx:docs:static-build               # Build + zip to resources/static/geobrix-docs-<version>.zip
+gbx:docs:static-build --output path # Zip to custom folder
+gbx:docs:static-build --skip-zip    # Build only (no zip)
 ```
 
 ## Documentation Server Details
@@ -104,6 +109,15 @@ cat test-logs/docs-build.log
 
 # Fix issues and retry
 gbx:docs:restart
+```
+
+### Scenario 5: Build offline zip for distribution
+```bash
+# Build with relative paths and create zip for resources/beta-dist/
+gbx:docs:static-build
+
+# Zip is written to resources/static/geobrix-docs-<version>.zip (version from docs/package.json)
+# Unzipped folder works when opening index.html from any location (e.g. Downloads)
 ```
 
 ## Docusaurus Build Process

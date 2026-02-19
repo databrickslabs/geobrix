@@ -319,7 +319,7 @@ def _run_pip_install(args_str: str) -> tuple[bool, str]:
     args_str = args_str.strip()
     if args_str.startswith("install"):
         args_str = args_str[7:].strip()
-    args = re.split(r"\s+", args_str) if args_str else []
+    args = [a for a in re.split(r"\s+", args_str) if a] if args_str else []
     r = subprocess.run(
         [sys.executable, "-m", "pip", "install", "-q"] + args,
         capture_output=True,

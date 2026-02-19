@@ -30,7 +30,7 @@ bash .cursor/commands/gbx-test-notebooks.sh [OPTIONS]
 
 ## Default behavior
 
-- **Cell-by-cell (no kernel)**: Default run executes notebooks with the runner in `notebooks/tests/run_notebooks_cell_by_cell.py`. Magic-only cells (e.g. `%pip install`) are skipped.
+- **Cell-by-cell (no kernel)**: Default run executes notebooks with the runner in `notebooks/tests/run_notebooks_cell_by_cell.py`. `%pip install` cells are run in the isolated venv (same interpreter as subsequent cells). The venv is pre-installed with pystac-client, planetary-computer, and geopandas so notebooks that use Sentinel-2 or other sample-data deps work with or without a %pip cell.
 - **Verbosity**: `GBX_NOTEBOOK_VERBOSITY=quiet|truncated|full` (default: `truncated`). Controls how much source/result is printed per cell.
 - **Volumes mount required**: The command checks that `/Volumes` exists in the container. If not, it exits with instructions to start the container using `./scripts/docker/start_docker_with_volumes.sh`.
 - **Pytest when `--path` is a .py file**: e.g. `--path test_notebook_via_script.py` runs pytest for that test file instead of the cell-by-cell runner.

@@ -6,6 +6,8 @@
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
     "build": "docusaurus build",
+    "build:static-zip": "DOCS_STATIC_ZIP=1 docusaurus build && cp -r build build-static-zip && node scripts/relativize-static-build.js build-static-zip && npm run build",
+    "verify-static-docs": "node scripts/verify-static-docs.mjs",
     "swizzle": "docusaurus swizzle",
     "deploy": "docusaurus deploy",
     "clear": "docusaurus clear",
@@ -25,6 +27,8 @@
   "devDependencies": {
     "@docusaurus/module-type-aliases": "^3.1.0",
     "@docusaurus/types": "^3.1.0",
+    "@someok/docusaurus-plugin-relative-paths": "^1.0.5",
+    "playwright": "^1.58.0",
     "raw-loader": "^4.0.2"
   },
   "browserslist": {
@@ -43,4 +47,3 @@
     "node": ">=18.0"
   }
 }
-

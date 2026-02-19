@@ -92,3 +92,43 @@ The gbx-test-notebooks script installs these if needed.
 ## Markers
 
 - **integration**: Full notebook run (downloads data). Skip in fast CI; run when you need to verify end-to-end execution.
+
+## Test bundle on a live Databricks cluster
+
+You can test the Essential sample-data bundle against a **real Databricks workspace** (Unity Catalog Volumes) in two ways.
+
+### 1. Local test (bundle runs on your machine, uploads via SDK)
+
+The bundle code runs locally; uploads go to the configured Volume via the Databricks SDK (`WorkspaceClient`). No code runs on a cluster.
+
+1. Copy `notebooks/tests/databricks_cluster_config.example.env` to `notebooks/tests/databricks_cluster_config.env`.
+2. Set `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or `DATABRICKS_CONFIG_PROFILE`) and `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME`.
+3. Ensure the Volume exists in the workspace. Install: `pip install -e python/geobrix[databricks]` (or `pip install databricks-sdk`). For the full Essential bundle (Sentinel-2, etc.) also install `requests`, `pystac-client`, `planetary-computer`.
+4. Run the test (from repo root, or with `python -m pytest` from `notebooks/tests/`):
+
+   ```bash
+   pytest notebooks/tests/test_bundle_on_databricks.py -v
+   ```
+
+   Or run the bundle directly:
+
+   ```bash
+   python notebooks/tests/test_bundle_on_databricks.py
+   ```
+
+If the env is not set, the test is **skipped** (no failure).
+
+### 2. Push and run on cluster (job runs on a Databricks cluster)
+
+Use **push_and_run_bundle_on_cluster.py** to upload a small runner notebook to the workspace and run it as a **one-off job** on a configured cluster. The cluster must have GeoBrix installed (e.g. as a cluster library), or you can set `GBX_BUNDLE_WHEEL_VOLUME_PATH` so the script builds a wheel, uploads it to a Volume, and the runner notebook installs it first.
+
+1. Set the same env as above, plus `CLUSTER_ID` (existing cluster id).
+2. Optional: `GBX_BUNDLE_WHEEL_VOLUME_PATH=/Volumes/main/default/geobrix_samples/wheels/geobrix.whl` so the script builds and uploads a wheel; the runner will `%pip install` it.
+3. Run:
+
+   ```bash
+   python notebooks/tests/push_and_run_bundle_on_cluster.py       # wait for run to finish
+   python notebooks/tests/push_and_run_bundle_on_cluster.py --no-wait   # submit and exit
+   ```
+
+This uses the [Databricks SDK](https://docs.databricks.com/en/dev-tools/sdk-python.html) and [Databricks Utilities with Databricks Connect](https://docs.databricks.com/aws/en/dev-tools/databricks-connect/python/databricks-utilities) pattern: workspace upload + one-off job submit.

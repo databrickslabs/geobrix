@@ -39,6 +39,26 @@ GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and too
 
 Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; many Cursor commands run inside that container.
 
+### Testing on a Databricks cluster
+
+You can run the **Essential bundle** and **primitive Volume tests** on a live Databricks cluster so that Volume paths are FUSE-mounted and the bundle uses pathlib/shutil only (no Databricks Files API).
+
+**Config** — Copy `notebooks/tests/databricks_cluster_config.example.env` to `notebooks/tests/databricks_cluster_config.env` and set:
+
+- `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or `DATABRICKS_CONFIG_PROFILE`)
+- `CLUSTER_ID` (existing cluster to run the job)
+- `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME` — Volume root is `/Volumes/<catalog>/<schema>/<volume_name>`. The volume name must match Data Explorer exactly (e.g. `sample-data` not `sample_data`).
+- Optional: `GBX_BUNDLE_WHEEL_VOLUME_PATH` — path to a GeoBrix wheel on a Volume (e.g. `.../geobrix-0.2.0-py3-none-any.whl`). When set, the bundle runner notebook gets two pip cells plus `dbutils.library.restartPython()` so the cluster loads the latest code.
+- Optional: `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` — use an existing wheel (no build/upload); notebook still gets the pip and restart cells.
+- Optional: `GBX_RUNNER_DIR`, `GBX_BUNDLE_RUNNER_NOTEBOOK`, `GBX_PRIMITIVE_RUNNER_NOTEBOOK` — where to upload the runner notebooks.
+
+**Commands** — From the repo root:
+
+- `gbx:test:primitive-databricks` — Pushes the primitive notebook and runs it on the cluster. Validates volume exists, create subdirs, read/write/copy via FUSE (pathlib/shutil). No GeoBrix dependency.
+- `gbx:test:bundle-databricks` — Pushes the bundle runner notebook and runs it on the cluster. If `GBX_BUNDLE_WHEEL_VOLUME_PATH` is set, the notebook has: (1) `%pip install --quiet <wheel>`, (2) `%pip install --quiet --no-deps --force-reinstall <wheel>`, (3) `dbutils.library.restartPython()`, then the bundle cell. Run those cells in order so the restarted process loads the new GeoBrix code.
+
+**Rule** — For Volume path handling (FUSE, pathlib, no random access), see `.cursor/rules/unity-catalog-volumes.mdc`.
+
 ---
 
 ## Cursor
@@ -72,7 +92,7 @@ Commands follow **`gbx:<category>:<action>`**:
 | `test` | Run tests (Scala, Python, docs, SQL docs, notebooks, function-info) |
 | `coverage` | Code coverage (Scala/Python, unit/docs, gaps, baseline, package-targeted) |
 | `data` | Sample data download (essential / complete bundle) |
-| `docs` | Documentation server (start, stop, restart, dev, serve-local, function-info, prompt-session) |
+| `docs` | Documentation server (start, stop, restart, dev, serve-local, static-build, function-info, prompt-session) |
 | `docker` | Container lifecycle (exec, start, stop, restart, rebuild, attach) |
 
 #### When to use which command
@@ -91,6 +111,8 @@ Use the following by task; always prefer the command over manual shell for these
 | `gbx:test:docs` | Before PR that touches docs | Runs all doc tests (Python + Scala) |
 | `gbx:test:function-info` | After changing function-info or doc SQL | Regenerates function-info and runs DESCRIBE/coverage tests |
 | `gbx:test:notebooks` | After changing sample-data or notebook runner | Runs notebook tests; use `--include-integration` for full run |
+| `gbx:test:bundle-databricks` | Validate Essential bundle on a live cluster | Pushes runner notebook and runs it on `CLUSTER_ID`; use `--local` to run bundle on host |
+| `gbx:test:primitive-databricks` | Validate Volume access on cluster (FUSE) | Pushes primitive notebook; tests volume exists, create subdirs, read/write/copy via pathlib |
 
 **Coverage** (Scala coverage is slow; use strategically)
 
@@ -108,6 +130,7 @@ Use the following by task; always prefer the command over manual shell for these
 | Command | When to use | What it does |
 |---------|-------------|--------------|
 | `gbx:data:download` | Need sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
+| `gbx:data:push-wheel` | Put built wheel on a Volume for cluster install | Builds Python wheel and uploads to `GBX_BUNDLE_WHEEL_VOLUME_PATH` |
 
 **Documentation**
 
@@ -117,6 +140,7 @@ Use the following by task; always prefer the command over manual shell for these
 | `gbx:docs:stop` | Free port or before another docs command | Stops any running docs server |
 | `gbx:docs:dev` | While editing docs | Dev server with hot reload |
 | `gbx:docs:serve-local` | Preview production build | Build then serve static site |
+| `gbx:docs:static-build` | Create offline/portable docs zip | Build with relative paths and hash router; zip to `resources/static/` by default (use `--output <path>`); leaves `docs/build/` unchanged for serving |
 | `gbx:docs:restart` | Restart after stop | Stop + start with same options |
 | `gbx:docs:function-info` | After changing doc SQL examples | Regenerates `function-info.json` from doc SQL |
 | `gbx:prompt-session` | Start of session or context switch | Prints agent-context rule for review |
@@ -154,9 +178,10 @@ Most commands accept `--help`. Common options: `--log <path>` for test/output lo
 
 ## Quick reference
 
-- **Run tests**: `gbx:test:*` (pick the scope: scala, python, docs, notebooks, etc.).
+- **Run tests**: `gbx:test:*` (pick the scope: scala, python, docs, notebooks, bundle-databricks, primitive-databricks).
 - **Coverage**: Prefer `gbx:coverage:gaps` and `gbx:coverage:scala-package` for Scala; `gbx:coverage:python` is fast.
 - **Docs**: `gbx:docs:dev` while editing; `gbx:docs:stop` to stop.
 - **Docker**: `gbx:docker:start` then `gbx:docker:exec` (or `attach`) for builds and tests.
+- **Databricks cluster**: `gbx:test:primitive-databricks` then `gbx:test:bundle-databricks` with `databricks_cluster_config.env` set.
 - **Context**: `gbx:prompt-session` to print the agent-context rule.
 - **Full command list and options**: See `.cursor/rules/cursor-commands.mdc` in the repo.

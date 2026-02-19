@@ -14,9 +14,10 @@ const config = {
 
   // Set the production url of your site here
   url: 'https://your-docusaurus-site.example.com',
-  // Set the /<baseUrl>/ pathname under which your site is served
-  // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/',
+  // baseUrl: use './' for static zip (open index.html from any folder); '/' for deployed site
+  baseUrl: process.env.DOCS_STATIC_ZIP === '1' ? './' : '/',
+  // Hash router for static zip so file:// opens work (pathname is then in hash, e.g. #/)
+  ...(process.env.DOCS_STATIC_ZIP === '1' ? { future: { experimental_router: 'hash' } } : {}),
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
@@ -63,6 +64,8 @@ const config = {
         },
       };
     },
+    // Convert absolute paths to relative in HTML/CSS so static zip works when opening index.html from any folder (file://)
+    ...(process.env.DOCS_STATIC_ZIP === '1' ? ['@someok/docusaurus-plugin-relative-paths'] : []),
   ],
 
   presets: [

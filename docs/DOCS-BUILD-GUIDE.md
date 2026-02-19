@@ -312,7 +312,24 @@ npm run build
 # Examples: Netlify, Vercel, AWS S3, etc.
 ```
 
-#### Option C: CI/CD Pipeline
+#### Option C: Static zip for offline / local viewing
+
+Use this when you need a single zip that works when users unzip and open `index.html` from any folder (e.g. Downloads). Uses relative paths and hash router so the site loads without a server. Zip filename and path use the version from `docs/package.json`.
+
+```bash
+# From project root (creates zip in resources/static/ by default)
+gbx:docs:static-build
+
+# Or from docs/ and zip manually:
+cd docs/
+npm run build:static-zip
+cd build-static-zip && zip -r ../../resources/static/geobrix-docs-$(node -e "console.log(require('./package.json').version)").zip . -x "*.DS_Store"
+```
+
+- `build:static-zip` uses `@someok/docusaurus-plugin-relative-paths` (HTML/CSS), baseUrl `./`, hash router, and a post-step to relativize JS and inject a file:// redirect; then restores `docs/build/` for serving.
+- Normal `npm run build` keeps `baseUrl: '/'` for deployed sites.
+
+#### Option D: CI/CD pipeline
 
 Add to `.github/workflows/docs.yml`:
 

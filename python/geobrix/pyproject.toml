@@ -39,6 +39,10 @@ test = [
     "rasterio>=1.3.0",
     "numpy>=1.24.0",
 ]
+# For sample-data bundle uploads to Unity Catalog Volumes and gbx:test:bundle-databricks
+databricks = [
+    "databricks-sdk",
+]
 
 [tool.pytest.ini_options]
 pythonpath = [ "src" ]

@@ -36,7 +36,7 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 | `test` | Run tests | `scala`, `python`, `scala-docs`, `python-docs`, `sql-docs`, `docs`, `function-info` |
 | `coverage` | Code coverage | `scala`, `scala-docs`, `python`, `python-docs` |
 | `data` | Sample data | `download` |
-| `docs` | Documentation | `start`, `stop`, `restart`, `function-info`, `prompt-session` |
+| `docs` | Documentation | `start`, `stop`, `restart`, `static-build`, `function-info`, `prompt-session` |
 | `docker` | Container mgmt | `exec`, `start`, `stop`, `restart`, `rebuild`, `attach` |
 
 ---
@@ -85,6 +85,14 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
    - Default: Excludes integration tests (full-notebook run); use `--include-integration` to run them
    - Options: `--log`, `--path <path>`, `--include-integration`
    - Example: `gbx:test:notebooks` or `gbx:test:notebooks --include-integration --log notebooks.log`
+
+9. **`gbx:test:bundle-databricks`** - Test Essential bundle on configured Databricks workspace
+   - **Default:** Pushes runner notebook (GBX_RUNNER_DIR + GBX_BUNDLE_RUNNER_NOTEBOOK, or GBX_BUNDLE_RUNNER_NOTEBOOK_PATH) and runs it on CLUSTER_ID (bundle executes on cluster; no local execution). Options: `--no-wait`, `--local` (run on host), `--debug`
+   - Config: `notebooks/tests/databricks_cluster_config.env`; requires DATABRICKS_HOST, DATABRICKS_TOKEN, CLUSTER_ID, GBX_BUNDLE_VOLUME_*
+
+10. **`gbx:test:primitive-databricks`** - Primitive Volume tests on Databricks cluster
+   - Pushes primitive runner notebook (GBX_RUNNER_DIR + GBX_PRIMITIVE_RUNNER_NOTEBOOK) and runs it on CLUSTER_ID. Tests: volume exists, create subdirs, read/write/copy via SDK only. Options: `--no-wait`
+   - Config: same as bundle; optional GBX_RUNNER_DIR, GBX_PRIMITIVE_RUNNER_NOTEBOOK
 
 ### Coverage Commands
 
@@ -148,6 +156,10 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
    - Output: `sample-data/Volumes/main/default/geobrix_samples/`
    - Example: `gbx:data:download --bundle complete`
 
+10. **`gbx:data:push-wheel`** - Build Python wheel and upload to Volume
+    - Builds wheel from `python/geobrix`, uploads to **GBX_BUNDLE_WHEEL_VOLUME_PATH** (overwrite)
+    - Config: `databricks_cluster_config.env` with GBX_BUNDLE_WHEEL_VOLUME_PATH, DATABRICKS_HOST, DATABRICKS_TOKEN
+
 ### Documentation Commands
 
 10. **`gbx:docs:start`** - Start Docusaurus documentation server
@@ -180,7 +192,12 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
     - For dynamic refresh while editing, use `gbx:docs:dev` instead
     - Example: `gbx:docs:serve-local --skip-build`
 
-17. **`gbx:docs:function-info`** - Generate function-info.json from doc SQL examples
+17. **`gbx:docs:static-build`** - Build docs for static zip (relative paths + hash router for offline/local viewing)
+    - Runs `npm run build:static-zip`; by default zips to `resources/static/geobrix-docs-<version>.zip`; use `--output <path>` to override
+    - Use for distribution zip that works when opening `index.html` from any folder (file://)
+    - Example: `gbx:docs:static-build` or `gbx:docs:static-build --output <path>` (zip filename always uses version from `docs/package.json`)
+
+18. **`gbx:docs:function-info`** - Generate function-info.json from doc SQL examples
     - Updates `DESCRIBE FUNCTION EXTENDED` to use the same examples as the API docs (one-copy pattern)
     - Output: `src/main/resources/com/databricks/labs/gbx/function-info.json`
     - Run after changing `docs/tests/python/api/rasterx_functions_sql.py` or `gridx_functions_sql.py`; then commit the JSON
@@ -188,32 +205,32 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 
 ### Docker Commands
 
-18. **`gbx:docker:exec`** - Execute commands in container
+19. **`gbx:docker:exec`** - Execute commands in container
     - Interactive shells: `--spark`, `--pyspark`, `--python`, `--scala`, `--bash`
     - Command execution: Direct or via `--command`
     - Example: `gbx:docker:exec --pyspark` or `gbx:docker:exec "mvn -version"`
 
-19. **`gbx:docker:start`** - Start geobrix-dev container
+20. **`gbx:docker:start`** - Start geobrix-dev container
     - Auto-mounts volumes
     - Checks if already running
     - Example: `gbx:docker:start --attach`
 
-20. **`gbx:docker:stop`** - Stop geobrix-dev container
+21. **`gbx:docker:stop`** - Stop geobrix-dev container
     - Graceful shutdown (default timeout: 10s)
     - Force option available
     - Example: `gbx:docker:stop --timeout 30`
 
-21. **`gbx:docker:restart`** - Restart geobrix-dev container
+22. **`gbx:docker:restart`** - Restart geobrix-dev container
     - Faster than stop + start
     - Preserves configuration
     - Example: `gbx:docker:restart --attach`
 
-22. **`gbx:docker:rebuild`** - Rebuild Docker image
+23. **`gbx:docker:rebuild`** - Rebuild Docker image
     - Stops/removes container
     - Rebuilds from Dockerfile
     - Example: `gbx:docker:rebuild --no-cache --start`
 
-23. **`gbx:docker:attach`** - Attach to running container
+24. **`gbx:docker:attach`** - Attach to running container
     - Opens interactive bash shell
     - Container keeps running after detach
     - Example: `gbx:docker:attach`
@@ -404,6 +421,7 @@ Start the development container first:
 
 **Data Commands**:
 - `gbx-data-download.sh` / `.md`
+- `gbx-data-push-wheel.sh` / `.md`
 
 **Documentation Commands**:
 - `gbx-docs-start.sh` / `.md`
@@ -411,6 +429,7 @@ Start the development container first:
 - `gbx-docs-restart.sh` / `.md`
 - `gbx-docs-dev.sh` / `.md`
 - `gbx-docs-serve-local.sh` / `.md`
+- `gbx-docs-static-build.sh` / `.md`
 - `gbx-prompt-session.sh` / `.md`
 
 **Docker Commands**:

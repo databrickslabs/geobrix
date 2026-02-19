@@ -15,6 +15,7 @@
 /metastore_db/
 /derby.log
 /test-logs/
+/notebooks/tests/databricks_cluster_config.env
 /ci-logs/# macOS files
 .DS_Store
 **/.DS_Store# Python cache and compiled files

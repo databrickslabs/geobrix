@@ -77,6 +77,17 @@ def _create_venv_and_run(venv_root: Path, path_arg: str | None) -> int:
         timeout=120,
         stdin=subprocess.DEVNULL,
     )
+    # Install deps used by sample-data notebooks (Sentinel-2, London boroughs, etc.) so %pip cells
+    # and notebooks without a %pip cell (e.g. workdir_path_minimal) see them in the same venv.
+    print("Installing notebook deps (pystac-client, planetary-computer, geopandas)...", flush=True)
+    subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "-q", "pystac-client", "planetary-computer", "geopandas"],
+        check=True,
+        capture_output=True,
+        cwd=str(PROJECT_ROOT),
+        timeout=120,
+        stdin=subprocess.DEVNULL,
+    )
     print("Running in isolated env (GBX_NOTEBOOK_ISOLATED=1)...", flush=True)
     env = os.environ.copy()
     env["GBX_NOTEBOOK_ISOLATED"] = "1"

@@ -1,0 +1,42 @@
+---
+description: Methodical doc-test iteration per-package pinpoint failures retest only failing tests
+alwaysApply: true
+---
+
+# Doc-Test Iteration Strategy
+
+**Remember:** Restest only pinpointed failing tests. Do not retest passing packages or full suites during iteration. Prefer the methodical identify-fix-rerun-only-failures loop over summary reports. Give ~30s status for long runs (see progress-updates.mdc).
+
+Use a **methodical, pinpointed approach** when running and fixing Python documentation tests. **Restesting should be only against pinpointed failing tests**—not full suites or packages. Track which tests and packages have already passed and **do not retest them**. Prefer this methodical identify-fix-rerun-only-failures loop over summary reports.
+
+## Core Principles
+
+1. Per-package with logging: run one suite at a time with a dedicated log per package.
+2. Leave passing packages alone: if a suite passes, do not retest it.
+3. Pinpoint failures: when a suite fails, narrow to the exact failing test or tests (single test or single file).
+4. Retest only what failed: after a code change, rerun only the pinpointed failing tests, not the full suite or full package.
+5. Iterate until clear: fix, run only failing tests, repeat until they pass.
+
+## Workflow
+
+**Step 1 – Run packages with per-package logging.** Run each doc-test suite separately (setup, quickstart, api, readers, rasterx, advanced) with its own log. If a suite passes, do not retest it. If it fails, note the failing test names.
+
+**Step 2 – Narrow to failing tests.** From the failure output, get the exact test node IDs. Run only those tests: use --test for one test, --path for one file. Do not rerun the whole suite until the pinpointed run passes.
+
+**Step 3 – Fix and retest only failing tests.** After changing code, **restest only the pinpointed failing test(s)**—never the full suite or a full package for iteration. If the pinpointed tests pass, you are done with that package. If they still fail, fix and run only those same tests again. Do not re-run passing packages or full suites after every fix. Understanding which tests have already passed and not retesting them is more important than producing summary reports.
+
+**Step 4 – Re-run only packages where code changed.** After all failures are fixed, run only the suite or suites whose code you changed.
+
+## Status updates during long runs (mandatory)
+
+**Results at least every 30 seconds.** For any doc-test run expected to take more than ~30 seconds, you MUST provide a brief progress update at roughly 30-second intervals. Do not run a long test to completion without giving the user status in between.
+
+- **How:** Run the test command in the background (e.g. `is_background: true` or equivalent), then every ~30s read the terminal output or log (e.g. `tail` the terminal file or `--log` file) and post a short status to the user (suite name, tests run so far, pass/fail if visible). Repeat until the run finishes.
+- **What to report:** e.g. "Readers suite in progress… 45 tests run so far" or "API suite… 120 passed, 0 failed so far."
+- **Reference:** `.cursor/rules/progress-updates.mdc` (Progress Updates for Long-Running Operations)—same 30s frequency for builds, pytest, etc.
+
+## References
+
+- Targeting and timing: .cursor/commands/gbx-test-python-docs.md
+- Test organization: .cursor/rules/test-organization-logging.mdc
+- Progress updates: .cursor/rules/progress-updates.mdc

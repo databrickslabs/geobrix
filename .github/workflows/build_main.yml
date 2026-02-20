@@ -1,0 +1,79 @@
+name: build main
+# Runs on: push to any branch (except python/** and scala/**), all PRs, and manual trigger.
+# Scala doc tests are excluded from the main Scala run; they run in a separate step only on push to main.
+on:
+  push:
+    branches-ignore:
+      - "python/**"
+      - "scala/**"
+  pull_request:
+    branches:
+      - "**"
+  workflow_dispatch:
+permissions:
+  contents: read
+  id-token: write
+jobs:
+  # Regenerate doc-snippet-inventory and push to the PR branch (not main). Only for PRs targeting main.
+  update-doc-inventory:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout PR head branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.head_ref }}
+      - name: Rebuild doc-snippet-inventory
+        run: python3 scripts/ci/inventory-doc-snippets.py
+      - name: Commit and push if inventory changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/doc-snippet-inventory.json
+          git diff --staged --quiet && echo "No changes to doc-snippet-inventory.json" && exit 0
+          git commit -m "chore(docs): rebuild doc-snippet-inventory.json [skip ci]"
+          git push origin HEAD:${{ github.head_ref }}
+  build:
+    runs-on: linux-ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      matrix:
+        python: [ 3.12.3 ]
+        pytest: [8.4.2]
+        numpy: [ 2.1.3 ]
+        gdal: [ 3.11.4 ]
+        spark: [ 4.0.0 ]
+    steps:
+      - name: checkout code
+        uses: actions/checkout@v5
+      - name: Create pip cache key file
+        run: |
+          echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: .cache/apt-archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}
+      - name: build scala
+        uses: ./.github/actions/scala_build
+        with:
+          enable_coverage: "false"
+          fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+      - name: build python
+        uses: ./.github/actions/python_build
+        with:
+          run_lint: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+      - name: Rebuild doc-snippet-inventory
+        run: python3 scripts/ci/inventory-doc-snippets.py
+      - name: Scala doc tests (main only, after everything else)
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        env:
+          GBX_SAMPLE_DATA_ROOT: ${{ runner.temp }}/geobrix-sample-data
+        run: |
+          mkdir -p "$GBX_SAMPLE_DATA_ROOT"
+          sudo -E mvn -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
+      - name: upload artifacts
+        uses: ./.github/actions/upload_artifacts

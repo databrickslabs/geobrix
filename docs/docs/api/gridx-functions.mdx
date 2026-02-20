@@ -1,0 +1,564 @@
+---
+sidebar_position: 6
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import gridxFunctionsExamples from '!!raw-loader!../../tests/python/api/gridx_functions.py';
+import gridxFunctionsSqlExamples from '!!raw-loader!../../tests/python/api/gridx_functions_sql.py';
+
+# GridX Function Reference (BNG)
+
+Complete reference for all GridX British National Grid (BNG) functions with detailed descriptions, parameters, return values, and examples.
+
+## Overview
+
+GridX provides functions for working with the British National Grid coordinate system, a specialized grid system used in Great Britain for spatial indexing and location-based services.
+
+**Function Count**: 23 functions organized into 7 categories:
+- **Conversion Functions** (2): Convert cells to geometries
+- **Core Functions** (4): Basic cell operations
+- **Cell Operations** (2): Intersection and union
+- **Coordinate Conversion** (2): Point/coordinate to cell
+- **K-Ring Functions** (4): Neighboring cells
+- **Tessellation Functions** (2): Fill geometries with cells
+- **Aggregator Functions** (2): Aggregate operations
+- **Generator Functions** (5): Explode arrays into rows
+
+:::note SQL examples
+Examples on this page use **SQL** (and Python where shown); in SQL, GridX functions are prefixed with **`gbx_`** (e.g. `gbx_bng_aswkb`, `gbx_bng_cellarea`). For more language-specific tips, see the [Python](./python), [Scala](./scala), and [SQL](./sql) API pages.
+:::
+
+## Common setup
+
+Run this once before the examples below. It registers GridX (BNG) so you can use `bng_*` in Python and `gbx_bng_*` in SQL.
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="gridx_setup_example" language="python" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="gridx_setup_example_output" />
+
+---
+
+## Conversion Functions
+
+Functions to convert BNG cell IDs to standard geometry formats.
+
+### bng_aswkb
+
+Convert a BNG cell ID to Well-Known Binary (WKB) format.
+
+**Signature:** `bng_aswkb(cellId: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference string
+
+**Returns:**
+- Binary WKB geometry representation
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_aswkb_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_aswkb_sql_example_output" />
+
+---
+
+### bng_aswkt
+
+Convert a BNG cell ID to Well-Known Text (WKT) format.
+
+**Signature:** `bng_aswkt(cellId: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference string
+
+**Returns:**
+- String WKT geometry representation
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_aswkt_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_aswkt_sql_example_output" />
+
+---
+
+## Core Functions
+
+Fundamental operations on BNG cells.
+
+### bng_cellarea
+
+Calculate the area of a BNG grid cell.
+
+**Signature:** `bng_cellarea(cellId: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference
+
+**Returns:**
+- Double representing the cell area in square kilometres
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_cellarea_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_cellarea_sql_example_output" />
+
+---
+
+### bng_centroid
+
+Get the centroid (center point) of a BNG cell.
+
+**Signature:** `bng_centroid(cellId: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference
+
+**Returns:**
+- Point geometry at cell center
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_centroid_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_centroid_sql_example_output" />
+
+---
+
+### bng_distance
+
+Calculate distance between two BNG cells.
+
+**Signature:** `bng_distance(cell1: Column, cell2: Column): Column`
+
+**Parameters:**
+- `cell1` - First BNG cell reference
+- `cell2` - Second BNG cell reference
+
+**Returns:**
+- Double representing distance in meters
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_distance_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_distance_example_output" />
+
+---
+
+### bng_euclideandistance
+
+Calculate Euclidean distance between two BNG cells.
+
+**Signature:** `bng_euclideandistance(cell1: Column, cell2: Column): Column`
+
+**Parameters:**
+- `cell1` - First BNG cell reference
+- `cell2` - Second BNG cell reference
+
+**Returns:**
+- Double representing Euclidean distance in meters
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_euclideandistance_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_euclideandistance_example_output" />
+
+---
+
+## Cell Operations
+
+Operations combining multiple cells.
+
+### bng_cellintersection
+
+Get the intersection of two BNG cells.
+
+**Signature:** `bng_cellintersection(cell1: Column, cell2: Column): Column`
+
+**Parameters:**
+- `cell1` - First BNG cell reference
+- `cell2` - Second BNG cell reference
+
+**Returns:**
+- BNG cell ID representing the intersection
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_cellintersection_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_cellintersection_example_output" />
+
+---
+
+### bng_cellunion
+
+Get the union of two BNG cells.
+
+**Signature:** `bng_cellunion(cell1: Column, cell2: Column): Column`
+
+**Parameters:**
+- `cell1` - First BNG cell reference
+- `cell2` - Second BNG cell reference
+
+**Returns:**
+- BNG cell ID representing the union
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_cellunion_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_cellunion_example_output" />
+
+---
+
+## Coordinate Conversion Functions
+
+Convert coordinates or geometries to BNG cells.
+
+### bng_eastnorthasbng
+
+Convert easting/northing coordinates to a BNG cell reference.
+
+**Signature:** `bng_eastnorthasbng(easting: Column, northing: Column, resolution: Column): Column`
+
+**Parameters:**
+- `easting` - Easting coordinate value
+- `northing` - Northing coordinate value
+- `resolution` - BNG resolution: integer index (1–6 or negative for quadrant) or string (e.g. '1km', '100m'). See resolutionMap in BNG.
+
+**Returns:**
+- String BNG cell reference
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_eastnorthasbng_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_eastnorthasbng_sql_example_output" />
+
+---
+
+### bng_pointascell
+
+Convert a point geometry to a BNG grid cell. The point must be supplied as **WKT or WKB** (GeoBrix does not accept native Databricks geometry types).
+
+**Signature:** `bng_pointascell(point: Column, resolution: Column): Column`
+
+**Parameters:**
+- `point` - Point geometry as **WKT** (string) or **WKB** (binary). For example, WKT: `'POINT(-0.1278 51.5074)'`. Do not use `st_point()` or other DBR native geometry functions—they return a type GeoBrix does not accept.
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+
+**Returns:**
+- String BNG cell reference
+
+**Python (point as WKT column):**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_pointascell_python_api_example" language="python" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" />
+
+**Scala:** Pass a WKT or WKB column and BNG resolution (e.g. `bx.bng_pointascell(lit("POINT(530000 180000)"), lit("1km"))` for BNG coords, or `lit(3)` for 1 km index). Do not use `st_point()`.
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_pointascell_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_pointascell_sql_example_output" />
+
+---
+
+## K-Ring Functions
+
+Generate neighboring cells using k-ring patterns.
+
+### bng_kring
+
+Generate a k-ring of cells around a center cell (filled disk).
+
+**Signature:** `bng_kring(cellId: Column, k: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference for center
+- `k` - Integer ring distance (0 = just center, 1 = center + neighbors, etc.)
+
+**Returns:**
+- Array of BNG cell references in the k-ring
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_kring_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_kring_sql_example_output" />
+
+---
+
+### bng_kloop
+
+Generate a k-loop of cells around a center cell (hollow ring).
+
+**Signature:** `bng_kloop(cellId: Column, k: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference for center
+- `k` - Integer ring distance
+
+**Returns:**
+- Array of BNG cell references at exactly distance k
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_kloop_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_kloop_example_output" />
+
+---
+
+### bng_geomkring
+
+Generate a k-ring of cells around a geometry at specified resolution.
+
+**Signature:** `bng_geomkring(geom: Column, resolution: Column, k: Column): Column`
+
+**Parameters:**
+- `geom` - Input geometry (any type)
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+- `k` - Integer ring distance
+
+**Returns:**
+- Array of BNG cell references
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkring_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkring_example_output" />
+
+---
+
+### bng_geomkloop
+
+Generate a k-loop of cells around a geometry at specified resolution.
+
+**Signature:** `bng_geomkloop(geom: Column, resolution: Column, k: Column): Column`
+
+**Parameters:**
+- `geom` - Input geometry (any type)
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+- `k` - Integer ring distance
+
+**Returns:**
+- Array of BNG cell references at exactly distance k
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkloop_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkloop_example_output" />
+
+---
+
+## Tessellation Functions
+
+Fill geometries with grid cells.
+
+### bng_polyfill
+
+Fill a geometry with BNG cells at specified resolution.
+
+**Signature:** `bng_polyfill(geometry: Column, resolution: Column): Column`
+
+**Parameters:**
+- `geometry` - Input geometry to fill
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+
+**Returns:**
+- Array of BNG cell IDs covering the geometry
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_polyfill_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_polyfill_sql_example_output" />
+
+---
+
+### bng_tessellate
+
+Tessellate a geometry into BNG cells with their geometries.
+
+**Signature:** `bng_tessellate(geometry: Column, resolution: Column): Column`
+
+**Parameters:**
+- `geometry` - Input geometry to tessellate
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+
+**Returns:**
+- Array of structs containing cell ID and geometry
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_tessellate_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_tessellate_example_output" />
+
+---
+
+## Aggregator Functions
+
+Aggregate multiple cells into a single result.
+
+### bng_cellintersection_agg
+
+Aggregate intersection of multiple BNG cells.
+
+**Signature:** `bng_cellintersection_agg(cellId: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference column to aggregate
+
+**Returns:**
+- BNG cell ID representing common intersection
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_cellintersection_agg_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_cellintersection_agg_sql_example_output" />
+
+---
+
+### bng_cellunion_agg
+
+Aggregate union of multiple BNG cells.
+
+**Signature:** `bng_cellunion_agg(cellId: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference column to aggregate
+
+**Returns:**
+- BNG cell ID representing bounding union
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_cellunion_agg_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_cellunion_agg_sql_example_output" />
+
+---
+
+## Generator Functions
+
+Explode array results into individual rows.
+
+### bng_kringexplode
+
+Explode k-ring cells into separate rows.
+
+**Signature:** `bng_kringexplode(cellId: Column, k: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference for center
+- `k` - Integer ring distance
+
+**Returns:**
+- Exploded rows, one per cell in k-ring
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_kringexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_kringexplode_example_output" />
+
+---
+
+### bng_kloopexplode
+
+Explode k-loop cells into separate rows.
+
+**Signature:** `bng_kloopexplode(cellId: Column, k: Column): Column`
+
+**Parameters:**
+- `cellId` - BNG cell reference for center
+- `k` - Integer ring distance
+
+**Returns:**
+- Exploded rows, one per cell in k-loop
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_kloopexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_kloopexplode_example_output" />
+
+---
+
+### bng_geomkringexplode
+
+Explode geometry k-ring cells into separate rows.
+
+**Signature:** `bng_geomkringexplode(geom: Column, resolution: Column, k: Column): Column`
+
+**Parameters:**
+- `geom` - Input geometry
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+- `k` - Integer ring distance
+
+**Returns:**
+- Exploded rows, one per cell
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkringexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkringexplode_example_output" />
+
+---
+
+### bng_geomkloopexplode
+
+Explode geometry k-loop cells into separate rows.
+
+**Signature:** `bng_geomkloopexplode(geom: Column, resolution: Column, k: Column): Column`
+
+**Parameters:**
+- `geom` - Input geometry
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+- `k` - Integer ring distance
+
+**Returns:**
+- Exploded rows, one per cell at distance k
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkloopexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkloopexplode_example_output" />
+
+---
+
+### bng_tessellateexplode
+
+Explode tessellated cells into separate rows.
+
+**Signature:** `bng_tessellateexplode(geometry: Column, resolution: Column): Column`
+
+**Parameters:**
+- `geometry` - Input geometry to tessellate
+- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+
+**Returns:**
+- Exploded rows with cell ID and geometry for each cell
+
+**SQL:**
+
+<CodeFromTest code={gridxFunctionsExamples} functionName="bng_tessellateexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_tessellateexplode_example_output" />
+
+---
+
+## BNG Reference Format
+
+### Standard Format
+BNG references follow: `[Letters][Eastings][Northings]`
+
+### Common Resolutions
+
+| Resolution | Grid Size | Example | Use Case |
+|------------|-----------|---------|----------|
+| 100000m | 100km × 100km | TQ | Regional |
+| 10000m | 10km × 10km | TQ38 | District |
+| 1000m | 1km × 1km | TQ3080 | Local area |
+| 100m | 100m × 100m | TQ308808 | Neighborhood |
+| 10m | 10m × 10m | TQ30808080 | Building |
+| 1m | 1m × 1m | TQ3080080800 | Precise location |
+
+### Major Grid Squares
+
+Major 100km grid squares in Great Britain:
+- **TQ** - London area
+- **SU** - South Hampshire
+- **NT** - Edinburgh area
+- **SD** - Lake District
+- **ST** - Bristol area
+
+---
+
+## Performance Tips
+
+### 1. Use Appropriate Resolution
+
+Choose resolution based on analysis needs:
+- Coarse (10km) for regional analysis
+- Medium (1km) for local patterns
+- Fine (100m) for detailed studies
+
+### 2. Leverage Aggregators
+
+Use aggregator functions for efficient grouping:
+<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_cellunion_agg_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_cellunion_agg_sql_example_output" />
+
+### 3. Use Generators for Expansion
+
+Generator functions (e.g. `bng_kringexplode`, `bng_kloopexplode`) are more efficient than using `explode` on array results. See the generator examples above.
+
+---
+
+## Next Steps
+
+- [RasterX Function Reference](./rasterx-functions)
+- [VectorX Function Reference](./vectorx-functions)
+- [GridX Package Documentation](../packages/gridx)

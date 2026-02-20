@@ -1,0 +1,138 @@
+---
+sidebar_position: 5
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import geojsonExamples from '!!raw-loader!../../tests/python/readers/geojson_examples.py';
+import geojsonScala from '!!raw-loader!../../tests/scala/readers/GeoJSONExamples.scala';
+
+# GeoJSON Reader
+
+The GeoJSON reader provides support for reading GeoJSON and GeoJSONSeq (newline-delimited GeoJSON) formats.
+
+## Format Name
+
+`geojson_ogr`
+
+## Overview
+
+This is a named OGR Reader that intelligently switches between [GeoJSON](https://gdal.org/en/stable/drivers/vector/geojson.html) and [GeoJSONSeq](https://gdal.org/en/stable/drivers/vector/geojsonseq.html) drivers based on the `multi` option.
+
+## Supported Formats
+
+- **GeoJSON** (.geojson, .json) - Standard GeoJSON FeatureCollection
+- **GeoJSONSeq** (.geojsonl, .geojsons) - Newline-delimited GeoJSON (default)
+
+## Basic Usage
+
+### Python
+
+<CodeFromTest
+  code={geojsonExamples}
+  language="python"
+  functionName="READ_GEOJSON"
+  source="docs/tests/python/readers/geojson_examples.py"
+  testFile="docs/tests/python/readers/test_geojson_examples.py"
+  outputConstant="READ_GEOJSON_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={geojsonScala}
+  language="scala"
+  functionName="READ_GEOJSON"
+  source="docs/tests/scala/readers/GeoJSONExamples.scala"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+  outputConstant="READ_GEOJSON_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={geojsonExamples}
+  language="sql"
+  functionName="SQL_GEOJSON"
+  source="docs/tests/python/readers/geojson_examples.py"
+  testFile="docs/tests/python/readers/test_geojson_examples.py"
+  outputConstant="SQL_GEOJSON_output"
+/>
+
+## Options
+
+### `multi`
+
+**Default:** `"true"`
+
+Controls which GeoJSON driver to use:
+- `"true"` → Uses [GeoJSONSeq](https://gdal.org/en/stable/drivers/vector/geojsonseq.html) driver (newline-delimited, better for large files)
+- `"false"` → Uses [GeoJSON](https://gdal.org/en/stable/drivers/vector/geojson.html) driver (standard FeatureCollection format)
+
+<CodeFromTest
+  code={geojsonExamples}
+  language="python"
+  functionName="READ_GEOJSONSEQ"
+  source="docs/tests/python/readers/geojson_examples.py"
+  testFile="docs/tests/python/readers/test_geojson_examples.py"
+  outputConstant="READ_GEOJSONSEQ_output"
+/>
+
+### Other Options
+
+All [OGR reader options](./ogr#options) are available, e.g.:
+
+- `chunkSize` - Records per chunk (default: "10000")
+- `asWKB` - Output as WKB vs WKT (default: "true")
+
+## Output Schema
+
+The output maintains attribute columns and adds three columns for geometry:
+
+```
+root
+ |-- geom_0: binary (geometry in WKB format)
+ |-- geom_0_srid: integer (spatial reference ID)
+ |-- geom_0_srid_proj: string (projection definition)
+ |-- <properties>: various types (GeoJSON properties)
+```
+
+## GeoJSON vs GeoJSONSeq
+
+### Standard GeoJSON (FeatureCollection)
+
+**Format:**
+```json
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": { "type": "Point", "coordinates": [0, 0] },
+      "properties": { "name": "Feature 1" }
+    }
+  ]
+}
+```
+
+**When to use:** Small to medium files, API responses, standard GeoJSON files
+
+**Read with:** `option("multi", "false")`
+
+### GeoJSONSeq (Newline-Delimited)
+
+**Format:**
+```json
+{"type":"Feature","geometry":{"type":"Point","coordinates":[0,0]},"properties":{"name":"Feature 1"}}
+{"type":"Feature","geometry":{"type":"Point","coordinates":[1,1]},"properties":{"name":"Feature 2"}}
+```
+
+**When to use:** Large files, streaming data, parallel processing, better Spark performance
+
+**Read with:** `option("multi", "true")` (default) or omit the option
+
+## Next Steps
+
+- [View API Reference](../api/overview)
+- [Check Examples](../examples/overview)
+- [Other Readers](./overview)
+- [Learn about VectorX](../packages/vectorx)

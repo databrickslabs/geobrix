@@ -1,0 +1,38 @@
+/.idea/
+/scripts/docker/m2/
+/python/geobrix/.venv/
+/python/geobrix/dist/
+/python/geobrix/lib/
+/python/geobrix/src/geobrix.egg-info/
+/python/geobrix/spark-warehouse/
+/python/geobrix/build/
+/target/
+/spark-warehouse/
+/artifacts/
+/python/geobrix/artifacts/
+/python/geobrix/test/vectorx/spark-warehouse/
+/python/geobrix/test/gridx/artifacts/
+/.github-bak/
+/metastore_db/
+/derby.log
+/test-logs/
+/notebooks/tests/databricks_cluster_config.env
+/ci-logs/
+/.cache/
+.ci-pip-cache-key
+# macOS files
+.DS_Store
+**/.DS_Store# Python cache and compiled files
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class# Python compiled extensions (but NOT the GDAL library!)
+*.so
+!scripts/gdal311/*.so
+/prompts/
+/sample-data/Volumes/main/default/geobrix_samples/
+/WORKFLOW-SETUP.md
+/.vscode/
+/.coverage
+/python/coverage-report/
+/python/geobrix/test/coverage-report/

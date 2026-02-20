@@ -1,0 +1,210 @@
+---
+description: Standards for test organization, execution, and logging
+alwaysApply: true
+---
+
+# Test Organization and Logging Standards
+
+## Test Organization
+
+### Mirror Source Structure
+
+Tests should mirror the source code structure:
+
+```
+src/main/scala/com/databricks/labs/gbx/
+├── rasterx/
+│   ├── expressions/
+│   └── operations/
+└── gridx/
+    └── bng/
+
+src/test/scala/com/databricks/labs/gbx/
+├── rasterx/
+│   ├── expressions/     # Mirror structure
+│   └── operations/
+└── gridx/
+    └── bng/
+```
+
+### Documentation Tests
+
+Documentation tests mirror the docs structure:
+
+```
+docs/docs/
+├── advanced/
+│   └── custom-udfs.md
+└── api/
+    └── rasterx-functions.md
+
+src/test/scala/com/databricks/labs/gbx/docs/
+├── advanced/
+│   └── CustomUdfsDocTest.scala   # Matches custom-udfs.md
+└── api/
+    └── (future test files)
+```
+
+## Test Execution Best Practices
+
+### Run Targeted Tests (CRITICAL for Efficiency)
+
+**✅ GOOD: Test only what changed**
+```bash
+# After fixing specific test, run ONLY that test
+pytest docs/tests/python/rasterx/test_accessor_functions.py::test_get_pixel_dimensions -v
+
+# After fixing a group of related tests, run ONLY those tests
+pytest docs/tests/python/rasterx/test_accessor_functions.py::test_get_pixel_dimensions \
+       docs/tests/python/rasterx/test_accessor_functions.py::test_get_band_information \
+       -v
+```
+
+**❌ BAD: Re-running full suite unnecessarily**
+```bash
+# After fixing 1 test, running ALL 200+ tests
+pytest docs/tests/python/rasterx/ -v  # Wastes 3-5 minutes!
+```
+
+**When to Run Full Suite:**
+- ✅ After fixing multiple files that might interact
+- ✅ Before committing (final validation)
+- ✅ When unsure if changes affected other areas
+- ❌ After every single test fix (too slow!)
+
+**Python doc tests (10+ min full suite):** use pinpointed runs for day-to-day work:
+- Single test: `gbx:test:python-docs --test quickstart/test_examples.py::test_foo --skip-build`
+- Subset: `gbx:test:python-docs --suite quickstart` (or `api`, `readers`, `rasterx`, `advanced`, `setup`)
+- One file: `gbx:test:python-docs --path api/test_rasterx_functions_sql.py --skip-build`
+- Always use `--log test-logs/<name>-$(date +%Y%m%d-%H%M%S).log` for tracking long runs. See `.cursor/commands/gbx-test-python-docs.md` for suite timing and options.
+
+**Time Savings:**
+- Single test: ~5-20 seconds
+- Full rasterx suite: ~3-4 minutes
+- Full docs suite: ~10-15 minutes
+- **Running targeted tests saves 90%+ of time**
+
+### Always Log Output
+
+**✅ GOOD: Log to timestamped file**
+```bash
+docker exec geobrix-dev /bin/bash -c "mvn test-compile" 2>&1 | tee test-logs/compile-$(date +%Y%m%d-%H%M%S).log
+```
+
+**❌ BAD: No logging**
+```bash
+docker exec geobrix-dev /bin/bash -c "mvn test-compile"
+# Output lost forever!
+```
+
+### Check Logs Before Re-running
+
+**✅ GOOD: Check existing logs first**
+```bash
+# Check latest compilation result
+tail -20 test-logs/compile-*.log | grep "BUILD"
+# Only recompile if needed
+```
+
+**❌ BAD: Recompile unnecessarily**
+```bash
+# Running full test suite repeatedly without checking logs
+mvn test  # 5 minutes wasted!
+```
+
+### Use Appropriate Test Commands
+
+**Scala tests** - Use `-Dsuites=` (not `-Dtest=`):
+```bash
+# ✅ GOOD: Run specific test suite
+mvn test -Dsuites='com.databricks.labs.gbx.rasterx.expressions.*'
+
+# ❌ BAD: Wrong parameter for scalatest-maven-plugin
+mvn test -Dtest='com.databricks.labs.gbx.rasterx.expressions.*'
+```
+
+**Python tests** - Use pytest with specific markers:
+```bash
+# ✅ GOOD: Run specific test file
+pytest python/geobrix/test/rasterx/test_operations.py -v
+
+# ✅ GOOD: Run tests by marker
+pytest -m "not slow" -v
+```
+
+## Log File Organization
+
+### Naming Convention
+
+```
+test-logs/
+├── compile-20260107-143022.log
+├── doc-tests-compile-20260111-091534.log
+├── scala-rasterx-20260107-150122.log
+└── python-all-20260107-152401.log
+```
+
+**Pattern:** `{category}-{subcategory}-{YYYYMMDD-HHMMSS}.log`
+
+### Log Retention
+
+- Keep recent logs (last 7 days)
+- Archive old logs to `test-logs/archive/`
+- Add `test-logs/*.log` to `.gitignore`
+
+## Test Categories
+
+### 1. Compilation Tests (Fastest)
+```bash
+mvn test-compile  # ~10 seconds
+# Verifies code compiles, catches syntax errors
+```
+
+### 2. Unit Tests (Fast)
+```bash
+mvn test -Dsuites='com.databricks.labs.gbx.rasterx.operations.*'  # ~30 seconds
+# Tests individual components in isolation
+```
+
+### 3. Integration Tests (Medium)
+```bash
+mvn test -Dsuites='com.databricks.labs.gbx.rasterx.expressions.*'  # ~2 minutes
+# Tests components working together with Spark
+```
+
+### 4. Full Suite (Slow)
+```bash
+mvn test  # ~5-10 minutes
+# Runs everything - only when necessary
+```
+
+## Common Patterns
+
+### Before Committing
+```bash
+# 1. Quick compile check
+mvn test-compile 2>&1 | tee test-logs/pre-commit-$(date +%Y%m%d-%H%M%S).log
+
+# 2. Run affected tests only
+mvn test -Dsuites='com.databricks.labs.gbx.rasterx.operations.RasterProjectTest'
+
+# 3. Check logs
+tail -20 test-logs/pre-commit-*.log | grep "BUILD"
+```
+
+### After Refactoring
+```bash
+# 1. Compilation check (includes doc tests)
+mvn test-compile 2>&1 | tee test-logs/refactor-check-$(date +%Y%m%d-%H%M%S).log
+
+# 2. Run full test suite if compilation succeeds
+mvn test 2>&1 | tee test-logs/refactor-full-$(date +%Y%m%d-%H%M%S).log
+```
+
+## Reference
+
+Based on test improvement sessions that achieved:
+- 137 Scala tests passing (100%)
+- 30+ Python tests passing (100%)
+- Efficient test workflows with proper logging
+- Clear test organization mirroring source structure

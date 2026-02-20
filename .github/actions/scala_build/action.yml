@@ -1,0 +1,91 @@
+name: build geobrix scala
+description: build geobrix scala
+# Shares env with python_build (apt + pip). When run before python_build in same job, caches are warm.
+inputs:
+  skip_tests:
+    description: 'Skip Scala Tests? true or false'
+    default: 'false'
+  enable_coverage:
+    description: 'Enable code coverage with scoverage? true or false'
+    default: 'false'
+  fail_on_scalastyle:
+    description: 'Fail build on ScalaStyle errors? true or false. Typically true only for PRs targeting main.'
+    default: 'false'
+runs:
+  using: "composite"
+  steps:
+        - name: Configure JDK
+          uses: actions/setup-java@v5
+          with:
+            java-version: '17'
+            distribution: 'zulu'
+            cache: 'maven'
+            cache-dependency-path: 'pom.xml'
+        - name: Configure python interpreter
+          uses: actions/setup-python@v5
+          with:
+            cache: 'pip' # caches dependencies for faster subsequent runs
+            cache-dependency-path: '.ci-pip-cache-key'
+            python-version: ${{ matrix.python }}
+        - name: Add packaged GDAL dependencies
+          shell: bash
+          run : |
+            # - restore apt cache from workspace (populated by actions/cache in workflow)
+            mkdir -p .cache/apt-archives
+            if [ -n "$(ls -A .cache/apt-archives 2>/dev/null)" ]; then
+              sudo cp -n .cache/apt-archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+            fi
+            # - update apt
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-backports main universe multiverse restricted"
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates main universe multiverse restricted"
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-security main multiverse restricted universe"
+            sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc) main multiverse restricted universe"
+            # - add ubuntugis PPA with GPG key
+            sudo apt-get install -y software-properties-common
+            sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable
+            sudo apt-get update -y
+            # - install natives
+            sudo apt-get -o DPkg::Lock::Timeout=-1 install -y unixodbc libcurl3-gnutls libsnappy-dev libopenjp2-7
+            sudo apt-get -o DPkg::Lock::Timeout=-1 install -y libgdal-dev gdal-bin python3-gdal zip unzip
+            # - install pip packages
+            pip install --upgrade pip setuptools wheel cython
+            pip install build numpy==${{ matrix.numpy }}
+            pip install pyspark==${{ matrix.spark }}
+            # - install GDAL Python bindings (numpy must be installed first)
+            #   detect installed GDAL version and use it if different from matrix version
+            export GDAL_CONFIG=/usr/bin/gdal-config
+            INSTALLED_GDAL_VERSION=$(gdal-config --version)
+            echo "System GDAL version: ${INSTALLED_GDAL_VERSION}"
+            echo "Matrix GDAL version: ${{ matrix.gdal }}"
+            # Use installed version if available, otherwise use matrix version
+            GDAL_VERSION_TO_INSTALL="${INSTALLED_GDAL_VERSION:-${{ matrix.gdal }}}"
+            pip install --no-build-isolation gdal[numpy]==${GDAL_VERSION_TO_INSTALL}
+            # - add the so files
+            sudo cp scripts/gdal311/libgdalalljni.so /usr/lib/libgdalalljni.so
+            # - save apt archives for next run (workflow caches .cache/apt-archives)
+            sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
+        - name: Test and build the scala JAR - skip tests is false, coverage enabled
+          if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
+          shell: bash
+          run: mvn -q clean install -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+        - name: Test and build the scala JAR - skip tests is false, coverage disabled
+          if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'
+          shell: bash
+          run: mvn -q clean install -Dscoverage.skip -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+        - name: Build the scala JAR - skip tests is true
+          if: inputs.skip_tests == 'true'
+          shell: bash
+          run: mvn -q clean install -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+        - name: Copy build artifacts to local staging
+          shell: bash
+          run: |
+            # add .jar + .so
+            mkdir -p staging/build-artifacts
+            cp target/geobrix*.jar staging/build-artifacts
+            cp scripts/gdal311/libgdalalljni.so staging/build-artifacts
+        - name: Copy user artifacts local staging
+          shell: bash
+          run: |
+            # add zipped resources (for now)
+            mkdir -p staging/user-artifacts
+            cp resources/static/geobrix-docs-*.zip staging/user-artifacts 2>/dev/null || true

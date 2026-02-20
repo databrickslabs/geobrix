@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Test-time logging: reduce Spark and third-party noise so ScalaTest output is readable.
+  Used when -Dlog4j.configurationFile=log4j2-test.xml is set (e.g. by scalatest-maven-plugin argLine).
+-->
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d{yy/MM/dd HH:mm:ss} %p %c{1}: %m%n"/>
+      <ThresholdFilter level="WARN" onMatch="ACCEPT" onMismatch="DENY"/>
+    </Console>
+  </Appenders>
+  <Loggers>
+    <!-- Spark: WARN only (no INFO from DAGScheduler, CodeGenerator, etc.) -->
+    <Logger name="org.apache.spark" level="warn" additivity="false">
+      <AppenderRef ref="Console"/>
+    </Logger>
+    <Logger name="org.spark_project" level="warn" additivity="false">
+      <AppenderRef ref="Console"/>
+    </Logger>
+    <!-- GDAL/GeoBrix: WARN so test output stays clear -->
+    <Logger name="com.databricks.labs.gbx" level="warn" additivity="false">
+      <AppenderRef ref="Console"/>
+    </Logger>
+    <Root level="warn">
+      <AppenderRef ref="Console"/>
+    </Root>
+  </Loggers>
+</Configuration>

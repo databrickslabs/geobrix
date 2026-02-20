@@ -1,0 +1,84 @@
+---
+sidebar_position: 1
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import examplesOverview from '!!raw-loader!../../tests/python/examples/overview.py';
+
+# Examples Overview
+
+This section provides practical examples of using GeoBrix for common geospatial workflows.
+
+## Available Examples
+
+Examples are organized by use case and demonstrate end-to-end workflows.
+
+### Coming Soon
+
+Detailed examples will be added including:
+
+- **Raster Processing Workflows**
+  - Satellite imagery cataloging
+  - Elevation model analysis
+  - Multi-temporal raster analysis
+  
+- **Vector Data Workflows**
+  - Shapefile to Delta Lake migration
+  - Spatial joins and analysis
+  - Legacy Mosaic migration
+
+- **Grid Indexing Workflows**
+  - BNG spatial aggregation
+  - Multi-resolution analysis
+  - Location-based services
+
+- **Integration Examples**
+  - Combining raster and vector data
+  - Using with Databricks spatial functions
+  - Performance optimization patterns
+
+## Example Notebooks
+
+For now, please refer to the example notebooks included in the [beta-dist](https://github.com/databrickslabs/geobrix/tree/main/resources/beta-dist) directory of the GeoBrix repository.
+
+## Quick Examples
+
+### Example 1: Read and Catalog Rasters
+
+<CodeFromTest 
+  code={examplesOverview} 
+  language="python" 
+  functionName="example_read_catalog_rasters"
+  testFile="docs/tests/python/examples/test_overview.py"
+  validationLevel="compile"
+/>
+
+### Example 2: Spatial Aggregation with BNG
+
+<CodeFromTest 
+  code={examplesOverview} 
+  language="python" 
+  functionName="example_spatial_aggregation_bng"
+  testFile="docs/tests/python/examples/test_overview.py"
+  validationLevel="compile"
+/>
+
+### Example 3: Migrate from Mosaic
+
+<CodeFromTest 
+  code={examplesOverview} 
+  language="python" 
+  functionName="example_migrate_from_mosaic"
+  testFile="docs/tests/python/examples/test_overview.py"
+  validationLevel="compile"
+/>
+
+## Contributing Examples
+
+If you have interesting GeoBrix use cases, consider contributing examples to the documentation!
+
+## Next Steps
+
+- [View API Reference](../api/overview)
+- [Package Documentation](../packages/overview)
+- [Reader Documentation](../readers/overview)

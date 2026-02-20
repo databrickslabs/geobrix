@@ -1,0 +1,108 @@
+#!/bin/bash
+# gbx:test:scala - Run Scala unit tests (non-docs)
+
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+
+source "$SCRIPT_DIR/common.sh"
+
+show_help() {
+    show_banner "🧪 GeoBrix: Scala Tests (Non-Docs)"
+    echo -e "${CYAN}Usage:${NC}"
+    echo -e "  ${GREEN}gbx:test:scala${NC} ${YELLOW}[options]${NC}"
+    echo ""
+    echo -e "${CYAN}Options:${NC}"
+    echo -e "  ${GREEN}--suite <pattern>${NC}      Run specific test suite (e.g., 'com.databricks.labs.gbx.gridx.*')"
+    echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
+    echo -e "  ${GREEN}--verbose${NC}              Increase Maven verbosity (-X flag)"
+    echo -e "  ${GREEN}--help${NC}                 Show this help"
+    echo ""
+    echo -e "${CYAN}Log Path Behavior:${NC}"
+    echo -e "  ${YELLOW}filename.log${NC}           → test-logs/filename.log"
+    echo -e "  ${YELLOW}subdir/file.log${NC}        → test-logs/subdir/file.log"
+    echo -e "  ${YELLOW}/abs/path/file.log${NC}     → /abs/path/file.log"
+    echo ""
+    echo -e "${CYAN}Examples:${NC}"
+    echo -e "  ${YELLOW}gbx:test:scala${NC}"
+    echo -e "  ${YELLOW}gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'${NC}"
+    echo -e "  ${YELLOW}gbx:test:scala --log scala-tests.log --verbose${NC}"
+    echo ""
+}
+
+# Parse arguments
+SUITE_PATTERN=""
+LOG_PATH=""
+VERBOSE=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --suite)
+            SUITE_PATTERN="$2"
+            shift 2
+            ;;
+        --log)
+            LOG_PATH=$(resolve_log_path "$2")
+            shift 2
+            ;;
+        --verbose)
+            VERBOSE="-X"
+            shift
+            ;;
+        --help|-h)
+            show_help
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}❌ Unknown option: $1${NC}"
+            echo ""
+            show_help
+            exit 1
+            ;;
+    esac
+done
+
+cd "$PROJECT_ROOT"
+
+show_banner "🧪 GeoBrix: Scala Tests (Non-Docs)"
+check_docker
+setup_log_file "$LOG_PATH"
+
+# Build Maven command
+MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn test -PskipScoverage -DskipTests=false"
+
+if [ -n "$SUITE_PATTERN" ]; then
+    echo -e "${CYAN}🎯 Running suite: ${YELLOW}$SUITE_PATTERN${NC}"
+    MVN_CMD="$MVN_CMD -Dsuites='$SUITE_PATTERN'"
+else
+    echo -e "${CYAN}🎯 Running all Scala unit tests (src/test/scala; excludes docs)${NC}"
+    # Unit tests only: com.databricks.labs.gbx.* (scalatest-maven-plugin doesn't support !exclusion)
+    MVN_CMD="$MVN_CMD -Dsuites='com.databricks.labs.gbx.*'"
+fi
+
+if [ -n "$VERBOSE" ]; then
+    MVN_CMD="$MVN_CMD $VERBOSE"
+fi
+
+echo ""
+show_separator
+echo -e "${CYAN}Running tests...${NC}"
+show_separator
+echo ""
+
+docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+EXIT_CODE=$?
+
+echo ""
+show_separator
+if [ $EXIT_CODE -eq 0 ]; then
+    echo -e "${GREEN}✅ Scala tests passed!${NC}"
+else
+    echo -e "${RED}❌ Scala tests failed (exit code: $EXIT_CODE)${NC}"
+fi
+show_separator
+
+if [ -n "$LOG_PATH" ]; then
+    echo -e "${CYAN}📝 Log saved to: ${YELLOW}$LOG_PATH${NC}"
+fi
+
+exit $EXIT_CODE

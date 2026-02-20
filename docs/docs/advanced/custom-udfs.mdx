@@ -1,0 +1,235 @@
+---
+sidebar_position: 2
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import customUdfs from '!!raw-loader!../../tests/python/advanced/custom_udfs.py';
+import customUdfScala from '!!raw-loader!../../tests/scala/advanced/CustomUdfExamples.scala';
+
+# Custom Spark UDFs with GeoBrix
+
+Learn how to build custom Spark User-Defined Functions (UDFs) using GeoBrix's `execute` methods for specialized geospatial operations.
+
+## Understanding Execute vs Eval
+
+GeoBrix provides two interfaces for accessing functionality:
+
+### Eval Methods (Standard - Spark Expressions)
+
+Used by GeoBrix's registered Spark functions:
+
+<CodeFromTest 
+  code={customUdfs} 
+  language="python" 
+  functionName="eval_method_standard_usage"
+  source="docs/tests/python/advanced/custom_udfs.py"
+  testFile="docs/tests/python/advanced/test_custom_udfs.py"
+  outputConstant="eval_method_standard_usage_output"
+/>
+
+**Characteristics:**
+- Operates on Spark Columns
+- Integrated with Catalyst optimizer
+- Automatic serialization/deserialization
+- Best for standard operations
+
+### Execute Methods (Advanced - Direct GDAL)
+
+Used for building custom UDFs:
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Execute Methods Example"
+  functionName="EXECUTE_METHODS_EXAMPLE"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+/>
+
+**Characteristics:**
+- Operates on GDAL Dataset/Band objects directly
+- Full control over GDAL operations
+- Building blocks for custom logic
+- Best for specialized operations
+
+## Why Use Execute Methods?
+
+### Use Cases
+
+1. **Custom Business Logic**
+   - Apply domain-specific rules
+   - Combine multiple operations
+   - Implement proprietary algorithms
+
+2. **Specialized GDAL Operations**
+   - Access GDAL features not exposed in standard API
+   - Fine-tune GDAL parameters
+   - Implement complex workflows
+
+3. **Performance Optimization**
+   - Batch multiple operations
+   - Minimize dataset loading
+   - Custom caching strategies
+
+4. **Integration Requirements**
+   - Connect with external systems
+   - Custom format handling
+   - Specialized metadata extraction
+
+## Basic UDF Pattern
+
+### Python UDF Example
+
+<CodeFromTest 
+  code={customUdfs} 
+  language="python" 
+  functionName="basic_python_udf_example"
+  source="docs/tests/python/advanced/custom_udfs.py"
+  testFile="docs/tests/python/advanced/test_custom_udfs.py"
+  outputConstant="basic_python_udf_example_output"
+/>
+
+### Scala UDF Example
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Scala UDF Example"
+  functionName="SCALA_UDF_EXAMPLE"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="SCALA_UDF_EXAMPLE_output"
+/>
+
+## Real-World Examples
+
+### Example 1: Custom Cloud Mask
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Custom Cloud Mask Example"
+  functionName="CLOUD_MASK_EXAMPLE"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="CLOUD_MASK_EXAMPLE_output"
+/>
+
+### Example 2: Multi-Temporal Analysis
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Multi-Temporal Analysis Example"
+  functionName="MULTI_TEMPORAL_EXAMPLE"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="MULTI_TEMPORAL_EXAMPLE_output"
+/>
+
+### Example 3: Custom Format Handler
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Custom Format Handler Example"
+  functionName="CUSTOM_FORMAT_EXAMPLE"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="CUSTOM_FORMAT_EXAMPLE_output"
+/>
+
+## Best Practices
+
+### 1. Resource Management
+
+Always clean up GDAL resources:
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Resource Management Pattern"
+  functionName="RESOURCE_MANAGEMENT_PATTERN"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="RESOURCE_MANAGEMENT_PATTERN_output"
+/>
+
+### 2. Error Handling
+
+Wrap execute calls in try-catch:
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Error Handling Pattern"
+  functionName="ERROR_HANDLING_PATTERN"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="ERROR_HANDLING_PATTERN_output"
+/>
+
+### 3. Performance Considerations
+
+Batch operations when possible:
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Performance Optimization Pattern"
+  functionName="PERFORMANCE_PATTERN"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="PERFORMANCE_PATTERN_output"
+/>
+
+### 4. Type Safety
+
+Use proper Spark SQL types:
+
+<CodeFromTest 
+  code={customUdfScala} 
+  language="scala" 
+  title="Type Safety Pattern"
+  functionName="TYPE_SAFETY_PATTERN"
+  source="docs/tests/scala/advanced/CustomUdfExamples.scala"
+  testFile="docs/tests/scala/advanced/CustomUdfsDocTest.scala"
+  outputConstant="TYPE_SAFETY_PATTERN_output"
+/>
+
+## Common Patterns
+
+One-copy examples: code in `docs/tests/python/advanced/custom_udfs.py`, tested by `test_custom_udfs.py`.
+
+### Pattern: Conditional Processing
+
+Branch logic based on raster properties (e.g. band count):
+
+<CodeFromTest
+  code={customUdfs}
+  language="python"
+  functionName="conditional_processing_example"
+  source="docs/tests/python/advanced/custom_udfs.py"
+  testFile="docs/tests/python/advanced/test_custom_udfs.py"
+  outputConstant="conditional_processing_example_output"
+/>
+
+### Pattern: Chained Processing
+
+Chain multiple operations (metadata, validate, process) with a single load:
+
+<CodeFromTest
+  code={customUdfs}
+  language="python"
+  functionName="chained_processing_example"
+  source="docs/tests/python/advanced/custom_udfs.py"
+  testFile="docs/tests/python/advanced/test_custom_udfs.py"
+  outputConstant="chained_processing_example_output"
+/>
+
+## Next Steps
+
+- [GDAL CLI Integration](./gdal-cli) - Preprocessing with GDAL utilities
+- [Library Integration](./library-integration) - Connect with rasterio, xarray
+- [Examples](../examples/overview) - More real-world patterns
+- [Test Cases](https://github.com/databrickslabs/geobrix/tree/main/src/test) - Browse execute method examples

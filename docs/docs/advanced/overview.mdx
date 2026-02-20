@@ -1,0 +1,153 @@
+---
+sidebar_position: 1
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import advancedOverview from '!!raw-loader!../../tests/python/advanced/overview.py';
+import advancedOverviewScala from '!!raw-loader!../../tests/scala/advanced/OverviewExamples.scala';
+
+# Advanced Usage Overview
+
+This section covers advanced GeoBrix usage patterns for users who need to go beyond the standard out-of-the-box functionality.
+
+## What's Covered
+
+### 🔧 Custom Spark UDFs
+Learn how to leverage GeoBrix's `execute` methods to build custom Spark User-Defined Functions (UDFs) that directly interact with GDAL operations.
+
+[Custom UDFs Guide →](./custom-udfs)
+
+### 🖥️ GDAL Command Line Integration
+Understand how to complement GeoBrix with GDAL command-line utilities for preprocessing, format conversion, and specialized operations.
+
+[GDAL CLI Guide →](./gdal-cli)
+
+### 📦 Third-Party Library Integration
+Integrate GeoBrix with popular Python geospatial libraries like rasterio, xarray, and PDAL for extended functionality.
+
+[Library Integration Guide →](./library-integration)
+
+## Understanding GeoBrix Architecture
+
+GeoBrix is built on top of GDAL and provides two primary interfaces:
+
+### Spark Expressions (Standard Usage)
+
+<CodeFromTest 
+  code={advancedOverview} 
+  language="python" 
+  functionName="spark_expressions_standard_usage"
+  source="docs/tests/python/advanced/overview.py"
+  testFile="docs/tests/python/advanced/test_overview.py"
+  outputConstant="spark_expressions_standard_usage_output"
+/>
+
+**Characteristics:**
+- ✅ Optimized for Spark's catalyst optimizer
+- ✅ Automatic parallelization
+- ✅ Column-oriented operations
+- ✅ Best for standard workflows
+
+### Execute Methods (Advanced Usage)
+
+<CodeFromTest 
+  code={advancedOverviewScala} 
+  language="scala" 
+  title="Execute Methods Example"
+  functionName="EXECUTE_METHODS_EXAMPLE"
+  source="docs/tests/scala/advanced/OverviewExamples.scala"
+  testFile="docs/tests/scala/advanced/OverviewDocTest.scala"
+/>
+
+**Characteristics:**
+- ✅ Direct GDAL access
+- ✅ Fine-grained control
+- ✅ Custom UDF building blocks
+- ✅ Best for specialized operations
+
+## When to Use Advanced Patterns
+
+### Use Standard GeoBrix When:
+- ✅ Operations fit your use case
+- ✅ Working with DataFrames
+- ✅ Need automatic parallelization
+- ✅ Want Spark optimization
+
+### Use Advanced Patterns When:
+- 🔧 Need custom business logic
+- 🔧 Require specialized GDAL operations
+- 🔧 Integrating with external tools
+- 🔧 Building custom functions
+- 🔧 Need preprocessing/postprocessing
+- 🔧 Working with formats not fully supported
+
+## Architecture Diagram
+
+```
+┌───────────────────────────────────────────────────────────┐
+│                    Your Application                       │
+│  ┌────────────────┐  ┌────────────────┐  ┌───────────┐    │
+│  │  Standard API  │  │  Custom UDFs   │  │ GDAL CLI  │    │
+│  └────────┬───────┘  └───────┬────────┘  └─────┬─────┘    │
+└───────────┼──────────────────┼─────────────────┼──────────┘
+            │                  │                 │
+            ▼                  ▼                 ▼
+┌───────────────────────────────────────────────────────────┐
+│                      GeoBrix Layer                        │
+│  ┌───────────────────┐         ┌──────────────────────┐   │
+│  │ Spark Expressions │         │  Execute Methods     │   │
+│  │  (eval functions) │         │  (direct GDAL calls) │   │
+│  └────────┬──────────┘         └───────────┬──────────┘   │
+└───────────┼────────────────────────────────┼──────────────┘
+            │                                │
+            ▼                                ▼
+┌───────────────────────────────────────────────────────────┐
+│                    GDAL/OGR Layer                         │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────┐    │
+│  │ Drivers  │  │ Dataset  │  │  Band    │  │ Geometry│    │
+│  └──────────┘  └──────────┘  └──────────┘  └─────────┘    │
+└───────────────────────────────────────────────────────────┘
+```
+
+## Typical Advanced Workflow
+
+1. **Read Data** - Use GeoBrix readers or GDAL CLI for format conversion
+2. **Preprocess** - Apply GDAL utilities for reprojection, tiling, etc.
+3. **Custom Processing** - Build UDFs using execute methods for specialized logic
+4. **Standard Processing** - Use GeoBrix Spark expressions for distributed operations
+5. **Integration** - Leverage third-party libraries for specialized analysis
+6. **Post-process** - Use GDAL CLI or libraries for final formatting
+
+## Example: End-to-End Advanced Pipeline
+
+<CodeFromTest 
+  code={advancedOverview} 
+  language="python" 
+  functionName="end_to_end_advanced_pipeline"
+  source="docs/tests/python/advanced/overview.py"
+  testFile="docs/tests/python/advanced/test_overview.py"
+  outputConstant="end_to_end_advanced_pipeline_output"
+/>
+
+## Next Steps
+
+Explore each advanced topic in detail:
+
+1. **[Custom UDFs](./custom-udfs)** - Start here to understand execute methods
+2. **[GDAL CLI](./gdal-cli)** - Learn preprocessing and postprocessing
+3. **[Library Integration](./library-integration)** - Connect with rasterio, xarray, PDAL
+
+## Prerequisites
+
+For advanced usage, you should be familiar with:
+- ✅ Basic GeoBrix usage (see [Quick Start](../quick-start))
+- ✅ Spark DataFrames and UDFs
+- ✅ Python and/or Scala
+- ✅ Basic GDAL concepts
+- ✅ Databricks notebooks and clusters
+
+## Support
+
+For advanced usage questions:
+- Review [test cases](https://github.com/databrickslabs/geobrix/tree/main/src/test) in the repository
+- File issues on [GitHub](https://github.com/databrickslabs/geobrix/issues)

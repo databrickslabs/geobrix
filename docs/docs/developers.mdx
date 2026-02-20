@@ -1,0 +1,257 @@
+---
+sidebar_position: 16
+title: Developers
+---
+
+# Developers
+
+This page is for contributors and developers working in the GeoBrix repository. It describes how the project is organized and how to use the Cursor integration (rules, commands, agents, and skills) effectively.
+
+## How the project is organized
+
+GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and tooling share the same root and are wired for Databricks and local development.
+
+### Repository layout
+
+| Path | Purpose |
+|------|---------|
+| `src/main/scala/com/databricks/labs/gbx/` | Core implementation: readers, expressions, RasterX, GridX, VectorX |
+| `src/test/scala/` | Scala unit and integration tests |
+| `python/geobrix/` | Python package: PySpark bindings and sample-data bundle |
+| `docs/` | Docusaurus site: `docs/` (content), `src/` (components), tests under `docs/tests/` |
+| `notebooks/` | Sample notebooks (e.g. `sample-data/setup_sample_data.ipynb`) and `notebooks/tests/` |
+| `scripts/` | CI, Docker, and one-off scripts |
+| `sample-data/` | Scripts and outputs for sample data (host); in-cluster uses Volumes path |
+| `.cursor/` | Cursor integration: **rules**, **commands**, **agents**, **skills** (see below) |
+
+### Packages and readers
+
+- **RasterX** — Raster operations and expressions (GDAL-backed); `rst_*` / `gbx_rst_*`.
+- **GridX** — Grid systems (BNG, H3); `bng_*` / `gbx_bng_*`.
+- **VectorX** — Vector geometry and OGR-backed readers; `st_*` / `gbx_st_*`.
+- **Readers** — Format-specific data sources (GDAL, OGR, GeoTIFF, Shapefile, GeoJSON, GeoPackage, etc.) registered as Spark data sources.
+
+### Tests and docs
+
+- **Unit tests**: `src/test/scala/` (Scala), `python/geobrix/test/` (Python).
+- **Documentation tests**: `docs/tests/python/`, `docs/tests/scala/` — validate code examples used in the docs; single source of truth.
+- **Notebook tests**: `notebooks/tests/` mirrors `notebooks/`; run via Cursor commands or CI.
+
+Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; many Cursor commands run inside that container.
+
+### Testing on a Databricks cluster
+
+You can run the **Essential bundle** and **primitive Volume tests** on a live Databricks cluster so that Volume paths are FUSE-mounted and the bundle uses pathlib/shutil only (no Databricks Files API).
+
+**Config** — Copy `notebooks/tests/databricks_cluster_config.example.env` to `notebooks/tests/databricks_cluster_config.env` and set:
+
+- `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or `DATABRICKS_CONFIG_PROFILE`)
+- `CLUSTER_ID` (existing cluster to run the job)
+- `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME` — Volume root is `/Volumes/<catalog>/<schema>/<volume_name>`. The volume name must match Data Explorer exactly (e.g. `sample-data` not `sample_data`).
+- **GBX_ARTIFACT_VOLUME** — directory for artifacts (e.g. `/Volumes/.../artifacts`). JAR and wheel are uploaded directly here (no subpaths). Wheel path for the notebook is derived as `GBX_ARTIFACT_VOLUME/geobrix-<version>-py3-none-any.whl` unless overridden.
+- Optional: `GBX_BUNDLE_WHEEL_VOLUME_PATH` — override full wheel path for the notebook pip cells.
+- Optional: `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` — use existing wheel (no build/upload); notebook still gets the pip and restart cells.
+- Optional: `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` — when running push-wheel, skip JAR build/upload; when running push-jar alone, skip JAR build/upload.
+- Optional: `GBX_RUNNER_DIR`, `GBX_BUNDLE_RUNNER_NOTEBOOK`, `GBX_PRIMITIVE_RUNNER_NOTEBOOK` — where to upload the runner notebooks.
+
+**Commands** — From the repo root:
+
+- `gbx:test:primitive-databricks` — Pushes the primitive notebook and runs it on the cluster. Validates volume exists, create subdirs, read/write/copy via FUSE (pathlib/shutil). No GeoBrix dependency.
+- `gbx:test:bundle-databricks` — Pushes the bundle runner notebook and runs it on the cluster. If `GBX_BUNDLE_WHEEL_VOLUME_PATH` is set, the notebook has: (1) `%pip install --quiet <wheel>`, (2) `%pip install --quiet --no-deps --force-reinstall <wheel>`, (3) `dbutils.library.restartPython()`, then the bundle cell. Run those cells in order so the restarted process loads the new GeoBrix code.
+
+**Rule** — For Volume path handling (FUSE, pathlib, no random access), see `.cursor/rules/unity-catalog-volumes.mdc`.
+
+---
+
+## Cursor
+
+The repo includes a full Cursor setup so that both humans and AI agents can run tests, coverage, docs, and Docker in a consistent way. The main pieces are **rules**, **commands**, **agents**, and **skills**.
+
+### Rules
+
+**Rules** are persistent guidance that shape how agents (and developers) should behave. They live in `.cursor/rules/` as `.mdc` files.
+
+- **Always-applied rules** — Loaded every session (e.g. `00-agent-context.mdc`, behavior and progress rules).
+- **Topic- or file-scoped rules** — Applied when relevant (e.g. test organization, docs single-source, GDAL resource management, Maven config).
+
+The **entry point** is `00-agent-context.mdc`: it defines how to delegate work (topic → subagent), where to find finer rule detail (topic → rule files), and the difference between commands, skills, and rules. When in doubt, check that rule and the topic→rule table there.
+
+### Commands
+
+**Commands** are invocable actions. Prefer them over ad-hoc shell for tests, coverage, docs, Docker, and data so behavior is consistent and reproducible.
+
+#### How to invoke
+
+- **From Cursor UI** — Use the command palette (e.g. type `/` or the command name) and run the desired `gbx:*` command. Each command is backed by a `.md` (registration) and a `.sh` (implementation) in `.cursor/commands/`.
+- **From a shell** — Run the script directly, e.g. `bash .cursor/commands/gbx-test-scala.sh [OPTIONS]`. Useful in terminals or when an agent runs them via the Shell tool.
+
+#### Naming
+
+Commands follow **`gbx:<category>:<action>`**:
+
+| Category | Purpose |
+|----------|---------|
+| `test` | Run tests (Scala, Python, docs, SQL docs, notebooks, function-info) |
+| `coverage` | Code coverage (Scala/Python, unit/docs, gaps, baseline, package-targeted) |
+| `data` | Sample data: download (essential/complete bundle), generate minimal bundle, push JAR/wheel to Volume |
+| `docs` | Documentation server (start, stop, restart, dev, serve-local, static-build, function-info, prompt-session) |
+| `docker` | Container lifecycle (exec, start, stop, restart, rebuild, attach) |
+| `ci` | CI / GitHub Actions: push, trigger, status, watch, logs, docs menu, setup |
+| `lint` | Scala: scalastyle; Python: isort, black, flake8 (same as CI) |
+
+#### When to use which command
+
+Use the following by task; always prefer the command over manual shell for these operations.
+
+**Testing**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:test:scala` | After Scala changes, before commit | Runs Scala unit tests (excludes doc tests); supports `--suite` |
+| `gbx:test:python` | After Python changes | Runs Python unit tests in `python/geobrix/test/` |
+| `gbx:test:scala-docs` | After changing Scala doc examples | Runs Scala doc tests in `docs/tests/scala/` |
+| `gbx:test:python-docs` | After changing Python doc examples | Runs Python doc tests in `docs/tests/python/` (default: no integration) |
+| `gbx:test:sql-docs` | After changing SQL API examples | Runs SQL (and Python API) doc tests in `docs/tests/python/api/` |
+| `gbx:test:docs` | Before PR that touches docs | Runs all doc tests by invoking **python-docs**, **sql-docs**, and **scala-docs** in sequence; sets `GBX_SAMPLE_DATA_ROOT` to minimal bundle by default (use `--no-sample-data-root` for full bundle) |
+| `gbx:test:function-info` | After changing function-info or doc SQL | Regenerates function-info and runs DESCRIBE/coverage tests |
+| `gbx:test:notebooks` | After changing sample-data or notebook runner | Runs notebook tests; use `--include-integration` for full run |
+| `gbx:test:python-dbr` | Validate Python on Databricks Runtime | DBR integration tests (spatial SQL, readers); excluded from regular CI; requires DBR environment |
+| `gbx:test:bundle-databricks` | Validate Essential bundle on a live cluster | Pushes runner notebook and runs it on `CLUSTER_ID`; use `--local` to run bundle on host |
+| `gbx:test:primitive-databricks` | Validate Volume access on cluster (FUSE) | Pushes primitive notebook; tests volume exists, create subdirs, read/write/copy via pathlib |
+
+**Coverage** (Scala coverage is slow; use strategically)
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:coverage:gaps` | See where to focus | Shows package-level gaps (no test run) |
+| `gbx:coverage:scala-package` | After changes in one package | Runs coverage for one package (e.g. `rasterx`, `gridx`) |
+| `gbx:coverage:baseline` | Weekly or before release | Full Scala or Python baseline |
+| `gbx:coverage:scala` | Full Scala coverage (sparingly) | Full scoverage; use `--report-only` to view last run |
+| `gbx:coverage:python` | After Python changes | Python unit test coverage (fast) |
+| `gbx:coverage:scala-docs` / `gbx:coverage:python-docs` | After doc test changes | Coverage for doc test suites |
+
+**Data**
+
+Doc tests use the **in-repo minimal bundle** (no download step). Generate it once with `gbx:data:generate-minimal-bundle`; the Docker Volumes mount makes it available to tests. For full sample data locally, use `gbx:data:download`. Minimal-bundle Sentinel-2 rasters (and `*_byte.tif` variants) may appear black in QGIS or other viewers; the full-size Essential/Complete bundle rasters are the ones suited for visual inspection.
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:data:download` | Need full sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
+| `gbx:data:generate-minimal-bundle` | CI or doc tests; after full bundle if needed | Generates minimal bundle under `sample-data/Volumes/.../test-data/geobrix-examples/` by bbox extraction (NYC/London, `--bbox-size`, `--max-rows`); doc test commands use this, not a download step |
+| `gbx:data:push-wheel` | Put built JAR and wheel on Volume | Builds JAR first (push-jar) unless `GBX_BUNDLE_SKIP_JAR_UPLOAD=1`, then clears `python/geobrix/dist`, runs `python3 -m build`, uploads wheel to `GBX_ARTIFACT_VOLUME/` (overwrite if exists); set `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` to skip wheel |
+| `gbx:data:push-jar` | Put built JAR on a Volume | Runs `mvn clean package -DskipTests`, uploads JAR to `GBX_ARTIFACT_VOLUME/` (overwrite if exists); set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to skip |
+
+**Documentation**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:docs:start` | Serve docs (one-off) | Builds (optional) and starts server on port 3000 |
+| `gbx:docs:stop` | Free port or before another docs command | Stops any running docs server |
+| `gbx:docs:dev` | While editing docs | Dev server with hot reload |
+| `gbx:docs:serve-local` | Preview production build | Build then serve static site |
+| `gbx:docs:static-build` | Create offline/portable docs zip | Build with relative paths and hash router; zip to `resources/static/` by default (use `--output <path>`); leaves `docs/build/` unchanged for serving |
+| `gbx:docs:restart` | Restart after stop | Stop + start with same options |
+| `gbx:docs:function-info` | After changing doc SQL examples | Regenerates `function-info.json` from doc SQL |
+| `gbx:prompt-session` | Start of session or context switch | Prints agent-context rule for review |
+
+**Docker**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:docker:start` | First time or after stop | Starts `geobrix-dev` container |
+| `gbx:docker:stop` | When done developing | Stops container |
+| `gbx:docker:exec` | Run Maven, pytest, etc. | Runs a command (or interactive shell) in container |
+| `gbx:docker:attach` | Interactive shell in container | Attach to running container |
+| `gbx:docker:restart` | After config change | Restart container |
+| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image and optionally start |
+| `gbx:docker:clear-pycache` | After editing Python code, stale imports | Clears `.pyc` and `__pycache__` in container so tests see fresh code |
+
+**Lint**
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:lint:scalastyle` | Before pushing Scala changes | Runs ScalaStyle on `src/main/scala` (same config as CI); catches trailing whitespace, missing EOF newline, non-ASCII in comments |
+| `gbx:lint:python` | Before pushing Python changes | Runs isort, black, flake8 on `python/geobrix` (same as CI). Default: check-only in Docker. Use `--fix` on host to apply isort/black (requires `pip install -e \"python/geobrix[dev]\"`). |
+
+**CI** (require GitHub CLI `gh`; use `gbx:ci:setup` to install/authenticate)
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:ci:push` | Initiate remote build on current branch (e.g. beta/0.2.0) | Pushes branch to origin, then watches the **build main** workflow run |
+| `gbx:ci:trigger` | Push then manually trigger build main (e.g. workflow_dispatch) | Pushes branch, lists runs, prompts to trigger **build main** on current branch |
+| `gbx:ci:status` | Check recent CI runs | Shows recent workflow runs for current branch (optional: `[LIMIT]`) |
+| `gbx:ci:watch` | Stream a CI run | Watches latest run (or `[RUN_ID]`) in real time |
+| `gbx:ci:logs` | Download CI logs | Fetches logs for latest run (or `[RUN_ID]`) into `ci-logs/` |
+| `gbx:ci:docs` | Doc-test CI menu | Run doc tests locally (python/scala), status, trigger, watch, logs (or no args for menu) |
+| `gbx:ci:setup` | One-time CI setup | Install and authenticate GitHub CLI (`gh`) |
+
+Most commands accept `--help`. Common options: `--log <path>` for test/output logs (truncated each run), `--open` for coverage reports, and command-specific flags (e.g. `--suite`, `--path`, `--skip-build`). **Doc test commands** set `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container by default so the minimal bundle is used (required for remote/CI); use `--no-sample-data-root` to leave it unset and use the full-bundle path or your own env. They do not run a sample-data download; the minimal or full bundle must be present via the Volumes mount.
+
+### Agents (subagents)
+
+**Agents** (subagents) are topic-owned “specialists” defined under `.cursor/agents/`. Each has an `.md` file (e.g. `test.md`, `coverage.md`, `docs.md`, `docker.md`, `rasterx.md`, `gridx.md`, `vectorx.md`, `gdal.md`, `data.md`, `function-info.md`).
+
+- They **own** the `gbx:*` commands for their topic and hold detailed knowledge for that area.
+- **When to delegate**: Use them for domain work (e.g. “run tests”, “fix coverage”, “docs server”, “Docker”, “RasterX API”, “GDAL drivers”). The topic → subagent table in `00-agent-context.mdc` is the canonical list.
+- Invoking a subagent should include the root Cursor rule (or `00-agent-context`) so the invoked agent has project context.
+
+### Skills
+
+**Skills** are reusable **procedures** (step-by-step guidance), not runnable commands. They live under `.cursor/skills/` (e.g. `add-or-fix-gbx-command/`, `create-cursor-rule/`).
+
+- **When to use**: For “how to do X in a standard way” — e.g. “add or fix a GeoBrix command”, “create or update a Cursor rule”. An agent (or you) follows the skill’s instructions.
+- **Add/fix command**: Use the **add-or-fix-gbx-command** skill when adding a new `gbx:*` command or fixing an existing one; then the subagent for that command’s topic can own further improvements.
+- **Create/update rule**: Use the **create-cursor-rule** skill when creating or updating a rule; then update `00-agent-context` (topic→rules) and the owning subagent if needed.
+
+---
+
+## Quick reference
+
+- **Run tests**: `gbx:test:*` (pick the scope: scala, python, docs, notebooks, bundle-databricks, primitive-databricks).
+- **Coverage**: Prefer `gbx:coverage:gaps` and `gbx:coverage:scala-package` for Scala; `gbx:coverage:python` is fast.
+- **Docs**: `gbx:docs:dev` while editing; `gbx:docs:stop` to stop.
+- **Docker**: `gbx:docker:start` then `gbx:docker:exec` (or `attach`) for builds and tests.
+- **Databricks cluster**: `gbx:test:primitive-databricks` then `gbx:test:bundle-databricks` with `databricks_cluster_config.env` set.
+- **Context**: `gbx:prompt-session` to print the agent-context rule.
+- **Full command list and options**: See `.cursor/rules/cursor-commands.mdc` in the repo.
+
+---
+
+## CI / GitHub Actions
+
+Workflows live in **`.github/workflows/`**. They define when and how tests and builds run on GitHub.
+
+### When things run
+
+- **Main build** (`build_main.yml`) — Runs on **push to any branch** (except `python/**` and `scala/**`), on **all pull requests**, and via **workflow_dispatch** (manual trigger from the Actions tab or `gh workflow run "build main" --ref <branch>`). Pipeline: checkout → build Scala → build Python → rebuild doc-snippet-inventory → (on push to main only) Scala doc tests → upload artifacts.
+  - **Scala tests** in the main run use `-Dsuites='com.databricks.labs.gbx.*'`, so only unit/integration tests run; **Scala doc tests** (`docs/tests/scala/`) are excluded from this step.
+  - **Scala doc tests** run in a **separate step** only when the event is **push to `main`**. That step sets `GBX_SAMPLE_DATA_ROOT` and runs the doc test suites.
+- **Documentation tests** (`doc-tests.yml`) — Run **after the "build main" workflow completes** (on the same ref). Python doc tests and structure validation run here; Scala doc tests are run by `build_main` (see above). Also triggerable manually via workflow_dispatch.
+- **Branch-specific builds** — `build_python.yml` runs on push to `python/**`; `build_scala.yml` runs on push to `scala/**`.
+- **CodeQL** (`codeql-analysis.yml`) — Security analysis on push and pull_request to `main`.
+- **Publish / release** — Triggered by release or publish events (see the workflow files).
+
+### Initiating a build from a branch
+
+Pushing to a branch (except `python/**` and `scala/**`) **successfully triggers** the **build main** workflow. To run the main build on your current branch (e.g. `beta/0.2.0`):
+
+- **Push and watch** — **`gbx:ci:push`**. Pushes the current branch to origin (push triggers **build main**), then streams the run.
+- **Trigger after push** — **`gbx:ci:trigger`**. Pushes, then prompts to trigger **build main** (workflow_dispatch).
+- **Check status** — **`gbx:ci:status`**. Recent workflow runs for the current branch.
+- **Watch a run** — **`gbx:ci:watch`** or **`gbx:ci:watch RUN_ID`**.
+- **Fetch logs** — **`gbx:ci:logs`** or **`gbx:ci:logs RUN_ID`** (saves to `ci-logs/`).
+- **First-time setup** — **`gbx:ci:setup`** to install and authenticate the GitHub CLI (`gh`).
+
+### Build environment and caching
+
+The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `python_build/`) use a **shared environment** so that when both run in the same job (e.g. **build main**), caches stay warm:
+
+- **Apt** — Both actions restore `.cache/apt-archives` at the start of the GDAL step and save it at the end. Workflows cache `.cache/apt-archives` with a key derived from both action files, so one cache serves Scala and Python; changing either action’s apt steps invalidates the cache.
+- **Pip** — Both use the same pip cache key (`.ci-pip-cache-key`, created by the workflow from ref + matrix). That avoids duplicate pip installs when Scala runs first and Python reuses the same interpreter and cache.
+- **Maven** — Scala uses `setup-java` with `cache: 'maven'` and `cache-dependency-path: 'pom.xml'`.
+
+The two actions intentionally mirror each other (same apt repos, same GDAL/natives, same pip stack: numpy, pyspark, gdal). Scala adds JDK, Maven, `zip`/`unzip`, and the JNI `.so` copy; Python adds pytest and `pip install python/geobrix[dev]`. **Lint (ScalaStyle, isort/black/flake8)** runs in CI on every build, but the build **fails on lint errors only for PRs targeting main**; pushes and PRs to other branches do not fail on lint. Config: `scalastyle-config.xml`, `python/geobrix/pyproject.toml`. Use **`gbx:lint:scalastyle`** and **`gbx:lint:python`** locally (or **`gbx:lint:python --fix`** with dev deps on the host). A future refactor could extract a single “setup GDAL + pip” composite used by both; for now the duplication is small and the structure is aligned for easy comparison.
+
+### Summary
+
+The main build runs on **push to any branch** (except `python/**`, `scala/**`) — push triggers are successful — and on all PRs and via **workflow_dispatch**. Use **`gbx:ci:push`** to push and watch the build. Scala doc tests run only on **push to `main`**, in a separate step with `GBX_SAMPLE_DATA_ROOT` set. For full details and triggers, see the YAML files in `.github/workflows/`.

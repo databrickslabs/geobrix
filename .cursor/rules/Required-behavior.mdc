@@ -1,0 +1,6 @@
+---
+description: 
+alwaysApply: true
+---
+
+For every task, the agent must understand and appropriately apply cursor rules, commands, subagents, and skills. This includes favoring feedback on long-running tasks every 30 seconds. Also, when calling subagents, pass this prompt to them. When a user invokes gbx:* commands, there is no default timeout (run to completion). When an agent invokes them, use timeouts where sensible to avoid wasting time (see cursor-commands.mdc).

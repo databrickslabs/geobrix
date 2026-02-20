@@ -1,0 +1,84 @@
+name: build geobrix python
+description: build geobrix python
+# Shares env with scala_build (apt + pip). When run after scala_build in same job, caches are warm.
+inputs:
+  run_lint:
+    description: 'Run Python lint (isort, black, flake8) and fail build on errors? true or false. Typically true only for PRs targeting main.'
+    default: 'false'
+runs:
+  using: "composite"
+  steps:
+    - name: Configure python interpreter
+      uses: actions/setup-python@v5
+      with:
+        cache: 'pip'
+        cache-dependency-path: '.ci-pip-cache-key'
+        python-version: ${{ matrix.python }}
+    - name: Add packaged GDAL dependencies
+      shell: bash
+      run: |
+        # - restore apt cache from workspace (workflow caches .cache/apt-archives; same key as scala_build)
+        mkdir -p .cache/apt-archives
+        if [ -n "$(ls -A .cache/apt-archives 2>/dev/null)" ]; then
+          sudo cp -n .cache/apt-archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+        fi
+        # - update apt
+        sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-backports main universe multiverse restricted"
+        sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates main universe multiverse restricted"
+        sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-security main multiverse restricted universe"
+        sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc) main multiverse restricted universe"
+        # - add ubuntugis PPA with GPG key
+        sudo apt-get install -y software-properties-common
+        sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable
+        sudo apt-get update -y
+        # - install natives (same set as scala_build minus zip/unzip and .so copy)
+        sudo apt-get -o DPkg::Lock::Timeout=-1 install -y unixodbc libcurl3-gnutls libsnappy-dev libopenjp2-7
+        sudo apt-get -o DPkg::Lock::Timeout=-1 install -y libgdal-dev gdal-bin python3-gdal
+        # - save apt archives for next run (workflow caches .cache/apt-archives)
+        sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
+    - name: Install python dependencies
+      shell: bash
+      run: |
+        # - install pip libs
+        #   note: gdal requires the extra args
+        pip install --upgrade pip setuptools wheel cython
+        pip install build numpy==${{ matrix.numpy }}
+        pip install pyspark==${{ matrix.spark }}
+        # - install GDAL Python bindings (numpy must be installed first)
+        #   detect installed GDAL version and use it if different from matrix version
+        export GDAL_CONFIG=/usr/bin/gdal-config
+        INSTALLED_GDAL_VERSION=$(gdal-config --version)
+        echo "System GDAL version: ${INSTALLED_GDAL_VERSION}"
+        echo "Matrix GDAL version: ${{ matrix.gdal }}"
+        # Use installed version if available, otherwise use matrix version
+        GDAL_VERSION_TO_INSTALL="${INSTALLED_GDAL_VERSION:-${{ matrix.gdal }}}"
+        pip install --no-build-isolation gdal[numpy]==${GDAL_VERSION_TO_INSTALL}
+        pip install pytest==${{ matrix.pytest }}
+        pip install python/geobrix[dev]
+    - name: Lint Python (isort, black, flake8)
+      if: inputs.run_lint == 'true'
+      shell: bash
+      run: |
+        cd python/geobrix
+        isort --check-only src test
+        black --check src test
+        flake8 src test
+    - name: Give Python interpreter write access to checkpointing / raster write location
+      shell: bash
+      run: |
+        # does this need to be '/mnt/tmp/raster-checkpoint'?
+        sudo mkdir -p /tmp/raster-checkpoint
+        sudo chmod -R 777 /tmp/raster-checkpoint
+        # Create GDAL temp directory for NodeFilePathUtil
+        sudo mkdir -p /tmp/gdal_local_files
+        sudo chmod -R 777 /tmp/gdal_local_files
+    - name: Test and build python package
+      shell: bash
+      run: |
+        # 'pytest' or 'python3 -m unittest'?
+        cd python/geobrix
+        python -m build
+        pytest
+    - name: Copy python artifacts to GH Actions run
+      shell: bash
+      run: cp python/geobrix/dist/*.whl staging/build-artifacts

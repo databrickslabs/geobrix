@@ -1,0 +1,47 @@
+# GeoBrix Project — Cursor Entry Point
+
+**Read first**: `.cursor/rules/00-agent-context.mdc` — critical context for every agent: how rules work, **topic → subagent** mapping, **topic → rule files**, commands vs skills, delegation, and Beta (no aliases).
+
+---
+
+## How to Operate
+
+1. **Follow 00-agent-context**: Use it to decide **which subagent to invoke** for a topic and where to find finer rule detail. Subagents own Cursor commands for their topic and build topical knowledge; delegate so context spikes in the subagent, then subside.
+2. **Use Cursor commands**: Run tests, coverage, docs, Docker, and data via `gbx:*` commands (see `.cursor/rules/cursor-commands.mdc`). Do not use raw shell for those. If a command fails, **fix the command** (use skill **add-or-fix-gbx-command** or the owning subagent); do not work around.
+3. **Skills when appropriate**: For “add/fix a GeoBrix command” or “create a rule/skill”, invoke the relevant skill (e.g. **add-or-fix-gbx-command** in `.cursor/skills/`, or Cursor’s create-rule / create-skill).
+4. **Required behavior**: Apply cursor rules, commands, subagents, and skills consistently. For long-running tasks, give brief progress feedback ~every 30s. When invoking subagents, pass context so they can act on the task.
+
+---
+
+## Docker & Sample Data (Essential)
+
+- **Container**: `geobrix-dev`. Commands: `gbx:docker:*` (Docker Specialist).
+- **Sample data (host)**: `sample-data/` at project root.
+- **Sample data (container)**: `/Volumes/main/default/geobrix_samples/` (or `geobrix-examples/` under that). Used by doc tests and examples.
+
+---
+
+## Subagents (10)
+
+**Canonical list** and when to invoke: see **00-agent-context.mdc** (topic → subagent table).
+
+- **Infrastructure**: Test (`test.md`), Coverage (`coverage.md`), Data (`data.md`), Documentation (`docs.md`), **Function-Info** (`function-info.md`), Docker (`docker.md`).
+- **API**: GDAL (`gdal.md`), RasterX (`rasterx.md`), GridX (`gridx.md`), VectorX (`vectorx.md`).
+
+Location: `.cursor/agents/*.md`. Subagents maintain and improve commands in their domain; update their `.md` when adding/fixing commands or when learning from sessions.
+
+---
+
+## Summaries & Doc Validation
+
+- **Session summaries**: `prompts/` with subfolders (`documentation/`, `tests/`, `features/`, etc.). Naming: `YYYY-MM-DD-brief-description.md`. See `.cursor/rules/summary-files-organization.mdc`.
+- **Doc code validation**: CodeFromTest, validation levels, JSX escaping. See `.cursor/rules/documentation-code-validation.mdc` and Documentation Manager subagent.
+
+---
+
+## Reference
+
+- **Topic → subagent & rules**: `.cursor/rules/00-agent-context.mdc`
+- **Delegation protocol**: `.cursor/rules/subagent-protocol.mdc`
+- **All commands**: `.cursor/rules/cursor-commands.mdc`
+- **Project skills**: `.cursor/skills/add-or-fix-gbx-command/`, `.cursor/skills/create-cursor-rule/` (use when adding/fixing commands or creating/updating rules)

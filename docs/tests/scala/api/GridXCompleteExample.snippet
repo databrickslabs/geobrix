@@ -1,0 +1,18 @@
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Register functions
+bx.register(spark)
+
+// Aggregate by BNG cell (point as WKT; GeoBrix does not accept st_point)
+val aggregated = spark.sql("""
+  SELECT
+    gbx_bng_pointascell(concat('POINT(', cast(longitude as string), ' ', cast(latitude as string), ')'), 1000) as bng_cell,
+    COUNT(*) as point_count,
+    AVG(value) as avg_value
+  FROM measurements
+  WHERE country = 'GB'
+  GROUP BY bng_cell
+""")
+
+aggregated.write.mode("overwrite").saveAsTable("bng_aggregated")

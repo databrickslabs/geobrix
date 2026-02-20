@@ -1,0 +1,608 @@
+---
+sidebar_position: 5
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import rasterxCode from '!!raw-loader!../../tests/python/api/rasterx_functions.py';
+import rasterxSqlCode from '!!raw-loader!../../tests/python/api/rasterx_functions_sql.py';
+
+
+# RasterX Function Reference
+
+Complete reference for all RasterX functions with detailed descriptions, parameters, return values, and examples.
+
+## Overview
+
+RasterX provides functions for working with raster (pixel) data in Spark—loading, querying, transforming, and aggregating rasters from formats such as GeoTIFF, COG, and NetCDF.
+
+**Function Count**: 65 functions organized into 6 categories (see [rasterx/functions.scala](https://github.com/databrickslabs/geobrix/blob/main/src/main/scala/com/databricks/labs/gbx/rasterx/functions.scala)):
+- **Accessor Functions** (29): Read raster properties and metadata (bounds, dimensions, CRS, bands, pixel size, georeference, format, type, NoData, subdatasets, summary, etc.)
+- **Aggregator Functions** (3): Combine or merge rasters in group-by (combineavg_agg, derivedband_agg, merge_agg)
+- **Constructor Functions** (3): Create or load rasters from paths, binary content, or bands
+- **Generator Functions** (5): Produce multiple tiles or bands (h3_tessellate, maketiles, retile, separatebands, tooverlappingtiles)
+- **Grid Functions (H3)** (5): Aggregate raster values to H3 cells (rastertogrid avg/count/max/min/median)
+- **Operations** (20): Transform and analyze rasters (clip, transform, merge, asformat, ndvi, filter, convolve, map algebra, coordinate conversion, isEmpty, tryOpen, initNoData, updateType, combineavg, derivedband)
+
+:::note SQL examples
+Examples on this page use **SQL**, where RasterX functions are prefixed with **`gbx_`** (e.g. `gbx_rst_boundingbox`, `gbx_rst_width`). For Python and Scala usage and more tips, see the [Python](./python), [Scala](./scala), and [SQL](./sql) API pages.
+:::
+
+## Common setup
+
+Run this once before the examples below. It registers RasterX and loads sample rasters into a temp view `rasters`.
+
+**Python:**
+
+<CodeFromTest
+  language="python"
+  title="RasterX setup"
+  source="docs/tests/python/api/rasterx_functions.py"
+  testFile="docs/tests/python/api/test_rasterx_functions.py"
+  functionName="rasterx_setup_example"
+  outputConstant="rasterx_setup_example_output"
+  code={rasterxCode}
+/>
+
+**SQL:** After registering RasterX (e.g. from Python above), create the view so SQL examples can use `FROM rasters`:
+
+<CodeFromTest
+  language="sql"
+  title="SQL view setup"
+  source="docs/tests/python/api/rasterx_functions_sql.py"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+  functionName="RASTERX_SQL_SETUP"
+  outputConstant="RASTERX_SQL_SETUP_output"
+  code={rasterxSqlCode}
+/>
+
+---
+
+## Accessor Functions
+
+Functions to read raster properties and metadata (29 total).
+
+### rst_avg
+
+**Signature:** `rst_avg(tile: Column): Column` — Per-band average pixel values.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_avg_sql_example" outputConstant="rst_avg_sql_example_output" code={rasterxSqlCode} />
+
+### rst_bandmetadata
+
+**Signature:** `rst_bandmetadata(tile: Column, band: Column): Column` — Band metadata map.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bandmetadata_sql_example" outputConstant="rst_bandmetadata_sql_example_output" code={rasterxSqlCode} />
+
+### rst_boundingbox
+
+**Signature:** `rst_boundingbox(tile: Column): Column` — Bounding box geometry.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_boundingbox_sql_example" outputConstant="rst_boundingbox_sql_example_output" code={rasterxSqlCode} />
+
+### rst_format
+
+**Signature:** `rst_format(tile: Column): Column` — GDAL format name.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_format_sql_example" outputConstant="rst_format_sql_example_output" code={rasterxSqlCode} />
+
+### rst_georeference
+
+**Signature:** `rst_georeference(tile: Column): Column` — Georeference parameters as a map.
+
+The result is a **MapType** with the following keys, corresponding to [GDAL's 6-element geotransform](https://gdal.org/en/stable/tutorials/geotransforms_tut.html):
+
+| Key | Geotransform index | Meaning |
+|-----|--------------------|---------|
+| `upperLeftX` | GT(0) | X of the upper-left corner of the upper-left pixel |
+| `upperLeftY` | GT(3) | Y of the upper-left corner of the upper-left pixel |
+| `scaleX` | GT(1) | Pixel width (west–east resolution) |
+| `scaleY` | GT(5) | Pixel height (north–south resolution; often negative for north-up) |
+| `skewX` | GT(2) | Row rotation (typically 0) |
+| `skewY` | GT(4) | Column rotation (typically 0) |
+
+See the [GDAL geotransform tutorial](https://gdal.org/en/stable/tutorials/geotransforms_tut.html) and [raster data model](https://gdal.org/en/stable/user/raster_data_model.html) for details.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_georeference_sql_example" outputConstant="rst_georeference_sql_example_output" code={rasterxSqlCode} />
+
+### rst_getnodata
+
+**Signature:** `rst_getnodata(tile: Column): Column` — NoData values per band.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_getnodata_sql_example" outputConstant="rst_getnodata_sql_example_output" code={rasterxSqlCode} />
+
+### rst_getsubdataset
+
+**Signature:** `rst_getsubdataset(tile: Column, subsetName: Column): Column` — Extract subdataset.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_getsubdataset_sql_example" outputConstant="rst_getsubdataset_sql_example_output" code={rasterxSqlCode} />
+
+### rst_height
+
+**Signature:** `rst_height(tile: Column): Column` — Height in pixels.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_height_sql_example" outputConstant="rst_height_sql_example_output" code={rasterxSqlCode} />
+
+### rst_max
+
+**Signature:** `rst_max(tile: Column): Column` — Maximum pixel values per band.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_max_sql_example" outputConstant="rst_max_sql_example_output" code={rasterxSqlCode} />
+
+### rst_median
+
+**Signature:** `rst_median(tile: Column): Column` — Median pixel values per band.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_median_sql_example" outputConstant="rst_median_sql_example_output" code={rasterxSqlCode} />
+
+### rst_memsize
+
+**Signature:** `rst_memsize(tile: Column): Column` — In-memory size in bytes.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_memsize_sql_example" outputConstant="rst_memsize_sql_example_output" code={rasterxSqlCode} />
+
+### rst_metadata
+
+**Signature:** `rst_metadata(tile: Column): Column` — Metadata map.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_metadata_sql_example" outputConstant="rst_metadata_sql_example_output" code={rasterxSqlCode} />
+
+### rst_min
+
+**Signature:** `rst_min(tile: Column): Column` — Minimum pixel values per band.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_min_sql_example" outputConstant="rst_min_sql_example_output" code={rasterxSqlCode} />
+
+### rst_numbands
+
+**Signature:** `rst_numbands(tile: Column): Column` — Number of bands.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_numbands_sql_example" outputConstant="rst_numbands_sql_example_output" code={rasterxSqlCode} />
+
+### rst_pixelcount
+
+**Signature:** `rst_pixelcount(tile: Column): Column` — Total pixel count.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_pixelcount_sql_example" outputConstant="rst_pixelcount_sql_example_output" code={rasterxSqlCode} />
+
+### rst_pixelheight
+
+**Signature:** `rst_pixelheight(tile: Column): Column` — Pixel height in ground units.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_pixelsize_sql_example" outputConstant="rst_pixelsize_sql_example_output" code={rasterxSqlCode} />
+
+### rst_pixelwidth
+
+**Signature:** `rst_pixelwidth(tile: Column): Column` — Pixel width in ground units.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_pixelsize_sql_example" outputConstant="rst_pixelsize_sql_example_output" code={rasterxSqlCode} />
+
+### rst_rotation
+
+**Signature:** `rst_rotation(tile: Column): Column` — Rotation in radians.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_rotation_sql_example" outputConstant="rst_rotation_sql_example_output" code={rasterxSqlCode} />
+
+### rst_scalex / rst_scaley
+
+**Signature:** `rst_scalex(tile: Column): Column`, `rst_scaley(tile: Column): Column` — Scale (pixel size) in X/Y.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_scalex_scaley_sql_example" outputConstant="rst_scalex_scaley_sql_example_output" code={rasterxSqlCode} />
+
+### rst_skewx / rst_skewy
+
+**Signature:** `rst_skewx(tile: Column): Column`, `rst_skewy(tile: Column): Column` — Skew in X/Y.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_skewx_skewy_sql_example" outputConstant="rst_skewx_skewy_sql_example_output" code={rasterxSqlCode} />
+
+### rst_srid
+
+**Signature:** `rst_srid(tile: Column): Column` — Spatial reference ID (e.g. EPSG).
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_srid_sql_example" outputConstant="rst_srid_sql_example_output" code={rasterxSqlCode} />
+
+### rst_subdatasets
+
+**Signature:** `rst_subdatasets(tile: Column): Column` — List of subdataset names.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_subdatasets_sql_example" outputConstant="rst_subdatasets_sql_example_output" code={rasterxSqlCode} />
+
+### rst_summary
+
+**Signature:** `rst_summary(tile: Column): Column` — Statistical summary of values.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_summary_sql_example" outputConstant="rst_summary_sql_example_output" code={rasterxSqlCode} />
+
+### rst_type
+
+**Signature:** `rst_type(tile: Column): Column` — Data type per band.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_type_sql_example" outputConstant="rst_type_sql_example_output" code={rasterxSqlCode} />
+
+### rst_upperleftx / rst_upperlefty
+
+**Signature:** `rst_upperleftx(tile: Column): Column`, `rst_upperlefty(tile: Column): Column` — Upper-left corner coordinates.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_upperleft_sql_example" outputConstant="rst_upperleft_sql_example_output" code={rasterxSqlCode} />
+
+### rst_width
+
+**Signature:** `rst_width(tile: Column): Column` — Width in pixels.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_width_sql_example" outputConstant="rst_width_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+## Aggregator Functions
+
+Combine or merge rasters in group-by (3 total).
+
+### rst_combineavg_agg
+
+**Signature:** `rst_combineavg_agg(tile: Column): Column` — Average tiles per group.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_combineavg_agg_sql_example" outputConstant="rst_combineavg_agg_sql_example_output" code={rasterxSqlCode} />
+
+### rst_derivedband_agg
+
+**Signature:** `rst_derivedband_agg(tile: Column, pyfunc: String, funcName: String): Column` — Apply Python UDF to tiles per group.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_derivedband_agg_sql_example" outputConstant="rst_derivedband_agg_sql_example_output" code={rasterxSqlCode} />
+
+### rst_merge_agg
+
+**Signature:** `rst_merge_agg(tile: Column): Column` — Merge tiles per group.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_merge_agg_sql_example" outputConstant="rst_merge_agg_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+## Constructor Functions
+
+Create or load rasters from path, binary content, or bands (3 total).
+
+### rst_fromfile
+
+Load a raster from a file path.
+
+**Signature:** `rst_fromfile(path: Column, driver: Column): Column`
+
+**Parameters:** `path` — File path; `driver` — GDAL driver name (e.g. `GTiff`)
+
+**Returns:** Binary raster tile data
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_fromfile_sql_example" outputConstant="rst_fromfile_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+### rst_fromcontent
+
+Create a raster from binary content.
+
+**Signature:** `rst_fromcontent(content: Column, driver: Column): Column`
+
+**Parameters:** `content` — Binary column; `driver` — GDAL driver name
+
+**Returns:** Binary raster tile data
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_fromcontent_sql_example" outputConstant="rst_fromcontent_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+### rst_frombands
+
+Create a raster from an array of band tiles.
+
+**Signature:** `rst_frombands(bands: Column): Column`
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_frombands_sql_example" outputConstant="rst_frombands_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+## Generator Functions
+
+Produce multiple tiles or bands (5 total).
+
+### rst_h3_tessellate
+
+**Signature:** `rst_h3_tessellate(tile: Column, resolution: Column): Column` — Tessellate raster to H3 cells.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_tessellate_sql_example" outputConstant="rst_h3_tessellate_sql_example_output" code={rasterxSqlCode} />
+
+### rst_maketiles
+
+**Signature:** `rst_maketiles(tile: Column, tileWidth: Column, tileHeight: Column): Column` — Subdivide into smaller tiles.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_maketiles_sql_example" outputConstant="rst_maketiles_sql_example_output" code={rasterxSqlCode} />
+
+### rst_retile
+
+**Signature:** `rst_retile(tile: Column, tileWidth: Column, tileHeight: Column): Column` — Retile to uniform dimensions.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_retile_sql_example" outputConstant="rst_retile_sql_example_output" code={rasterxSqlCode} />
+
+### rst_separatebands
+
+**Signature:** `rst_separatebands(tile: Column): Column` — Split multi-band into array of bands.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_separatebands_sql_example" outputConstant="rst_separatebands_sql_example_output" code={rasterxSqlCode} />
+
+### rst_tooverlappingtiles
+
+**Signature:** `rst_tooverlappingtiles(tile: Column, tileWidth: Column, tileHeight: Column, overlap: Column): Column` — Create overlapping tiles.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tooverlappingtiles_sql_example" outputConstant="rst_tooverlappingtiles_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+## Grid Functions (H3)
+
+Aggregate raster values to H3 grid cells (5 total).
+
+### rst_h3_rastertogridavg
+
+**Signature:** `rst_h3_rastertogridavg(tile: Column, resolution: Column): Column`
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridavg_sql_example" outputConstant="rst_h3_rastertogridavg_sql_example_output" code={rasterxSqlCode} />
+
+### rst_h3_rastertogridcount
+
+**Signature:** `rst_h3_rastertogridcount(tile: Column, resolution: Column): Column` — Pixel count per H3 cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridcount_sql_example" outputConstant="rst_h3_rastertogridcount_sql_example_output" code={rasterxSqlCode} />
+
+### rst_h3_rastertogridmax
+
+**Signature:** `rst_h3_rastertogridmax(tile: Column, resolution: Column): Column` — Max value per H3 cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridmax_sql_example" outputConstant="rst_h3_rastertogridmax_sql_example_output" code={rasterxSqlCode} />
+
+### rst_h3_rastertogridmin
+
+**Signature:** `rst_h3_rastertogridmin(tile: Column, resolution: Column): Column` — Min value per H3 cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridmin_sql_example" outputConstant="rst_h3_rastertogridmin_sql_example_output" code={rasterxSqlCode} />
+
+### rst_h3_rastertogridmedian
+
+**Signature:** `rst_h3_rastertogridmedian(tile: Column, resolution: Column): Column` — Median value per H3 cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridmedian_sql_example" outputConstant="rst_h3_rastertogridmedian_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+## Operations
+
+Transform and analyze rasters (20 total).
+
+### rst_asformat
+
+**Signature:** `rst_asformat(tile: Column, newFormat: Column): Column` — Convert to another format.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_asformat_sql_example" outputConstant="rst_asformat_sql_example_output" code={rasterxSqlCode} />
+
+### rst_clip
+
+**Signature:** `rst_clip(tile: Column, clip: Column, cutlineAllTouched: Column): Column` — Clip by geometry. The `clip` argument must be **WKT** (string) or **WKB** (binary); do not use `st_geomfromtext()` or other DBR native geometry.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_clip_sql_example" outputConstant="rst_clip_sql_example_output" code={rasterxSqlCode} />
+
+### rst_combineavg
+
+**Signature:** `rst_combineavg(tiles: Column): Column` — Average multiple tiles (e.g. temporal composite).
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_combineavg_sql_example" outputConstant="rst_combineavg_sql_example_output" code={rasterxSqlCode} />
+
+### rst_convolve
+
+**Signature:** `rst_convolve(tile: Column, kernel: Column): Column` — Apply convolution kernel.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_convolve_sql_example" outputConstant="rst_convolve_sql_example_output" code={rasterxSqlCode} />
+
+### rst_derivedband
+
+**Signature:** `rst_derivedband(tile: Column, pyfunc: String, funcName: String): Column` — Apply Python UDF to derive band.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_derivedband_sql_example" outputConstant="rst_derivedband_sql_example_output" code={rasterxSqlCode} />
+
+### rst_filter
+
+**Signature:** `rst_filter(tile: Column, kernelSize: Column, operation: Column): Column` — Spatial filter (e.g. median, avg).
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_filter_sql_example" outputConstant="rst_filter_sql_example_output" code={rasterxSqlCode} />
+
+### rst_initnodata
+
+**Signature:** `rst_initnodata(tile: Column): Column` — Initialize NoData values.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_initnodata_sql_example" outputConstant="rst_initnodata_sql_example_output" code={rasterxSqlCode} />
+
+### rst_isempty
+
+**Signature:** `rst_isempty(tile: Column): Column` — Check if raster is empty.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_isempty_sql_example" outputConstant="rst_isempty_sql_example_output" code={rasterxSqlCode} />
+
+### rst_mapalgebra
+
+**Signature:** `rst_mapalgebra(tiles: Column, expression: Column): Column` — Map algebra expression (e.g. A-B).
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_mapalgebra_sql_example" outputConstant="rst_mapalgebra_sql_example_output" code={rasterxSqlCode} />
+
+### rst_merge
+
+**Signature:** `rst_merge(tiles: Column): Column` — Merge tiles into mosaic.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_merge_sql_example" outputConstant="rst_merge_sql_example_output" code={rasterxSqlCode} />
+
+### rst_ndvi
+
+**Signature:** `rst_ndvi(tile: Column, redBand: Column, nirBand: Column): Column` — NDVI from band indices.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_ndvi_sql_example" outputConstant="rst_ndvi_sql_example_output" code={rasterxSqlCode} />
+
+### rst_rastertoworldcoord / rst_rastertoworldcoordx / rst_rastertoworldcoordy
+
+**Signature:** `rst_rastertoworldcoord(tile: Column, pixelX: Column, pixelY: Column): Column` (and X/Y variants) — Pixel to world coordinates.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_rastertoworldcoord_sql_example" outputConstant="rst_rastertoworldcoord_sql_example_output" code={rasterxSqlCode} />
+
+### rst_transform
+
+**Signature:** `rst_transform(tile: Column, targetSrid: Column): Column` — Reproject to target CRS.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_transform_sql_example" outputConstant="rst_transform_sql_example_output" code={rasterxSqlCode} />
+
+### rst_tryopen
+
+**Signature:** `rst_tryopen(tile: Column): Column` — Validate raster can be opened.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tryopen_sql_example" outputConstant="rst_tryopen_sql_example_output" code={rasterxSqlCode} />
+
+### rst_updatetype
+
+**Signature:** `rst_updatetype(tile: Column, newType: Column): Column` — Convert raster data type.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_updatetype_sql_example" outputConstant="rst_updatetype_sql_example_output" code={rasterxSqlCode} />
+
+### rst_worldtorastercoord / rst_worldtorastercoordx / rst_worldtorastercoordy
+
+**Signature:** `rst_worldtorastercoord(tile: Column, worldX: Column, worldY: Column): Column` (and X/Y variants) — World to pixel coordinates.
+
+**rst_worldtorastercoord** — full struct (pixel with .x and .y):
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoord_sql_example" outputConstant="rst_worldtorastercoord_sql_example_output" code={rasterxSqlCode} />
+
+**rst_worldtorastercoord** — multiple points (e.g. from a locations table):
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoord_multi_sql_example" outputConstant="rst_worldtorastercoord_multi_sql_example_output" code={rasterxSqlCode} />
+
+**rst_worldtorastercoordx** — pixel column only:
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoordx_sql_example" outputConstant="rst_worldtorastercoordx_sql_example_output" code={rasterxSqlCode} />
+
+**rst_worldtorastercoordy** — pixel row only:
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoordy_sql_example" outputConstant="rst_worldtorastercoordy_sql_example_output" code={rasterxSqlCode} />
+
+---
+
+## Next Steps
+
+- [GridX Function Reference](./gridx-functions)
+- [VectorX Function Reference](./vectorx-functions)
+- [RasterX Package Documentation](../packages/rasterx)
+

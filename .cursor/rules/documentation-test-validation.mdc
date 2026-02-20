@@ -1,0 +1,227 @@
+---
+description: Validate documentation examples through compilation tests
+alwaysApply: true
+---
+
+# Documentation Test Validation
+
+Ensure documentation code examples are valid through automated testing.
+
+## Core Principle
+
+**Doc Tests = Compilation Tests**
+
+We don't need to execute examples - just verify they compile. This catches:
+- ❌ Invalid imports
+- ❌ Non-existent classes
+- ❌ Wrong method signatures
+- ❌ Invalid API usage
+
+## Structure
+
+Mirror docs structure in test directory:
+
+```
+docs/docs/
+├── advanced/
+│   ├── custom-udfs.md
+│   └── overview.md
+└── api/
+    ├── rasterx-functions.md
+    └── vectorx-functions.md
+
+src/test/scala/com/databricks/labs/gbx/docs/
+├── advanced/
+│   ├── CustomUdfsDocTest.scala    # Tests custom-udfs.md examples
+│   └── OverviewDocTest.scala      # Tests overview.md examples
+└── api/
+    └── (future test files)
+```
+
+## The One Command You Need
+
+```bash
+# Compile doc tests and save to log
+docker exec geobrix-dev /bin/bash -c "unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn test-compile" 2>&1 | tee test-logs/doc-tests-compile-$(date +%Y%m%d-%H%M%S).log
+```
+
+**Remember:**
+1. **Always log** - Use `| tee test-logs/...`
+2. **Check logs first** - Don't recompile unnecessarily
+3. **Only recompile when docs or code changes**
+
+## Quick Check
+
+```bash
+# Check latest compilation result (don't recompile!)
+tail -20 test-logs/doc-tests-compile-*.log | grep "BUILD"
+
+# Should see:
+# [INFO] BUILD SUCCESS
+```
+
+## Test Pattern
+
+### For Each Documentation Example
+
+**1. Documentation (custom-udfs.md):**
+```markdown
+## Custom Python UDF
+
+\`\`\`scala
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
+
+val result = RST_DerivedBand.execute(tile, pythonCode, "myFunction")
+\`\`\`
+```
+
+**2. Test (CustomUdfsDocTest.scala):**
+```scala
+package com.databricks.labs.gbx.docs.advanced
+
+import org.scalatest.funsuite.AnyFunSuite
+
+class CustomUdfsDocTest extends AnyFunSuite {
+  
+  test("custom python udf example from docs") {
+    // Copy the exact imports and code from docs
+    import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+    import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
+    
+    // If it compiles, the docs are valid!
+    succeed
+  }
+}
+```
+
+## What This Catches
+
+### Example 1: Invalid Class Name
+
+**❌ BAD Docs:**
+```scala
+// Docs show:
+import com.databricks.labs.gbx.rasterx.model.tile.MosaicRasterTile
+val tile = MosaicRasterTile.deserialize(bytes)
+```
+
+**Compilation Error:**
+```
+[ERROR] object MosaicRasterTile is not a member of package model.tile
+```
+
+**✅ FIXED Docs:**
+```scala
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+val ds = RasterDriver.readFromBytes(bytes, Map.empty)
+```
+
+### Example 2: Wrong Method Signature
+
+**❌ BAD Docs:**
+```scala
+// Docs show:
+val result = myExpression.execute(dataset)
+```
+
+**Compilation Error:**
+```
+[ERROR] not enough arguments for method execute: (implicit spark: SparkSession)
+```
+
+**✅ FIXED Docs:**
+```scala
+implicit val spark: SparkSession = // ...
+val result = myExpression.execute(dataset)
+```
+
+## Workflow
+
+### When Adding Documentation Examples
+
+1. **Write example in markdown**
+   ```markdown
+   \`\`\`scala
+   import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
+   val result = RST_Transform.execute(tile, targetSRID)
+   \`\`\`
+   ```
+
+2. **Create matching test** in mirrored location
+   ```scala
+   // src/test/scala/com/databricks/labs/gbx/docs/.../MyFeatureDocTest.scala
+   test("transform example from docs") {
+     import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
+     succeed  // If imports work, test passes
+   }
+   ```
+
+3. **Compile and verify**
+   ```bash
+   mvn test-compile 2>&1 | tee test-logs/doc-tests-$(date +%Y%m%d-%H%M%S).log
+   ```
+
+4. **Check log** (don't recompile!)
+   ```bash
+   tail -20 test-logs/doc-tests-*.log | grep "BUILD"
+   ```
+
+### When Refactoring Code
+
+```bash
+# Compile doc tests to see if you broke documented examples
+mvn test-compile 2>&1 | tee test-logs/refactor-doc-check-$(date +%Y%m%d-%H%M%S).log
+
+# If compilation fails, update BOTH code AND docs!
+```
+
+## Benefits
+
+### ✅ Prevents Documentation Rot
+- Examples stay valid as code evolves
+- Catches breaking changes immediately
+- No manual verification needed
+
+### ✅ Fast Feedback
+- Compile-only: ~10 seconds
+- No test execution overhead
+- Quick verification during development
+
+### ✅ Easy Maintenance
+- Mirror structure makes it obvious where tests go
+- Simple pattern to follow
+- Easy to add new tests as docs grow
+
+## Coverage Tracking
+
+Track which docs have test coverage:
+
+```
+| Doc File | Test File | Status |
+|----------|-----------|--------|
+| advanced/custom-udfs.md | CustomUdfsDocTest.scala | ✅ 8 tests |
+| advanced/overview.md | OverviewDocTest.scala | ✅ 1 test |
+| api/rasterx-functions.md | _TODO_ | ❌ Not yet |
+| api/vectorx-functions.md | _TODO_ | ❌ Not yet |
+```
+
+## If You Need to Execute Tests
+
+Use `-Dsuites=` (not `-Dtest=`) for scalatest-maven-plugin:
+
+```bash
+# Run all doc tests
+mvn test -Dsuites='com.databricks.labs.gbx.docs.*' 2>&1 | tee test-logs/doc-tests-exec-$(date +%Y%m%d-%H%M%S).log
+
+# Run specific doc test
+mvn test -Dsuites=com.databricks.labs.gbx.docs.advanced.CustomUdfsDocTest
+```
+
+## Reference
+
+Based on doc tests implementation that:
+- Fixed 10+ invalid examples
+- Prevented documentation rot
+- Established simple, maintainable validation pattern
+- Mirrors docs structure for easy maintenance

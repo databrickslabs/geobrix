@@ -1,0 +1,35 @@
+import logging
+from pathlib import Path
+
+import pytest
+from pyspark.sql import SparkSession
+
+HERE = Path(__file__).resolve()
+LIBDIR = (HERE.parents[2] / "lib").resolve()  # simpler, robust
+candidates = sorted(LIBDIR.glob("geobrix-*-jar-with-dependencies.jar"))
+JAR = candidates[-1].resolve()
+JAR_URI = JAR.as_uri()
+
+
+@pytest.fixture(scope="session")
+def spark():
+    logging.getLogger("py4j").setLevel(logging.ERROR)
+    spark = (
+        SparkSession.builder.config(
+            "spark.driver.extraJavaOptions",
+            "-Dlog4j.rootLogger=INFO,console "
+            "-Djava.library.path=/usr/local/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib:/usr/local/hadoop/lib/native",
+        )
+        .config("spark.jars", str(JAR))
+        .getOrCreate()
+    )
+    spark.sql("LIST JAR").show(truncate=False)
+    return spark
+
+
+def test_legacy_functions_registration(spark):
+    from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy_funcs
+
+    legacy_funcs.register(spark)
+    df = spark.sql("show functions like 'gbx_st_legacyaswkb'")
+    assert df.count() is not None

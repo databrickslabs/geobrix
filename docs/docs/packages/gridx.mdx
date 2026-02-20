@@ -1,0 +1,149 @@
+---
+sidebar_position: 3
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.py';
+import gridxScalaCode from '!!raw-loader!../../tests/scala/packages/GridxPackageExamples.scala';
+
+# GridX
+
+![GridX](../../../resources/images/GridX.png)
+
+:::tip Full API reference
+For the complete list of GridX (BNG) functions with parameters and examples, see the [GridX Function Reference](../api/gridx-functions).
+:::
+
+GridX is GeoBrix's grid indexing package, providing discrete global grid indexing capabilities with a focus on the British National Grid (BNG) system.
+
+:::note Registration and import path
+GridX BNG functions are under **gridx.bng**. Use `gridx.bng` when importing from `databricks.labs.gbx.gridx.bng` (Python) or `com.databricks.labs.gbx.gridx.bng` (Scala).
+:::
+
+## Overview
+
+GridX is a refactor of Mosaic discrete global grid indexing functions. The current focus has been on porting BNG (British National Grid) for Great Britain customers, providing specialized grid operations for UK-based spatial data.
+
+## British National Grid (BNG)
+
+The British National Grid is the national coordinate system for Great Britain. It is based on the Ordnance Survey National Grid (OSGB36) and divides the UK into grid squares with letter-based prefixes and numeric coordinates.
+
+### BNG Structure
+
+- **Grid Squares**: 100km × 100km squares identified by two letters (e.g., "TQ", "SU")
+- **Eastings & Northings**: Numeric coordinates within each grid square
+- **Precision**: Supports various precision levels (1m, 10m, 100m, 1km, etc.)
+
+## Key Features
+
+- **Grid Cell Operations**: Create, manipulate, and query BNG grid cells
+- **Area Calculations**: Calculate areas of grid cells at different precisions
+- **Coordinate Conversion**: Convert between grid references and coordinates
+- **Spatial Indexing**: Use BNG for efficient spatial indexing
+- **Multi-Resolution Support**: Work with different grid resolutions
+
+## Function Categories
+
+### Cell operations and geometry
+
+- `gbx_bng_cellarea` - Area of a BNG grid cell (square kilometres)
+- `gbx_bng_distance` - Grid distance between two cells
+- `gbx_bng_euclideandistance` - Euclidean distance between cell centers
+- `gbx_bng_cellintersection` - Intersection of two cells (geometry)
+- `gbx_bng_cellunion` - Union of two cells (geometry)
+- `gbx_bng_centroid` - Centroid of a BNG cell (point geometry)
+- `gbx_bng_aswkt` - BNG cell as WKT polygon
+- `gbx_bng_aswkb` - BNG cell as WKB polygon
+
+### Point and coordinate conversion
+
+- `gbx_bng_pointascell` - Convert point geometry to BNG cell reference (point as WKT or WKB)
+- `gbx_bng_eastnorthasbng` - Create BNG cell from easting/northing and resolution
+
+### K-ring and k-loop
+
+- `gbx_bng_kring` - K-ring of cells around a center cell
+- `gbx_bng_kloop` - K-loop (hollow ring) around a center cell
+- `gbx_bng_geomkring` - K-ring for a geometry at a given resolution
+- `gbx_bng_geomkloop` - K-loop for a geometry
+- `gbx_bng_kringexplode` - Explode k-ring into rows
+- `gbx_bng_kloopexplode` - Explode k-loop into rows
+- `gbx_bng_geomkringexplode` - Explode geometry k-ring into rows
+- `gbx_bng_geomkloopexplode` - Explode geometry k-loop into rows
+
+### Tessellation and polyfill
+
+- `gbx_bng_tessellate` - Tessellate geometry into BNG cells
+- `gbx_bng_polyfill` - Polyfill geometry with BNG cells
+- `gbx_bng_tessellateexplode` - Explode tessellation into rows
+
+### Aggregations
+
+- `gbx_bng_cellintersection_agg` - Aggregate intersection of cells
+- `gbx_bng_cellunion_agg` - Aggregate union of cells
+
+## Usage Examples
+
+### Python/PySpark
+
+<CodeFromTest
+  code={packagesExamples}
+  language="python"
+  source="docs/tests/python/packages/examples.py"
+  testFile="docs/tests/python/packages/test_examples.py"
+  functionName="gridx_basic_usage"
+  outputConstant="gridx_basic_usage_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={gridxScalaCode}
+  language="scala"
+  source="docs/tests/scala/packages/GridxPackageExamples.scala"
+  testFile="docs/tests/scala/packages/GridxExamplesDocTest.scala"
+  functionName="GRIDX_SCALA_USAGE"
+  outputConstant="GRIDX_SCALA_USAGE_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={packagesExamples}
+  language="sql"
+  source="docs/tests/python/packages/examples.py"
+  testFile="docs/tests/python/packages/test_examples.py"
+  functionName="SQL_GRIDX_BNG_USAGE"
+  outputConstant="SQL_GRIDX_BNG_USAGE_output"
+/>
+
+## BNG Grid Reference Format
+
+### Standard Format
+
+BNG references follow the format: `[Letters][Eastings][Northings]`
+
+Examples:
+- `TQ 38 80` - 1km precision (Tower of London area)
+- `TQ 3800 8000` - 100m precision
+- `TQ 38000 80000` - 10m precision
+- `SU 12 34` - Different grid square
+
+### Precision Levels
+
+| Precision | Grid Size | Use Case |
+|-----------|-----------|----------|
+| 100000m | 100km × 100km | Regional analysis |
+| 10000m | 10km × 10km | District-level |
+| 1000m | 1km × 1km | Local area analysis |
+| 100m | 100m × 100m | Neighborhood level |
+| 10m | 10m × 10m | Building level |
+| 1m | 1m × 1m | Precise location |
+
+## Next Steps
+
+- [View API Reference](../api/overview)
+- [Check Examples](../examples/overview)
+- [Learn about RasterX](./rasterx)
+- [Learn about VectorX](./vectorx)
+- [Advanced Usage](../advanced/overview)

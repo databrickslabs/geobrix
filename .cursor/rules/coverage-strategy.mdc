@@ -1,0 +1,382 @@
+---
+description: Strategic approach to code coverage - Scala is expensive, be judicious
+alwaysApply: true
+---
+
+# Code Coverage Strategy: Be Judicious with Scala Coverage
+
+## Core Principle
+
+**Scala coverage is EXPENSIVE** (~5-10 minutes for full run). Python coverage is fast (~30 seconds). Strategy must be different for each.
+
+## The Problem
+
+### Scala Coverage Cost
+- **Full run**: `mvn clean package -DskipTests=false` → 5-10 minutes
+- **Instrumentation overhead**: scoverage instruments bytecode at compile time
+- **All tests execute**: Cannot skip tests and still get accurate coverage
+- **Resource intensive**: CPU + memory heavy
+
+### Why This Matters
+Running full Scala coverage after every small change:
+- ❌ Wastes 40+ minutes per day (4 changes × 10 min)
+- ❌ Slows development velocity
+- ❌ Discourages frequent coverage checks
+- ❌ Makes coverage improvement feel expensive
+
+## Strategic Approach
+
+### 1. Use Report-Only Mode (FREE)
+
+**Command**: `gbx:coverage:scala --report-only`
+
+**When to use**:
+- ✅ Checking current coverage status
+- ✅ Gap analysis (which packages need work)
+- ✅ Quick reviews between full runs
+- ✅ After making non-code changes (docs, configs)
+
+**Why it's free**:
+- Reads existing `target/scoverage.xml`
+- No test execution
+- Completes in seconds
+- Shows same HTML report
+
+**Limitation**: Data is only as current as last full run
+
+---
+
+### 2. Target Specific Packages (FOCUSED)
+
+**Command**: `gbx:coverage:scala-package <package>`
+
+**Examples**:
+```bash
+gbx:coverage:scala-package rasterx  # Only rasterx tests (~2 min)
+gbx:coverage:scala-package gridx    # Only gridx tests (~1 min)
+gbx:coverage:scala-package vectorx  # Only vectorx tests (~1.5 min)
+```
+
+**When to use**:
+- ✅ Implementing feature in specific package
+- ✅ Improving coverage for low-covered package
+- ✅ Testing package after refactoring
+- ✅ Validating new tests cover target code
+
+**Time savings**: 2-3 minutes vs 10 minutes (60-70% faster)
+
+**Packages available**:
+- `rasterx` - Raster operations (largest, 73 files)
+- `gridx` - Grid systems (BNG, H3)
+- `vectorx` - Vector operations
+- `ds` - Data sources
+- `expressions` - Expression framework
+- `util` - Utilities
+
+---
+
+### 3. Baseline + Incremental Pattern (RECOMMENDED)
+
+**Weekly baseline**:
+```bash
+# Once per week (Monday morning, or before major PR)
+gbx:coverage:baseline scala --open
+# Saves: target/scoverage.xml (baseline data)
+# Time: 10 minutes
+```
+
+**Daily incremental**:
+```bash
+# Step 1: Check gaps (FREE - uses baseline)
+gbx:coverage:gaps scala
+# Output: Shows package-level coverage, identifies lowest
+
+# Step 2: Target lowest package (FOCUSED)
+gbx:coverage:scala-package rasterx --open
+# Time: 2 minutes
+
+# Step 3: Review combined results (FREE)
+gbx:coverage:scala --report-only --open
+```
+
+**Benefits**:
+- ✅ Full coverage data always available (baseline)
+- ✅ Quick targeted improvements (package-level)
+- ✅ Minimal time investment (2 min vs 10 min daily)
+- ✅ Weekly validation (full run catches edge cases)
+
+---
+
+## When to Run FULL Coverage
+
+### Required (Must Run Full)
+- ✅ **Weekly baseline** - Establish ground truth
+- ✅ **Before major PR/release** - Validate overall coverage
+- ✅ **After cross-package refactoring** - Multiple packages changed
+- ✅ **When data is stale** - Baseline >7 days old
+
+### Optional (Can Use Package-Targeted)
+- ⚠️ **Single package feature** - Use package-targeted instead
+- ⚠️ **Small bug fix** - Use report-only to check
+- ⚠️ **Adding tests** - Use package-targeted for speed
+
+### Never (Use Report-Only)
+- ❌ **Quick status check** - Use report-only
+- ❌ **Gap analysis** - Use report-only or gaps analyzer
+- ❌ **Between changes** - Use report-only
+
+---
+
+## Coverage Goals
+
+### Target: 90% Overall Coverage
+
+**Package priorities** (focus on lowest first):
+1. Identify packages <90% coverage
+2. Target lowest coverage package
+3. Add tests until package reaches 90%
+4. Move to next lowest package
+5. Repeat until all packages ≥90%
+
+**Incremental approach**:
+- Don't aim for 90% in one day
+- Target +5-10% per session
+- Use package-targeted coverage for feedback
+- Celebrate progress (70% → 75% → 80% → 85% → 90%)
+
+---
+
+## Python Coverage (Fast)
+
+Python coverage is fast (~30 seconds), so strategy is different:
+
+### Always Run Full Coverage
+```bash
+gbx:coverage:python --open  # Fast, always do full run
+```
+
+**Why**:
+- ✅ Quick (30 seconds)
+- ✅ No reason to avoid
+- ✅ Always up-to-date data
+
+**When to run**:
+- After any Python code change
+- After adding Python tests
+- Before committing Python changes
+
+---
+
+## Workflow Integration
+
+### During Feature Development
+
+**Scala feature**:
+```bash
+# 1. Implement feature in package (e.g., rasterx)
+# 2. Add tests
+# 3. Run package-targeted coverage
+gbx:coverage:scala-package rasterx --open
+# 4. Verify new code is covered
+# 5. Commit if coverage looks good
+```
+
+**Python feature**:
+```bash
+# 1. Implement feature
+# 2. Add tests  
+# 3. Run full coverage (fast)
+gbx:coverage:python --open
+# 4. Verify coverage
+# 5. Commit
+```
+
+### Weekly Maintenance
+
+**Monday morning ritual**:
+```bash
+# 1. Generate baseline
+gbx:coverage:baseline scala --open
+
+# 2. Check gaps
+gbx:coverage:gaps scala
+# Output: Shows packages below 90%
+
+# 3. Plan week's coverage work
+# Target: Improve lowest package by 5-10%
+```
+
+### Before Major PR
+
+```bash
+# 1. Run full coverage (both languages)
+gbx:coverage:scala --open
+gbx:coverage:python --open
+
+# 2. Verify all packages ≥90%
+# 3. If any below 90%, add tests before merging
+```
+
+---
+
+## Agent Behavior Guidance
+
+### When User Says "Check Coverage"
+
+**Ask clarifying questions**:
+- "Full run or report-only?" (Scala only)
+- "Specific package or all packages?" (Scala only)
+- "Want to see gaps analysis first?" (Identify targets)
+
+**Default behavior**:
+- **Scala**: Report-only (unless data is stale)
+- **Python**: Full run (always fast)
+
+### When User Says "Improve Coverage"
+
+**Recommended flow**:
+1. Run gaps analysis
+2. Identify lowest package
+3. Show uncovered files/functions
+4. Suggest tests to add
+5. After adding tests, run package-targeted coverage
+6. Repeat until target reached
+
+### When to Suggest Full Run
+
+**Suggest full run when**:
+- Baseline data >7 days old
+- User says "before release" or "before PR"
+- Cross-package changes detected
+- User explicitly asks for "full coverage"
+
+**Don't suggest full run for**:
+- Single package changes
+- Quick status checks
+- Gap analysis
+- Daily development
+
+---
+
+## Command Reference
+
+### Scala Coverage Commands
+
+```bash
+# Full run (10 min) - use sparingly
+gbx:coverage:scala --open
+
+# Report-only (seconds) - use frequently  
+gbx:coverage:scala --report-only --open
+
+# Package-targeted (2-3 min) - use daily
+gbx:coverage:scala-package rasterx --open
+gbx:coverage:scala-package gridx --open
+gbx:coverage:scala-package vectorx --open
+
+# Gaps analysis (seconds) - use before targeting
+gbx:coverage:gaps scala
+
+# Baseline (10 min) - use weekly
+gbx:coverage:baseline scala --open
+```
+
+### Python Coverage Commands
+
+```bash
+# Full run (30 sec) - use always
+gbx:coverage:python --open
+gbx:coverage:python-docs --open
+
+# Gaps analysis
+gbx:coverage:gaps python
+```
+
+---
+
+## Key Metrics
+
+### Time Investment
+
+| Activity | Before Strategy | After Strategy | Savings |
+|----------|----------------|---------------|---------|
+| Daily coverage check | 10 min × 5 = 50 min | 0 min (report-only) | 50 min/week |
+| Package improvement | 10 min per attempt | 2 min per attempt | 8 min per attempt |
+| Weekly validation | 10 min × 5 = 50 min | 10 min × 1 = 10 min | 40 min/week |
+| **Total savings** | - | - | **90 min/week** |
+
+### Coverage Improvement Rate
+
+**With strategic approach**:
+- ✅ More frequent coverage checks (report-only is free)
+- ✅ Faster iteration (package-targeted is quick)
+- ✅ Better targeting (gaps analysis shows priorities)
+- ✅ Sustained improvement (weekly baseline validates)
+
+**Expected progress**:
+- Week 1: Identify gaps, baseline
+- Week 2-4: Improve lowest package by 20%
+- Week 5-8: Improve next lowest package
+- Goal: 90% coverage across all packages
+
+---
+
+## Common Mistakes to Avoid
+
+### ❌ DON'T: Run full coverage after every change
+```bash
+# After adding one test
+gbx:coverage:scala --open  # 10 minutes wasted!
+```
+
+### ✅ DO: Use package-targeted coverage
+```bash
+# After adding rasterx test
+gbx:coverage:scala-package rasterx --open  # 2 minutes
+```
+
+### ❌ DON'T: Forget to baseline
+```bash
+# Using stale data from 2 weeks ago
+gbx:coverage:scala --report-only  # Shows old results!
+```
+
+### ✅ DO: Weekly baseline
+```bash
+# Monday morning
+gbx:coverage:baseline scala --open  # Fresh data
+```
+
+### ❌ DON'T: Try to reach 90% in one session
+```bash
+# Adding 100 tests at once
+# Overwhelming, hard to review, likely to have issues
+```
+
+### ✅ DO: Incremental improvement
+```bash
+# Week 1: 70% → 75% (add 10 tests, review)
+# Week 2: 75% → 80% (add 10 tests, review)
+# Week 3: 80% → 85% (add 10 tests, review)
+# Week 4: 85% → 90% (add 10 tests, review)
+```
+
+---
+
+## Summary
+
+**Remember**:
+1. 🐢 **Scala coverage is SLOW** - be strategic
+2. ⚡ **Python coverage is FAST** - run it always
+3. 📊 **Report-only is FREE** - use it often
+4. 🎯 **Package-targeted is FOCUSED** - use it daily
+5. 📈 **Baseline weekly** - keep data fresh
+6. 🎯 **Target 90%** - incremental improvement
+7. 📉 **Lowest first** - biggest impact
+
+**Golden rule**: If you're about to run full Scala coverage, ask yourself:
+- "Can I use report-only instead?" (if just checking status)
+- "Can I target specific package?" (if working on one package)
+- "Is my baseline stale?" (if last run >7 days ago)
+
+Only run full coverage when you answered "yes" to the last question or need pre-release validation.

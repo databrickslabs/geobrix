@@ -1,0 +1,62 @@
+package com.databricks.labs.gbx.rasterx.expressions.accessors
+
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
+import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.types._
+import org.apache.spark.unsafe.types.UTF8String
+import org.gdal.gdal.Dataset
+
+/** Expression that evaluates to the Y coordinate of the upper-left corner of the raster (geotransform). */
+case class RST_UpperLeftY(
+    tileExpr: Expression
+) extends InvokedExpression {
+
+    /** Raster DataType from the tile expression. */
+    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
+    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def dataType: DataType = DoubleType
+    override def nullable: Boolean = true
+    override def prettyName: String = RST_UpperLeftY.name
+    override def replacement: Expression = rstInvoke(RST_UpperLeftY, rasterType)
+    override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
+
+}
+
+/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
+object RST_UpperLeftY extends WithExpressionInfo {
+
+    def evalPath(row: InternalRow, conf: UTF8String): Double = eval(row, conf, StringType)
+    def evalBinary(row: InternalRow, conf: UTF8String): Double = eval(row, conf, BinaryType)
+
+    def eval(row: InternalRow, conf: UTF8String, dt: DataType): Double =
+        Option(
+          RST_ErrorHandler.safeEval(
+            () => {
+                val exprConf = ExpressionConfig.fromB64(conf.toString)
+                RST_ExpressionUtil.init(exprConf)
+                val ds = RasterSerializationUtil.rowToDS(row, dt)
+                val res = execute(ds)
+                RasterDriver.releaseDataset(ds)
+                res
+            },
+            row,
+            dt,
+            conf
+          )
+        ).map(_.asInstanceOf[Double]).getOrElse(Double.NaN)
+
+    def execute(ds: Dataset): Double = {
+        val gt = ds.GetGeoTransform
+        // upper left y is the fourth element in the GeoTransform array
+        gt(3)
+    }
+
+    override def name: String = "gbx_rst_upperlefty"
+
+    override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_UpperLeftY(c(0))
+
+}

@@ -1,0 +1,178 @@
+---
+sidebar_position: 2
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import gtiffExamples from '!!raw-loader!../../tests/python/readers/gtiff_examples.py';
+import gtiffScala from '!!raw-loader!../../tests/scala/readers/GTiffExamples.scala';
+
+# GeoTIFF Reader
+
+Read GeoTIFF raster files (.tif, .tiff) - the most common geospatial raster format.
+
+## Format Name
+
+`gtiff_gdal`
+
+## Overview
+
+This is a named GDAL Reader that presets the `driver` option to "GTiff". GeoTIFF is the de facto standard for geospatial raster data, combining TIFF image format with geospatial metadata.
+
+**Key Features**:
+- Industry standard format for geospatial rasters
+- Supports multiple bands (RGB, multispectral, etc.)
+- Embedded spatial reference and geotransform
+- Compression options (LZW, DEFLATE, JPEG, etc.)
+- Cloud-optimized variant (COG) support
+
+## Basic Usage
+
+### Python
+
+<CodeFromTest
+  code={gtiffExamples}
+  language="python"
+  functionName="READ_GTIFF"
+  source="docs/tests/python/readers/gtiff_examples.py"
+  testFile="docs/tests/python/readers/test_gtiff_examples.py"
+  outputConstant="READ_GTIFF_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={gtiffScala}
+  language="scala"
+  functionName="READ_GTIFF"
+  source="docs/tests/scala/readers/GTiffExamples.scala"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+  outputConstant="READ_GTIFF_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={gtiffExamples}
+  language="sql"
+  functionName="SQL_GTIFF"
+  source="docs/tests/python/readers/gtiff_examples.py"
+  testFile="docs/tests/python/readers/test_gtiff_examples.py"
+  outputConstant="SQL_GTIFF_output"
+/>
+
+## Options
+
+The GeoTIFF reader inherits all [GDAL reader options](./gdal#options). Common options include:
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `readSubdatasets` | `"false"` | Read subdatasets if present |
+| `rasterAsGrid` | `"false"` | Read as grid instead of tiles |
+| `retile` | `"false"` | Retile rasters for optimal processing |
+| `tileSize` | `"256"` | Tile size in pixels (if retiling) |
+
+### Example with Options
+
+<CodeFromTest
+  code={gtiffExamples}
+  language="python"
+  functionName="READ_WITH_OPTIONS"
+  source="docs/tests/python/readers/gtiff_examples.py"
+  testFile="docs/tests/python/readers/test_gtiff_examples.py"
+  outputConstant="READ_WITH_OPTIONS_output"
+/>
+
+## Output Schema
+
+```
+root
+ |-- tile: struct (GeoBrix raster tile structure)
+     |-- cellid: bigint (grid cell ID, nullable)
+     |-- raster: binary (raster file content)
+     |-- metadata: map<string,string> (driver, extension, etc.)
+```
+
+The `tile` column contains the complete raster data structure. See [Tile Structure](../api/tile-structure) for detailed field descriptions.
+
+## Common Use Cases
+
+### Satellite Imagery
+
+GeoTIFF is the primary format for satellite imagery:
+- **Sentinel-2**: Multispectral Earth observation
+- **Landsat**: Long-term Earth monitoring
+- **Planet**: High-resolution daily imagery
+
+### Digital Elevation Models (DEMs)
+
+Many elevation datasets are distributed as GeoTIFF:
+- **SRTM**: 30m/90m global coverage
+- **ASTER GDEM**: 30m global digital elevation
+- **LiDAR-derived**: High-resolution terrain models
+
+### Aerial Photography
+
+Orthophotos and aerial surveys commonly use GeoTIFF:
+- RGB imagery
+- Near-infrared (NIR) bands
+- Thermal imagery
+
+## GeoTIFF vs GDAL Reader
+
+**When to use each** (sample-data Volumes path):
+
+<CodeFromTest
+  code={gtiffExamples}
+  language="python"
+  functionName="GTIFF_VS_GDAL"
+  source="docs/tests/python/readers/gtiff_examples.py"
+  testFile="docs/tests/python/readers/test_gtiff_examples.py"
+/>
+
+**Use gtiff_gdal when**:
+- ✅ Working primarily with GeoTIFF files
+- ✅ Want cleaner, more readable code
+- ✅ Following GeoBrix naming conventions
+
+**Use gdal when**:
+- ✅ Working with multiple raster formats
+- ✅ Need format-specific driver options
+- ✅ Format is not a common one with named reader
+
+## Cloud-Optimized GeoTIFF (COG)
+
+Cloud-Optimized GeoTIFFs work seamlessly with the GeoTIFF reader. Example uses sample-data path; for cloud storage use an `s3://`, `abfs://`, or `gs://` path.
+
+<CodeFromTest
+  code={gtiffExamples}
+  language="python"
+  functionName="COG_EXAMPLE"
+  source="docs/tests/python/readers/gtiff_examples.py"
+  testFile="docs/tests/python/readers/test_gtiff_examples.py"
+/>
+
+:::tip Cloud-Optimized GeoTIFF
+For cloud storage (S3, Azure Blob, GCS), use Cloud-Optimized GeoTIFF (COG) format for best performance. COGs enable efficient partial reads without downloading the entire file.
+:::
+
+## Compression Formats
+
+GeoTIFF supports various compression options:
+
+| Compression | Use Case | Pros | Cons |
+|-------------|----------|------|------|
+| **None** | Quick access | Fast read/write | Large files |
+| **LZW** | General purpose | Good compression, lossless | Moderate speed |
+| **DEFLATE** | General purpose | Better compression, lossless | Slower than LZW |
+| **JPEG** | RGB imagery | High compression | Lossy |
+| **JPEG2000** | High-quality | Very high compression | Slower |
+
+:::note Compression
+GeoBrix reads compressed GeoTIFFs transparently. The compression format is automatically detected and handled by GDAL.
+:::
+
+## Next Steps
+
+- [GDAL Reader](./gdal) - Generic raster reader for all GDAL formats
+- [RasterX Functions](../api/rasterx-functions) - Raster processing operations
+- [Quick Start](../quick-start) - Get started with GeoBrix

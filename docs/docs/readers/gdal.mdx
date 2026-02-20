@@ -1,0 +1,221 @@
+---
+sidebar_position: 2
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import gdalExamples from '!!raw-loader!../../tests/python/readers/gdal_examples.py';
+import gdalScala from '!!raw-loader!../../tests/scala/readers/GDALExamples.scala';
+
+# GDAL Reader
+
+The GDAL reader provides generic support for reading raster data formats through the GDAL library. This is the base reader that powers all raster format readers in GeoBrix.
+
+:::info GeoTIFF Focus
+GeoBrix is currently most focused on support for GeoTIFF format. While the GDAL reader can work with many formats, GeoTIFF receives the most testing and optimization. For other formats, your experience may vary depending on GDAL driver availability and maturity.
+:::
+
+## Format Name
+
+`gdal`
+
+## Overview
+
+The GDAL reader is a generic raster data reader that can handle any format supported by GDAL. While GeoBrix provides named readers for common formats (GeoTIFF), you can use the GDAL reader directly for any available format.
+
+**Understanding Raster Formats**: Raster data represents geographic information as a grid of cells (pixels), where each cell contains a value. Unlike vector data (points, lines, polygons), rasters are ideal for continuous phenomena like elevation, temperature, or satellite imagery. Common raster use cases include Digital Elevation Models (DEMs) for terrain analysis, multispectral satellite imagery for land cover classification, weather model outputs (temperature, precipitation), and aerial photography. Raster formats vary in their compression methods, band organization, and metadata capabilities—GeoTIFF is the most universal, NetCDF excels at multi-dimensional scientific data, HDF5 handles massive hierarchical datasets, and GRIB2 is standard for meteorological models.
+
+## Available Formats
+
+The GDAL reader can work with [many GDAL raster drivers](https://gdal.org/drivers/raster/index.html), including:
+
+- **GeoTIFF** (.tif, .tiff) - Most common geospatial raster format
+- **Cloud-Optimized GeoTIFF (COG)** - Web-optimized GeoTIFF variant
+- **NetCDF** (.nc) - Multi-dimensional scientific data
+- **HDF5** (.h5, .hdf) - Hierarchical data format
+- **GRIB/GRIB2** (.grb, .grib2) - Meteorological data
+- **JPEG2000** (.jp2) - High-compression imagery
+- **ENVI** (.hdr) - Remote sensing format
+- **Zarr** - Cloud-native array storage
+- **And 150+ more formats**
+
+:::note Format Availability
+Experience varies across GDAL formats. Not all formats are available by default—some require additional packages or drivers to be installed in your environment. Refer to GDAL for [driver names](https://gdal.org/drivers/raster/index.html).
+:::
+
+## Basic Usage
+
+### Python
+
+<CodeFromTest
+  code={gdalExamples}
+  language="python"
+  functionName="READ_GDAL"
+  source="docs/tests/python/readers/gdal_examples.py"
+  testFile="docs/tests/python/readers/test_gdal_examples.py"
+  outputConstant="READ_GDAL_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={gdalScala}
+  language="scala"
+  functionName="READ_GDAL"
+  source="docs/tests/scala/readers/GDALExamples.scala"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+  outputConstant="READ_GDAL_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={gdalExamples}
+  language="sql"
+  functionName="SQL_GDAL"
+  source="docs/tests/python/readers/gdal_examples.py"
+  testFile="docs/tests/python/readers/test_gdal_examples.py"
+  outputConstant="SQL_GDAL_output"
+/>
+
+## Options
+
+### `driver`
+
+**Default:** Auto-detected from file extension if not specified
+
+Explicitly specify the GDAL driver to use (regardless of extension).
+
+<CodeFromTest
+  code={gdalExamples}
+  language="python"
+  functionName="READ_WITH_DRIVER"
+  source="docs/tests/python/readers/gdal_examples.py"
+  testFile="docs/tests/python/readers/test_gdal_examples.py"
+  outputConstant="READ_WITH_DRIVER_output"
+/>
+
+### Other Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `sizeInMB` | `"16"` | Split threshold for large files (parallel processing) |
+| `filterRegex` | `".*"` | Filter files by regex when reading from directory |
+| `readSubdatasets` | `"false"` | Read subdatasets if present (e.g., HDF, NetCDF) |
+| `rasterAsGrid` | `"false"` | Read as grid instead of tiles |
+| `retile` | `"false"` | Retile rasters for optimal processing |
+| `tileSize` | `"256"` | Tile size in pixels (if retiling enabled) |
+
+## Output Schema
+
+```
+root
+ |-- tile: struct (GeoBrix raster tile structure)
+     |-- cellid: bigint (grid cell ID, nullable)
+     |-- raster: binary (raster file content)
+     |-- metadata: map<string,string> (driver, extension, etc.)
+```
+
+The `tile` column contains the complete raster data structure. See [Tile Structure](../api/tile-structure) for detailed field descriptions.
+
+## Named Readers vs GDAL
+
+For common formats, GeoBrix provides named readers for convenience:
+
+```python
+# Using named reader (recommended for GeoTIFF)
+df = spark.read.format("gtiff_gdal").load("/path/to/file.tif")
+
+# Using GDAL (works but less convenient)
+df = spark.read.format("gdal").option("driver", "GTiff").load("/path/to/file.tif")
+```
+
+**When to use each**:
+- **Named readers** (gtiff_gdal): Better for common formats, cleaner syntax
+- **GDAL**: Useful for less common formats or when you need driver-specific options
+
+## Common Raster Formats Explained
+
+### GeoTIFF - The Universal Choice
+
+**Best for**: General-purpose geospatial rasters, aerial imagery, DEMs
+
+GeoTIFF combines TIFF image format with embedded geospatial metadata (coordinate system, geotransform). It's the de facto standard because it's simple, widely supported, and works everywhere. Cloud-Optimized GeoTIFF (COG) adds internal tiling and overviews for efficient cloud storage access.
+
+```python
+# Standard GeoTIFF
+df = spark.read.format("gtiff_gdal").load("/path/to/elevation.tif")
+
+# Works with COG too
+df = spark.read.format("gtiff_gdal").load("s3://bucket/cog-file.tif")
+```
+
+### NetCDF - Multi-Dimensional Science Data
+
+**Best for**: Climate models, oceanographic data, time-series rasters
+
+NetCDF excels at storing multi-dimensional arrays with labeled dimensions (time, latitude, longitude, elevation). Common in scientific computing for weather forecasts, climate projections, and oceanographic measurements.
+
+```python
+# NetCDF with multiple variables/subdatasets
+df = spark.read.format("gdal") \
+    .option("driver", "NetCDF") \
+    .option("readSubdatasets", "true") \
+    .load("/path/to/climate_model.nc")
+```
+
+### HDF5 - Massive Hierarchical Data
+
+**Best for**: Large scientific datasets, satellite products (MODIS, Sentinel)
+
+HDF5 (Hierarchical Data Format) handles extremely large datasets with complex internal structures. NASA and ESA use it for satellite products. Like NetCDF, it often contains multiple subdatasets.
+
+```python
+# HDF5 from satellite products
+df = spark.read.format("gdal") \
+    .option("driver", "HDF5") \
+    .option("readSubdatasets", "true") \
+    .load("/path/to/MOD13Q1.hdf")
+```
+
+### GRIB/GRIB2 - Weather Models
+
+**Best for**: Numerical weather prediction, meteorological data
+
+GRIB (GRIdded Binary) is the standard format for weather model outputs from agencies like NOAA, ECMWF. Highly compressed and optimized for meteorological variables. Example uses NOAA HRRR weather data from [sample-data](/docs/sample-data/overview) (`nyc/hrrr-weather`).
+
+:::info Complete bundle only
+The `hrrr-weather` dataset is included in the **complete** sample-data bundle, not the essential bundle. See [Sample data](/docs/sample-data/overview) for download options.
+:::
+
+<CodeFromTest
+  code={gdalExamples}
+  language="python"
+  functionName="READ_GRIB2"
+  source="docs/tests/python/readers/gdal_examples.py"
+  testFile="docs/tests/python/readers/test_gdal_examples.py"
+  outputConstant="READ_GRIB2_output"
+/>
+
+### Format Selection Guide
+
+| Format | Size | Compression | Multi-Band | Time-Series | Cloud-Friendly |
+|--------|------|-------------|------------|-------------|----------------|
+| **GeoTIFF** | Good | Good | Yes | No | Yes (COG) |
+| **NetCDF** | Excellent | Good | Yes | Yes | Moderate |
+| **HDF5** | Excellent | Good | Yes | Yes | Poor |
+| **GRIB2** | Excellent | Excellent | Yes | Yes | Poor |
+| **JPEG2000** | Excellent | Excellent | Yes | No | Moderate |
+| **Zarr** | Excellent | Good | Yes | Yes | Excellent |
+
+**General Rules**:
+- Start with **GeoTIFF** (use COG for cloud)
+- Use **NetCDF** for multi-dimensional scientific data
+- Use **HDF5** when required by data provider (e.g., MODIS)
+- Use **GRIB2** for weather models
+- Use **Zarr** for cloud-native analysis at scale
+
+## Next Steps
+
+- [GeoTIFF Reader](./gtiff) - Named reader for GeoTIFF format
+- [RasterX Functions](../api/rasterx-functions) - Raster processing operations
+- [Quick Start](../quick-start) - Get started with GeoBrix

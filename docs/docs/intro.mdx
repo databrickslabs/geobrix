@@ -1,0 +1,41 @@
+---
+sidebar_position: 1
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+
+# Introduction to GeoBrix
+
+GeoBrix is a high-performance spatial processing library. Its heavy-weight readers and functions are powered by GDAL, implemented on Apache Spark, and built to run exclusively on the Databricks Runtime (DBR).
+
+![GeoBrix Logo](../../resources/images/GeoBriX.png)
+
+## Background
+
+Now that product built-in [Spatial SQL Functions](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-st-geospatial-functions) have reached public preview as of DBR17.1, we are seeking to deliver the next generation of product-augmenting capabilities to help our customers. GeoBrix project is a streamlined iteration to the existing, and quite popular, [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/index.html) project. 
+
+Beyond just porting existing Mosaic code, GeoBrix is modernized with expressions designed to work with our [Data Intelligence Platform](https://www.databricks.com/product/data-intelligence-platform). GeoBrix will be a combination of heavy-weight (e.g. JAR) as well as lightweight (e.g Python, SQL) code artifacts. It also will focus on techniques to use the Databricks platform more widely.
+
+## Why GeoBrix?
+
+With Databricks first having acquired [MosaicML](https://www.databricks.com/company/newsroom/press-releases/databricks-completes-acquisition-mosaicml) and now having made a product line, [Mosaic AI](https://www.databricks.com/product/artificial-intelligence), it has become clear that the DBLabs Mosaic project, sharing the name, needs to be revamped in name as well as any existing Mosaic capabilities that compete with product investments. 
+
+If this were not the case, we would have simply iterated on DBLabs Mosaic "in-place" keeping the same name for what is now called GeoBrix. DBLabs Mosaic is in maintenance mode. The latest/last version of Mosaic targets DBR 13.3 LTS since product introduced ST functions starting with private preview work in DBR 14. As such, Mosaic does not have any awareness of advancements in recent runtimes, including product support for spatial sql and types, and will be retired with [DBR 13.3 EoS](https://docs.databricks.com/aws/en/release-notes/runtime/#supported-databricks-runtime-lts-releases) in AUG 2026.
+
+![GeoBrix Vision](../../resources/images/geobrix_vision.png)
+
+## Key Features
+
+- **High Performance**: Built on Apache Spark for distributed processing
+- **GDAL-Powered**: Leverages GDAL for heavy-weight spatial operations
+- **Databricks Native**: Designed specifically for Databricks Runtime
+- **Multi-Language Support**: APIs available in Scala, Python, and SQL
+- **Comprehensive Readers**: Support for various geospatial file formats
+- **Three Specialized Packages**: RasterX, GridX, and VectorX for different spatial needs
+
+## What's Next?
+
+- [Install GeoBrix](./installation) on your Databricks cluster
+- Follow the [Quick Start Guide](./quick-start) to get up and running
+- Explore the [Packages](./packages/overview) to understand what GeoBrix offers
+- Check out the [Readers](./readers/overview) for data ingestion options

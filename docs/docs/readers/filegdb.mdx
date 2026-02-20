@@ -1,0 +1,126 @@
+---
+sidebar_position: 7
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import filegdbExamples from '!!raw-loader!../../tests/python/readers/filegdb_examples.py';
+import filegdbScala from '!!raw-loader!../../tests/scala/readers/FileGDBExamples.scala';
+
+# File GeoDatabase Reader
+
+Read ESRI File Geodatabase (.gdb) format - the standard multi-layer geospatial format used in ArcGIS.
+
+## Format Name
+
+`file_gdb_ogr`
+
+## Overview
+
+This is a named OGR Reader that uses the [OpenFileGDB](https://gdal.org/en/stable/drivers/vector/openfilegdb.html) driver. File Geodatabases are directory-based formats that can contain multiple feature classes (layers), making them ideal for complex geospatial datasets.
+
+## Basic Usage
+
+### Python
+
+<CodeFromTest
+  code={filegdbExamples}
+  language="python"
+  functionName="READ_FILEGDB"
+  source="docs/tests/python/readers/filegdb_examples.py"
+  testFile="docs/tests/python/readers/test_filegdb_examples.py"
+  outputConstant="READ_FILEGDB_output"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={filegdbScala}
+  language="scala"
+  functionName="READ_FILEGDB"
+  source="docs/tests/scala/readers/FileGDBExamples.scala"
+  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
+  outputConstant="READ_FILEGDB_output"
+/>
+
+### SQL
+
+<CodeFromTest
+  code={filegdbExamples}
+  language="sql"
+  functionName="SQL_FILEGDB"
+  source="docs/tests/python/readers/filegdb_examples.py"
+  testFile="docs/tests/python/readers/test_filegdb_examples.py"
+  outputConstant="SQL_FILEGDB_output"
+/>
+
+## Options
+
+### `layerName`
+
+**Default:** `""` (first feature class)
+
+Specify which feature class (layer) to read from the geodatabase:
+
+<CodeFromTest
+  code={filegdbExamples}
+  language="python"
+  functionName="READ_WITH_LAYER"
+  source="docs/tests/python/readers/filegdb_examples.py"
+  testFile="docs/tests/python/readers/test_filegdb_examples.py"
+  outputConstant="READ_WITH_LAYER_output"
+/>
+
+### Other Options
+
+All [OGR reader options](./ogr#options) are available, e.g.:
+
+- `layerN` - Layer index to read (0-based)
+- `chunkSize` - Records per chunk (default: "10000")
+- `asWKB` - Output as WKB vs WKT (default: "true")
+
+## Output Schema
+
+File Geodatabases typically use `SHAPE` as the geometry column name:
+
+```
+root
+ |-- SHAPE: binary (geometry in WKB format)
+ |-- SHAPE_srid: integer (spatial reference ID)
+ |-- SHAPE_srid_proj: string (projection definition)
+ |-- <attribute_columns>: various types
+```
+
+:::note Column Names
+Column names in File Geodatabases are case-insensitive.
+:::
+
+## Key Features
+
+- **Multi-Layer**: Contains multiple feature classes (layers)
+- **Rich Attributes**: Full attribute support with domains and subtypes
+- **Topology**: Can include topology rules (read-only)
+- **ArcGIS Native**: The standard format for ESRI ArcGIS
+
+## Use Cases
+
+- **ArcGIS Migration**: Moving from ArcGIS workflows to Databricks
+- **Enterprise Geodata**: Reading complex organizational geospatial datasets
+- **Multi-Layer Datasets**: Working with related feature classes in one file
+- **Attribute-Rich Data**: Preserving domains, subtypes, and relationships
+
+## Limitations
+
+:::note Read-Only Access
+The OpenFileGDB driver provides read-only access. You cannot create, modify, or write File Geodatabases using this reader.
+:::
+
+- Supports File Geodatabase versions 9.x and later
+- Topology and relationship rules are read-only
+- Some advanced ArcGIS features may not be fully supported
+
+## Next Steps
+
+- [View API Reference](../api/overview)
+- [Check Examples](../examples/overview)
+- [Other Readers](./overview)
+- [Learn about VectorX](../packages/vectorx)

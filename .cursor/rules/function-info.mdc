@@ -1,0 +1,49 @@
+---
+description: Population and testing of function-info.json for DESCRIBE FUNCTION EXTENDED
+alwaysApply: false
+globs: docs/scripts/generate-function-info.py, docs/tests-function-info/**/*, docs/tests/python/api/*_functions_sql.py, src/main/resources/com/databricks/labs/gbx/function-info.json
+---
+
+# Function-Info: Population and Testing
+
+Single source for **DESCRIBE FUNCTION [EXTENDED]** usage examples. No aliases; no empty usage.
+
+## Source of truth
+
+- **Feeder**: SQL API function ref in docs only:
+  - `docs/tests/python/api/rasterx_functions_sql.py`
+  - `docs/tests/python/api/gridx_functions_sql.py`
+  - `docs/tests/python/api/vectorx_functions_sql.py`
+- **Discovery**: Callables named `*_sql_example()` (e.g. `rst_width_sql_example`, `bng_cellarea_sql_example`). Each example’s SQL is applied to **every registered function name that appears in that SQL** (one doc example can fill multiple functions, e.g. upperleftx/upperlefty).
+- **Registered list**: `docs/tests-function-info/registered_functions.txt` — canonical list; update when adding new Scala-registered functions.
+- **Output**: `src/main/resources/com/databricks/labs/gbx/function-info.json` (by package, sorted). Loaders skip keys starting with `_`.
+
+## Generator
+
+- **Script**: `docs/scripts/generate-function-info.py`
+- **Run**: From repo root, `python docs/scripts/generate-function-info.py` (or use `gbx:docs:function-info` / `gbx:test:function-info` which run it in Docker).
+- **Behavior**:
+  - Loads `registered_functions.txt`.
+  - Imports the three `*_functions_sql` modules from `docs/tests/python/api/`, collects from every `*_sql_example()`.
+  - For each example, takes the first SELECT containing the package prefix (`gbx_rst_`, `gbx_bng_`, `gbx_st_`), then assigns that example to every **registered** function whose name appears in that statement.
+  - Fails if any registered function has no non-empty example (lists missing and the file to fix: rasterx/gridx/vectorx_functions_sql.py).
+- **No aliases**: Do not add alias or legacy names; fix upstream (Scala registration + registered_functions.txt) to a single canonical name. Beta = we break API to stabilize.
+
+## Adding or fixing examples
+
+1. **Missing function**: Add a `*_sql_example()` in the appropriate `docs/tests/python/api/*_functions_sql.py` that returns SQL containing the **exact** registered name (e.g. `gbx_rst_isempty`, `gbx_bng_pointascell`). Re-run the generator.
+2. **Statement not found**: Generator uses the first SELECT that contains the package prefix. If the example’s first statement is comment-only or doesn’t contain the function name, fix the SQL (e.g. put the SELECT with the function first, or ensure the first SELECT contains the name).
+3. **Combined examples**: One helper (e.g. `rst_upperleft_sql_example`) can return SQL that calls multiple functions (`gbx_rst_upperleftx`, `gbx_rst_upperlefty`). Generator will assign that SQL to each of those names. No need for separate helpers per function when one SELECT shows both.
+
+## Testing
+
+- **Location**: `docs/tests-function-info/`
+- **Commands**: `gbx:test:function-info` (generate then pytest in Docker); `gbx:docs:function-info` (generate only).
+- **What tests do**:
+  - DESCRIBE FUNCTION / DESCRIBE FUNCTION EXTENDED per package (rasterx, gridx, vectorx).
+  - Coverage: every function in `registered_functions.txt` must have an entry in `function-info.json` with **non-empty** examples.
+- **If coverage fails**: Fix upstream (add or repair `*_sql_example()` in the doc modules), then re-run generator and tests. Do not add placeholder or empty usage.
+
+## Delegation
+
+For function-info population, testing, or generator changes: invoke the **Function-Info** subagent (`.cursor/agents/function-info.md`). For doc SQL content (rasterx/gridx/vectorx examples), coordinate with the corresponding API subagent (RasterX, GridX, VectorX) so naming and signatures stay consistent.

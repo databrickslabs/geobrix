@@ -1,0 +1,94 @@
+---
+description: Standards for documenting public functions with examples in all supported languages
+alwaysApply: true
+---
+
+# Function Documentation Standards
+
+All public API functions must follow these documentation standards.
+
+## Required Elements
+
+Every public function must have:
+
+1. **Clear description** - What the function does and why it exists
+2. **Parameter documentation** - Type and purpose of each parameter
+3. **Return value documentation** - What the function returns
+4. **Examples in ALL supported languages**:
+   - ✅ Python
+   - ✅ Scala
+   - ✅ SQL
+
+## Example Format
+
+```markdown
+### function_name
+
+Brief one-line description of what the function does.
+
+**Parameters:**
+- `param1` (Type) - Description of first parameter
+- `param2` (Type) - Description of second parameter
+
+**Returns:**
+- Type - Description of return value
+
+**Python Example:**
+\`\`\`python
+from databricks.labs.gbx import functions as fx
+result = fx.function_name(param1, param2)
+\`\`\`
+
+**Scala Example:**
+\`\`\`scala
+import com.databricks.labs.gbx.{functions => fx}
+val result = fx.function_name(param1, param2)
+\`\`\`
+
+**SQL Example:**
+\`\`\`sql
+SELECT gbx_function_name(param1, param2) FROM table;
+\`\`\`
+
+**Notes:**
+- Important usage notes
+- Common gotchas
+- Related functions
+```
+
+## Anti-Patterns to Avoid
+
+### ❌ BAD: Single-language examples
+```markdown
+### my_function
+Only has Python example, missing Scala and SQL.
+```
+
+### ❌ BAD: No examples at all
+```markdown
+### my_function
+Just a description with no code examples.
+```
+
+### ❌ BAD: "Phantom functions"
+```markdown
+### phantom_function
+Documented but doesn't actually exist in the codebase!
+```
+
+## Verification
+
+Before merging documentation:
+
+1. **Verify function exists** - Check implementation matches docs
+2. **Test examples compile** - Use doc tests to verify code validity
+3. **Coverage check** - Ensure no functions are missing from docs
+4. **Cross-reference** - Link to related functions
+
+## Reference
+
+Based on RasterX documentation project that achieved:
+- 100% function coverage (65/65 functions)
+- 195+ code examples across 3 languages
+- Zero phantom functions
+- Consistent quality across all functions

@@ -1,0 +1,220 @@
+---
+sidebar_position: 3
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import gdalCli from '!!raw-loader!../../tests/python/advanced/gdal_cli.py';
+
+# GDAL Command Line Integration
+
+Learn how to complement GeoBrix with GDAL command-line utilities for preprocessing, format conversion, and specialized operations that prepare data for distributed processing.
+
+## Overview
+
+GDAL provides powerful command-line utilities that can handle operations best done before or after distributed processing. These tools complement GeoBrix by:
+
+- **Preprocessing** data before loading into Spark
+- **Format conversion** and optimization
+- **Reprojection** and warping operations
+- **Tiling** large rasters for parallel processing
+- **Metadata** extraction and manipulation
+- **Postprocessing** results after Spark operations
+
+## Why Use GDAL CLI with GeoBrix?
+
+### Preprocessing Benefits
+
+Use the GDAL CLI on a TIF from [sample-data](../sample-data/overview) (Volumes path). Commands and **actual shell output**:
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="preprocessing_cli_commands"
+  title="Preprocessing: gdalwarp and gdal_translate on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="preprocessing_cli_output"
+/>
+
+### Complementary Workflows
+
+GDAL CLI excels at:
+- ✅ One-time transformations
+- ✅ File format operations
+- ✅ Creating VRT (Virtual Raster)
+- ✅ Building overviews/pyramids
+- ✅ Batch file operations
+
+GeoBrix excels at:
+- ✅ Distributed processing
+- ✅ Per-row operations
+- ✅ Spark DataFrame integration
+- ✅ Columnar operations
+
+## Common GDAL Utilities
+
+### gdalinfo - Inspect Rasters
+
+Get detailed raster information with the GDAL CLI. Example using a TIF from [sample-data](../sample-data/overview) (Volumes path) and **actual shell output**:
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="gdalinfo_cli_command"
+  title="gdalinfo on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdalinfo_cli_output"
+/>
+
+Other useful flags: `gdalinfo -json`, `gdalinfo -stats`, `gdalinfo -checksum`. **Integration with GeoBrix:** after inspecting, load the same path with `spark.read.format("gdal").load(...)`.
+
+---
+
+### gdalwarp - Reproject and Warp
+
+Reproject rasters before distributed processing. Example using a TIF from [sample-data](../sample-data/overview) (Volumes path):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="gdalwarp_cli_command"
+  title="gdalwarp on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdalwarp_cli_output"
+/>
+
+---
+
+### gdal_translate - Convert and Optimize
+
+Convert formats and create optimized files. Example: Cloud-Optimized GeoTIFF using a TIF from [sample-data](../sample-data/overview) (Volumes path):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="gdal_translate_cli_command"
+  title="gdal_translate COG on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdal_translate_cli_output"
+/>
+
+---
+
+### gdal_merge - Mosaic Multiple Rasters
+
+Merge rasters before processing. Example using [sample-data](../sample-data/overview) (Volumes path):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="gdal_merge_cli_command"
+  title="gdal_merge on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdal_merge_cli_output"
+/>
+
+---
+
+### gdalbuildvrt - Virtual Raster
+
+Create virtual raster from multiple files. Example using [sample-data](../sample-data/overview) (Volumes path):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="gdalbuildvrt_cli_command"
+  title="gdalbuildvrt on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdalbuildvrt_cli_output"
+/>
+
+---
+
+### gdaldem - Terrain Analysis
+
+Generate DEMs and terrain products. Example (hillshade) using [sample-data](../sample-data/overview) elevation (Volumes path):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="gdaldem_cli_command"
+  title="gdaldem hillshade on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdaldem_cli_output"
+/>
+
+---
+
+### gdal_calc - Raster Calculator
+
+Perform band math before processing. Example (threshold) using [sample-data](../sample-data/overview) (Volumes path):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="gdal_calc_cli_command"
+  title="gdal_calc on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdal_calc_cli_output"
+/>
+
+---
+
+### ogr2ogr - Vector Operations
+
+Preprocess vector data. Example (reproject) using [sample-data](../sample-data/overview) (Volumes path):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="ogr2ogr_cli_command"
+  title="ogr2ogr on sample-data (Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="ogr2ogr_cli_output"
+/>
+
+## Notional Preprocessing Workflow
+
+This is just to demonstrate use of custom code, not saying you need to do all of this as GeoBrix offers somewhat
+overlapping distributed functions.
+
+### Scenario: Satellite Image Processing
+
+Workflow using [sample-data](../sample-data/overview) Volumes path (same pattern as prior examples):
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="bash" 
+  functionName="satellite_preprocessing_cli_commands"
+  title="Satellite preprocessing script (sample-data Volumes path)"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="satellite_preprocessing_cli_output"
+/>
+
+## GDAL CLI in Spark UDFs
+
+Combine GDAL CLI with custom UDFs. Example uses [sample-data](../sample-data/overview) Volumes path; below: UDF definition and execution results.
+
+<CodeFromTest 
+  code={gdalCli} 
+  language="python" 
+  functionName="gdal_cli_in_spark_udfs"
+  source="docs/tests/python/advanced/gdal_cli.py"
+  testFile="docs/tests/python/advanced/test_gdal_cli.py"
+  outputConstant="gdal_cli_in_spark_udfs_output"
+/>
+
+## Next Steps
+
+- [Custom UDFs](./custom-udfs) - Use GDAL results in UDFs
+- [Library Integration](./library-integration) - Combine with rasterio, xarray
+- [GDAL Documentation](https://gdal.org/programs/index.html) - Full GDAL CLI reference

@@ -1,0 +1,121 @@
+---
+description: Preferred execution workflow with checkpoints and rollback safeguards
+alwaysApply: true
+---
+
+# Execution Workflow: Plan → Execute → Iterate → Assess
+
+## Core Principle
+
+When working in "Run Everything" mode, follow a structured workflow with built-in checkpoints and rollback mechanisms.
+
+## Workflow Pattern
+
+### 1. Plan Phase
+- For complex tasks, propose a plan before executing
+- Break work into clear milestones
+- Identify natural checkpoint moments
+- Example: "Here's my plan: [steps]. Shall I proceed?"
+
+### 2. Execute Phase  
+- Execute plan in "Run Everything" mode for speed
+- Work efficiently without unnecessary interruptions
+- Make atomic, logical changes
+
+### 3. Iterate Phase
+- After each milestone, provide a summary of changes
+- Highlight files modified/created/deleted
+- Note any unexpected issues or deviations from plan
+
+### 4. Assess Phase
+- Present summary: "✅ Complete. Changes: [list]"
+- Suggest next actions: "Run tests" or "Review with git diff"
+- Wait for user feedback before major next steps
+
+## Rollback Safeguards
+
+### Git Checkpoints
+- Always work on a feature branch
+- Encourage checkpoint commits before major changes
+- Remind user to review with `git diff` before pushing
+
+### Natural Check-ins
+- After file edits: Summarize what changed
+- After test runs: Report results
+- Before git push: Explicitly confirm
+- On errors: Stop and report immediately
+
+### Explicit Milestones
+Watch for these phrases and provide summaries:
+- "Show me the plan first"
+- "Summarize changes before..."
+- "Let me review before..."
+- "Stop here and show me..."
+
+## Example Communication Pattern
+
+✅ **GOOD**:
+```
+[After implementing feature]
+"✅ Implemented rst_hillshade function:
+
+Changes:
+- src/main/scala/.../RST_Hillshade.scala (new, 120 lines)
+- python/geobrix/src/.../functions.py (modified, +5 lines)
+- src/test/scala/.../RST_HillshadeTest.scala (new, 85 lines)
+
+Next: Run tests with 'gbx:test:scala' or review changes with 'git diff'.
+Shall I proceed with tests?"
+```
+
+❌ **BAD**:
+```
+[After implementing feature]
+"Done. I made the changes and ran the tests and committed it."
+[User has no chance to review!]
+```
+
+## When to Use Plan Mode
+
+Switch to Plan Mode (collaborative planning) for:
+- Architectural changes
+- Multi-component refactoring  
+- Unclear requirements
+- High-risk operations
+
+Use `SwitchMode` tool when planning is needed.
+
+## Git Best Practices
+
+### Before Starting Work
+```bash
+git checkout -b feature/descriptive-name
+git status  # Verify clean state
+```
+
+### During Work
+- Make logical, atomic commits
+- Clear commit messages
+- Keep changes focused
+
+### After Work
+```bash
+git diff  # Review all changes
+git status  # Verify what's staged
+# Then push or request review
+```
+
+## Quick Reference
+
+| User Says | Agent Should |
+|-----------|-------------|
+| "Show me the plan first" | Provide detailed plan, wait for approval |
+| "Implement X" (simple) | Execute directly, summarize at end |
+| "Implement X" (complex) | Propose plan OR ask if plan needed |
+| After major milestone | Provide summary, suggest next action |
+| Before git push | Remind to review with `git diff` |
+| On test failure | Stop, report, wait for guidance |
+
+## Summary
+
+Speed + Safety = "Run Everything" mode + Structured workflow with checkpoints

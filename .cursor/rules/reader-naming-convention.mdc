@@ -1,0 +1,207 @@
+# Reader Naming Convention
+
+**Date**: 2026-01-29  
+**Status**: Standard (breaking change from 0.1.0)
+
+## Core Principle
+
+All GeoBrix readers use **namespace-based naming** to avoid conflicts with other Spark data source providers (e.g., Apache Sedona).
+
+## Naming Pattern
+
+```
+<format>_<engine>
+```
+
+Where:
+- `<format>` = The file format or data type
+- `<engine>` = The underlying library (ogr, gdal)
+
+## Vector Readers (OGR-based)
+
+All vector readers use OGR (GDAL's vector library) and include `_ogr` suffix:
+
+| Reader | Format Name | Extends | Driver |
+|--------|-------------|---------|--------|
+| **Generic** | `ogr` | - | (user-specified) |
+| **Shapefile** | `shapefile_ogr` | `ogr` | `"ESRI Shapefile"` |
+| **GeoJSON** | `geojson_ogr` | `ogr` | `"GeoJSON"` |
+| **GeoPackage** | `gpkg_ogr` | `ogr` | `"GPKG"` |
+| **FileGDB** | `file_gdb_ogr` | `ogr` | `"OpenFileGDB"` |
+
+### Usage Examples
+
+```python
+# Generic OGR (any vector format)
+df = spark.read.format("ogr").option("driverName", "KML").load("/path/to/file.kml")
+
+# Named readers (preset driver)
+df = spark.read.format("shapefile_ogr").load("/path/to/file.shp")
+df = spark.read.format("geojson_ogr").load("/path/to/file.geojson")
+df = spark.read.format("gpkg_ogr").load("/path/to/file.gpkg")
+df = spark.read.format("file_gdb_ogr").load("/path/to/geodatabase.gdb")
+```
+
+## Raster Readers (GDAL-based)
+
+All raster readers use GDAL and include `_gdal` suffix:
+
+| Reader | Format Name | Extends | Driver |
+|--------|-------------|---------|--------|
+| **Generic** | `gdal` | - | (user-specified) |
+| **GeoTIFF** | `gtiff_gdal` | `gdal` | `"GTiff"` |
+
+### Usage Examples
+
+```python
+# Generic GDAL (any raster format)
+df = spark.read.format("gdal").option("driver", "NetCDF").load("/path/to/file.nc")
+
+# Named readers (preset driver)
+df = spark.read.format("gtiff_gdal").load("/path/to/file.tif")
+
+# Equivalent to:
+df = spark.read.format("gdal").option("driver", "GTiff").load("/path/to/file.tif")
+```
+
+## Why This Convention?
+
+### Problem: Name Collisions
+
+Without namespace separation:
+- ❌ `shapefile` - Could conflict with Apache Sedona's shapefile reader
+- ❌ `geojson` - Generic name used by many libraries
+- ❌ `gdal` - Ambiguous (vector or raster?)
+
+### Solution: Namespace Suffix
+
+With `_ogr` / `_gdal` suffix:
+- ✅ `shapefile_ogr` - Clearly GeoBrix's OGR-based shapefile reader
+- ✅ `geojson_ogr` - Clearly GeoBrix's OGR-based GeoJSON reader
+- ✅ `gtiff_gdal` - Clearly GeoBrix's GDAL-based GeoTIFF reader
+- ✅ Generic readers (`ogr`, `gdal`) remain clean for flexibility
+
+## Implementation Pattern
+
+### Named Readers Extend Generic Readers
+
+**Vector Example** (`ShapeFile_DataSource.scala`):
+```scala
+class ShapeFile_DataSource extends OGR_DataSource with DataSourceExtras {
+    override def dsExtraMap(checkMap: Map[String, String] = Map.empty): Map[String, String] = Map(
+        "driverName" -> "ESRI Shapefile"
+    )
+    
+    override def shortName(): String = "shapefile_ogr"
+}
+```
+
+**Raster Example** (`GTiff_DataSource.scala`):
+```scala
+class GTiff_DataSource extends GDAL_DataSource with DataSourceExtras {
+    override def dsExtraMap(checkMap: Map[String, String] = Map.empty): Map[String, String] = Map(
+        "driver" -> "GTiff"
+    )
+    
+    override def shortName(): String = "gtiff_gdal"
+}
+```
+
+### Key Points
+
+1. ✅ Named readers **extend** generic readers
+2. ✅ Named readers **preset** driver options via `dsExtraMap`
+3. ✅ Users can override preset options if needed
+4. ✅ All options from generic reader are available
+
+## When to Create Named Readers
+
+Create a named reader when:
+- ✅ Format is **commonly used** (e.g., GeoTIFF, Shapefile)
+- ✅ Driver name is **non-obvious** (e.g., "ESRI Shapefile" not "shapefile")
+- ✅ Improves **user experience** (shorter, cleaner code)
+- ✅ Follows **GeoBrix naming conventions**
+
+**Do NOT create named readers for**:
+- ❌ Rarely used formats
+- ❌ Experimental/unstable formats
+- ❌ Formats with obvious driver names
+
+## Migration from 0.1.0
+
+**Breaking Change**: Reader names changed in 0.2.0
+
+### Before (0.1.0)
+
+```python
+df = spark.read.format("shapefile").load("/path/to/file.shp")
+df = spark.read.format("geojson").load("/path/to/file.geojson")
+df = spark.read.format("ogr_gpkg").load("/path/to/file.gpkg")
+df = spark.read.format("file_gdb").load("/path/to/geodatabase.gdb")
+```
+
+### After (0.2.0+)
+
+```python
+df = spark.read.format("shapefile_ogr").load("/path/to/file.shp")
+df = spark.read.format("geojson_ogr").load("/path/to/file.geojson")
+df = spark.read.format("gpkg_ogr").load("/path/to/file.gpkg")
+df = spark.read.format("file_gdb_ogr").load("/path/to/geodatabase.gdb")
+```
+
+### Migration Script
+
+```python
+# Find and replace in your code:
+.format("shapefile")    → .format("shapefile_ogr")
+.format("geojson")      → .format("geojson_ogr")
+.format("ogr_gpkg")     → .format("gpkg_ogr")
+.format("file_gdb")     → .format("file_gdb_ogr")
+
+# Generic readers unchanged:
+.format("ogr")   # Still works
+.format("gdal")  # Still works
+```
+
+## File Locations
+
+**Scala Data Sources**:
+- Vector: `src/main/scala/com/databricks/labs/gbx/vectorx/ds/`
+- Raster: `src/main/scala/com/databricks/labs/gbx/rasterx/ds/`
+
+**Registration**:
+- `src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`
+
+**Documentation**:
+- `docs/docs/readers/<reader-name>.mdx`
+
+## Future Readers
+
+When adding new readers, follow this convention:
+
+**Vector Readers** (if OGR-based):
+```
+<format>_ogr
+```
+
+**Raster Readers** (if GDAL-based):
+```
+<format>_gdal
+```
+
+**Other Engines** (if needed in future):
+```
+<format>_<engine>
+```
+For example: `parquet_arrow`, `delta_unity`, etc.
+
+## Reference
+
+- Implementation: 2026-01-29
+- Breaking change: Version 0.2.0
+- Rationale: Namespace separation from other Spark providers
+- Pattern: Consistent across all GeoBrix readers
+
+---
+
+**Summary**: All GeoBrix readers use `_ogr` or `_gdal` suffix for namespace separation, except generic `ogr` and `gdal` readers which remain clean for flexibility.

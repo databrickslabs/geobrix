@@ -1,0 +1,162 @@
+---
+sidebar_position: 3
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import quickstartCode from '!!raw-loader!../tests/python/quickstart/examples.py';
+
+# Quick Start
+
+This guide will help you get started with GeoBrix quickly after installation. All code below is copy-paste executable when you use the sample data paths shown.
+
+:::tip Set up sample data first
+The examples on this page use **sample data paths** (e.g. `/Volumes/.../geobrix-examples/nyc/...`). To run them as-is, set up sample data first: **[Sample Data Guide](./sample-data/overview)** — then use the same paths or volume in your notebook.
+:::
+
+## Prerequisites
+
+- [Install GeoBrix](./installation) on your Databricks cluster.
+- (Recommended) [Set up sample data](./sample-data/overview) so the snippets below run without changing paths.
+
+:::note
+You do not need to register functions if you are only using the included readers.
+:::
+
+## Register Functions
+
+### Python/PySpark
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="REGISTER_RASTERX"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+/>
+
+### Scala
+
+<CodeFromTest
+  code={quickstartCode}
+  language="scala"
+  functionName="REGISTER_RASTERX_SCALA"
+  title="Register RasterX (Scala)"
+  source="docs/tests/python/quickstart/examples.py"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+/>
+
+Register GridX and VectorX the same way:
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="REGISTER_GRIDX"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+/>
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="REGISTER_VECTORX"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+/>
+
+## List and Describe Functions
+
+<CodeFromTest
+  code={quickstartCode}
+  language="sql"
+  functionName="SQL_LIST_FUNCTIONS"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="SQL_LIST_FUNCTIONS_output"
+/>
+
+<CodeFromTest
+  code={quickstartCode}
+  language="sql"
+  functionName="SQL_DESCRIBE"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="SQL_DESCRIBE_output"
+/>
+
+## Reading Data
+
+Paths below assume the [Sample Data](./sample-data/overview) layout (e.g. Essential Bundle).
+
+### Read GeoTIFF
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="READ_GEOTIFF"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="READ_GEOTIFF_output"
+/>
+
+### Read Shapefile
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="READ_SHAPEFILE"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="READ_SHAPEFILE_output"
+/>
+
+### Read GeoJSON
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="READ_GEOJSON"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="READ_GEOJSON_output"
+/>
+
+## Using RasterX, GridX, and VectorX
+
+### RasterX
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="USE_RASTERX"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="USE_RASTERX_output"
+/>
+
+### GridX (BNG)
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="USE_BNG"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="USE_BNG_output"
+/>
+
+### VectorX
+
+<CodeFromTest
+  code={quickstartCode}
+  language="python"
+  functionName="USE_VECTORX"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="USE_VECTORX_output"
+/>
+
+## Using SQL
+
+<CodeFromTest
+  code={quickstartCode}
+  language="sql"
+  functionName="SQL_READ_AND_USE"
+  testFile="docs/tests/python/quickstart/test_examples.py"
+  outputConstant="SQL_READ_AND_USE_output"
+/>
+
+## Next Steps
+
+- [Sample Data](./sample-data/overview) — Download and use sample data in examples
+- [Readers](./readers/overview) — Shapefile, GeoJSON, GDAL, and more
+- [API Reference](./api/overview) — Function reference
+- [RasterX](./packages/rasterx) · [GridX](./packages/gridx) · [VectorX](./packages/vectorx)

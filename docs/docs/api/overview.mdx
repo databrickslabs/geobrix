@@ -1,0 +1,123 @@
+---
+sidebar_position: 1
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import overviewExamples from '!!raw-loader!../../tests/python/api/overview.py';
+import scalaApiExamples from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
+
+# API Reference Overview
+
+GeoBrix provides APIs in three languages: Scala, Python, and SQL. All APIs provide access to the same underlying functionality with language-appropriate idioms.
+
+## Function References
+
+For detailed documentation of each function with parameters, return values, and examples:
+
+- [RasterX Function Reference](./rasterx-functions) - Complete reference for all raster functions
+- [GridX Function Reference](./gridx-functions) - Complete reference for all BNG grid functions
+- [VectorX Function Reference](./vectorx-functions) - Complete reference for all vector functions
+
+## API Languages
+
+### Scala
+The native implementation language, providing the most direct access to GeoBrix functionality.
+
+[Scala API Documentation →](./scala)
+
+### Python
+Python bindings via PySpark, providing Pythonic access to all GeoBrix features.
+
+[Python API Documentation →](./python)
+
+### SQL
+SQL functions registered in the Spark catalog, usable from any SQL context.
+
+[SQL API Documentation →](./sql)
+
+## Function Naming Convention
+
+All GeoBrix SQL functions use the `gbx_` prefix to clearly identify them as GeoBrix functions:
+
+| Package | Prefix | Example |
+|---------|--------|---------|
+| **RasterX** | `gbx_rst_` | `gbx_rst_boundingbox` |
+| **GridX/BNG** | `gbx_bng_` | `gbx_bng_cellarea` |
+| **VectorX** | `gbx_st_` | `gbx_st_legacyaswkb` |
+
+This makes it easy to:
+- Identify GeoBrix functions in your code
+- Distinguish from Databricks built-in `st_*` functions
+- Track usage and attribution
+
+## Registration
+
+Before using GeoBrix functions in Python or SQL, you must register them:
+
+### Python
+
+<CodeFromTest code={overviewExamples} functionName="register_packages_python" language="python" source="docs/tests/python/api/overview.py" testFile="docs/tests/python/api/test_overview.py" outputConstant="register_packages_python_output" />
+
+### Scala
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="RegisterAllPackages"
+  language="scala"
+  outputConstant="RegisterAllPackages_output"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="Register All Packages"
+/>
+
+### SQL
+
+SQL functions are registered via Python or Scala. Once registered, they're available in any SQL context:
+
+<CodeFromTest code={overviewExamples} functionName="SQL_SHOW_FUNCTIONS" language="sql" source="docs/tests/python/api/overview.py" testFile="docs/tests/python/api/test_overview.py" outputConstant="SQL_SHOW_FUNCTIONS_output" />
+
+## API Categories
+
+### RasterX Functions
+
+Functions for raster data processing:
+
+- **Accessors**: Get raster properties (width, height, bounds, metadata)
+- **Constructors**: Load or create rasters
+- **Transformations**: Clip, reproject rasters
+- **Grid Operations**: Raster to grid conversions
+- **Band Operations**: Multi-band raster operations
+- **Aggregations**: Combine and merge rasters
+
+[View RasterX Functions →](./python#rasterx-functions)
+
+### GridX Functions
+
+Functions for grid indexing (BNG):
+
+- **Cell Operations**: Create and manipulate grid cells
+- **Coordinate Conversion**: Convert between coordinates and grid references
+- **Grid Properties**: Get grid cell attributes
+- **Spatial Indexing**: Use grid cells for efficient spatial operations
+
+[View GridX Functions →](./python#gridx-functions)
+
+### VectorX Functions
+
+Functions for vector operations:
+
+- **Geometry Conversion**: Convert legacy formats to WKB/WKT
+- **Format Transformation**: Prepare data for Databricks spatial types
+
+[View VectorX Functions →](./python#vectorx-functions)
+
+## Next Steps
+
+- [Scala API Reference](./scala)
+- [Python API Reference](./python)
+- [SQL API Reference](./sql)
+- [RasterX Functions](./rasterx-functions)
+- [GridX Functions](./gridx-functions)
+- [VectorX Functions](./vectorx-functions)
+- [Package Documentation](../packages/overview)
+- [Examples](../examples/overview)

@@ -1,0 +1,72 @@
+---
+description: Organize summary markdown files in prompts folder with contextual structure
+alwaysApply: true
+---
+
+# Summary Files Organization
+
+When creating summary markdown files, follow this structure:
+
+## Location
+All summary files must be written to the `prompts/` folder in the project root.
+
+## Subfolder Organization
+Organize summaries into contextually appropriate subfolders based on the content:
+
+- **conversations/** - Conversation logs and dialogue summaries
+- **documentation/** - Documentation updates and writing sessions
+- **features/** - Feature implementation summaries
+- **refactoring/** - Code refactoring and restructuring sessions
+- **testing/** - Test creation and debugging sessions
+- **analysis/** - Code analysis and review summaries
+- **planning/** - Planning and architecture discussions
+- **bugfixes/** - Bug investigation and resolution summaries
+
+Create new subfolders as needed when existing categories don't fit.
+
+## File Naming
+Use descriptive, contextual names that clearly indicate the content:
+
+```
+✅ GOOD
+prompts/features/2026-01-15-raster-tile-structure-implementation.md
+prompts/documentation/2026-01-23-api-reference-update-session.md
+prompts/refactoring/2026-01-20-grid-coordinate-system-rewrite.md
+prompts/conversations/2026-01-18-geospatial-performance-discussion.md
+
+❌ BAD
+prompts/summary.md
+prompts/file1.md
+prompts/notes.md
+prompts/raster-functions.md (missing date)
+```
+
+## Naming Conventions
+- **MUST include date prefix**: `YYYY-MM-DD-` at the start of filename
+- Use lowercase with hyphens (kebab-case)
+- Include key topic/feature keywords after the date
+- Be specific enough to identify content at a glance
+- Avoid generic names like "summary", "notes", "session"
+- Include meaningful context (feature name, component, topic)
+
+## Date Format
+- Format: `YYYY-MM-DD-descriptive-name.md`
+- Use the date when the work/session occurred (not file creation date)
+- Extract date from document content if available
+- If document spans multiple days, use the completion/final date
+- Helps maintain chronological order and track project evolution
+
+## Example Structure
+```
+prompts/
+├── features/
+│   ├── 2026-01-15-vector-operations-implementation.md
+│   └── 2026-01-18-shapefile-reader-enhancement.md
+├── documentation/
+│   ├── 2026-01-23-vectorx-api-docs-update.md
+│   └── 2026-01-24-installation-guide-revision.md
+├── refactoring/
+│   └── 2026-01-20-coordinate-transformation-refactor.md
+└── bugfixes/
+    └── 2026-01-22-gdal-memory-leak-resolution.md
+```

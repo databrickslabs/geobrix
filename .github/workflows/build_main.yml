@@ -1,13 +1,15 @@
 name: build main
-# Run on push to main only (not on push to other branches e.g. beta/0.2.0).
-# Scala doc tests are excluded from the main Scala run; run them separately with GBX_SAMPLE_DATA_ROOT.
+# Runs on: push to any branch (except python/** and scala/**), all PRs, and manual trigger.
+# Scala doc tests are excluded from the main Scala run; they run in a separate step only on push to main.
 on:
   push:
-    branches:
-      - main
+    branches-ignore:
+      - "python/**"
+      - "scala/**"
   pull_request:
     branches:
       - "**"
+  workflow_dispatch:
 permissions:
   contents: read
   id-token: write

@@ -96,6 +96,7 @@ Commands follow **`gbx:<category>:<action>`**:
 | `data` | Sample data: download (essential/complete bundle), generate minimal bundle, push JAR/wheel to Volume |
 | `docs` | Documentation server (start, stop, restart, dev, serve-local, static-build, function-info, prompt-session) |
 | `docker` | Container lifecycle (exec, start, stop, restart, rebuild, attach) |
+| `ci` | CI / GitHub Actions: push, trigger, status, watch, logs, docs menu, setup |
 
 #### When to use which command
 
@@ -164,6 +165,18 @@ Doc tests use the **in-repo minimal bundle** (no download step). Generate it onc
 | `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image and optionally start |
 | `gbx:docker:clear-pycache` | After editing Python code, stale imports | Clears `.pyc` and `__pycache__` in container so tests see fresh code |
 
+**CI** (require GitHub CLI `gh`; use `gbx:ci:setup` to install/authenticate)
+
+| Command | When to use | What it does |
+|---------|-------------|--------------|
+| `gbx:ci:push` | Initiate remote build on current branch (e.g. beta/0.2.0) | Pushes branch to origin, then watches the **build main** workflow run |
+| `gbx:ci:trigger` | Push then manually trigger build main (e.g. workflow_dispatch) | Pushes branch, lists runs, prompts to trigger **build main** on current branch |
+| `gbx:ci:status` | Check recent CI runs | Shows recent workflow runs for current branch (optional: `[LIMIT]`) |
+| `gbx:ci:watch` | Stream a CI run | Watches latest run (or `[RUN_ID]`) in real time |
+| `gbx:ci:logs` | Download CI logs | Fetches logs for latest run (or `[RUN_ID]`) into `ci-logs/` |
+| `gbx:ci:docs` | Doc-test CI menu | Run doc tests locally (python/scala), status, trigger, watch, logs (or no args for menu) |
+| `gbx:ci:setup` | One-time CI setup | Install and authenticate GitHub CLI (`gh`) |
+
 Most commands accept `--help`. Common options: `--log <path>` for test/output logs (truncated each run), `--open` for coverage reports, and command-specific flags (e.g. `--suite`, `--path`, `--skip-build`). **Doc test commands** set `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container by default so the minimal bundle is used (required for remote/CI); use `--no-sample-data-root` to leave it unset and use the full-bundle path or your own env. They do not run a sample-data download; the minimal or full bundle must be present via the Volumes mount.
 
 ### Agents (subagents)
@@ -202,14 +215,25 @@ Workflows live in **`.github/workflows/`**. They define when and how tests and b
 
 ### When things run
 
-- **Main build** (`build_main.yml`) — Runs on **push to `main`** and on **all pull requests** (not on push to other branches, e.g. `beta/0.2.0`). Runs checkout → build Scala → build Python → rebuild doc-snippet-inventory → (on push to main only) Scala doc tests → upload artifacts.
-  - **Scala tests** in the main run use `-Dsuites='com.databricks.labs.gbx.*'`, so only unit/integration tests run; **Scala doc tests** (`docs/tests/scala/`) are excluded and do not run in this step.
-  - **Scala doc tests** run in a **separate step** only when the event is **push to `main`**. That step sets `GBX_SAMPLE_DATA_ROOT` and runs `mvn test -Dsuites='tests.docs.scala.*,docs.tests.scala.*'`, so doc tests run after the rest of the build and have sample-data env configured.
-- **Documentation tests** (`doc-tests.yml`) — Run **after the "build main" workflow completes** (on the same ref), so failing doc tests do not block the main build. Python doc tests and structure validation run here; Scala doc tests are run by `build_main` (see above). Also triggerable manually via workflow_dispatch.
+- **Main build** (`build_main.yml`) — Runs on **push to any branch** (except `python/**` and `scala/**`), on **all pull requests**, and via **workflow_dispatch** (manual trigger from the Actions tab or `gh workflow run "build main" --ref <branch>`). Pipeline: checkout → build Scala → build Python → rebuild doc-snippet-inventory → (on push to main only) Scala doc tests → upload artifacts.
+  - **Scala tests** in the main run use `-Dsuites='com.databricks.labs.gbx.*'`, so only unit/integration tests run; **Scala doc tests** (`docs/tests/scala/`) are excluded from this step.
+  - **Scala doc tests** run in a **separate step** only when the event is **push to `main`**. That step sets `GBX_SAMPLE_DATA_ROOT` and runs the doc test suites.
+- **Documentation tests** (`doc-tests.yml`) — Run **after the "build main" workflow completes** (on the same ref). Python doc tests and structure validation run here; Scala doc tests are run by `build_main` (see above). Also triggerable manually via workflow_dispatch.
 - **Branch-specific builds** — `build_python.yml` runs on push to `python/**`; `build_scala.yml` runs on push to `scala/**`.
 - **CodeQL** (`codeql-analysis.yml`) — Security analysis on push and pull_request to `main`.
 - **Publish / release** — Triggered by release or publish events (see the workflow files).
 
+### Initiating a build from a branch
+
+To run the main build on your current branch (e.g. `beta/0.2.0`):
+
+- **Push and watch** — **`gbx:ci:push`**. Pushes the current branch to origin (push triggers **build main**), then streams the run.
+- **Trigger after push** — **`gbx:ci:trigger`**. Pushes, then prompts to trigger **build main** (workflow_dispatch).
+- **Check status** — **`gbx:ci:status`**. Recent workflow runs for the current branch.
+- **Watch a run** — **`gbx:ci:watch`** or **`gbx:ci:watch RUN_ID`**.
+- **Fetch logs** — **`gbx:ci:logs`** or **`gbx:ci:logs RUN_ID`** (saves to `ci-logs/`).
+- **First-time setup** — **`gbx:ci:setup`** to install and authenticate the GitHub CLI (`gh`).
+
 ### Summary
 
-The main build does **not** run on push to branches other than `main` (e.g. `beta/0.2.0`); it runs on push to `main` and on all PRs. Scala doc tests run only on **push to `main`**, in a separate step after the build, with `GBX_SAMPLE_DATA_ROOT` set. For full details and triggers, see the YAML files in `.github/workflows/`.
+The main build runs on **push to any branch** (except `python/**`, `scala/**`), on all PRs, and via **workflow_dispatch**. Use **`gbx:ci:push`** to push and watch the build. Scala doc tests run only on **push to `main`**, in a separate step with `GBX_SAMPLE_DATA_ROOT` set. For full details and triggers, see the YAML files in `.github/workflows/`.

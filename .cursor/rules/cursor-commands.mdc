@@ -38,6 +38,7 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 | `data` | Sample data | `download` |
 | `docs` | Documentation | `start`, `stop`, `restart`, `static-build`, `function-info`, `prompt-session` |
 | `docker` | Container mgmt | `exec`, `start`, `stop`, `restart`, `rebuild`, `attach` |
+| `ci` | CI / GitHub Actions | `push`, `trigger`, `status`, `watch`, `logs`, `docs`, `setup` |
 
 ---
 
@@ -244,6 +245,38 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
     - Opens interactive bash shell
     - Container keeps running after detach
     - Example: `gbx:docker:attach`
+
+25. **`gbx:ci:push`** - Push current branch and watch build main workflow
+    - Pushes to origin, then streams the GitHub Actions run
+    - Use on branches (e.g. beta/0.2.0) to initiate a remote build
+    - Requires: `gh` CLI installed and authenticated
+    - Example: `gbx:ci:push`
+
+26. **`gbx:ci:trigger`** - Push and optionally trigger build main (manual)
+    - Pushes branch, lists runs, prompts to trigger workflow
+    - Example: `gbx:ci:trigger`
+
+27. **`gbx:ci:status`** - Check CI status and recent runs
+    - Shows recent workflow runs for current branch
+    - Optional: `[LIMIT]` (default 10)
+    - Example: `gbx:ci:status` or `gbx:ci:status 5`
+
+28. **`gbx:ci:watch`** - Watch CI run in real time
+    - Streams latest run for current branch, or pass `[RUN_ID]`
+    - Example: `gbx:ci:watch` or `gbx:ci:watch 123456789`
+
+29. **`gbx:ci:logs`** - Fetch CI run logs
+    - Downloads logs to `ci-logs/` (latest run or `[RUN_ID]`)
+    - Example: `gbx:ci:logs` or `gbx:ci:logs 123456789`
+
+30. **`gbx:ci:docs`** - Documentation tests CI menu
+    - Commands: local, python, scala, status, trigger, watch, logs, help
+    - No args: interactive menu
+    - Example: `gbx:ci:docs local python`
+
+31. **`gbx:ci:setup`** - Install and configure GitHub CLI
+    - Installs `gh`, runs `gh auth login` if needed
+    - Example: `gbx:ci:setup`
 
 ---
 

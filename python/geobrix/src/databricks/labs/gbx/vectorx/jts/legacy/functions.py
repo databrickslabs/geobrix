@@ -6,9 +6,8 @@ and examples, see the API docs or SQL:
   DESCRIBE FUNCTION EXTENDED gbx_st_legacyaswkb;
 """
 
-from pyspark.sql import SparkSession
+from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as f
-from pyspark.sql import Column
 
 
 def register(_spark: SparkSession) -> None:

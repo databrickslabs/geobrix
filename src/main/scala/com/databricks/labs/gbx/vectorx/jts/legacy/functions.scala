@@ -23,7 +23,7 @@ object functions extends Serializable {
         sc.getConf.set(flag, "true")
     }
 
-    /** Returns a Column that invokes gbx_st_legacyaswkb on the given geometry column (legacy internal → WKB). */
+    /** Returns a Column that invokes gbx_st_legacyaswkb on the given geometry column (legacy internal -> WKB). */
     def st_legacyaswkb(geom: Column): Column = ColumnAdapter(ST_LegacyAsWKB.name, Seq(geom))
 
 }

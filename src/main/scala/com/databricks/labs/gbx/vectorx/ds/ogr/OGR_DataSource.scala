@@ -44,7 +44,7 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
             )
 
         NodeFileManager.releaseRemote(headPath)
-        
+
         schemaOpt.getOrElse {
             throw new IllegalArgumentException(
               s"Unable to infer schema from file: $headPath. " +

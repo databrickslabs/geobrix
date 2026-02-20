@@ -23,6 +23,8 @@
         
         <!-- Legacy -->
         <spec2.version>4.2.0</spec2.version>
+        <!-- Lint: set -Dscalastyle.fail=false in CI when lint should not fail the build (e.g. non-main PRs) -->
+        <scalastyle.fail>true</scalastyle.fail>
     </properties>
 
     <dependencies>
@@ -288,7 +290,7 @@
                 <version>1.0.0</version>
                 <configuration>
                     <verbose>true</verbose>
-                    <failOnViolation>true</failOnViolation>
+                    <failOnViolation>${scalastyle.fail}</failOnViolation>
                     <includeTestSourceDirectory>false</includeTestSourceDirectory>
                     <failOnWarning>false</failOnWarning>
                     <sourceDirectory>${basedir}/src/main/scala</sourceDirectory>

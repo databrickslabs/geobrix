@@ -8,6 +8,9 @@ inputs:
   enable_coverage:
     description: 'Enable code coverage with scoverage? true or false'
     default: 'false'
+  fail_on_scalastyle:
+    description: 'Fail build on ScalaStyle errors? true or false. Typically true only for PRs targeting main.'
+    default: 'false'
 runs:
   using: "composite"
   steps:
@@ -64,15 +67,15 @@ runs:
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
           shell: bash
-          run: mvn -q clean install -Dsuites='com.databricks.labs.gbx.*'
+          run: mvn -q clean install -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Test and build the scala JAR - skip tests is false, coverage disabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'
           shell: bash
-          run: mvn -q clean install -Dscoverage.skip -Dsuites='com.databricks.labs.gbx.*'
+          run: mvn -q clean install -Dscoverage.skip -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Build the scala JAR - skip tests is true
           if: inputs.skip_tests == 'true'
           shell: bash
-          run: mvn -q clean install -DskipTests -Dscoverage.skip
+          run: mvn -q clean install -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Copy build artifacts to local staging
           shell: bash
           run: |

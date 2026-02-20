@@ -15,7 +15,7 @@ import scala.util.{Success, Try}
   * covers the EPSG:27700 bounds. The grid system is represented as a square
   * grid, where x and y coordinates are provided as eastings and northings. The
   * grid system supports representation of cell ids as integers and as strings.
-  * The grid system supports resolutions as integer indices (1–6, or negative for
+  * The grid system supports resolutions as integer indices (1-6, or negative for
   * quadrant resolutions) and as string cell size descriptors (e.g. "1km", "100m"
   * via resolutionMap). Negative resolution values represent quad tree
   * representations where each cell is split into orientation quadrants.

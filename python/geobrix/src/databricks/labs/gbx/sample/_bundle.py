@@ -10,8 +10,6 @@ Requires Python 3.10+. Optional runtime deps: requests,
 pystac-client, planetary-computer, geopandas (see function docstrings).
 """
 
-from pathlib import Path
-from typing import List, Optional, Tuple
 import errno
 import gzip
 import io
@@ -19,6 +17,8 @@ import os
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 try:
     import requests
@@ -102,11 +102,7 @@ def _ensure_dir(path: Path | str, volume_root: Optional[Path | str] = None) -> N
 def _is_volume_path(path: Path) -> bool:
     """True if path looks like a Unity Catalog Volume path (/Volumes/catalog/schema/volume/...)."""
     parts = Path(path).parts
-    return (
-        len(parts) >= 5
-        and parts[0] in ("/", "")
-        and parts[1].lower() == "volumes"
-    )
+    return len(parts) >= 5 and parts[0] in ("/", "") and parts[1].lower() == "volumes"
 
 
 def _path_exists_for_skip(path: Path | str) -> tuple[bool, Optional[float]]:
@@ -227,7 +223,11 @@ def download_srtm_to_path(
     is fetched as .hgt.gz and written as decompressed .hgt. Callers should use
     srtm_hgt_to_geotiff() to produce a .tif for use with GDAL (GTiff is always supported).
     """
-    hgt_path = dest_path if dest_path.suffix.lower() == ".hgt" else dest_path.with_suffix(".hgt")
+    hgt_path = (
+        dest_path
+        if dest_path.suffix.lower() == ".hgt"
+        else dest_path.with_suffix(".hgt")
+    )
     if skip_if_exists and hgt_path.exists():
         if not quiet:
             size_mb = hgt_path.stat().st_size / (1024 * 1024)
@@ -251,7 +251,9 @@ def download_srtm_to_path(
     return hgt_path
 
 
-def _create_synthetic_dem_geotiff(out_path: Path, minx: float, miny: float, maxx: float, maxy: float) -> bool:
+def _create_synthetic_dem_geotiff(
+    out_path: Path, minx: float, miny: float, maxx: float, maxy: float
+) -> bool:
     """Create a small synthetic DEM GeoTIFF (single band, WGS84). Used when .hgt is not supported by GDAL.
     Fills with an elevation gradient (0–100 m) so the raster is human-viewable."""
     try:
@@ -270,7 +272,9 @@ def _create_synthetic_dem_geotiff(out_path: Path, minx: float, miny: float, maxx
     srs.ImportFromEPSG(4326)
     ds.SetProjection(srs.ExportToWkt())
     # Ramp 0–100 m so the DEM is viewable (not solid black)
-    arr = np.linspace(0, 100, h, dtype=np.float32).reshape(-1, 1) + np.linspace(0, 50, w, dtype=np.float32)
+    arr = np.linspace(0, 100, h, dtype=np.float32).reshape(-1, 1) + np.linspace(
+        0, 50, w, dtype=np.float32
+    )
     band = ds.GetRasterBand(1)
     band.WriteArray(arr)
     band.FlushCache()
@@ -280,7 +284,8 @@ def _create_synthetic_dem_geotiff(out_path: Path, minx: float, miny: float, maxx
 
 def _scale_raster_to_viewable_byte(raster_path: Path) -> Optional[Path]:
     """Write a separate Byte 0-255 GeoTIFF for human viewing; keep the original .tif unchanged.
-    Uses -scale with no src range so GDAL stretches actual min/max to 0-255 (viewable in QGIS etc.)."""
+    Uses -scale with no src range so GDAL stretches actual min/max to 0-255 (viewable in QGIS etc.).
+    """
     if not shutil.which("gdal_translate") or not raster_path.exists():
         return None
     out_path = raster_path.parent / (raster_path.stem + "_byte.tif")
@@ -288,8 +293,13 @@ def _scale_raster_to_viewable_byte(raster_path: Path) -> Optional[Path]:
         # -scale with no args: compute src min/max from raster, map to 0-255 (avoids black clips)
         rc = subprocess.run(
             [
-                "gdal_translate", "-q", "-ot", "Byte", "-scale",
-                str(raster_path), str(out_path),
+                "gdal_translate",
+                "-q",
+                "-ot",
+                "Byte",
+                "-scale",
+                str(raster_path),
+                str(out_path),
             ],
             capture_output=True,
             text=True,
@@ -325,6 +335,7 @@ def srtm_hgt_to_geotiff(
         True if tif_path was written successfully.
     """
     import subprocess
+
     tif_path.parent.mkdir(parents=True, exist_ok=True)
     # Try gdal_translate .hgt -> .tif (requires GDAL built with SRTMHGT)
     cmd = ["gdal_translate", "-q", "-of", "GTiff", str(hgt_path), str(tif_path)]
@@ -336,7 +347,9 @@ def srtm_hgt_to_geotiff(
         return True
     # Fallback: synthetic DEM so elevation path exists and works with GDAL
     if not quiet:
-        print(f"⚠️  {description}: .hgt not supported by GDAL; writing small synthetic DEM GeoTIFF")
+        print(
+            f"⚠️  {description}: .hgt not supported by GDAL; writing small synthetic DEM GeoTIFF"
+        )
     return _create_synthetic_dem_geotiff(tif_path, *bbox_wgs84)
 
 
@@ -345,7 +358,7 @@ def _bundle_debug(msg: str) -> None:
         print(f"[bundle] {msg}", flush=True)
 
 
-def run_essential_bundle(
+def run_essential_bundle(  # noqa: C901
     volumes_path: str,
     temp_dir: Optional[str] = None,
 ) -> dict:
@@ -399,12 +412,14 @@ def run_essential_bundle(
         return p.resolve()
 
     try:
-        import pystac_client
         import planetary_computer
+        import pystac_client
     except ImportError:
         pystac_client = planetary_computer = None
 
-    def download_sentinel2(bbox, subfolder: str, filename: str, region_name: str) -> Optional[Path]:
+    def download_sentinel2(
+        bbox, subfolder: str, filename: str, region_name: str
+    ) -> Optional[Path]:
         out = vol(f"{subfolder}/{filename}")
         exists_skip, size_mb = _path_exists_for_skip(out)
         if exists_skip and size_mb is not None:
@@ -440,12 +455,19 @@ def run_essential_bundle(
         with open(tmp_file, "wb") as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        _copy_final_to_volumes(tmp_file, out, f"Sentinel-2 {region_name}", volume_root=volume_root)
+        _copy_final_to_volumes(
+            tmp_file, out, f"Sentinel-2 {region_name}", volume_root=volume_root
+        )
         # Generate separate _byte.tif for human viewing; tests use the original .tif
         byte_path = _scale_raster_to_viewable_byte(tmp_file)
         if byte_path is not None:
             out_byte = out.parent / (out.stem + "_byte.tif")
-            _copy_final_to_volumes(byte_path, out_byte, f"Sentinel-2 {region_name} (viewable)", volume_root=volume_root)
+            _copy_final_to_volumes(
+                byte_path,
+                out_byte,
+                f"Sentinel-2 {region_name} (viewable)",
+                volume_root=volume_root,
+            )
         return out
 
     _bundle_debug("Starting NYC Vector Data")
@@ -456,7 +478,7 @@ def run_essential_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  NYC Taxi Zones: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading NYC Taxi Zones...")
+            print("⬇️  Downloading NYC Taxi Zones...")
             t = tmp_dir_resolve("nyc", "taxi-zones") / "nyc_taxi_zones.geojson"
             download_to_path(
                 "https://data.cityofnewyork.us/resource/8meu-9t5y.geojson?$limit=300",
@@ -466,7 +488,9 @@ def run_essential_bundle(
                 quiet=True,
             )
             if t.exists():
-                _copy_final_to_volumes(t, dest, "NYC Taxi Zones", volume_root=volume_root)
+                _copy_final_to_volumes(
+                    t, dest, "NYC Taxi Zones", volume_root=volume_root
+                )
     except Exception as e:
         errors.append(("NYC Taxi Zones", str(e)))
         print(f"⚠️  NYC Taxi Zones failed: {e}")
@@ -477,7 +501,7 @@ def run_essential_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  NYC Boroughs: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading NYC Boroughs...")
+            print("⬇️  Downloading NYC Boroughs...")
             t = tmp_path("nyc", "boroughs", "nyc_boroughs.geojson")
             download_to_path(
                 "https://data.cityofnewyork.us/resource/gthc-hcne.geojson?$limit=10",
@@ -499,7 +523,7 @@ def run_essential_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  London Postcodes: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading London Postcodes...")
+            print("⬇️  Downloading London Postcodes...")
             t = tmp_path("london", "postcodes", "london_postcodes.geojson")
             download_to_path(
                 "https://raw.githubusercontent.com/sjwhitworth/london_geojson/master/london_postcodes.json",
@@ -509,7 +533,9 @@ def run_essential_bundle(
                 quiet=True,
             )
             if t.exists():
-                _copy_final_to_volumes(t, dest, "London Postcodes", volume_root=volume_root)
+                _copy_final_to_volumes(
+                    t, dest, "London Postcodes", volume_root=volume_root
+                )
     except Exception as e:
         errors.append(("London Postcodes", str(e)))
         print(f"⚠️  London Postcodes failed: {e}")
@@ -535,11 +561,15 @@ def run_essential_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  SRTM NYC: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading SRTM NYC...")
+            print("⬇️  Downloading SRTM NYC...")
             t_hgt = tmp_path("nyc", "elevation", "srtm_n40w074.hgt")
-            download_srtm_to_path("N40W074", t_hgt, "SRTM NYC", skip_if_exists=False, quiet=True)
+            download_srtm_to_path(
+                "N40W074", t_hgt, "SRTM NYC", skip_if_exists=False, quiet=True
+            )
             t_tif = tmp_path("nyc", "elevation", "srtm_n40w074.tif")
-            if t_hgt.exists() and srtm_hgt_to_geotiff(t_hgt, t_tif, _nyc_bbox, "SRTM NYC", quiet=True):
+            if t_hgt.exists() and srtm_hgt_to_geotiff(
+                t_hgt, t_tif, _nyc_bbox, "SRTM NYC", quiet=True
+            ):
                 _copy_final_to_volumes(t_tif, dest, "SRTM NYC", volume_root=volume_root)
     except Exception as e:
         errors.append(("SRTM NYC", str(e)))
@@ -553,12 +583,18 @@ def run_essential_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  SRTM London: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading SRTM London...")
+            print("⬇️  Downloading SRTM London...")
             t_hgt = tmp_path("london", "elevation", "srtm_n51w001.hgt")
-            download_srtm_to_path("N51W001", t_hgt, "SRTM London", skip_if_exists=False, quiet=True)
+            download_srtm_to_path(
+                "N51W001", t_hgt, "SRTM London", skip_if_exists=False, quiet=True
+            )
             t_tif = tmp_path("london", "elevation", "srtm_n51w001.tif")
-            if t_hgt.exists() and srtm_hgt_to_geotiff(t_hgt, t_tif, _lon_bbox, "SRTM London", quiet=True):
-                _copy_final_to_volumes(t_tif, dest, "SRTM London", volume_root=volume_root)
+            if t_hgt.exists() and srtm_hgt_to_geotiff(
+                t_hgt, t_tif, _lon_bbox, "SRTM London", quiet=True
+            ):
+                _copy_final_to_volumes(
+                    t_tif, dest, "SRTM London", volume_root=volume_root
+                )
     except Exception as e:
         errors.append(("SRTM London", str(e)))
         print(f"⚠️  SRTM London failed: {e}")
@@ -577,14 +613,16 @@ def run_essential_bundle(
 
     try:
         file_count = sum(1 for _ in base.rglob("*") if _.is_file())
-        total_size = sum(f.stat().st_size for f in base.rglob("*") if f.is_file()) / (1024 * 1024)
+        total_size = sum(f.stat().st_size for f in base.rglob("*") if f.is_file()) / (
+            1024 * 1024
+        )
     except OSError:
         file_count = 0
         total_size = 0.0
     return {"errors": errors, "file_count": file_count, "total_size_mb": total_size}
 
 
-def run_complete_bundle(
+def run_complete_bundle(  # noqa: C901
     volumes_path: str,
     temp_dir: Optional[str] = None,
 ) -> dict:
@@ -634,7 +672,7 @@ def run_complete_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  NYC Neighborhoods: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading NYC Neighborhoods...")
+            print("⬇️  Downloading NYC Neighborhoods...")
             t = tmp_path("nyc", "neighborhoods", "nyc_nta.geojson")
             download_to_path(
                 "https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=250",
@@ -644,7 +682,9 @@ def run_complete_bundle(
                 quiet=True,
             )
             if t.exists():
-                _copy_final_to_volumes(t, dest, "NYC Neighborhoods", volume_root=volume_root)
+                _copy_final_to_volumes(
+                    t, dest, "NYC Neighborhoods", volume_root=volume_root
+                )
     except Exception as e:
         errors.append(("NYC Neighborhoods", str(e)))
 
@@ -655,12 +695,18 @@ def run_complete_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  SRTM NYC East: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading SRTM NYC East...")
+            print("⬇️  Downloading SRTM NYC East...")
             t_hgt = tmp_path("nyc", "elevation", "srtm_n40w073.hgt")
-            download_srtm_to_path("N40W073", t_hgt, "SRTM NYC East", skip_if_exists=False, quiet=True)
+            download_srtm_to_path(
+                "N40W073", t_hgt, "SRTM NYC East", skip_if_exists=False, quiet=True
+            )
             t_tif = tmp_path("nyc", "elevation", "srtm_n40w073.tif")
-            if t_hgt.exists() and srtm_hgt_to_geotiff(t_hgt, t_tif, _nyc_east_bbox, "SRTM NYC East", quiet=True):
-                _copy_final_to_volumes(t_tif, dest, "SRTM NYC East", volume_root=volume_root)
+            if t_hgt.exists() and srtm_hgt_to_geotiff(
+                t_hgt, t_tif, _nyc_east_bbox, "SRTM NYC East", quiet=True
+            ):
+                _copy_final_to_volumes(
+                    t_tif, dest, "SRTM NYC East", volume_root=volume_root
+                )
     except Exception as e:
         errors.append(("SRTM NYC East", str(e)))
 
@@ -670,10 +716,12 @@ def run_complete_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  London Boroughs: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading London Boroughs...")
+            print("⬇️  Downloading London Boroughs...")
             url = "https://data.london.gov.uk/download/statistical-gis-boundary-files-london/9ba8c833-6370-4b11-abdc-314aa020d5e0/statistical-gis-boundaries-london.zip"
             zpath = tmp_path("london_boroughs.zip")
-            download_to_path(url, zpath, "London Boroughs (zip)", skip_if_exists=False, quiet=True)
+            download_to_path(
+                url, zpath, "London Boroughs (zip)", skip_if_exists=False, quiet=True
+            )
             if zpath.exists():
                 tmp_extract = tmp_path("london_boroughs_extract")
                 tmp_extract.mkdir(parents=True, exist_ok=True)
@@ -685,10 +733,13 @@ def run_complete_bundle(
                 if shp_files:
                     try:
                         import geopandas as gpd
+
                         gdf = gpd.read_file(str(shp_files[0]))
                         _ensure_dir(out_geojson.parent, volume_root=volume_root)
                         gdf.to_file(str(out_geojson), driver="GeoJSON")
-                        print(f"✅ London Boroughs: {out_geojson.stat().st_size / (1024*1024):.1f} MB")
+                        print(
+                            f"✅ London Boroughs: {out_geojson.stat().st_size / (1024 * 1024):.1f} MB"
+                        )
                     except ImportError:
                         errors.append(("London Boroughs", "geopandas required"))
                 shutil.rmtree(tmp_extract, ignore_errors=True)
@@ -717,14 +768,16 @@ def run_complete_bundle(
                     raise
             print(f"⏭️  HRRR Weather: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading HRRR Weather...")
+            print("⬇️  Downloading HRRR Weather...")
             yesterday = datetime.now(_utc) - timedelta(days=1)
             date_str = yesterday.strftime("%Y%m%d")
             hrrr_url = f"https://noaa-hrrr-bdp-pds.s3.amazonaws.com/hrrr.{date_str}/conus/hrrr.t12z.wrfsfcf00.grib2"
             fname = f"hrrr_nyc_{date_str}_12z.grib2"
             dest = out_hrrr / fname
             t = tmp_path("hrrr.grib2")
-            download_to_path(hrrr_url, t, "HRRR Weather", skip_if_exists=False, quiet=True)
+            download_to_path(
+                hrrr_url, t, "HRRR Weather", skip_if_exists=False, quiet=True
+            )
             if t.exists():
                 _copy_final_to_volumes(t, dest, "HRRR Weather", volume_root=volume_root)
     except Exception as e:
@@ -736,10 +789,12 @@ def run_complete_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  NYC Parks: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading NYC Parks...")
+            print("⬇️  Downloading NYC Parks...")
             url = "https://data.cityofnewyork.us/api/geospatial/enfh-gkve?method=export&format=Shapefile"
             tzip = tmp_path("nyc_parks_download.zip")
-            download_to_path(url, tzip, "NYC Parks (zip)", skip_if_exists=False, quiet=True)
+            download_to_path(
+                url, tzip, "NYC Parks (zip)", skip_if_exists=False, quiet=True
+            )
             if tzip.exists():
                 extract_dir = tmp_path("nyc_parks_extract")
                 extract_dir.mkdir(parents=True, exist_ok=True)
@@ -752,9 +807,17 @@ def run_complete_bundle(
                             zout.write(f, f.relative_to(extract_dir))
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 _ensure_dir(parks_zip_dest.parent, volume_root=volume_root)
-                _copy_final_to_volumes(out_zip_tmp, parks_zip_dest, "NYC Parks", volume_root=volume_root)
+                _copy_final_to_volumes(
+                    out_zip_tmp, parks_zip_dest, "NYC Parks", volume_root=volume_root
+                )
                 for old in parks_zip_dest.parent.glob("*"):
-                    if old != parks_zip_dest and old.suffix.lower() in (".shp", ".dbf", ".prj", ".shx", ".cpg"):
+                    if old != parks_zip_dest and old.suffix.lower() in (
+                        ".shp",
+                        ".dbf",
+                        ".prj",
+                        ".shx",
+                        ".cpg",
+                    ):
                         try:
                             old.unlink()
                         except OSError:
@@ -768,10 +831,12 @@ def run_complete_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  NYC Subway: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Downloading NYC Subway...")
+            print("⬇️  Downloading NYC Subway...")
             url = "https://data.ny.gov/api/geospatial/i9wp-a4ja?method=export&format=Shapefile"
             tzip = tmp_path("nyc_subway_download.zip")
-            download_to_path(url, tzip, "NYC Subway (zip)", skip_if_exists=False, quiet=True)
+            download_to_path(
+                url, tzip, "NYC Subway (zip)", skip_if_exists=False, quiet=True
+            )
             if tzip.exists():
                 extract_dir = tmp_path("nyc_subway_extract")
                 extract_dir.mkdir(parents=True, exist_ok=True)
@@ -784,9 +849,14 @@ def run_complete_bundle(
                             zout.write(f, f.relative_to(extract_dir))
                 shutil.rmtree(extract_dir, ignore_errors=True)
                 _ensure_dir(subway_zip_dest.parent, volume_root=volume_root)
-                _copy_final_to_volumes(out_zip_tmp, subway_zip_dest, "NYC Subway", volume_root=volume_root)
+                _copy_final_to_volumes(
+                    out_zip_tmp, subway_zip_dest, "NYC Subway", volume_root=volume_root
+                )
                 for old in subway_zip_dest.parent.glob("*"):
-                    if old.suffix.lower() in (".shp", ".dbf", ".prj", ".shx", ".cpg") and old != subway_zip_dest:
+                    if (
+                        old.suffix.lower() in (".shp", ".dbf", ".prj", ".shx", ".cpg")
+                        and old != subway_zip_dest
+                    ):
                         try:
                             old.unlink()
                         except OSError:
@@ -800,26 +870,40 @@ def run_complete_bundle(
         if exists_skip and size_mb is not None:
             print(f"⏭️  Multi-Layer GeoPackage: {size_mb:.1f} MB (already exists)")
         else:
-            print(f"⬇️  Building Multi-Layer GeoPackage...")
+            print("⬇️  Building Multi-Layer GeoPackage...")
             import geopandas as gpd
+
             gpkg_tmp = tmp_path("nyc_complete.gpkg")
             boroughs_file = vol("nyc/boroughs/nyc_boroughs.geojson")
             if _path_exists_for_skip(boroughs_file)[0]:
-                gpd.read_file(str(boroughs_file)).to_file(str(gpkg_tmp), layer="boroughs", driver="GPKG")
+                gpd.read_file(str(boroughs_file)).to_file(
+                    str(gpkg_tmp), layer="boroughs", driver="GPKG"
+                )
             zones_file = vol("nyc/taxi-zones/nyc_taxi_zones.geojson")
             if _path_exists_for_skip(zones_file)[0]:
-                gpd.read_file(str(zones_file)).to_file(str(gpkg_tmp), layer="taxi_zones", driver="GPKG", mode="a")
+                gpd.read_file(str(zones_file)).to_file(
+                    str(gpkg_tmp), layer="taxi_zones", driver="GPKG", mode="a"
+                )
             parks_zip = vol("nyc/parks/nyc_parks.shp.zip")
             if _path_exists_for_skip(parks_zip)[0]:
                 uri = "zip://" + parks_zip.resolve().as_posix()
-                gpd.read_file(uri).to_file(str(gpkg_tmp), layer="parks", driver="GPKG", mode="a")
+                gpd.read_file(uri).to_file(
+                    str(gpkg_tmp), layer="parks", driver="GPKG", mode="a"
+                )
             subway_zip = vol("nyc/subway/nyc_subway.shp.zip")
             if _path_exists_for_skip(subway_zip)[0]:
                 uri = "zip://" + subway_zip.resolve().as_posix()
-                gpd.read_file(uri).to_file(str(gpkg_tmp), layer="subway_stations", driver="GPKG", mode="a")
+                gpd.read_file(uri).to_file(
+                    str(gpkg_tmp), layer="subway_stations", driver="GPKG", mode="a"
+                )
             if gpkg_tmp.exists():
                 _ensure_dir(gpkg_dest.parent, volume_root=volume_root)
-                _copy_final_to_volumes(gpkg_tmp, gpkg_dest, "Multi-Layer GeoPackage", volume_root=volume_root)
+                _copy_final_to_volumes(
+                    gpkg_tmp,
+                    gpkg_dest,
+                    "Multi-Layer GeoPackage",
+                    volume_root=volume_root,
+                )
     except ImportError:
         errors.append(("GeoPackage", "geopandas required"))
     except Exception as e:
@@ -828,7 +912,9 @@ def run_complete_bundle(
 
     try:
         file_count = sum(1 for _ in base.rglob("*") if _.is_file())
-        total_size = sum(f.stat().st_size for f in base.rglob("*") if f.is_file()) / (1024 * 1024)
+        total_size = sum(f.stat().st_size for f in base.rglob("*") if f.is_file()) / (
+            1024 * 1024
+        )
     except OSError:
         file_count = 0
         total_size = 0.0

@@ -6,9 +6,8 @@ descriptions and examples, see the API docs or SQL:
   DESCRIBE FUNCTION EXTENDED gbx_rst_<name>;
 """
 
-from pyspark.sql import SparkSession
+from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as f
-from pyspark.sql import Column
 
 
 def register(_spark: SparkSession) -> None:
@@ -400,7 +399,9 @@ def rst_derivedband_agg(tile: Column, pyfunc: str, func_name: str) -> Column:
     Returns:
         Column of derived raster tile.
     """
-    return f.call_function("gbx_rst_derivedband_agg", tile, f.lit(pyfunc), f.lit(func_name))
+    return f.call_function(
+        "gbx_rst_derivedband_agg", tile, f.lit(pyfunc), f.lit(func_name)
+    )
 
 
 def rst_merge_agg(tile: Column) -> Column:
@@ -664,7 +665,9 @@ def rst_derivedband(tile_expr: Column, pyfunc: str, func_name: str) -> Column:
     Returns:
         Column of raster tile with derived band(s).
     """
-    return f.call_function("gbx_rst_derivedband", tile_expr, f.lit(pyfunc), f.lit(func_name))
+    return f.call_function(
+        "gbx_rst_derivedband", tile_expr, f.lit(pyfunc), f.lit(func_name)
+    )
 
 
 def rst_filter(tile: Column, kernel_size: Column, operation: Column) -> Column:

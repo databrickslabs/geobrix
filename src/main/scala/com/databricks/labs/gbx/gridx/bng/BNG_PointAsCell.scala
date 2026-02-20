@@ -9,7 +9,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
 /** Expression that converts a geometry (WKT/WKB) point to a BNG cell ID string. Arguments: geom, resolution.
-  * Resolution must be a BNG resolution: Int index (1–6 or negative for quadrant) or String from resolutionMap (e.g. "1km", "100m"). */
+  * Resolution must be a BNG resolution: Int index (1-6 or negative for quadrant) or String from resolutionMap (e.g. "1km", "100m"). */
 case class BNG_PointAsCell(
     geom: Expression,
     resolution: Expression

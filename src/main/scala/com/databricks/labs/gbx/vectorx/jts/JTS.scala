@@ -142,7 +142,7 @@ object JTS {
         writer.write(geometry)
     }
 
-    /** Douglas–Peucker simplification with given tolerance; preserves SRID. */
+    /** Douglas-Peucker simplification with given tolerance; preserves SRID. */
     def simplify(geometry: Geometry, tolerance: Double): Geometry = {
         val simplified = DouglasPeuckerSimplifier.simplify(geometry, tolerance)
         simplified.setSRID(geometry.getSRID)

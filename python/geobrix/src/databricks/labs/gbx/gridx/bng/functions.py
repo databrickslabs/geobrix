@@ -6,9 +6,8 @@ descriptions and examples, see the API docs or SQL:
   DESCRIBE FUNCTION EXTENDED gbx_bng_<name>;
 """
 
-from pyspark.sql import SparkSession
+from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as f
-from pyspark.sql import Column
 
 
 def register(_spark: SparkSession) -> None:
@@ -225,7 +224,9 @@ def bng_polyfill(geom: Column, resolution: Column) -> Column:
     return f.call_function("gbx_bng_polyfill", geom, resolution)
 
 
-def bng_tessellate(geom: Column, resolution: Column, keep_core_geom: bool = True) -> Column:
+def bng_tessellate(
+    geom: Column, resolution: Column, keep_core_geom: bool = True
+) -> Column:
     """Tessellate the geometry into BNG cells (as array of cell IDs).
 
     Args:
@@ -236,7 +237,9 @@ def bng_tessellate(geom: Column, resolution: Column, keep_core_geom: bool = True
     Returns:
         Column of array of BNG cell identifiers (and optionally geometry).
     """
-    return f.call_function("gbx_bng_tessellate", geom, resolution, f.lit(keep_core_geom))
+    return f.call_function(
+        "gbx_bng_tessellate", geom, resolution, f.lit(keep_core_geom)
+    )
 
 
 # Aggregators
@@ -327,7 +330,9 @@ def bng_kringexplode(cell_id: Column, k: Column) -> Column:
     return f.explode(f.call_function("gbx_bng_kringexplode", cell_id, k))
 
 
-def bng_tessellateexplode(geom: Column, resolution: Column, keep_core_geom: bool = True) -> Column:
+def bng_tessellateexplode(
+    geom: Column, resolution: Column, keep_core_geom: bool = True
+) -> Column:
     """Explode the tessellation of the geometry into one row per BNG cell.
 
     Args:
@@ -338,4 +343,6 @@ def bng_tessellateexplode(geom: Column, resolution: Column, keep_core_geom: bool
     Returns:
         Column of exploded BNG cell identifiers (and optionally geometry).
     """
-    return f.call_function("gbx_bng_tessellateexplode", geom, resolution, f.lit(keep_core_geom))
+    return f.call_function(
+        "gbx_bng_tessellateexplode", geom, resolution, f.lit(keep_core_geom)
+    )

@@ -92,7 +92,7 @@ object H3 extends Serializable {
     // An instance of H3Core to be used for Grid System implementation.
     @transient private val h3: H3Core = H3Core.newInstance()
 
-    /** Parses resolution from Int, String, or UTF8String; must be in 0–15 (throws otherwise). */
+    /** Parses resolution from Int, String, or UTF8String; must be in 0-15 (throws otherwise). */
     def getResolution(res: Any): Int = {
         val resolution = (
           Try(res.asInstanceOf[Int]),
@@ -133,7 +133,7 @@ object H3 extends Serializable {
         }
     }
 
-    /** H3 boundary → JTS polygon; appends first point to close LinearRing; handles pole-crossing via makePoleGeometry. */
+    /** H3 boundary -> JTS polygon; appends first point to close LinearRing; handles pole-crossing via makePoleGeometry. */
     def cellIdToGeometry(cellID: Long): Geometry = {
         val boundary = h3.h3ToGeoBoundary(cellID).asScala
         val extended = boundary ++ List(boundary.head)
@@ -201,7 +201,7 @@ object H3 extends Serializable {
         h3.geoToH3(lat, lon, resolution)
     }
 
-    /** All cell IDs within k rings of center cellID (distance ≤ n). */
+    /** All cell IDs within k rings of center cellID (distance <= n). */
     def kRing(cellID: Long, n: Int): mutable.Seq[Long] = {
         h3.kRing(cellID, n).asScala.map(_.toLong)
     }
@@ -222,7 +222,7 @@ object H3 extends Serializable {
         )
     }
 
-    /** Supported H3 resolutions 0–15 (0 = coarsest, 122 hexagons; 15 = finest). */
+    /** Supported H3 resolutions 0-15 (0 = coarsest, 122 hexagons; 15 = finest). */
     def resolutions: Set[Int] = (0 to 15).toSet
 
     /** Converts cell ID to H3 address string. */
@@ -271,7 +271,7 @@ object H3 extends Serializable {
     /** True if this cell (by address string) crosses the South Pole. */
     private def crossesSouthPole(cell_id: String): Boolean = southPoleCells contains h3.stringToH3(cell_id)
 
-    /** True if geometry envelope spans lon 0 and (width > 180° or invalid); not general for all polygons. */
+    /** True if geometry envelope spans lon 0 and (width > 180 deg or invalid); not general for all polygons. */
     def crossesAntiMeridian(geometry: Geometry): Boolean = {
         val envelope = geometry.getEnvelopeInternal
         val minX = envelope.getMinX

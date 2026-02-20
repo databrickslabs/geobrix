@@ -37,7 +37,7 @@ case class GDALBlock[T: ClassTag](
     /** Mask at (x, y) in raster coordinates. */
     def rasterMaskAt(x: Int, y: Int): Double = maskBlock((y - yOffset) * width + (x - xOffset))
 
-    /** Extracts kernelWidth×kernelHeight values centred at (x, y), NoData where invalid. */
+    /** Extracts kernelWidth x kernelHeight values centred at (x, y), NoData where invalid. */
     def valuesAt(x: Int, y: Int, kernelWidth: Int, kernelHeight: Int): Array[Double] = {
         val kernelCenterX = kernelWidth / 2
         val kernelCenterY = kernelHeight / 2

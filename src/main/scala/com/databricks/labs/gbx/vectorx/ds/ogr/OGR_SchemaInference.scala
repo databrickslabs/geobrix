@@ -27,7 +27,7 @@ object OGR_SchemaInference extends Serializable {
         }
     }
 
-    /** Maps OGR field type name to Spark DataType (e.g. Integer → IntegerType, Real → DoubleType). */
+    /** Maps OGR field type name to Spark DataType (e.g. Integer -> IntegerType, Real -> DoubleType). */
     def getType(typeName: String): DataType =
         typeName match {
             case "Boolean"        => BooleanType
@@ -74,7 +74,7 @@ object OGR_SchemaInference extends Serializable {
         }
     }
 
-    /** Picks single DataType from list (precedence: String > Long > Double > … > Date > String fallback). */
+    /** Picks single DataType from list (precedence: String > Long > Double > ... > Date > String fallback). */
     private[ds] def coerceTypeList(coerceables: Seq[DataType]): DataType = {
         if (coerceables.isEmpty) StringType
         else if (coerceables.contains(StringType)) StringType
@@ -115,7 +115,7 @@ object OGR_SchemaInference extends Serializable {
         else (0 until feature.GetFieldCount).find(i => feature.GetFieldDefnRef(i).GetName == name)
     }
 
-    /** OGR DateTime field → java.sql.Timestamp; returns null for invalid components. */
+    /** OGR DateTime field -> java.sql.Timestamp; returns null for invalid components. */
     // noinspection ScalaDeprecation
     private def getJavaSQLTimestamp(feature: Feature, id: Int): Timestamp = {
         var year: Array[Int] = Array.fill[Int](1)(0)
@@ -262,19 +262,19 @@ object OGR_SchemaInference extends Serializable {
         }
         layer.ResetReading()
         val headFeature = layer.GetNextFeature()
-        
+
         // Handle empty layers - return None if no features
         if (headFeature == null) {
             return None
         }
-        
+
         val headSchemaFields = getFeatureSchema(headFeature, asWKB).fields
         val n = math.min(inferenceLimit, layer.GetFeatureCount()).toInt
 
         // start from 1 since 1 feature was read already
         val layerSchema = (1 until n).foldLeft(headSchemaFields) { (schema, _) =>
             val feature = layer.GetNextFeature()
-            
+
             // Skip null features (shouldn't happen but defensive programming)
             if (feature == null) {
                 schema

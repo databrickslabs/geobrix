@@ -1,31 +1,36 @@
 import logging
-import pytest
 from pathlib import Path
 
+import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as f
 
 HERE = Path(__file__).resolve()
-LIBDIR = (HERE.parents[2] / "lib").resolve()   # simpler, robust
+LIBDIR = (HERE.parents[2] / "lib").resolve()  # simpler, robust
 candidates = sorted(LIBDIR.glob("geobrix-*-jar-with-dependencies.jar"))
 JAR = candidates[-1].resolve()
 JAR_URI = JAR.as_uri()
 
+
 @pytest.fixture(scope="session")
 def spark():
     logging.getLogger("py4j").setLevel(logging.ERROR)
-    spark = (SparkSession.builder
-             .config("spark.driver.extraJavaOptions",
-                     "-Dlog4j.rootLogger=INFO,console "
-                     "-Djava.library.path=/usr/local/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib:/usr/local/hadoop/lib/native")
-             .config("spark.jars", str(JAR))
-             .getOrCreate())
+    spark = (
+        SparkSession.builder.config(
+            "spark.driver.extraJavaOptions",
+            "-Dlog4j.rootLogger=INFO,console "
+            "-Djava.library.path=/usr/local/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib:/usr/local/hadoop/lib/native",
+        )
+        .config("spark.jars", str(JAR))
+        .getOrCreate()
+    )
     spark.sql("LIST JAR").show(truncate=False)
     return spark
 
 
 def test_bng_functions_registration(spark):
     from databricks.labs.gbx.gridx.bng import functions as bng_funcs
+
     bng_funcs.register(spark)
     df = spark.range(1).select(bng_funcs.bng_aswkb(f.lit("TQ388791")).alias("wkb"))
     row = df.collect()[0]

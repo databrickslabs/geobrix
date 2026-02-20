@@ -1,6 +1,10 @@
 name: build geobrix python
 description: build geobrix python
 # Shares env with scala_build (apt + pip). When run after scala_build in same job, caches are warm.
+inputs:
+  run_lint:
+    description: 'Run Python lint (isort, black, flake8) and fail build on errors? true or false. Typically true only for PRs targeting main.'
+    default: 'false'
 runs:
   using: "composite"
   steps:
@@ -50,7 +54,15 @@ runs:
         GDAL_VERSION_TO_INSTALL="${INSTALLED_GDAL_VERSION:-${{ matrix.gdal }}}"
         pip install --no-build-isolation gdal[numpy]==${GDAL_VERSION_TO_INSTALL}
         pip install pytest==${{ matrix.pytest }}
-        pip install python/geobrix
+        pip install python/geobrix[dev]
+    - name: Lint Python (isort, black, flake8)
+      if: inputs.run_lint == 'true'
+      shell: bash
+      run: |
+        cd python/geobrix
+        isort --check-only src test
+        black --check src test
+        flake8 src test
     - name: Give Python interpreter write access to checkpointing / raster write location
       shell: bash
       run: |

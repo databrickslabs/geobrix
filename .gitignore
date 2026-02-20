@@ -1,5 +1,6 @@
 /.idea/
 /scripts/docker/m2/
+/python/geobrix/.venv/
 /python/geobrix/dist/
 /python/geobrix/lib/
 /python/geobrix/src/geobrix.egg-info/

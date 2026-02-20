@@ -131,7 +131,7 @@ object InterpolateElevation {
         })
     }
 
-    /** Builds a regular grid of points (origin + xCells×yCells, cell sizes xSize×ySize). */
+    /** Builds a regular grid of points (origin + xCells x yCells, cell sizes xSize x ySize). */
     def pointGrid(origin: Point, xCells: Int, yCells: Int, xSize: Double, ySize: Double): MultiPoint = {
         val gridPoints = for (i <- 0 until xCells; j <- 0 until yCells) yield {
             val x = origin.getX + i * xSize + xSize / 2

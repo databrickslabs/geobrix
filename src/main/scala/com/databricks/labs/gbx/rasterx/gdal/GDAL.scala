@@ -4,7 +4,7 @@ import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants._
 import org.gdal.osr.SpatialReference
 
-/** GDAL constants and helpers: WGS84/3857 refs, driver extension, NoData by type, pixel↔geo coordinate conversion. */
+/** GDAL constants and helpers: WGS84/3857 refs, driver extension, NoData by type, pixel-to/from-geo coordinate conversion. */
 object GDAL {
 
     /** WGS84 spatial reference (EPSG:4326, traditional axis order). Note: val name is WSG84 (historical typo). */

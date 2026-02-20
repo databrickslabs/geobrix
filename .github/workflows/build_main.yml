@@ -61,8 +61,11 @@ jobs:
         uses: ./.github/actions/scala_build
         with:
           enable_coverage: "false"
+          fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
       - name: build python
         uses: ./.github/actions/python_build
+        with:
+          run_lint: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
       - name: Rebuild doc-snippet-inventory
         run: python3 scripts/ci/inventory-doc-snippets.py
       - name: Scala doc tests (main only, after everything else)

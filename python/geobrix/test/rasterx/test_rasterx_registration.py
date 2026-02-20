@@ -1,7 +1,7 @@
 import logging
-import pytest
 from pathlib import Path
 
+import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as f
 
@@ -15,12 +15,15 @@ JAR_URI = JAR.as_uri()
 @pytest.fixture(scope="session")
 def spark():
     logging.getLogger("py4j").setLevel(logging.ERROR)
-    spark = (SparkSession.builder
-             .config("spark.driver.extraJavaOptions",
-                     "-Dlog4j.rootLogger=ERROR,console "
-                     "-Djava.library.path=/usr/local/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib:/usr/local/hadoop/lib/native")
-             .config("spark.jars", str(JAR))
-             .getOrCreate())
+    spark = (
+        SparkSession.builder.config(
+            "spark.driver.extraJavaOptions",
+            "-Dlog4j.rootLogger=ERROR,console "
+            "-Djava.library.path=/usr/local/lib:/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib:/usr/local/hadoop/lib/native",
+        )
+        .config("spark.jars", str(JAR))
+        .getOrCreate()
+    )
     print(JAR_URI)
     spark.sql("LIST JAR").show(truncate=False)
     return spark
@@ -28,8 +31,12 @@ def spark():
 
 def test_rasterx_functions_registration(spark):
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
-    path = (HERE.parents[4] / "src/test/resources/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").resolve()
+    path = (
+        HERE.parents[4]
+        / "src/test/resources/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
+    ).resolve()
     df = spark.range(1).select(
         rx.rst_avg(
             rx.rst_fromfile(

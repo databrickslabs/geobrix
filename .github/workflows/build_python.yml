@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: checkout code
         uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Create pip cache key file
         run: |
           echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key

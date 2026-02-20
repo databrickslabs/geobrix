@@ -29,6 +29,8 @@ jobs:
     steps:
     - name: Checkout repository
       uses: actions/checkout@v5
+      with:
+        token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
 
     # Initializes the CodeQL tools for scanning.
     # Requires: repo Settings → Code security and analysis → Code scanning (enable).

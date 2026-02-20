@@ -4,6 +4,11 @@
 # First-time setup: In repo Settings → Pages → Build and deployment,
 # set Source to "GitHub Actions" (or "Deploy from a branch" and choose gh-pages).
 # If using branch: after first run, set Source to branch "gh-pages", root / (root).
+#
+# Private repo 403 on checkout: If you get "The requested URL returned error: 403"
+# when checking out, add a repo secret (e.g. REPO_ACCESS_TOKEN) with a Personal
+# Access Token (classic: repo scope; or fine-grained: Contents read), then set
+# token for the Checkout step to: ${{ secrets.REPO_ACCESS_TOKEN }}
 name: Deploy documentation
 
 on:
@@ -27,8 +32,12 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      # Use token explicitly; for private repos with restricted GITHUB_TOKEN,
+      # add secret REPO_ACCESS_TOKEN (PAT with repo/Contents read) and use it here.
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
 
       - name: Setup Node
         uses: actions/setup-node@v4

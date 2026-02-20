@@ -79,7 +79,7 @@ gbx:coverage:scala-package rasterx --open
 
 ## Output
 
-**HTML Report**: `target/site/scoverage/index.html`
+**HTML Report**: `target/scoverage-report/index.html`
 **XML Report**: `target/scoverage.xml`
 
 The reports show coverage for the entire codebase, but only the selected package's tests were executed.

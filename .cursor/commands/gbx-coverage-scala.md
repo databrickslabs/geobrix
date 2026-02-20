@@ -34,7 +34,7 @@ bash .cursor/commands/gbx-coverage-scala.sh --report-only --open
 
 ## Coverage Report Location
 
-- **HTML Report**: `target/site/scoverage/index.html`
+- **HTML Report**: `target/scoverage-report/index.html`
 - **XML Report**: `target/scoverage.xml`
 
 ## Notes

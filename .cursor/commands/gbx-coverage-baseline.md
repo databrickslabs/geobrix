@@ -127,7 +127,7 @@ gbx:coverage:python \
 
 ### Scala
 - **XML**: `target/scoverage.xml`
-- **HTML**: `target/site/scoverage/index.html`
+- **HTML**: `target/scoverage-report/index.html`
 - **Valid for**: ~7 days
 
 ### Python

@@ -79,7 +79,7 @@ gbx:coverage:python-docs --path docs/tests/python/api/
 
 | Test Type | Report Location | What's Measured |
 |-----------|-----------------|-----------------|
-| Scala Unit | `target/site/scoverage/index.html` | `src/main/scala/` by unit tests |
+| Scala Unit | `target/scoverage-report/index.html` | `src/main/scala/` by unit tests |
 | Scala Docs | `target/scoverage-docs-report/index.html` | `src/main/scala/` by docs tests |
 | Python Unit | `python/coverage-report/index.html` | `python/geobrix/src/databricks/labs/gbx/` by unit tests |
 | Python Docs | `docs/tests/coverage-report/index.html` | `python/geobrix/src/databricks/labs/gbx/` by docs tests |

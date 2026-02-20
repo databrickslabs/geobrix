@@ -40,6 +40,7 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 | `docker` | Container mgmt | `exec`, `start`, `stop`, `restart`, `rebuild`, `attach` |
 | `ci` | CI / GitHub Actions | `push`, `trigger`, `status`, `watch`, `logs`, `docs`, `setup` |
 | `lint` | Scala / Python style | `scalastyle`, `python` |
+| `security` | Code scanning | `codeql` |
 
 ---
 
@@ -130,7 +131,7 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
    - Tests: `src/test/scala/` (excludes docs tests)
    - Time: ~10 minutes ⚠️ Use weekly or via `baseline`
    - Default threshold: 80%
-   - Output: `target/site/scoverage/index.html`
+   - Output: `target/scoverage-report/index.html`
    - Example: `gbx:coverage:scala --min-coverage 90 --open`
    - Example: `gbx:coverage:scala --report-only --open` (5 sec, uses existing data)
 
@@ -271,6 +272,11 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
    - Same as CI: check-only by default (runs in Docker). Use `--fix` on host to apply isort/black (requires `pip install -e "python/geobrix[dev]"`).
    - Config in `python/geobrix/pyproject.toml`
    - Example: `gbx:lint:python` or `gbx:lint:python --fix`
+
+30. **`gbx:security:codeql`** - Run CodeQL analysis locally (Python)
+   - Requires CodeQL CLI on PATH (free; no special license). Creates database, runs default Python queries, writes SARIF to `test-logs/codeql-results.sarif` (or `--output`).
+   - CI upload to GitHub requires repo **Settings → Code security and analysis → Code scanning** enabled.
+   - Example: `gbx:security:codeql` or `gbx:security:codeql --output ./codeql.sarif`
 
 28. **`gbx:ci:watch`** - Watch CI run in real time
     - Streams latest run for current branch, or pass `[RUN_ID]`

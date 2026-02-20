@@ -32,6 +32,14 @@ This command generates static content into the `build` directory and can be serv
 
 ## Deployment
 
+### GitHub Actions (recommended)
+
+Docs are built and deployed automatically by the [Deploy documentation](https://github.com/databrickslabs/geobrix/actions/workflows/deploy-docs.yml) workflow when you push to `main` (under `docs/`) or run it manually.
+
+**One-time setup:** In the repo go to **Settings → Pages**. Under **Build and deployment**, set **Source** to **GitHub Actions**. After the first run, the site will be at **https://databrickslabs.github.io/geobrix/**.
+
+### Manual deploy (optional)
+
 ### Using SSH:
 
 ```bash
@@ -44,7 +52,7 @@ USE_SSH=true npm run deploy
 GIT_USER=<Your GitHub username> npm run deploy
 ```
 
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+If you use the `deploy` script, ensure `docusaurus.config.js` has `url: 'https://databrickslabs.github.io'` and `baseUrl: '/geobrix/'` for GitHub Pages.
 
 ## Structure
 

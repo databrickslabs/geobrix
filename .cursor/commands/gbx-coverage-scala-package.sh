@@ -39,7 +39,7 @@ show_help() {
     echo -e "  ${GREEN}--help${NC}                    Show this help"
     echo ""
     echo -e "${CYAN}Output:${NC}"
-    echo -e "  HTML Report:  ${YELLOW}target/site/scoverage/index.html${NC}"
+    echo -e "  HTML Report:  ${YELLOW}target/scoverage-report/index.html${NC}"
     echo -e "  XML Report:   ${YELLOW}target/scoverage.xml${NC}"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
@@ -214,7 +214,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}✅ Package coverage complete!${NC}"
     echo ""
     echo -e "${CYAN}📊 Reports generated:${NC}"
-    echo -e "  HTML: ${YELLOW}target/site/scoverage/index.html${NC}"
+    echo -e "  HTML: ${YELLOW}target/scoverage-report/index.html${NC}"
     echo -e "  XML:  ${YELLOW}target/scoverage.xml${NC}"
     echo ""
     echo -e "${CYAN}💡 Tips:${NC}"
@@ -224,7 +224,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     
     if [ "$OPEN_REPORT" = true ]; then
         echo ""
-        open_report "$PROJECT_ROOT/target/site/scoverage/index.html"
+        open_report "$PROJECT_ROOT/target/scoverage-report/index.html"
     fi
 else
     echo -e "${RED}❌ Package coverage failed (exit code: $EXIT_CODE)${NC}"

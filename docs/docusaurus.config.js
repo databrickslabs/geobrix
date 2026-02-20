@@ -12,10 +12,10 @@ const config = {
   tagline: 'High-performance spatial processing library for Databricks',
   favicon: 'img/favicon.ico',
 
-  // Set the production url of your site here
-  url: 'https://your-docusaurus-site.example.com',
-  // baseUrl: use './' for static zip (open index.html from any folder); '/' for deployed site
-  baseUrl: process.env.DOCS_STATIC_ZIP === '1' ? './' : '/',
+  // Production URL for GitHub Pages: https://databrickslabs.github.io/geobrix/
+  url: 'https://databrickslabs.github.io',
+  // baseUrl: use './' for static zip (open index.html from any folder); '/geobrix/' for GitHub Pages project site
+  baseUrl: process.env.DOCS_STATIC_ZIP === '1' ? './' : '/geobrix/',
   // Hash router for static zip so file:// opens work (pathname is then in hash, e.g. #/)
   ...(process.env.DOCS_STATIC_ZIP === '1' ? { future: { experimental_router: 'hash' } } : {}),
 

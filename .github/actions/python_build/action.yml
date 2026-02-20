@@ -5,6 +5,9 @@ inputs:
   run_lint:
     description: 'Run Python lint (isort, black, flake8) and fail build on errors? true or false. Typically true only for PRs targeting main.'
     default: 'false'
+  enable_coverage:
+    description: 'Run pytest with coverage (--cov) and emit coverage.xml for Codecov? true or false.'
+    default: 'false'
 runs:
   using: "composite"
   steps:
@@ -75,10 +78,14 @@ runs:
     - name: Test and build python package
       shell: bash
       run: |
-        # 'pytest' or 'python3 -m unittest'?
         cd python/geobrix
         python -m build
-        pytest
+        if [ "${{ inputs.enable_coverage }}" = "true" ]; then
+          pip install pytest-cov -q
+          pytest --cov=src --cov-report=xml --cov-report=term -q
+        else
+          pytest
+        fi
     - name: Copy python artifacts to GH Actions run
       shell: bash
       run: cp python/geobrix/dist/*.whl staging/build-artifacts

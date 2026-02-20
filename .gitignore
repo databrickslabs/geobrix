@@ -16,6 +16,7 @@
 /metastore_db/
 /derby.log
 /test-logs/
+/.codeql/
 /notebooks/tests/databricks_cluster_config.env
 /ci-logs/
 /.cache/

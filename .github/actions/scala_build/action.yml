@@ -64,10 +64,14 @@ runs:
             sudo cp scripts/gdal311/libgdalalljni.so /usr/lib/libgdalalljni.so
             # - save apt archives for next run (workflow caches .cache/apt-archives)
             sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
+        # With coverage: run full scoverage lifecycle (instrument + test + report) then build JAR.
+        # report-only in pom has no data from normal install; scoverage:report produces it.
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
           shell: bash
-          run: mvn -q clean install -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+          run: |
+            mvn -q clean scoverage:report -Druntime=standard -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+            mvn -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Test and build the scala JAR - skip tests is false, coverage disabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'
           shell: bash

@@ -1,6 +1,7 @@
 name: build main
 # Runs on: push to any branch (except python/** and scala/**), all PRs, and manual trigger.
 # Scala doc tests are excluded from the main Scala run; they run in a separate step only on push to main.
+# Manual run: Actions → "build main" → Run workflow (workflow_dispatch).
 on:
   push:
     branches-ignore:
@@ -9,7 +10,7 @@ on:
   pull_request:
     branches:
       - "**"
-  workflow_dispatch:
+  workflow_dispatch: {}
 permissions:
   contents: read
   id-token: write
@@ -60,20 +61,29 @@ jobs:
       - name: build scala
         uses: ./.github/actions/scala_build
         with:
-          enable_coverage: "false"
+          enable_coverage: "true"
           fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
       - name: build python
         uses: ./.github/actions/python_build
         with:
           run_lint: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+          enable_coverage: "true"
       - name: Rebuild doc-snippet-inventory
         run: python3 scripts/ci/inventory-doc-snippets.py
+      # Disabled until project launch. Re-enable by restoring the condition below.
       - name: Scala doc tests (main only, after everything else)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: false  # Disabled until project launch
         env:
           GBX_SAMPLE_DATA_ROOT: ${{ runner.temp }}/geobrix-sample-data
         run: |
           mkdir -p "$GBX_SAMPLE_DATA_ROOT"
           sudo -E mvn -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
+      # Upload Scala + Python coverage so README codecov badge shows %. Requires repo secret CODECOV_TOKEN.
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/scoverage.xml,target/scoverage-report/scoverage.xml,python/geobrix/coverage.xml
+          fail_ci_if_error: false
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts

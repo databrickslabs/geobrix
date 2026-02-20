@@ -24,8 +24,8 @@ show_help() {
     echo -e "  ${YELLOW}/abs/path/file.log${NC}        → /abs/path/file.log"
     echo ""
     echo -e "${CYAN}Output:${NC}"
-    echo -e "  HTML Report:  ${YELLOW}target/scoverage-report/index.html${NC}"
-    echo -e "  XML Report:   ${YELLOW}target/scoverage-report/scoverage.xml${NC}"
+    echo -e "  HTML Report:  ${YELLOW}target/site/scoverage/index.html${NC} or ${YELLOW}target/scoverage-report/index.html${NC}"
+    echo -e "  XML Report:   ${YELLOW}target/scoverage.xml${NC}"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:coverage:scala${NC}"
@@ -83,10 +83,10 @@ echo ""
 show_separator
 if [ "$REPORT_ONLY" = true ]; then
     echo -e "${CYAN}Generating report from existing data...${NC}"
-    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scoverage:report-only -Dminimum.coverage=$MIN_COVERAGE"
+    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
 else
-    echo -e "${CYAN}Running tests with coverage...${NC}"
-    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn clean package -DskipTests=false -Dminimum.coverage=$MIN_COVERAGE"
+    echo -e "${CYAN}Running tests with coverage (instrumented build + test + report)...${NC}"
+    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn clean scoverage:report -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dsuites='com.databricks.labs.gbx.*'"
 fi
 show_separator
 echo ""
@@ -100,12 +100,27 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}✅ Coverage analysis complete!${NC}"
     echo ""
     echo -e "${CYAN}📊 Reports generated:${NC}"
-    echo -e "  HTML: ${YELLOW}target/site/scoverage/index.html${NC}"
-    echo -e "  XML:  ${YELLOW}target/scoverage.xml${NC}"
-    
-    if [ "$OPEN_REPORT" = true ]; then
-        echo ""
-        open_report "$PROJECT_ROOT/target/site/scoverage/index.html"
+    # Plugin may write to target/site/scoverage (Maven report) or target/scoverage-report
+    HTML_REPORT=""
+    for candidate in "$PROJECT_ROOT/target/site/scoverage/index.html" "$PROJECT_ROOT/target/scoverage-report/index.html"; do
+        if [ -f "$candidate" ]; then
+            HTML_REPORT="$candidate"
+            break
+        fi
+    done
+    if [ -n "$HTML_REPORT" ]; then
+        echo -e "  HTML: ${YELLOW}${HTML_REPORT#$PROJECT_ROOT/}${NC}"
+        if [ "$OPEN_REPORT" = true ]; then
+            echo ""
+            open_report "$HTML_REPORT"
+        fi
+    else
+        echo -e "  HTML: ${YELLOW}(check target/site/scoverage/ or target/scoverage-report/)${NC}"
+    fi
+    if [ -f "$PROJECT_ROOT/target/scoverage.xml" ]; then
+        echo -e "  XML:  ${YELLOW}target/scoverage.xml${NC}"
+    elif [ -f "$PROJECT_ROOT/target/scoverage-report/scoverage.xml" ]; then
+        echo -e "  XML:  ${YELLOW}target/scoverage-report/scoverage.xml${NC}"
     fi
 else
     echo -e "${RED}❌ Coverage analysis failed (exit code: $EXIT_CODE)${NC}"

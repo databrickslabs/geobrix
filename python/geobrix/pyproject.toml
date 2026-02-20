@@ -25,7 +25,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://databricks.com/learn/labs"
 Repository = "https://github.com/databrickslabs/geobrix"
-#Documentation = "https://databrickslabs.github.io/geobrix/"
+Documentation = "https://databrickslabs.github.io/geobrix/"
 
 [project.optional-dependencies]
 dev = [

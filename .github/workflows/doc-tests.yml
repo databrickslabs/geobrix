@@ -1,18 +1,17 @@
 name: Documentation Tests
 
-# Run documentation tests to ensure all code examples are valid
-# These tests verify the single source of truth between docs and tests
+# DOCUMENTATION UNIT TESTS ARE DISABLED UNTIL PROJECT LAUNCH.
+# The jobs below are skipped (if: false). Re-enable by removing the condition
+# and this notice when ready for launch.
+#
+# When enabled: run documentation tests to ensure all code examples are valid
+# and verify the single source of truth between docs and tests.
 #
 # NOTE: This workflow EXCLUDES docs/tests-dbr/ which contains Databricks Runtime
 # integration tests. Those tests require DBR-specific SQL functions (st_*, etc.)
-# and must be run in a Databricks environment. They are excluded from:
-# - Regular CI/CD pipelines
-# - Coverage reporting
-# - Automated test runs
+# and must be run in a Databricks environment.
 #
-# Runs at the end: triggered after "build main" completes on PRs to main, so
-# failing doc tests do not interrupt build, test, or coverage. Also runnable
-# manually via workflow_dispatch.
+# Runs after "build main" completes; also runnable manually via workflow_dispatch.
 
 on:
   # Run after build main completes (PR or push to any branch). Doc tests run
@@ -26,11 +25,18 @@ permissions:
   contents: read
 
 jobs:
+  doc-tests-disabled-notice:
+    name: Notice
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "## Documentation unit tests are disabled until project launch" >> $GITHUB_STEP_SUMMARY
+          echo "Re-enable in .github/workflows/doc-tests.yml and build_main.yml when ready." >> $GITHUB_STEP_SUMMARY
+
   test-python-docs:
     name: Python Documentation Tests
     runs-on: ubuntu-latest
-    # When triggered by workflow_run, use the same ref as the build that completed
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: false  # Disabled until project launch
 
     steps:
       - name: Checkout code
@@ -102,7 +108,7 @@ jobs:
   validate-structure:
     name: Validate Documentation Structure
     runs-on: ubuntu-latest
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    if: false  # Disabled until project launch
 
     steps:
       - name: Checkout code
@@ -143,7 +149,7 @@ jobs:
   report:
     name: Generate Test Report
     runs-on: ubuntu-latest
-    needs: [test-python-docs, validate-structure]
+    needs: [doc-tests-disabled-notice, test-python-docs, validate-structure]
     if: always()
     
     steps:

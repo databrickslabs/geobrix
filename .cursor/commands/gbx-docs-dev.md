@@ -11,6 +11,7 @@ bash .cursor/commands/gbx-docs-dev.sh [OPTIONS]
 ## Options
 
 - `--port <number>` - Custom port (default: 3000)
+- `--no-stop-first` - If port is in use, do not stop existing server (default: stop first, then start)
 - `--log <path>` - Write output to log file
 - `--help` - Display help message
 
@@ -25,12 +26,12 @@ bash .cursor/commands/gbx-docs-dev.sh [OPTIONS]
 # Start dev server with hot reload
 bash .cursor/commands/gbx-docs-dev.sh
 
-# Custom port
+# Custom port (by default, stops existing server on 3000 if in use)
 bash .cursor/commands/gbx-docs-dev.sh --port 3001
 ```
 
 ## Notes
 
-- Requires any existing docs server to be stopped first (`gbx:docs:stop`).
+- By default, if port is in use the command runs `gbx:docs:stop` then starts the dev server. Use `--no-stop-first` to disable that and fail if the port is busy.
 - Uses the same PID file as other docs commands, so `gbx:docs:stop` stops the dev server too.
 - Access at: http://localhost:3000 (or your port).

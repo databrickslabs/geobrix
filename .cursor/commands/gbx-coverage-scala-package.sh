@@ -33,7 +33,10 @@ show_help() {
     echo -e "  ${GREEN}util${NC}                 Utilities (502 statements, ~45 sec)"
     echo ""
     echo -e "${CYAN}Options:${NC}"
+    echo -e "  ${GREEN}--class <name>${NC}             Run only this test class (e.g. GDALRasterizeTest); comma-separated for multiple"
     echo -e "  ${GREEN}--min-coverage <percent>${NC}  Minimum coverage threshold (default: 90)"
+    echo -e "  ${GREEN}--clean${NC}                   Run 'mvn clean' before coverage (default: incremental, no clean)"
+    echo -e "  ${GREEN}--parallel${NC}                Run tests in parallel (scoverage:test -T 1C then report-only)"
     echo -e "  ${GREEN}--log <path>${NC}              Write output to log file"
     echo -e "  ${GREEN}--open${NC}                    Open HTML report in browser"
     echo -e "  ${GREEN}--help${NC}                    Show this help"
@@ -44,19 +47,23 @@ show_help() {
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:coverage:scala-package rasterx --open${NC}"
+    echo -e "  ${YELLOW}gbx:coverage:scala-package rasterx.operations --class GDALRasterizeTest${NC}  # one class only (fast)"
     echo -e "  ${YELLOW}gbx:coverage:scala-package gridx --min-coverage 85${NC}"
     echo -e "  ${YELLOW}gbx:coverage:scala-package vectorx --log vectorx-cov.log${NC}"
     echo ""
     echo -e "${CYAN}Time Savings:${NC}"
     echo -e "  Full coverage:   ~10 minutes (all tests)"
     echo -e "  Package-only:    ~1-3 minutes (filtered tests)"
-    echo -e "  Savings:         ~7-9 minutes (70-90% faster)"
+    echo -e "  ${GREEN}--class <Name>${NC}:  ~10-30 sec (single test class) ⭐"
     echo ""
 }
 
 # Parse arguments
 PACKAGE=""
+CLASS_NAMES=""
 MIN_COVERAGE="90"
+CLEAN=false
+PARALLEL=false
 LOG_PATH=""
 OPEN_REPORT=false
 
@@ -68,9 +75,21 @@ fi
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --class)
+            CLASS_NAMES="$2"
+            shift 2
+            ;;
         --min-coverage)
             MIN_COVERAGE="$2"
             shift 2
+            ;;
+        --clean)
+            CLEAN=true
+            shift
+            ;;
+        --parallel)
+            PARALLEL=true
+            shift
             ;;
         --log)
             LOG_PATH=$(resolve_log_path "$2")
@@ -170,7 +189,7 @@ map_package_to_suite() {
     esac
 }
 
-# Validate package and get suite pattern
+# Validate package and get suite pattern (or single-class pattern)
 SUITE_PATTERN=$(map_package_to_suite "$PACKAGE")
 if [ -z "$SUITE_PATTERN" ]; then
     echo -e "${RED}❌ Error: Unknown package '$PACKAGE'${NC}"
@@ -184,6 +203,26 @@ if [ -z "$SUITE_PATTERN" ]; then
     exit 1
 fi
 
+# If --class given, restrict to those test class(es) for faster runs
+if [ -n "$CLASS_NAMES" ]; then
+    # Package prefix is suite pattern with ".*" stripped
+    PKG_PREFIX="${SUITE_PATTERN%.*}"
+    SUITE_PATTERN=""
+    for name in $(echo "$CLASS_NAMES" | tr ',' ' '); do
+        name=$(echo "$name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        [ -z "$name" ] && continue
+        case "$name" in
+            com.*) full="$name" ;;
+            *)     full="${PKG_PREFIX}.${name}" ;;
+        esac
+        if [ -n "$SUITE_PATTERN" ]; then
+            SUITE_PATTERN="$SUITE_PATTERN,$full"
+        else
+            SUITE_PATTERN="$full"
+        fi
+    done
+fi
+
 cd "$PROJECT_ROOT"
 
 show_banner "📦 GeoBrix: Package-Targeted Scala Coverage"
@@ -191,6 +230,7 @@ check_docker
 setup_log_file "$LOG_PATH"
 
 echo -e "${CYAN}📦 Package: ${GREEN}$PACKAGE${NC}"
+[ -n "$CLASS_NAMES" ] && echo -e "${CYAN}🎯 Class(es) only: ${YELLOW}$CLASS_NAMES${NC}"
 echo -e "${CYAN}🎯 Test suite: ${YELLOW}$SUITE_PATTERN${NC}"
 echo -e "${CYAN}🎯 Minimum coverage: ${YELLOW}$MIN_COVERAGE%${NC}"
 
@@ -202,11 +242,25 @@ echo -e "${YELLOW}      Use 'gbx:coverage:scala' for full coverage${NC}"
 show_separator
 echo ""
 
-# Run Maven with suite filter
-MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn clean package -DskipTests=false -Dsuites='$SUITE_PATTERN' -Dminimum.coverage=$MIN_COVERAGE"
-
-docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
-EXIT_CODE=$?
+# Run scoverage with suite filter; use DOCKER_MAVEN_ENV (MAVEN_OPTS for speed). Default: incremental (no clean).
+CLEAN_PREFIX=""
+[ "$CLEAN" = true ] && CLEAN_PREFIX="clean "
+if [ "$PARALLEL" = true ]; then
+    echo -e "${CYAN}Step 1: Running package tests in parallel (scoverage:test -T 1C)...${NC}"
+    MVN_TEST="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$SUITE_PATTERN'"
+    docker exec geobrix-dev /bin/bash -c "$MVN_TEST"
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "${CYAN}Step 2: Generating report (report-only)...${NC}"
+        MVN_REPORT="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
+        docker exec geobrix-dev /bin/bash -c "$MVN_REPORT"
+        EXIT_CODE=$?
+    fi
+else
+    MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:report -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dsuites='$SUITE_PATTERN'"
+    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    EXIT_CODE=$?
+fi
 
 echo ""
 show_separator
@@ -214,18 +268,34 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}✅ Package coverage complete!${NC}"
     echo ""
     echo -e "${CYAN}📊 Reports generated:${NC}"
-    echo -e "  HTML: ${YELLOW}target/scoverage-report/index.html${NC}"
-    echo -e "  XML:  ${YELLOW}target/scoverage.xml${NC}"
+    # Plugin may write to target/site/scoverage or target/scoverage-report (same as gbx-coverage-scala)
+    HTML_REPORT=""
+    for candidate in "$PROJECT_ROOT/target/site/scoverage/index.html" "$PROJECT_ROOT/target/scoverage-report/index.html"; do
+        if [ -f "$candidate" ]; then
+            HTML_REPORT="$candidate"
+            break
+        fi
+    done
+    if [ -n "$HTML_REPORT" ]; then
+        echo -e "  HTML: ${YELLOW}${HTML_REPORT#$PROJECT_ROOT/}${NC}"
+        echo -e "  Link: $(print_report_link "$HTML_REPORT")"
+        if [ "$OPEN_REPORT" = true ]; then
+            echo ""
+            open_report "$HTML_REPORT"
+        fi
+    else
+        echo -e "  HTML: ${YELLOW}(check target/site/scoverage/ or target/scoverage-report/)${NC}"
+    fi
+    if [ -f "$PROJECT_ROOT/target/scoverage.xml" ]; then
+        echo -e "  XML:  ${YELLOW}target/scoverage.xml${NC}"
+    elif [ -f "$PROJECT_ROOT/target/scoverage-report/scoverage.xml" ]; then
+        echo -e "  XML:  ${YELLOW}target/scoverage-report/scoverage.xml${NC}"
+    fi
     echo ""
     echo -e "${CYAN}💡 Tips:${NC}"
     echo -e "  ${YELLOW}• Use 'gbx:coverage:scala --report-only' to view without re-running${NC}"
     echo -e "  ${YELLOW}• Use 'gbx:coverage:gaps scala' to analyze coverage gaps${NC}"
     echo -e "  ${YELLOW}• Target other packages to improve overall coverage${NC}"
-    
-    if [ "$OPEN_REPORT" = true ]; then
-        echo ""
-        open_report "$PROJECT_ROOT/target/scoverage-report/index.html"
-    fi
 else
     echo -e "${RED}❌ Package coverage failed (exit code: $EXIT_CODE)${NC}"
 fi

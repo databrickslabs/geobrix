@@ -12,10 +12,10 @@ const config = {
   tagline: 'High-performance spatial processing library for Databricks',
   favicon: 'img/favicon.ico',
 
-  // Production URL for GitHub Pages: https://databrickslabs.github.io/geobrix/
-  url: 'https://databrickslabs.github.io',
-  // baseUrl: use './' for static zip (open index.html from any folder); '/geobrix/' for GitHub Pages project site
-  baseUrl: process.env.DOCS_STATIC_ZIP === '1' ? './' : '/geobrix/',
+  // Production URL: private repo → https://friendly-fiesta-2eo74ww.pages.github.io/ ; public → https://databrickslabs.github.io/geobrix/
+  url: process.env.DOCS_PUBLIC_PAGES === '1' ? 'https://databrickslabs.github.io' : 'https://friendly-fiesta-2eo74ww.pages.github.io',
+  // baseUrl: './' for static zip; '/' for private Pages (site at root); '/geobrix/' for public project site
+  baseUrl: process.env.DOCS_STATIC_ZIP === '1' ? './' : (process.env.DOCS_PUBLIC_PAGES === '1' ? '/geobrix/' : '/'),
   // Hash router for static zip so file:// opens work (pathname is then in hash, e.g. #/)
   ...(process.env.DOCS_STATIC_ZIP === '1' ? { future: { experimental_router: 'hash' } } : {}),
 

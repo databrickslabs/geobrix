@@ -14,6 +14,8 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--min-coverage <percent>${NC}  Minimum coverage threshold (default: 80)"
     echo -e "  ${GREEN}--report-only${NC}             Generate report from existing data (no re-test)"
+    echo -e "  ${GREEN}--clean${NC}                   Run 'mvn clean' before coverage (default: incremental, no clean)"
+    echo -e "  ${GREEN}--parallel${NC}                Run tests in parallel (scoverage:test -T 1C then report-only; faster on multi-core)"
     echo -e "  ${GREEN}--log <path>${NC}              Write output to log file"
     echo -e "  ${GREEN}--open${NC}                    Open HTML report in browser after generation"
     echo -e "  ${GREEN}--help${NC}                    Show this help"
@@ -29,7 +31,8 @@ show_help() {
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:coverage:scala${NC}"
-    echo -e "  ${YELLOW}gbx:coverage:scala --min-coverage 75 --open${NC}"
+    echo -e "  ${YELLOW}gbx:coverage:scala --parallel${NC}   # parallel tests, then report"
+    echo -e "  ${YELLOW}gbx:coverage:scala --clean${NC}      # full clean + coverage"
     echo -e "  ${YELLOW}gbx:coverage:scala --report-only --open${NC}"
     echo ""
 }
@@ -37,6 +40,8 @@ show_help() {
 # Parse arguments
 MIN_COVERAGE="80"
 REPORT_ONLY=false
+CLEAN=false
+PARALLEL=false
 LOG_PATH=""
 OPEN_REPORT=false
 
@@ -48,6 +53,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --report-only)
             REPORT_ONLY=true
+            shift
+            ;;
+        --clean)
+            CLEAN=true
+            shift
+            ;;
+        --parallel)
+            PARALLEL=true
             shift
             ;;
         --log)
@@ -81,18 +94,36 @@ echo -e "${CYAN}🎯 Minimum coverage: ${YELLOW}$MIN_COVERAGE%${NC}"
 
 echo ""
 show_separator
+SUITES='com.databricks.labs.gbx.*'
 if [ "$REPORT_ONLY" = true ]; then
     echo -e "${CYAN}Generating report from existing data...${NC}"
-    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
+    MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
+    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    EXIT_CODE=$?
+elif [ "$PARALLEL" = true ]; then
+    echo -e "${CYAN}Step 1: Running tests in parallel (scoverage:test -T 1C)...${NC}"
+    CLEAN_PREFIX=""
+    [ "$CLEAN" = true ] && CLEAN_PREFIX="clean "
+    MVN_TEST="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$SUITES'"
+    docker exec geobrix-dev /bin/bash -c "$MVN_TEST"
+    EXIT_CODE=$?
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "${CYAN}Step 2: Generating report (report-only)...${NC}"
+        MVN_REPORT="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
+        docker exec geobrix-dev /bin/bash -c "$MVN_REPORT"
+        EXIT_CODE=$?
+    fi
 else
     echo -e "${CYAN}Running tests with coverage (instrumented build + test + report)...${NC}"
-    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn clean scoverage:report -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dsuites='com.databricks.labs.gbx.*'"
+    [ "$CLEAN" = true ] && echo -e "${YELLOW}Using 'clean' (use default for incremental)${NC}"
+    CLEAN_PREFIX=""
+    [ "$CLEAN" = true ] && CLEAN_PREFIX="clean "
+    MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:report -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dsuites='$SUITES'"
+    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    EXIT_CODE=$?
 fi
 show_separator
 echo ""
-
-docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
-EXIT_CODE=$?
 
 echo ""
 show_separator
@@ -110,6 +141,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     done
     if [ -n "$HTML_REPORT" ]; then
         echo -e "  HTML: ${YELLOW}${HTML_REPORT#$PROJECT_ROOT/}${NC}"
+        echo -e "  Link: $(print_report_link "$HTML_REPORT")"
         if [ "$OPEN_REPORT" = true ]; then
             echo ""
             open_report "$HTML_REPORT"

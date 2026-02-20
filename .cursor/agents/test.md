@@ -21,6 +21,7 @@ You are a specialized subagent focused exclusively on GeoBrix test execution and
 # Unit tests (non-docs)
 gbx:test:scala
 gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'
+gbx:test:scala --suites '...SpatialRefOpsTest,...GTiff_DataSourceTest'  # comma-separated
 gbx:test:scala --log test-logs/scala-unit.log
 
 # Documentation tests

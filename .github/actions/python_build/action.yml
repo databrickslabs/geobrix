@@ -82,9 +82,9 @@ runs:
         python -m build
         if [ "${{ inputs.enable_coverage }}" = "true" ]; then
           pip install pytest-cov -q
-          pytest --cov=src --cov-report=xml --cov-report=term -q
+          pytest -m "not integration" --cov=src --cov-report=xml --cov-report=term -q
         else
-          pytest
+          pytest -m "not integration"
         fi
     - name: Copy python artifacts to GH Actions run
       shell: bash

@@ -9,6 +9,10 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+# Maven env for Docker runs: unset conflicting opts, set Jupyter dirs, and tune Maven/JVM for coverage
+# MAVEN_OPTS speeds up builds and scoverage (G1GC + 4G heap when running in geobrix-dev)
+export DOCKER_MAVEN_ENV="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export MAVEN_OPTS=\"-Xmx4G -XX:+UseG1GC\""
+
 check_docker() {
     if ! docker ps &> /dev/null; then
         echo -e "${RED}❌ Error: Docker is not running${NC}"
@@ -78,6 +82,17 @@ show_banner() {
 
 show_separator() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
+# Print a clickable file:// URL for the report. Plain URL is clickable in most terminals/IDEs.
+# Usage: print_report_link "/absolute/path/to/index.html"
+print_report_link() {
+    local report_path="$1"
+    local abs_path
+    abs_path="$(cd "$(dirname "$report_path")" 2>/dev/null && pwd)/$(basename "$report_path")"
+    [ -n "$abs_path" ] || abs_path="$report_path"
+    # file:// URL (three slashes for absolute path) - most UIs make this clickable
+    printf 'file://%s\n' "$abs_path"
 }
 
 open_report() {

@@ -13,7 +13,7 @@ on:
 jobs:
   analyze:
     name: Analyze
-    runs-on: linux-ubuntu-latest
+    runs-on: larger
     permissions:
       actions: read
       contents: read

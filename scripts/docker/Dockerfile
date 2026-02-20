@@ -148,7 +148,7 @@ RUN pip3 install gdal==$(gdal-config --version) --break-system-packages
 RUN pip3 install gdal==$(gdal-config --version) --break-system-packages
 
 # Final library installs (build = PyPA python3 -m build for sdist/wheel)
-RUN pip3 install black isort build py4j requests keplergl ipython pyspark==$SPARK_VERSION --break-system-packages \
+RUN pip3 install black isort flake8 build py4j requests keplergl ipython pyspark==$SPARK_VERSION --break-system-packages \
     && pip3 install pytest pytest-cov pytest-mock nest-asyncio pytest-asyncio --break-system-packages \
     && pip3 install geopandas pystac-client planetary-computer rasterio rioxarray --break-system-packages \
     && pip3 install pdal --break-system-packages

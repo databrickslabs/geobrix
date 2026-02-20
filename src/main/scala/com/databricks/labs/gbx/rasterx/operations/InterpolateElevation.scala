@@ -1,5 +1,9 @@
 package com.databricks.labs.gbx.rasterx.operations
 
+/** Delaunay triangulation and Z interpolation for DTM. Used by RST_DTMFromGeoms.
+ * Not yet implemented for production (RST_DTMFromGeoms is unregistered).
+ * Excluded from scoverage (see pom.xml excludedFiles).
+ */
 import com.databricks.labs.gbx.vectorx.jts.{JTS, JTSConformingDelaunayTriangulationBuilder}
 import org.locationtech.jts.geom.util.{LinearComponentExtracter, PolygonExtracter}
 import org.locationtech.jts.geom._

@@ -3,7 +3,7 @@
 [![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
 [![codecov](https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg)](https://codecov.io/gh/databrickslabs/geobrix)
 [![docs](https://github.com/databrickslabs/geobrix/actions/workflows/doc-tests.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/doc-tests.yml)
-[![documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://databrickslabs.github.io/geobrix/)
+[![documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://friendly-fiesta-2eo74ww.pages.github.io/)
 [![scala](https://img.shields.io/badge/scala-2.13-red.svg)](https://www.scala-lang.org/)
 [![python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-Databricks-blue.svg)](LICENSE)

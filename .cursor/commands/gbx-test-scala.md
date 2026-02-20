@@ -10,7 +10,8 @@ bash .cursor/commands/gbx-test-scala.sh [OPTIONS]
 
 ## Options
 
-- `--suite <pattern>` - Run specific test suite (default: all non-docs tests)
+- `--suite <pattern>` - Run specific test suite (single pattern)
+- `--suites <list>` - Run specific test suites (comma-separated class/package patterns; same as `-Dsuites=`)
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
 - `--verbose` - Show detailed Maven output
 - `--help` - Display help message
@@ -23,6 +24,9 @@ bash .cursor/commands/gbx-test-scala.sh
 
 # Run specific test suite
 bash .cursor/commands/gbx-test-scala.sh --suite com.databricks.labs.gbx.rasterx.expressions.*
+
+# Run multiple suites (comma-separated)
+bash .cursor/commands/gbx-test-scala.sh --suites 'com.databricks.labs.gbx.rasterx.operations.SpatialRefOpsTest,com.databricks.labs.gbx.rasterx.ds.GTiff_DataSourceTest'
 
 # Run with logging
 bash .cursor/commands/gbx-test-scala.sh --log scala-tests.log

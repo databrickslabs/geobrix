@@ -51,7 +51,9 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 1. **`gbx:test:scala`** - Scala unit tests (non-docs)
    - Location: `src/test/scala/`
    - Excludes: `tests.docs.scala.*`
+   - Options: `--suite <pattern>`, `--suites <comma-separated>`, `--log`, `--verbose`
    - Example: `gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'`
+   - Example: `gbx:test:scala --suites '...SpatialRefOpsTest,...GTiff_DataSourceTest'`
 
 2. **`gbx:test:python`** - Python unit tests (non-docs)
    - Location: `python/geobrix/test/`
@@ -113,9 +115,11 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 
 6. **`gbx:coverage:scala-package`** - Coverage for specific package ⚡ NEW!
    - Time: 1-3 minutes (vs 10 min for full)
-   - Packages: `rasterx`, `gridx`, `vectorx`, `ds`, `expressions`, `util`
+   - Packages: `rasterx`, `gridx`, `vectorx`, `ds`, `expressions`, `util` (and sub-packages e.g. `rasterx.operations`)
+   - Default: incremental (no `clean`). Options: `--clean`, `--parallel` (scoverage:test -T 1C then report-only). Same `MAVEN_OPTS` in Docker as full coverage.
    - Purpose: Fast targeted coverage during development
    - Example: `gbx:coverage:scala-package rasterx --open`
+   - Example: `gbx:coverage:scala-package rasterx.operations --parallel`
 
 #### Baseline Coverage (Weekly)
 
@@ -129,10 +133,13 @@ When an **agent** runs a `gbx:*` command via the Shell tool, the agent should us
 
 8. **`gbx:coverage:scala`** - Scala unit test coverage (scoverage)
    - Tests: `src/test/scala/` (excludes docs tests)
-   - Time: ~10 minutes ⚠️ Use weekly or via `baseline`
+   - Time: ~10 minutes ⚠️ Use weekly or via `baseline`; use `--parallel` or incremental to speed up
+   - Default: incremental (no `clean`); use `--clean` for full rebuild. Docker runs use `MAVEN_OPTS=-Xmx4G -XX:+UseG1GC`.
+   - Options: `--min-coverage`, `--report-only`, `--clean`, `--parallel` (scoverage:test -T 1C then report-only)
    - Default threshold: 80%
-   - Output: `target/scoverage-report/index.html`
+   - Output: `target/scoverage-report/index.html` or `target/site/scoverage/index.html`
    - Example: `gbx:coverage:scala --min-coverage 90 --open`
+   - Example: `gbx:coverage:scala --parallel` (parallel tests, then report)
    - Example: `gbx:coverage:scala --report-only --open` (5 sec, uses existing data)
 
 9. **`gbx:coverage:scala-docs`** - Scala documentation test coverage

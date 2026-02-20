@@ -46,6 +46,23 @@ Running full Scala coverage after every small change:
 
 ---
 
+### 1b. Speed tips (Maven / scoverage in Docker)
+
+When running coverage via `gbx:coverage:scala` or `gbx:coverage:scala-package` **in Docker**:
+
+- **MAVEN_OPTS**: Commands set `MAVEN_OPTS=-Xmx4G -XX:+UseG1GC` so Maven and scoverage run with a 4G heap and G1GC for faster builds (see `common.sh` → `DOCKER_MAVEN_ENV`).
+- **Incremental (no clean by default)**: Default is `mvn scoverage:report` (no `clean`). Only re-instruments changed files. Use `--clean` when you need a full rebuild (e.g. after pulling or changing deps).
+- **Parallel tests**: Use `--parallel` to run tests with one thread per core (`scoverage:test -T 1C`) then generate the report with `scoverage:report-only` (report step is sequential but fast).
+
+```bash
+gbx:coverage:scala              # incremental, no clean
+gbx:coverage:scala --parallel   # parallel tests then report
+gbx:coverage:scala --clean      # full clean + coverage
+gbx:coverage:scala-package rasterx --parallel
+```
+
+---
+
 ### 2. Target Specific Packages (FOCUSED)
 
 **Command**: `gbx:coverage:scala-package <package>`
@@ -263,14 +280,17 @@ gbx:coverage:python --open
 ### Scala Coverage Commands
 
 ```bash
-# Full run (10 min) - use sparingly
+# Full run (10 min) - use sparingly; default is incremental (no clean)
 gbx:coverage:scala --open
+gbx:coverage:scala --parallel    # parallel tests then report (faster on multi-core)
+gbx:coverage:scala --clean      # force full clean + coverage
 
 # Report-only (seconds) - use frequently  
 gbx:coverage:scala --report-only --open
 
-# Package-targeted (2-3 min) - use daily
+# Package-targeted (2-3 min) - use daily; same --clean/--parallel options
 gbx:coverage:scala-package rasterx --open
+gbx:coverage:scala-package rasterx.operations --parallel
 gbx:coverage:scala-package gridx --open
 gbx:coverage:scala-package vectorx --open
 
@@ -280,6 +300,8 @@ gbx:coverage:gaps scala
 # Baseline (10 min) - use weekly
 gbx:coverage:baseline scala --open
 ```
+
+Docker runs use `MAVEN_OPTS=-Xmx4G -XX:+UseG1GC` (see Speed tips above).
 
 ### Python Coverage Commands
 

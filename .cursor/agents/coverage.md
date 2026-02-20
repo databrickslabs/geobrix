@@ -53,9 +53,12 @@ gbx:coverage:baseline python --open  # Full coverage, ~30 sec
 
 ```bash
 # Scala full coverage (~10 min - use weekly or for baseline)
+# Default: incremental (no clean). Docker uses MAVEN_OPTS=-Xmx4G -XX:+UseG1GC.
 gbx:coverage:scala
 gbx:coverage:scala --min-coverage 90
 gbx:coverage:scala --open
+gbx:coverage:scala --parallel    # parallel tests then report (faster)
+gbx:coverage:scala --clean       # full clean + coverage
 gbx:coverage:scala --report-only --open  # Fast, uses existing data
 gbx:coverage:scala --log test-logs/scala-coverage.log
 
@@ -92,6 +95,7 @@ gbx:coverage:python-docs --path docs/tests/python/api/
 - **Default threshold**: 80%
 - **Metrics**: Statement coverage, branch coverage
 - **Exclusions**: `tests.docs.scala.*` (documentation test utilities)
+- **Speed (Docker)**: Commands set `MAVEN_OPTS=-Xmx4G -XX:+UseG1GC`. Default is incremental (no `clean`); use `--clean` for full rebuild, `--parallel` for parallel tests then report.
 
 ### Python: pytest-cov
 - **Plugin**: `pytest-cov`

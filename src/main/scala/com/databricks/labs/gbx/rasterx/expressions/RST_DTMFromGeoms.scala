@@ -1,5 +1,9 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+/** DTM from points and breaklines (Delaunay interpolation + rasterize).
+ * Not yet implemented for production: expression is not registered in functions.
+ * Excluded from scoverage (see pom.xml excludedFiles).
+ */
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.operations.{GDALRasterize, InterpolateElevation}

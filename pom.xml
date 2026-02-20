@@ -379,6 +379,8 @@
                             <scalaVersion>${scala.version}</scalaVersion>
                             <!-- Exclude documentation test utilities from coverage -->
                             <excludedPackages>tests.docs.scala.*</excludedPackages>
+                            <!-- Exclude not-yet-implemented / experimental (not registered, excluded from coverage) -->
+                            <excludedFiles>.*RST_DTMFromGeoms\.scala;.*InterpolateElevation\.scala</excludedFiles>
                         </configuration>
                     </plugin>
                 </plugins>

@@ -44,7 +44,17 @@ GeoBrix uses a custom Maven configuration to optimize Docker container performan
 
 ---
 
-### 2. Default Profile: skipScoverage
+### 2. MAVEN_OPTS for Maven in Docker (gbx commands)
+
+When **Cursor commands** run Maven inside the `geobrix-dev` container (e.g. `gbx:test:scala`, `gbx:coverage:scala`, `gbx:coverage:scala-package`), they set:
+
+- **`MAVEN_OPTS=-Xmx4G -XX:+UseG1GC`** (via `DOCKER_MAVEN_ENV` in `.cursor/commands/common.sh`)
+
+This gives Maven and scoverage a 4G heap and G1GC for faster builds and coverage runs. You do not need to set this yourself when using the gbx commands; it is applied automatically.
+
+---
+
+### 3. Default Profile: skipScoverage
 
 **Purpose**: Faster day-to-day compilation and testing without coverage instrumentation overhead.
 

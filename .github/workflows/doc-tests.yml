@@ -29,7 +29,7 @@ permissions:
 jobs:
   doc-tests-disabled-notice:
     name: Notice
-    runs-on: ubuntu-latest
+    runs-on: larger
     steps:
       - run: |
           echo "## Documentation unit tests are disabled until project launch" >> $GITHUB_STEP_SUMMARY
@@ -37,7 +37,7 @@ jobs:
 
   test-python-docs:
     name: Python Documentation Tests
-    runs-on: ubuntu-latest
+    runs-on: larger
     if: false  # Disabled until project launch
 
     steps:
@@ -90,7 +90,7 @@ jobs:
 
   test-scala-docs:
     name: Scala Documentation Tests
-    runs-on: ubuntu-latest
+    runs-on: larger
     if: false  # Disabled until Scala doc tests are created
     
     steps:
@@ -112,7 +112,7 @@ jobs:
 
   validate-structure:
     name: Validate Documentation Structure
-    runs-on: ubuntu-latest
+    runs-on: larger
     if: false  # Disabled until project launch
 
     steps:
@@ -154,7 +154,7 @@ jobs:
 
   report:
     name: Generate Test Report
-    runs-on: ubuntu-latest
+    runs-on: larger
     needs: [doc-tests-disabled-notice, test-python-docs, validate-structure]
     if: always()
     

@@ -12,6 +12,7 @@ Faster, targeted coverage analysis when working on a specific package. Runs only
 |---------------|------|----------|
 | Full coverage | ~10 min | Weekly baseline, pre-release |
 | Package-targeted | ~1-3 min | Daily development, package improvement |
+| **--class &lt;Name&gt;** | **~10-30 sec** | **Single test class (e.g. after adding tests)** |
 | **Savings** | **~7-9 min** | **70-90% faster** |
 
 ## Usage
@@ -33,7 +34,10 @@ gbx:coverage:scala-package <package> [options]
 
 ## Options
 
+- `--class <name>` - Run only this test class (e.g. `GDALRasterizeTest`); comma-separated for multiple. Much faster than full package.
 - `--min-coverage <percent>` - Minimum coverage threshold (default: 90)
+- `--clean` - Run `mvn clean` before coverage (default: incremental, no clean)
+- `--parallel` - Run tests in parallel (`scoverage:test -T 1C` then `report-only`)
 - `--log <path>` - Write output to log file
 - `--open` - Open HTML report in browser after generation
 - `--help` - Show help message
@@ -44,6 +48,9 @@ gbx:coverage:scala-package <package> [options]
 ```bash
 # Run coverage for rasterx package
 gbx:coverage:scala-package rasterx
+
+# Single test class only (fast; e.g. to see coverage impact of new tests)
+gbx:coverage:scala-package rasterx.operations --class GDALRasterizeTest --open
 
 # With auto-open report
 gbx:coverage:scala-package rasterx --open
@@ -79,10 +86,10 @@ gbx:coverage:scala-package rasterx --open
 
 ## Output
 
-**HTML Report**: `target/scoverage-report/index.html`
+**HTML Report**: `target/scoverage-report/index.html` (or `target/site/scoverage/index.html`)
 **XML Report**: `target/scoverage.xml`
 
-The reports show coverage for the entire codebase, but only the selected package's tests were executed.
+Uses the same `scoverage:report` flow as `gbx:coverage:scala` (with `-Druntime=standard`), so the report is always generated. The reports show coverage for the entire codebase, but only the selected package's tests were executed.
 
 ## When to Use
 

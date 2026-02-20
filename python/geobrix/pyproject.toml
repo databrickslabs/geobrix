@@ -25,7 +25,7 @@ dependencies = [
 [project.urls]
 Homepage = "https://databricks.com/learn/labs"
 Repository = "https://github.com/databrickslabs/geobrix"
-Documentation = "https://databrickslabs.github.io/geobrix/"
+Documentation = "https://friendly-fiesta-2eo74ww.pages.github.io/"
 
 [project.optional-dependencies]
 dev = [
@@ -48,6 +48,13 @@ databricks = [
 
 [tool.pytest.ini_options]
 pythonpath = [ "src" ]
+markers = [
+    "integration: tests that need network or long-running setup (excluded from CI)",
+]
+filterwarnings = [
+    "ignore:Support for class-based .* config.* deprecated:",
+    "ignore:Neither gdal.UseExceptions:FutureWarning",
+]
 
 [build-system]
 requires = ["setuptools>=61.2", "wheel"]

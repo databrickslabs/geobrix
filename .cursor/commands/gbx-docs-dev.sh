@@ -10,6 +10,7 @@ source "$SCRIPT_DIR/common.sh"
 
 # Default values
 PORT=3000
+STOP_FIRST=true
 LOG_FILE=""
 
 # Help message
@@ -24,6 +25,7 @@ USAGE:
 
 OPTIONS:
     --port <number>      Custom port (default: 3000)
+    --no-stop-first      Do not stop existing server if port in use (default: stop first, then start)
     --log <path>         Write output to log file
     --help               Display this help message
 
@@ -31,7 +33,7 @@ EXAMPLES:
     # Start dev server (dynamic refresh)
     bash .cursor/commands/gbx-docs-dev.sh
 
-    # Custom port
+    # Custom port (stop-first is default)
     bash .cursor/commands/gbx-docs-dev.sh --port 3001
 
 NOTES:
@@ -50,6 +52,10 @@ while [[ $# -gt 0 ]]; do
         --port)
             PORT="$2"
             shift 2
+            ;;
+        --no-stop-first)
+            STOP_FIRST=false
+            shift
             ;;
         --log)
             LOG_FILE=$(resolve_log_path "$2")
@@ -75,9 +81,19 @@ fi
 print_banner "📚 GeoBrix: Docs Development (Hot Reload)"
 
 if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
-    echo -e "${RED}❌ Port $PORT is already in use!${NC}"
-    echo -e "${YELLOW}   Stop the existing server first: gbx:docs:stop${NC}"
-    exit 1
+    if [ "$STOP_FIRST" = true ]; then
+        echo -e "${CYAN}Port $PORT in use; stopping existing server...${NC}"
+        bash "$SCRIPT_DIR/gbx-docs-stop.sh"
+        sleep 2
+        if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo -e "${RED}❌ Port $PORT still in use after stop. Free it manually: kill -9 \$(lsof -ti:$PORT)${NC}"
+            exit 1
+        fi
+    else
+        echo -e "${RED}❌ Port $PORT is already in use!${NC}"
+        echo -e "${YELLOW}   Run: gbx:docs:stop   or   gbx:docs:dev (default: stop first)${NC}"
+        exit 1
+    fi
 fi
 
 cd "$PROJECT_ROOT/docs" || exit 1

@@ -96,20 +96,21 @@ if [ -n "$PIDS" ]; then
     STOPPED=true
 fi
 
-# Also kill any node processes serving on typical ports
+# Kill any process listening on docs ports (port-based is reliable when PID files are missing)
 for PORT in 3000 3001 3002 3003; do
-    PID=$(lsof -ti:$PORT 2>/dev/null)
-    if [ -n "$PID" ]; then
-        PROCESS_NAME=$(ps -p $PID -o comm= 2>/dev/null)
-        if [[ "$PROCESS_NAME" == *"node"* ]]; then
-            echo -e "${CYAN}   Stopping process on port $PORT (PID: $PID)...${NC}"
-            kill $PID 2>/dev/null
-            sleep 1
-            if ps -p $PID > /dev/null 2>&1; then
-                kill -9 $PID 2>/dev/null
+    PIDS=$(lsof -ti:$PORT 2>/dev/null)
+    if [ -n "$PIDS" ]; then
+        echo -e "${CYAN}   Stopping process(es) on port $PORT (PID(s): $PIDS)...${NC}"
+        for pid in $PIDS; do
+            kill $pid 2>/dev/null
+        done
+        sleep 1
+        for pid in $PIDS; do
+            if ps -p $pid > /dev/null 2>&1; then
+                kill -9 $pid 2>/dev/null
             fi
-            STOPPED=true
-        fi
+        done
+        STOPPED=true
     fi
 done
 

@@ -54,11 +54,11 @@ runs:
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
           shell: bash
-          run: sudo mvn -q clean install
+          run: sudo mvn -q clean install -Dsuites='com.databricks.labs.gbx.*'
         - name: Test and build the scala JAR - skip tests is false, coverage disabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'
           shell: bash
-          run: sudo mvn -q clean install -Dscoverage.skip
+          run: sudo mvn -q clean install -Dscoverage.skip -Dsuites='com.databricks.labs.gbx.*'
         - name: Build the scala JAR - skip tests is true
           if: inputs.skip_tests == 'true'
           shell: bash

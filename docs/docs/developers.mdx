@@ -202,12 +202,14 @@ Workflows live in **`.github/workflows/`**. They define when and how tests and b
 
 ### When things run
 
-- **Documentation tests** (`doc-tests.yml`) — Run **after the "build main" workflow completes** (on the same ref), so failing doc tests do not block the main build. Also triggerable manually via workflow_dispatch.
-- **Main build** (`build_main.yml`) — Runs on push (except to `python/**` and `scala/**`) and on pull requests; builds Scala and Python.
+- **Main build** (`build_main.yml`) — Runs on **push to `main`** and on **all pull requests** (not on push to other branches, e.g. `beta/0.2.0`). Runs checkout → build Scala → build Python → rebuild doc-snippet-inventory → (on push to main only) Scala doc tests → upload artifacts.
+  - **Scala tests** in the main run use `-Dsuites='com.databricks.labs.gbx.*'`, so only unit/integration tests run; **Scala doc tests** (`docs/tests/scala/`) are excluded and do not run in this step.
+  - **Scala doc tests** run in a **separate step** only when the event is **push to `main`**. That step sets `GBX_SAMPLE_DATA_ROOT` and runs `mvn test -Dsuites='tests.docs.scala.*,docs.tests.scala.*'`, so doc tests run after the rest of the build and have sample-data env configured.
+- **Documentation tests** (`doc-tests.yml`) — Run **after the "build main" workflow completes** (on the same ref), so failing doc tests do not block the main build. Python doc tests and structure validation run here; Scala doc tests are run by `build_main` (see above). Also triggerable manually via workflow_dispatch.
 - **Branch-specific builds** — `build_python.yml` runs on push to `python/**`; `build_scala.yml` runs on push to `scala/**`.
 - **CodeQL** (`codeql-analysis.yml`) — Security analysis on push and pull_request to `main`.
 - **Publish / release** — Triggered by release or publish events (see the workflow files).
 
 ### Summary
 
-Doc tests are **unit-tested on PRs to main** (with path filters) so that documentation changes are validated before merge without running doc tests on every commit or on feature branches. For full details and triggers, see the YAML files in `.github/workflows/`.
+The main build does **not** run on push to branches other than `main` (e.g. `beta/0.2.0`); it runs on push to `main` and on all PRs. Scala doc tests run only on **push to `main`**, in a separate step after the build, with `GBX_SAMPLE_DATA_ROOT` set. For full details and triggers, see the YAML files in `.github/workflows/`.

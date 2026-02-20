@@ -9,6 +9,6 @@ updates:
       interval: "weekly"
 
   - package-ecosystem: "pip"
-    directory: "/python"
+    directory: "/python/geobrix"
     schedule:
       interval: "weekly"

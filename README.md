@@ -69,10 +69,11 @@ The following are available and call the “gdal” reader with some options exp
 
 #### GeoTiff ["gtiff_gdal"]
 
-Read GeoTIFF raster files - the most common geospatial raster format. This is a named OGR Reader, sets “driverName” → "[GTiff](https://gdal.org/en/stable/drivers/raster/gtiff.html)":
+Read GeoTIFF raster files - the most common geospatial raster format. This is a named GDAL Reader, sets “driverName” → "[GTiff](https://gdal.org/en/stable/drivers/raster/gtiff.html)":
 
 * GDAL auto-associates GeoTiff and BigTiff extensions to this driver, e.g. __.tif__ files
 * With the named reader, the driver is specified to be used regardless of extension
+* Can use the other available "gdal" reader options
 
 ```commandline
 (
@@ -82,11 +83,9 @@ Read GeoTIFF raster files - the most common geospatial raster format. This is a 
 )
 ```
 
-# TODO: Update
+The output will look something like the following, with `tile` column now ready to use with other RasterX APIs.
 
-The output will look something like the following, maintaining attribute columns and having 3 columns for geometry: ‘geom_0’, ‘geom_0_srid’, and ‘geom_0_srid_proj’.
-
-<img src="resources/images/readers/shapefile_reader.png" width="50%" />
+<img src="resources/images/readers/gtiff_reader.png" width="50%" />
 
 ### Vector [“ogr”]
 

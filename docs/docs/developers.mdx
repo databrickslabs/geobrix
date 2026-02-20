@@ -225,7 +225,7 @@ Workflows live in **`.github/workflows/`**. They define when and how tests and b
 
 ### Initiating a build from a branch
 
-To run the main build on your current branch (e.g. `beta/0.2.0`):
+Pushing to a branch (except `python/**` and `scala/**`) **successfully triggers** the **build main** workflow. To run the main build on your current branch (e.g. `beta/0.2.0`):
 
 - **Push and watch** — **`gbx:ci:push`**. Pushes the current branch to origin (push triggers **build main**), then streams the run.
 - **Trigger after push** — **`gbx:ci:trigger`**. Pushes, then prompts to trigger **build main** (workflow_dispatch).
@@ -234,6 +234,16 @@ To run the main build on your current branch (e.g. `beta/0.2.0`):
 - **Fetch logs** — **`gbx:ci:logs`** or **`gbx:ci:logs RUN_ID`** (saves to `ci-logs/`).
 - **First-time setup** — **`gbx:ci:setup`** to install and authenticate the GitHub CLI (`gh`).
 
+### Build environment and caching
+
+The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `python_build/`) use a **shared environment** so that when both run in the same job (e.g. **build main**), caches stay warm:
+
+- **Apt** — Both actions restore `.cache/apt-archives` at the start of the GDAL step and save it at the end. Workflows cache `.cache/apt-archives` with a key derived from both action files, so one cache serves Scala and Python; changing either action’s apt steps invalidates the cache.
+- **Pip** — Both use the same pip cache key (`.ci-pip-cache-key`, created by the workflow from ref + matrix). That avoids duplicate pip installs when Scala runs first and Python reuses the same interpreter and cache.
+- **Maven** — Scala uses `setup-java` with `cache: 'maven'` and `cache-dependency-path: 'pom.xml'`.
+
+The two actions intentionally mirror each other (same apt repos, same GDAL/natives, same pip stack: numpy, pyspark, gdal). Scala adds JDK, Maven, `zip`/`unzip`, and the JNI `.so` copy; Python adds pytest and `pip install python/geobrix`. A future refactor could extract a single “setup GDAL + pip” composite used by both; for now the duplication is small and the structure is aligned for easy comparison.
+
 ### Summary
 
-The main build runs on **push to any branch** (except `python/**`, `scala/**`), on all PRs, and via **workflow_dispatch**. Use **`gbx:ci:push`** to push and watch the build. Scala doc tests run only on **push to `main`**, in a separate step with `GBX_SAMPLE_DATA_ROOT` set. For full details and triggers, see the YAML files in `.github/workflows/`.
+The main build runs on **push to any branch** (except `python/**`, `scala/**`) — push triggers are successful — and on all PRs and via **workflow_dispatch**. Use **`gbx:ci:push`** to push and watch the build. Scala doc tests run only on **push to `main`**, in a separate step with `GBX_SAMPLE_DATA_ROOT` set. For full details and triggers, see the YAML files in `.github/workflows/`.

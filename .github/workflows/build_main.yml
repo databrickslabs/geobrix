@@ -49,6 +49,14 @@ jobs:
     steps:
       - name: checkout code
         uses: actions/checkout@v5
+      - name: Create pip cache key file
+        run: |
+          echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
+      - name: Cache apt packages
+        uses: actions/cache@v4
+        with:
+          path: .cache/apt-archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}
       - name: build scala
         uses: ./.github/actions/scala_build
         with:

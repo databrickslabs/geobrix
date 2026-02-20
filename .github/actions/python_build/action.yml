@@ -1,17 +1,23 @@
 name: build geobrix python
 description: build geobrix python
+# Shares env with scala_build (apt + pip). When run after scala_build in same job, caches are warm.
 runs:
   using: "composite"
   steps:
     - name: Configure python interpreter
       uses: actions/setup-python@v5
       with:
-        cache: 'pip' # caches dependencies for faster subsequent runs
-        cache-dependency-path: '**/pyproject.toml'
+        cache: 'pip'
+        cache-dependency-path: '.ci-pip-cache-key'
         python-version: ${{ matrix.python }}
-    - name: Install GDAL system dependencies
+    - name: Add packaged GDAL dependencies
       shell: bash
       run: |
+        # - restore apt cache from workspace (workflow caches .cache/apt-archives; same key as scala_build)
+        mkdir -p .cache/apt-archives
+        if [ -n "$(ls -A .cache/apt-archives 2>/dev/null)" ]; then
+          sudo cp -n .cache/apt-archives/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+        fi
         # - update apt
         sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-backports main universe multiverse restricted"
         sudo add-apt-repository -y "deb http://archive.ubuntu.com/ubuntu $(lsb_release -sc)-updates main universe multiverse restricted"
@@ -21,9 +27,11 @@ runs:
         sudo apt-get install -y software-properties-common
         sudo add-apt-repository -y ppa:ubuntugis/ubuntugis-unstable
         sudo apt-get update -y
-        # - install natives
+        # - install natives (same set as scala_build minus zip/unzip and .so copy)
         sudo apt-get -o DPkg::Lock::Timeout=-1 install -y unixodbc libcurl3-gnutls libsnappy-dev libopenjp2-7
         sudo apt-get -o DPkg::Lock::Timeout=-1 install -y libgdal-dev gdal-bin python3-gdal
+        # - save apt archives for next run (workflow caches .cache/apt-archives)
+        sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
     - name: Install python dependencies
       shell: bash
       run: |

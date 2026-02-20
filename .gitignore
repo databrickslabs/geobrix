@@ -16,7 +16,10 @@
 /derby.log
 /test-logs/
 /notebooks/tests/databricks_cluster_config.env
-/ci-logs/# macOS files
+/ci-logs/
+/.cache/
+.ci-pip-cache-key
+# macOS files
 .DS_Store
 **/.DS_Store# Python cache and compiled files
 __pycache__/

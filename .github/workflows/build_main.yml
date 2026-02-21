@@ -66,7 +66,8 @@ jobs:
       - name: build scala
         uses: ./.github/actions/scala_build
         with:
-          enable_coverage: "true"
+          # Disable scoverage in main build to keep CI ~10–15 min (full Scala coverage is ~30+ min). Run "Upload coverage to Codecov" workflow manually for Scala+Python coverage.
+          enable_coverage: "false"
           fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
       - name: build python
         uses: ./.github/actions/python_build
@@ -85,20 +86,20 @@ jobs:
           sudo -E mvn -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
       - name: Stage coverage for upload job
         run: |
-          mkdir -p .coverage-artifacts
-          cp -f target/scoverage.xml .coverage-artifacts/ 2>/dev/null || true
-          cp -f target/scoverage-report/scoverage.xml .coverage-artifacts/scoverage-report.xml 2>/dev/null || true
-          cp -f python/geobrix/coverage.xml .coverage-artifacts/ 2>/dev/null || true
-          if [ -z "$(ls -A .coverage-artifacts 2>/dev/null)" ]; then
+          mkdir -p coverage-reports
+          cp -f target/scoverage.xml coverage-reports/ 2>/dev/null || true
+          cp -f target/scoverage-report/scoverage.xml coverage-reports/scoverage-report.xml 2>/dev/null || true
+          cp -f python/geobrix/coverage.xml coverage-reports/ 2>/dev/null || true
+          if [ -z "$(ls -A coverage-reports 2>/dev/null)" ]; then
             echo "No coverage files found. Expected Scala: target/scoverage.xml or target/scoverage-report/scoverage.xml; Python: python/geobrix/coverage.xml"
             exit 1
           fi
-          ls -la .coverage-artifacts/
+          ls -la coverage-reports/
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v5
         with:
           name: coverage-reports
-          path: .coverage-artifacts/
+          path: coverage-reports
           if-no-files-found: warn
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts
@@ -115,10 +116,10 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           name: coverage-reports
-          path: .coverage-artifacts
+          path: coverage-reports
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: .coverage-artifacts/scoverage.xml,.coverage-artifacts/scoverage-report.xml,.coverage-artifacts/coverage.xml
+          directory: coverage-reports
           fail_ci_if_error: false

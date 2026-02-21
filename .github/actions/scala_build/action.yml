@@ -11,6 +11,9 @@ inputs:
   fail_on_scalastyle:
     description: 'Fail build on ScalaStyle errors? true or false. Typically true only for PRs targeting main.'
     default: 'false'
+  suite_pattern:
+    description: 'Optional -Dsuites= value (e.g. com.databricks.labs.gbx.rasterx.*). If empty, uses com.databricks.labs.gbx.*'
+    default: ''
 runs:
   using: "composite"
   steps:
@@ -67,23 +70,31 @@ runs:
             sudo cp scripts/gdal311/libgdalalljni.so /usr/lib/libgdalalljni.so
             # - save apt archives for next run (workflow caches .cache/apt-archives)
             sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
-        # With coverage: 3-step flow for speed. (1) Parallel tests with instrumentation; (2) one aggregated report (report-only, no re-run); (3) package without re-running tests.
+        # With coverage: 3-step flow. When suite_pattern is set (e.g. parallel-by-package CI), skip report-only and package (caller will merge and upload).
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
           shell: bash
           run: |
-            mvn -T 1C -q clean scoverage:test -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }} -Druntime=large
-            mvn -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
-            mvn -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+            SUITES="${{ inputs.suite_pattern }}"
+            [ -z "$SUITES" ] && SUITES="com.databricks.labs.gbx.*"
+            mvn -T 1C -q clean scoverage:test -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }} -Druntime=large
+            if [ -z "${{ inputs.suite_pattern }}" ]; then
+              mvn -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
+              mvn -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+            fi
         - name: Test and build the scala JAR - skip tests is false, coverage disabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'
           shell: bash
-          run: mvn -T 1C -q clean install -Dscoverage.skip -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+          run: |
+            SUITES="${{ inputs.suite_pattern }}"
+            [ -z "$SUITES" ] && SUITES="com.databricks.labs.gbx.*"
+            mvn -T 1C -q clean install -Dscoverage.skip -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Build the scala JAR - skip tests is true
           if: inputs.skip_tests == 'true'
           shell: bash
           run: mvn -q clean install -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Copy build artifacts to local staging
+          if: inputs.suite_pattern == ''
           shell: bash
           run: |
             # add .jar + .so
@@ -91,6 +102,7 @@ runs:
             cp target/geobrix*.jar staging/build-artifacts
             cp scripts/gdal311/libgdalalljni.so staging/build-artifacts
         - name: Copy user artifacts local staging
+          if: inputs.suite_pattern == ''
           shell: bash
           run: |
             # add zipped resources (for now)

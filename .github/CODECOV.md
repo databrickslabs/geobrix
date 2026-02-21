@@ -23,6 +23,6 @@ Both require the repo secret **CODECOV_TOKEN** (from Codecov → this repo → S
 | Scala (scoverage) | `target/scoverage.xml`, `target/scoverage-report/scoverage.xml` |
 | Python (pytest-cov) | `python/geobrix/coverage.xml` |
 
-In **build main**, the build job stages these into `.coverage-artifacts/` and uploads that as a workflow artifact; the codecov job downloads it and sends the files to Codecov.
+The build job stages files into `coverage-reports/`; the codecov job downloads that directory and passes it to Codecov (`directory: coverage-reports`).
 
 If the badge does not update, confirm `CODECOV_TOKEN` is set and that the "Upload to Codecov" job in the Actions run succeeded (check the run logs).

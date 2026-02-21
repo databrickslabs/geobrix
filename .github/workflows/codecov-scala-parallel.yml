@@ -1,0 +1,93 @@
+# Optional: Run Scala coverage by package in parallel, merge, then upload to Codecov.
+# Faster wall-clock time than a single job running all tests (~10–15 min vs ~30–45 min).
+# Trigger: workflow_dispatch only (or add schedule/on push if desired).
+#
+# Requires: CODECOV_TOKEN secret.
+# Merge script: scripts/ci/merge_scoverage.py
+# Design: .github/docs/scala-coverage-parallel-design.md
+
+name: Scala coverage (parallel by package)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  coverage-package:
+    name: Coverage ${{ matrix.package }}
+    runs-on: larger
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [rasterx, gridx, vectorx, ds, expressions, util]
+        python: [3.12.3]
+        pytest: [8.4.2]
+        numpy: [2.1.3]
+        gdal: [3.11.4]
+        spark: [4.0.0]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Create pip cache key file
+        run: |
+          echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
+
+      - name: Cache apt packages
+        uses: actions/cache@v5
+        with:
+          path: .cache/apt-archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml') }}
+
+      - name: Build Scala with coverage (one package)
+        uses: ./.github/actions/scala_build
+        with:
+          skip_tests: "false"
+          enable_coverage: "true"
+          fail_on_scalastyle: "false"
+          suite_pattern: "com.databricks.labs.gbx.${{ matrix.package }}.*"
+
+      - name: Upload scoverage for package
+        uses: actions/upload-artifact@v5
+        with:
+          name: scoverage-${{ matrix.package }}
+          path: target/scoverage.xml
+          if-no-files-found: warn
+
+  merge-and-upload:
+    name: Merge and upload to Codecov
+    runs-on: larger
+    needs: coverage-package
+    if: always() && needs.coverage-package.result == 'success'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Download all package coverage artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: coverage-artifacts
+          pattern: scoverage-*
+          merge-multiple: false
+
+      - name: Merge scoverage XMLs
+        run: |
+          mkdir -p merged
+          python3 scripts/ci/merge_scoverage.py -o merged/scoverage.xml coverage-artifacts/
+          ls -la merged/
+
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: merged/scoverage.xml
+          fail_ci_if_error: false

@@ -118,14 +118,8 @@ jobs:
           name: coverage-reports
           path: coverage-reports
       - name: Upload to Codecov
-        if: secrets.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           directory: coverage-reports
           fail_ci_if_error: false
-      - name: Skip Codecov (no token)
-        if: secrets.CODECOV_TOKEN == ''
-        run: |
-          echo "::warning::CODECOV_TOKEN secret is not set. Add it in repo Settings → Secrets and variables → Actions to enable coverage upload and the README badge."
-          echo "See .github/CODECOV.md for how to get the token from https://codecov.io"

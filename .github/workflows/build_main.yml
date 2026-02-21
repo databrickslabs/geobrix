@@ -89,11 +89,17 @@ jobs:
           cp -f target/scoverage.xml .coverage-artifacts/ 2>/dev/null || true
           cp -f target/scoverage-report/scoverage.xml .coverage-artifacts/scoverage-report.xml 2>/dev/null || true
           cp -f python/geobrix/coverage.xml .coverage-artifacts/ 2>/dev/null || true
+          if [ -z "$(ls -A .coverage-artifacts 2>/dev/null)" ]; then
+            echo "No coverage files found. Expected Scala: target/scoverage.xml or target/scoverage-report/scoverage.xml; Python: python/geobrix/coverage.xml"
+            exit 1
+          fi
+          ls -la .coverage-artifacts/
       - name: Upload coverage artifacts
         uses: actions/upload-artifact@v5
         with:
           name: coverage-reports
           path: .coverage-artifacts/
+          if-no-files-found: warn
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts
 

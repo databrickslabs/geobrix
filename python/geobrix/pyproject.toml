@@ -46,6 +46,13 @@ databricks = [
     "databricks-sdk",
 ]
 
+[tool.coverage.run]
+# Exclude sample-data bundle from coverage total so reported % reflects main library (gridx, rasterx, vectorx)
+omit = ["*sample/_bundle.py"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover"]
+
 [tool.pytest.ini_options]
 pythonpath = [ "src" ]
 markers = [

@@ -418,7 +418,7 @@
                         <configuration>
                             <minimumCoverage>${minimum.coverage}</minimumCoverage>
                             <failOnMinimumCoverage>false</failOnMinimumCoverage>
-                            <scalaVersion>${scala.version}</scala.version>
+                            <scalaVersion>${scala.version}</scalaVersion>
                             <excludedPackages>tests.docs.scala.*</excludedPackages>
                             <excludedFiles>.*RST_DTMFromGeoms\.scala;.*InterpolateElevation\.scala</excludedFiles>
                         </configuration>

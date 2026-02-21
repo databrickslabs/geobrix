@@ -387,6 +387,46 @@
             </build>
         </profile>
         <profile>
+            <!-- Same as standard; use when running on larger GitHub runner (e.g. -Druntime=large). -->
+            <id>large</id>
+            <activation>
+                <property>
+                    <name>runtime</name>
+                    <value>large</value>
+                </property>
+            </activation>
+            <properties>
+                <scala.version>2.13.12</scala.version>
+                <scala.compat.version>2.13</scala.compat.version>
+                <spark.version>4.0.0</spark.version>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.scoverage</groupId>
+                        <artifactId>scoverage-maven-plugin</artifactId>
+                        <version>2.1.0</version>
+                        <executions>
+                            <execution>
+                                <id>scoverage-report</id>
+                                <phase>package</phase>
+                                <goals>
+                                    <goal>report-only</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <minimumCoverage>${minimum.coverage}</minimumCoverage>
+                            <failOnMinimumCoverage>false</failOnMinimumCoverage>
+                            <scalaVersion>${scala.version}</scala.version>
+                            <excludedPackages>tests.docs.scala.*</excludedPackages>
+                            <excludedFiles>.*RST_DTMFromGeoms\.scala;.*InterpolateElevation\.scala</excludedFiles>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
             <!-- Fast build without coverage (default via settings.xml) -->
             <id>skipScoverage</id>
             <activation>

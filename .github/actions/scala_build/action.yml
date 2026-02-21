@@ -21,6 +21,9 @@ runs:
             distribution: 'zulu'
             cache: 'maven'
             cache-dependency-path: 'pom.xml'
+        - name: Set Maven opts for coverage and parallel builds
+          shell: bash
+          run: echo "MAVEN_OPTS=-Xmx4g -XX:+UseG1GC" >> $GITHUB_ENV
         - name: Configure python interpreter
           uses: actions/setup-python@v5
           with:
@@ -64,18 +67,15 @@ runs:
             sudo cp scripts/gdal311/libgdalalljni.so /usr/lib/libgdalalljni.so
             # - save apt archives for next run (workflow caches .cache/apt-archives)
             sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
-        # With coverage: run full scoverage lifecycle (instrument + test + report) then build JAR.
-        # report-only in pom has no data from normal install; scoverage:report produces it.
+        # With coverage: run scoverage and package in one go. -Druntime=large (pom profile for larger runner). -T 1C = 1 thread per core. -DskipTests so package phase does not re-run tests.
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
           shell: bash
-          run: |
-            mvn -q clean scoverage:report -Druntime=standard -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
-            mvn -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+          run: mvn -T 1C -q clean scoverage:report package -DskipTests -Druntime=large -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Test and build the scala JAR - skip tests is false, coverage disabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'
           shell: bash
-          run: mvn -q clean install -Dscoverage.skip -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+          run: mvn -T 1C -q clean install -Dscoverage.skip -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Build the scala JAR - skip tests is true
           if: inputs.skip_tests == 'true'
           shell: bash

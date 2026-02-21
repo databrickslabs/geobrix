@@ -82,6 +82,19 @@ runs:
               mvn -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
               mvn -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
             fi
+        - name: Print Scala coverage summary
+          if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true' && inputs.suite_pattern == ''
+          shell: bash
+          run: |
+            if [ -f target/scoverage.xml ]; then
+              rate=$(sed -n 's/.*statement-rate="\([^"]*\)".*/\1/p' target/scoverage.xml | head -1)
+              inv=$(sed -n 's/.*statements-invoked="\([^"]*\)".*/\1/p' target/scoverage.xml | head -1)
+              tot=$(sed -n 's/.*statement-count="\([^"]*\)".*/\1/p' target/scoverage.xml | head -1)
+              echo ""
+              echo "============================== Scala coverage ==============================="
+              echo "Scala coverage: ${rate}% (${inv}/${tot} statements)"
+              echo "=============================================================================="
+            fi
         - name: Test and build the scala JAR - skip tests is false, coverage disabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'
           shell: bash

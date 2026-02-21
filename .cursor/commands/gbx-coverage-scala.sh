@@ -16,6 +16,7 @@ show_help() {
     echo -e "  ${GREEN}--report-only${NC}             Generate report from existing data (no re-test)"
     echo -e "  ${GREEN}--clean${NC}                   Run 'mvn clean' before coverage (default: incremental, no clean)"
     echo -e "  ${GREEN}--parallel${NC}                Run tests in parallel (scoverage:test -T 1C then report-only; faster on multi-core)"
+    echo -e "  ${GREEN}--by-package${NC}              Run coverage per package in sequence, merge, then report (same as CI package matrix; no parallel in one container)"
     echo -e "  ${GREEN}--log <path>${NC}              Write output to log file"
     echo -e "  ${GREEN}--open${NC}                    Open HTML report in browser after generation"
     echo -e "  ${GREEN}--help${NC}                    Show this help"
@@ -42,11 +43,16 @@ MIN_COVERAGE="80"
 REPORT_ONLY=false
 CLEAN=false
 PARALLEL=false
+BY_PACKAGE=false
 LOG_PATH=""
 OPEN_REPORT=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --by-package)
+            BY_PACKAGE=true
+            shift
+            ;;
         --min-coverage)
             MIN_COVERAGE="$2"
             shift 2
@@ -97,11 +103,43 @@ show_separator
 SUITES='com.databricks.labs.gbx.*'
 # report-only with one aggregated report (aggregateOnly avoids many per-module HTMLs)
 SCOV_REPORT_ONLY="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn -q scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true"
+GBX_PACKAGES="rasterx gridx vectorx ds expressions util"
 
 if [ "$REPORT_ONLY" = true ]; then
     echo -e "${CYAN}Generating report from existing data...${NC}"
     docker exec geobrix-dev /bin/bash -c "$SCOV_REPORT_ONLY"
     EXIT_CODE=$?
+elif [ "$BY_PACKAGE" = true ]; then
+    echo -e "${CYAN}Running coverage by package (sequence), then merge and report...${NC}"
+    mkdir -p "$PROJECT_ROOT/coverage-artifacts"
+    docker exec geobrix-dev /bin/bash -c "mkdir -p /root/geobrix/coverage-artifacts"
+    CLEAN_PREFIX=""
+    [ "$CLEAN" = true ] && CLEAN_PREFIX="clean "
+    EXIT_CODE=0
+    for pkg in $GBX_PACKAGES; do
+        echo -e "${CYAN}Package: ${GREEN}$pkg${NC}"
+        PKG_SUITE="com.databricks.labs.gbx.${pkg}.*"
+        MVN_PKG="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$PKG_SUITE'"
+        docker exec geobrix-dev /bin/bash -c "$MVN_PKG" || { EXIT_CODE=1; echo -e "${RED}$pkg failed${NC}"; break; }
+        docker exec geobrix-dev /bin/bash -c "cp -f /root/geobrix/target/scoverage.xml /root/geobrix/coverage-artifacts/scoverage-${pkg}.xml 2>/dev/null || true"
+        [ "$CLEAN" = true ] && CLEAN_PREFIX=""  # only clean first run
+    done
+    if [ $EXIT_CODE -eq 0 ] && [ -n "$(ls "$PROJECT_ROOT/coverage-artifacts"/scoverage-*.xml 2>/dev/null)" ]; then
+        echo -e "${CYAN}Merging scoverage XMLs...${NC}"
+        python3 "$PROJECT_ROOT/scripts/ci/merge_scoverage.py" -o "$PROJECT_ROOT/target/scoverage.xml" "$PROJECT_ROOT/coverage-artifacts/"
+        echo -e "${CYAN}Generating report (report-only)...${NC}"
+        docker exec geobrix-dev /bin/bash -c "$SCOV_REPORT_ONLY"
+        EXIT_CODE=$?
+        if [ $EXIT_CODE -eq 0 ] && [ -f "$PROJECT_ROOT/target/scoverage.xml" ]; then
+            rate=$(sed -n 's/.*statement-rate="\([^"]*\)".*/\1/p' "$PROJECT_ROOT/target/scoverage.xml" | head -1)
+            inv=$(sed -n 's/.*statements-invoked="\([^"]*\)".*/\1/p' "$PROJECT_ROOT/target/scoverage.xml" | head -1)
+            tot=$(sed -n 's/.*statement-count="\([^"]*\)".*/\1/p' "$PROJECT_ROOT/target/scoverage.xml" | head -1)
+            echo ""
+            echo "============================== Scala coverage ==============================="
+            echo "Scala coverage: ${rate}% (${inv}/${tot} statements)"
+            echo "=============================================================================="
+        fi
+    fi
 elif [ "$PARALLEL" = true ]; then
     echo -e "${CYAN}Step 1: Running tests in parallel (scoverage:test -T 1C)...${NC}"
     CLEAN_PREFIX=""

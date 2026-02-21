@@ -12,6 +12,7 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:scala${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
+    echo -e "  ${GREEN}--by-package${NC}           Run tests per package in sequence (rasterx, gridx, vectorx, ds, expressions, util); reports pass/fail per package"
     echo -e "  ${GREEN}--suite <pattern>${NC}       Run specific test suite (single pattern)"
     echo -e "  ${GREEN}--suites <list>${NC}        Run specific test suites (comma-separated class/package patterns)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
@@ -35,9 +36,14 @@ show_help() {
 SUITE_PATTERN=""
 LOG_PATH=""
 VERBOSE=""
+BY_PACKAGE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --by-package)
+            BY_PACKAGE=true
+            shift
+            ;;
         --suite)
             SUITE_PATTERN="$2"
             shift 2
@@ -73,39 +79,68 @@ show_banner "🧪 GeoBrix: Scala Tests (Non-Docs)"
 check_docker
 setup_log_file "$LOG_PATH"
 
-# Build Maven command (DOCKER_MAVEN_ENV sets MAVEN_OPTS for faster Maven in Docker)
-MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn test -PskipScoverage -DskipTests=false"
+# Package list for --by-package (same as CI matrix)
+GBX_PACKAGES="rasterx gridx vectorx ds expressions util"
 
-if [ -n "$SUITE_PATTERN" ]; then
-    echo -e "${CYAN}🎯 Running suite: ${YELLOW}$SUITE_PATTERN${NC}"
-    MVN_CMD="$MVN_CMD -Dsuites='$SUITE_PATTERN'"
+if [ "$BY_PACKAGE" = true ]; then
+    echo -e "${CYAN}🎯 Running tests by package (sequence): $GBX_PACKAGES${NC}"
+    echo ""
+    EXIT_CODE=0
+    for pkg in $GBX_PACKAGES; do
+        show_separator
+        echo -e "${CYAN}Package: ${GREEN}$pkg${NC}"
+        show_separator
+        SUITES="com.databricks.labs.gbx.${pkg}.*"
+        MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn test -PskipScoverage -DskipTests=false -Dsuites='$SUITES' $VERBOSE"
+        if docker exec geobrix-dev /bin/bash -c "$MVN_CMD"; then
+            echo -e "${GREEN}✅ $pkg passed${NC}"
+        else
+            echo -e "${RED}❌ $pkg failed${NC}"
+            EXIT_CODE=1
+        fi
+        echo ""
+    done
+    show_separator
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "${GREEN}✅ All packages passed!${NC}"
+    else
+        echo -e "${RED}❌ One or more packages failed${NC}"
+    fi
+    show_separator
 else
-    echo -e "${CYAN}🎯 Running all Scala unit tests (src/test/scala; excludes docs)${NC}"
-    # Unit tests only: com.databricks.labs.gbx.* (scalatest-maven-plugin doesn't support !exclusion)
-    MVN_CMD="$MVN_CMD -Dsuites='com.databricks.labs.gbx.*'"
+    # Build Maven command (DOCKER_MAVEN_ENV sets MAVEN_OPTS for faster Maven in Docker)
+    MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn test -PskipScoverage -DskipTests=false"
+
+    if [ -n "$SUITE_PATTERN" ]; then
+        echo -e "${CYAN}🎯 Running suite: ${YELLOW}$SUITE_PATTERN${NC}"
+        MVN_CMD="$MVN_CMD -Dsuites='$SUITE_PATTERN'"
+    else
+        echo -e "${CYAN}🎯 Running all Scala unit tests (src/test/scala; excludes docs)${NC}"
+        MVN_CMD="$MVN_CMD -Dsuites='com.databricks.labs.gbx.*'"
+    fi
+
+    if [ -n "$VERBOSE" ]; then
+        MVN_CMD="$MVN_CMD $VERBOSE"
+    fi
+
+    echo ""
+    show_separator
+    echo -e "${CYAN}Running tests...${NC}"
+    show_separator
+    echo ""
+
+    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    EXIT_CODE=$?
+
+    echo ""
+    show_separator
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "${GREEN}✅ Scala tests passed!${NC}"
+    else
+        echo -e "${RED}❌ Scala tests failed (exit code: $EXIT_CODE)${NC}"
+    fi
+    show_separator
 fi
-
-if [ -n "$VERBOSE" ]; then
-    MVN_CMD="$MVN_CMD $VERBOSE"
-fi
-
-echo ""
-show_separator
-echo -e "${CYAN}Running tests...${NC}"
-show_separator
-echo ""
-
-docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
-EXIT_CODE=$?
-
-echo ""
-show_separator
-if [ $EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✅ Scala tests passed!${NC}"
-else
-    echo -e "${RED}❌ Scala tests failed (exit code: $EXIT_CODE)${NC}"
-fi
-show_separator
 
 if [ -n "$LOG_PATH" ]; then
     echo -e "${CYAN}📝 Log saved to: ${YELLOW}$LOG_PATH${NC}"

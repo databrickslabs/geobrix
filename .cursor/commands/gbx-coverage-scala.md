@@ -14,6 +14,7 @@ bash .cursor/commands/gbx-coverage-scala.sh [OPTIONS]
 - `--report-only` - Skip tests and only generate report from existing data
 - `--clean` - Run `mvn clean` before coverage (default: incremental, no clean, for speed)
 - `--parallel` - Run tests in parallel (`scoverage:test -T 1C` then `report-only`; faster on multi-core)
+- `--by-package` - Run coverage per package in sequence, merge XMLs, then report (same package matrix as CI; no parallel in one container)
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
 - `--open` - Automatically open HTML coverage report in browser
 - `--help` - Display help message
@@ -42,6 +43,9 @@ bash .cursor/commands/gbx-coverage-scala.sh --open
 
 # Generate report only (no test execution)
 bash .cursor/commands/gbx-coverage-scala.sh --report-only --open
+
+# By package (sequence: rasterx, gridx, vectorx, ds, expressions, util; merge then report)
+bash .cursor/commands/gbx-coverage-scala.sh --by-package --open
 ```
 
 ## Coverage Report Location

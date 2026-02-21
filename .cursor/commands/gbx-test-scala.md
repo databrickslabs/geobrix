@@ -10,6 +10,7 @@ bash .cursor/commands/gbx-test-scala.sh [OPTIONS]
 
 ## Options
 
+- `--by-package` - Run tests per package in sequence (rasterx, gridx, vectorx, ds, expressions, util); reports pass/fail per package (same packages as CI matrix)
 - `--suite <pattern>` - Run specific test suite (single pattern)
 - `--suites <list>` - Run specific test suites (comma-separated class/package patterns; same as `-Dsuites=`)
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
@@ -33,6 +34,9 @@ bash .cursor/commands/gbx-test-scala.sh --log scala-tests.log
 
 # Run with verbose output
 bash .cursor/commands/gbx-test-scala.sh --verbose
+
+# Run by package (sequence; same packages as CI "Scala tests (by package)" workflow)
+bash .cursor/commands/gbx-test-scala.sh --by-package
 ```
 
 ## Test Location

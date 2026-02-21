@@ -84,6 +84,17 @@ jobs:
           mkdir -p merged
           python3 scripts/ci/merge_scoverage.py -o merged/scoverage.xml coverage-artifacts/
           ls -la merged/
+      - name: Print Scala coverage summary
+        run: |
+          if [ -f merged/scoverage.xml ]; then
+            rate=$(sed -n 's/.*statement-rate="\([^"]*\)".*/\1/p' merged/scoverage.xml | head -1)
+            inv=$(sed -n 's/.*statements-invoked="\([^"]*\)".*/\1/p' merged/scoverage.xml | head -1)
+            tot=$(sed -n 's/.*statement-count="\([^"]*\)".*/\1/p' merged/scoverage.xml | head -1)
+            echo ""
+            echo "============================== Scala coverage (merged) ==============================="
+            echo "Scala coverage: ${rate}% (${inv}/${tot} statements)"
+            echo "=============================================================================="
+          fi
 
       - name: Upload to Codecov
         uses: codecov/codecov-action@v5

@@ -48,7 +48,14 @@ databricks = [
 
 [tool.coverage.run]
 # Exclude sample-data bundle from coverage total so reported % reflects main library (gridx, rasterx, vectorx)
-omit = ["*sample/_bundle.py"]
+# Multiple patterns ensure exclusion when paths are relative (src/...) or absolute; required for CI and local.
+omit = [
+    "*sample/_bundle.py",
+    "*_bundle.py",
+    "src/databricks/labs/gbx/sample/_bundle.py",
+    "databricks/labs/gbx/sample/_bundle.py",
+    "python/geobrix/src/databricks/labs/gbx/sample/_bundle.py",
+]
 
 [tool.coverage.report]
 exclude_lines = ["pragma: no cover"]

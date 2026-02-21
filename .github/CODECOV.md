@@ -9,6 +9,8 @@ The README Codecov badge is:
 
 The badge updates when Codecov receives a new coverage upload for this repo.
 
+**Private repos:** If the README badge does not update after a successful upload, the repo is likely private. Codecov’s default badge is for public repos; for private repos you may need to install the [Codecov GitHub App](https://docs.codecov.com/docs/github-app) or use a [token in the badge URL](https://docs.codecov.com/docs/adding-the-codecov-badge). The upload itself can still succeed; only the public badge display may be restricted.
+
 ## How coverage gets uploaded (tests run once)
 
 1. **build main** (on push/PR): Runs Scala and Python tests **once** with coverage on the `larger` runner, uploads coverage as workflow artifacts, then a separate **codecov** job (lightweight, `ubuntu-latest`) downloads those artifacts and uploads to Codecov. So the slow Codecov step does not block the build job, and tests are never run twice.

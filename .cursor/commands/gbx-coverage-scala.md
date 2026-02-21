@@ -21,8 +21,9 @@ bash .cursor/commands/gbx-coverage-scala.sh [OPTIONS]
 ## Speed tips (Docker)
 
 - Maven runs with `MAVEN_OPTS=-Xmx4G -XX:+UseG1GC` for faster builds.
-- Default is incremental (no `clean`); use `--clean` only when you need a full rebuild.
-- Use `--parallel` to run tests with one thread per core, then generate the report.
+- Default flow: `scoverage:test -T 1C` (parallel, thread-safe) then `scoverage:report-only` with `aggregateOnly` (one report, no per-module HTMLs).
+- Use `--clean` only when you need a full rebuild; default is incremental.
+- `--parallel` uses the same 2-step flow (no extra behavior; tests already run with -T 1C).
 
 ## Examples
 

@@ -95,10 +95,12 @@ echo -e "${CYAN}🎯 Minimum coverage: ${YELLOW}$MIN_COVERAGE%${NC}"
 echo ""
 show_separator
 SUITES='com.databricks.labs.gbx.*'
+# report-only with one aggregated report (aggregateOnly avoids many per-module HTMLs)
+SCOV_REPORT_ONLY="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn -q scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true"
+
 if [ "$REPORT_ONLY" = true ]; then
     echo -e "${CYAN}Generating report from existing data...${NC}"
-    MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
-    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    docker exec geobrix-dev /bin/bash -c "$SCOV_REPORT_ONLY"
     EXIT_CODE=$?
 elif [ "$PARALLEL" = true ]; then
     echo -e "${CYAN}Step 1: Running tests in parallel (scoverage:test -T 1C)...${NC}"
@@ -108,19 +110,23 @@ elif [ "$PARALLEL" = true ]; then
     docker exec geobrix-dev /bin/bash -c "$MVN_TEST"
     EXIT_CODE=$?
     if [ $EXIT_CODE -eq 0 ]; then
-        echo -e "${CYAN}Step 2: Generating report (report-only)...${NC}"
-        MVN_REPORT="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
-        docker exec geobrix-dev /bin/bash -c "$MVN_REPORT"
+        echo -e "${CYAN}Step 2: Generating report (report-only, aggregate only)...${NC}"
+        docker exec geobrix-dev /bin/bash -c "$SCOV_REPORT_ONLY"
         EXIT_CODE=$?
     fi
 else
-    echo -e "${CYAN}Running tests with coverage (instrumented build + test + report)...${NC}"
+    echo -e "${CYAN}Step 1: Running tests with instrumentation (scoverage:test -T 1C)...${NC}"
     [ "$CLEAN" = true ] && echo -e "${YELLOW}Using 'clean' (use default for incremental)${NC}"
     CLEAN_PREFIX=""
     [ "$CLEAN" = true ] && CLEAN_PREFIX="clean "
-    MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:report -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dsuites='$SUITES'"
-    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    MVN_TEST="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$SUITES'"
+    docker exec geobrix-dev /bin/bash -c "$MVN_TEST"
     EXIT_CODE=$?
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "${CYAN}Step 2: Generating report (report-only, aggregate only)...${NC}"
+        docker exec geobrix-dev /bin/bash -c "$SCOV_REPORT_ONLY"
+        EXIT_CODE=$?
+    fi
 fi
 show_separator
 echo ""

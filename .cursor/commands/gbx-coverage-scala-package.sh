@@ -242,23 +242,17 @@ echo -e "${YELLOW}      Use 'gbx:coverage:scala' for full coverage${NC}"
 show_separator
 echo ""
 
-# Run scoverage with suite filter; use DOCKER_MAVEN_ENV (MAVEN_OPTS for speed). Default: incremental (no clean).
+# Run scoverage: test with instrumentation then report-only (one aggregated report). Parallel (-T 1C) is thread-safe for scoverage:test.
+SCOV_REPORT_ONLY="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn -q scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true"
 CLEAN_PREFIX=""
 [ "$CLEAN" = true ] && CLEAN_PREFIX="clean "
-if [ "$PARALLEL" = true ]; then
-    echo -e "${CYAN}Step 1: Running package tests in parallel (scoverage:test -T 1C)...${NC}"
-    MVN_TEST="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$SUITE_PATTERN'"
-    docker exec geobrix-dev /bin/bash -c "$MVN_TEST"
-    EXIT_CODE=$?
-    if [ $EXIT_CODE -eq 0 ]; then
-        echo -e "${CYAN}Step 2: Generating report (report-only)...${NC}"
-        MVN_REPORT="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE"
-        docker exec geobrix-dev /bin/bash -c "$MVN_REPORT"
-        EXIT_CODE=$?
-    fi
-else
-    MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:report -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dsuites='$SUITE_PATTERN'"
-    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+echo -e "${CYAN}Step 1: Running package tests (scoverage:test -T 1C)...${NC}"
+MVN_TEST="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$SUITE_PATTERN'"
+docker exec geobrix-dev /bin/bash -c "$MVN_TEST"
+EXIT_CODE=$?
+if [ $EXIT_CODE -eq 0 ]; then
+    echo -e "${CYAN}Step 2: Generating report (report-only, aggregate only)...${NC}"
+    docker exec geobrix-dev /bin/bash -c "$SCOV_REPORT_ONLY"
     EXIT_CODE=$?
 fi
 

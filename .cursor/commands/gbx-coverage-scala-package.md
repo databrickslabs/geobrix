@@ -89,7 +89,7 @@ gbx:coverage:scala-package rasterx --open
 **HTML Report**: `target/scoverage-report/index.html` (or `target/site/scoverage/index.html`)
 **XML Report**: `target/scoverage.xml`
 
-Uses the same `scoverage:report` flow as `gbx:coverage:scala` (with `-Druntime=standard`), so the report is always generated. The reports show coverage for the entire codebase, but only the selected package's tests were executed.
+Uses the same 2-step flow as `gbx:coverage:scala`: `scoverage:test -T 1C` then `scoverage:report-only` with `aggregateOnly` (one aggregated report). Reports show coverage for the entire codebase; only the selected package's tests are executed.
 
 ## When to Use
 

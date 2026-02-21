@@ -67,12 +67,13 @@ runs:
             sudo cp scripts/gdal311/libgdalalljni.so /usr/lib/libgdalalljni.so
             # - save apt archives for next run (workflow caches .cache/apt-archives)
             sudo cp -n /var/cache/apt/archives/*.deb .cache/apt-archives/ 2>/dev/null || true
-        # With coverage: run scoverage:report (no -DskipTests so forked lifecycle runs tests and produces report), then package with -DskipTests so main lifecycle does not re-run tests.
+        # With coverage: 3-step flow for speed. (1) Parallel tests with instrumentation; (2) one aggregated report (report-only, no re-run); (3) package without re-running tests.
         - name: Test and build the scala JAR - skip tests is false, coverage enabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true'
           shell: bash
           run: |
-            mvn -T 1C -q clean scoverage:report -Druntime=large -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+            mvn -T 1C -q clean scoverage:test -Dsuites='com.databricks.labs.gbx.*' -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }} -Druntime=large
+            mvn -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
             mvn -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Test and build the scala JAR - skip tests is false, coverage disabled
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'false'

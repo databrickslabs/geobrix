@@ -1,17 +1,13 @@
 # Manual workflow: run tests with coverage and upload to Codecov.
-# Use this to refresh the Codecov badge when it hasn't updated from build main.
+# Use only when you need to refresh the badge without a new push; build_main already
+# runs tests once and uploads to Codecov in a separate job (no double test run).
 #
 # Trigger: Actions → "Upload coverage to Codecov" → Run workflow.
 #
 # Requirements:
 #   - Repo secret CODECOV_TOKEN (from https://codecov.io/gh/databrickslabs/geobrix → Settings).
 #
-# Coverage report paths (same as build main):
-#   - Scala: target/scoverage.xml, target/scoverage-report/scoverage.xml (from scala_build enable_coverage)
-#   - Python: python/geobrix/coverage.xml (from python_build enable_coverage, pytest --cov-report=xml)
-#
 # Badge: README uses https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg
-#        Codecov updates the badge when this workflow or build main uploads successfully.
 
 name: Upload coverage to Codecov
 
@@ -25,7 +21,7 @@ permissions:
 jobs:
   coverage:
     name: Build, test with coverage, upload
-    runs-on: linux-ubuntu-latest
+    runs-on: larger
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:

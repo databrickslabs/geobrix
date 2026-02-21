@@ -9,21 +9,20 @@ The README Codecov badge is:
 
 The badge updates when Codecov receives a new coverage upload for this repo.
 
-## How coverage gets uploaded
+## How coverage gets uploaded (tests run once)
 
-1. **build main** (on push/PR): Runs Scala and Python tests with coverage, then uploads to Codecov.
-2. **Upload coverage to Codecov** (manual): Actions → “Upload coverage to Codecov” → Run workflow. Use this to refresh the badge without waiting for a push.
+1. **build main** (on push/PR): Runs Scala and Python tests **once** with coverage on the `larger` runner, uploads coverage as workflow artifacts, then a separate **codecov** job (lightweight, `ubuntu-latest`) downloads those artifacts and uploads to Codecov. So the slow Codecov step does not block the build job, and tests are never run twice.
+2. **Upload coverage to Codecov** (manual): Actions → “Upload coverage to Codecov” → Run workflow. Use only to refresh the badge without a new push; it runs the full test suite again.
 
 Both require the repo secret **CODECOV_TOKEN** (from Codecov → this repo → Settings → copy token, then GitHub repo → Settings → Secrets → Actions → add `CODECOV_TOKEN`).
 
-## Report paths (where the workflows look for coverage)
+## Report paths (where coverage is produced and uploaded)
 
 | Source        | Path(s) |
 |---------------|--------|
 | Scala (scoverage) | `target/scoverage.xml`, `target/scoverage-report/scoverage.xml` |
 | Python (pytest-cov) | `python/geobrix/coverage.xml` |
 
-- **build main** and **Upload coverage to Codecov** upload all of the above (Scala + Python).
-- **build_scala** uploads only the Scala paths.
+In **build main**, the build job stages these into `.coverage-artifacts/` and uploads that as a workflow artifact; the codecov job downloads it and sends the files to Codecov.
 
-If the badge does not update, confirm `CODECOV_TOKEN` is set and that the upload step in the workflow run succeeded (check the Actions run logs).
+If the badge does not update, confirm `CODECOV_TOKEN` is set and that the "Upload to Codecov" job in the Actions run succeeded (check the run logs).

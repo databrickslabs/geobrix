@@ -2,6 +2,8 @@ name: build main
 # Runs on: push to any branch (except python/** and scala/**), all PRs, and manual trigger.
 # Scala doc tests are excluded from the main Scala run; they run in a separate step only on push to main.
 # Manual run: Actions → "build main" → Run workflow (workflow_dispatch).
+#
+# Use runs-on: larger for all jobs (ubuntu-latest gets 403 on actions/checkout for private repo).
 on:
   push:
     branches-ignore:
@@ -17,7 +19,7 @@ permissions:
 jobs:
   # Regenerate doc-snippet-inventory and push to the PR branch (not main). Only for PRs targeting main.
   update-doc-inventory:
-    runs-on: ubuntu-latest
+    runs-on: larger
     if: github.event_name == 'pull_request' && github.base_ref == 'main'
     permissions:
       contents: write
@@ -38,7 +40,7 @@ jobs:
           git commit -m "chore(docs): rebuild doc-snippet-inventory.json [skip ci]"
           git push origin HEAD:${{ github.head_ref }}
   build:
-    runs-on: linux-ubuntu-latest
+    runs-on: larger
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
@@ -81,14 +83,36 @@ jobs:
         run: |
           mkdir -p "$GBX_SAMPLE_DATA_ROOT"
           sudo -E mvn -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
-      # Upload coverage so README Codecov badge updates. Requires repo secret CODECOV_TOKEN.
-      # Report paths: Scala → target/scoverage.xml, target/scoverage-report/scoverage.xml;
-      #              Python → python/geobrix/coverage.xml. Badge: codecov.io/gh/databrickslabs/geobrix
-      - name: Upload coverage to Codecov
+      - name: Stage coverage for upload job
+        run: |
+          mkdir -p .coverage-artifacts
+          cp -f target/scoverage.xml .coverage-artifacts/ 2>/dev/null || true
+          cp -f target/scoverage-report/scoverage.xml .coverage-artifacts/scoverage-report.xml 2>/dev/null || true
+          cp -f python/geobrix/coverage.xml .coverage-artifacts/ 2>/dev/null || true
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: coverage-reports
+          path: .coverage-artifacts/
+      - name: upload artifacts
+        uses: ./.github/actions/upload_artifacts
+
+  codecov:
+    name: Upload to Codecov
+    runs-on: larger
+    needs: build
+    if: always() && needs.build.result == 'success'
+    permissions:
+      contents: read
+    steps:
+      - name: Download coverage artifacts
+        uses: actions/download-artifact@v5
+        with:
+          name: coverage-reports
+          path: .coverage-artifacts
+      - name: Upload to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/scoverage.xml,target/scoverage-report/scoverage.xml,python/geobrix/coverage.xml
+          files: .coverage-artifacts/scoverage.xml,.coverage-artifacts/scoverage-report.xml,.coverage-artifacts/coverage.xml
           fail_ci_if_error: false
-      - name: upload artifacts
-        uses: ./.github/actions/upload_artifacts

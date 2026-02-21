@@ -6,7 +6,7 @@ on:
 jobs:
   build-n-publish:
     name: Build project and publish to PyPI
-    runs-on: linux-ubuntu-latest
+    runs-on: larger
     environment: release
     permissions:
       # Used to authenticate to PyPI via OIDC and sign the release's artifacts with sigstore-python.
@@ -29,7 +29,7 @@ jobs:
         run: |
           echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
       - name: Cache apt packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}

@@ -57,7 +57,7 @@ jobs:
         run: |
           echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
       - name: Cache apt packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}
@@ -81,7 +81,9 @@ jobs:
         run: |
           mkdir -p "$GBX_SAMPLE_DATA_ROOT"
           sudo -E mvn -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
-      # Upload Scala + Python coverage so README codecov badge shows %. Requires repo secret CODECOV_TOKEN.
+      # Upload coverage so README Codecov badge updates. Requires repo secret CODECOV_TOKEN.
+      # Report paths: Scala → target/scoverage.xml, target/scoverage-report/scoverage.xml;
+      #              Python → python/geobrix/coverage.xml. Badge: codecov.io/gh/databrickslabs/geobrix
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:

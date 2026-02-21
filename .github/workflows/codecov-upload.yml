@@ -1,0 +1,71 @@
+# Manual workflow: run tests with coverage and upload to Codecov.
+# Use this to refresh the Codecov badge when it hasn't updated from build main.
+#
+# Trigger: Actions → "Upload coverage to Codecov" → Run workflow.
+#
+# Requirements:
+#   - Repo secret CODECOV_TOKEN (from https://codecov.io/gh/databrickslabs/geobrix → Settings).
+#
+# Coverage report paths (same as build main):
+#   - Scala: target/scoverage.xml, target/scoverage-report/scoverage.xml (from scala_build enable_coverage)
+#   - Python: python/geobrix/coverage.xml (from python_build enable_coverage, pytest --cov-report=xml)
+#
+# Badge: README uses https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg
+#        Codecov updates the badge when this workflow or build main uploads successfully.
+
+name: Upload coverage to Codecov
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  coverage:
+    name: Build, test with coverage, upload
+    runs-on: linux-ubuntu-latest
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      matrix:
+        python: [ 3.12.3 ]
+        pytest: [8.4.2]
+        numpy: [ 2.1.3 ]
+        gdal: [ 3.11.4 ]
+        spark: [ 4.0.0 ]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Create pip cache key file
+        run: |
+          echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
+
+      - name: Cache apt packages
+        uses: actions/cache@v5
+        with:
+          path: .cache/apt-archives
+          key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}
+
+      - name: Build Scala (with coverage)
+        uses: ./.github/actions/scala_build
+        with:
+          enable_coverage: "true"
+          fail_on_scalastyle: "false"
+
+      - name: Build Python (with coverage)
+        uses: ./.github/actions/python_build
+        with:
+          run_lint: "false"
+          enable_coverage: "true"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/scoverage.xml,target/scoverage-report/scoverage.xml,python/geobrix/coverage.xml
+          fail_ci_if_error: false

@@ -27,7 +27,7 @@ jobs:
         run: |
           echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
       - name: Cache apt packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}
@@ -37,7 +37,9 @@ jobs:
           enable_coverage: "true"
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts
-      - name: Publish test coverage
+      - name: Publish test coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+          files: target/scoverage.xml,target/scoverage-report/scoverage.xml
+          fail_ci_if_error: false

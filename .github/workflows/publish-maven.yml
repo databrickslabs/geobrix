@@ -4,7 +4,7 @@ on:
     types: [created]
 jobs:
   publish:
-    runs-on: linux-ubuntu-latest4
+    runs-on: larger
     permissions:
       contents: read
       packages: write

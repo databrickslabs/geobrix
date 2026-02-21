@@ -13,6 +13,9 @@ on:
 jobs:
   analyze:
     name: Analyze
+    # Skip until Code Security is enabled: Settings → Code security and analysis → Code scanning.
+    # For private repos this may require GitHub Advanced Security. Remove this line once enabled.
+    if: false
     runs-on: larger
     permissions:
       actions: read

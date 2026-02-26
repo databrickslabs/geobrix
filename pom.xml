@@ -353,7 +353,7 @@
                     <plugin>
                         <groupId>org.scoverage</groupId>
                         <artifactId>scoverage-maven-plugin</artifactId>
-                        <version>2.1.0</version>
+                        <version>2.1.5</version>
                         <executions>
                             <execution>
                                 <id>scoverage-report</id>
@@ -405,7 +405,7 @@
                     <plugin>
                         <groupId>org.scoverage</groupId>
                         <artifactId>scoverage-maven-plugin</artifactId>
-                        <version>2.1.0</version>
+                        <version>2.1.5</version>
                         <executions>
                             <execution>
                                 <id>scoverage-report</id>

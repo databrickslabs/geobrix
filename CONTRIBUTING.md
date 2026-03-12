@@ -1,1 +1,3 @@
 We happily welcome contributions to GeoBrix. We use GitHub Issues to track community reported issues and GitHub Pull Requests for accepting changes.
+
+**Scala code:** We follow the [Scala style guide](https://docs.scala-lang.org/style/) (Scalaguide). Style is enforced with [Scalastyle](scalastyle-config.xml); see [docs/scala-style-guide.md](docs/scala-style-guide.md). Run `gbx:lint:scalastyle` before pushing.

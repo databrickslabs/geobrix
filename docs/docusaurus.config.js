@@ -12,10 +12,11 @@ const config = {
   tagline: 'High-performance spatial processing library for Databricks',
   favicon: 'img/favicon.ico',
 
-  // Production URL: private repo → https://friendly-fiesta-2eo74ww.pages.github.io/ ; public → https://databrickslabs.github.io/geobrix/
-  url: process.env.DOCS_PUBLIC_PAGES === '1' ? 'https://databrickslabs.github.io' : 'https://friendly-fiesta-2eo74ww.pages.github.io',
-  // baseUrl: './' for static zip; '/' for private Pages (site at root); '/geobrix/' for public project site
-  baseUrl: process.env.DOCS_STATIC_ZIP === '1' ? './' : (process.env.DOCS_PUBLIC_PAGES === '1' ? '/geobrix/' : '/'),
+  // Production URL: public → https://databrickslabs.github.io/geobrix/ ; set DOCS_PRIVATE_PAGES=1 for legacy private Pages URL
+  // GitHub Actions deploy sets DOCS_PUBLIC_PAGES=1 so baseUrl is always /geobrix/ for Pages.
+  url: process.env.DOCS_PRIVATE_PAGES === '1' ? 'https://friendly-fiesta-2eo74ww.pages.github.io' : 'https://databrickslabs.github.io',
+  // baseUrl: './' for static zip; '/' for legacy private Pages; '/geobrix/' for public project site (default; also when DOCS_PUBLIC_PAGES=1)
+  baseUrl: process.env.DOCS_STATIC_ZIP === '1' ? './' : (process.env.DOCS_PUBLIC_PAGES === '1' || process.env.DOCS_PRIVATE_PAGES !== '1' ? '/geobrix/' : '/'),
   // Hash router for static zip so file:// opens work (pathname is then in hash, e.g. #/)
   ...(process.env.DOCS_STATIC_ZIP === '1' ? { future: { experimental_router: 'hash' } } : {}),
 

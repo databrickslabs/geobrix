@@ -6,6 +6,14 @@
     <groupId>com.databricks.labs</groupId>
     <artifactId>geobrix</artifactId>
     <version>0.2.0</version>
+    <name>GeoBrix</name>
+    <description>High-performance spatial processing library for Databricks (GDAL, Spark). Raster, Grid, and Vector packages.</description>
+    <url>https://databrickslabs.github.io/geobrix/</url>
+    <scm>
+        <url>https://github.com/databrickslabs/geobrix</url>
+        <connection>scm:git:https://github.com/databrickslabs/geobrix.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/databrickslabs/geobrix.git</developerConnection>
+    </scm>
 
     <properties>
         <!-- Build Configuration -->

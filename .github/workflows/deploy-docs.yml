@@ -1,13 +1,10 @@
 # Build and deploy Docusaurus docs to GitHub Pages.
-# Private repo site URL: https://friendly-fiesta-2eo74ww.pages.github.io/
-# (When repo is public, set DOCS_PUBLIC_PAGES=1 in Build step and use url baseUrl for databrickslabs.github.io/geobrix/)
+# Public site URL: https://databrickslabs.github.io/geobrix/
 #
 # First-time setup: In repo Settings → Pages → Build and deployment,
-# set Source to "GitHub Actions" (or "Deploy from a branch" and choose gh-pages).
-# If using branch: after first run, set Source to branch "gh-pages", root / (root).
+# set Source to "GitHub Actions".
 #
-# Private repo 403 on checkout: (1) Add repo secret REPO_ACCESS_TOKEN (PAT) if needed.
-# (2) If the org enforces an IP allow list, use a self-hosted runner (e.g. larger)
+# If the org enforces an IP allow list, use a self-hosted runner (e.g. larger)
 # inside the allowlisted network; ubuntu-latest cannot be used in that case.
 name: Deploy documentation
 
@@ -32,8 +29,7 @@ jobs:
   build:
     runs-on: larger
     steps:
-      # Use token explicitly; for private repos with restricted GITHUB_TOKEN,
-      # add secret REPO_ACCESS_TOKEN (PAT with repo/Contents read) and use it here.
+      # For restricted GITHUB_TOKEN, add secret REPO_ACCESS_TOKEN (PAT with repo scope) if needed.
       - name: Checkout
         uses: actions/checkout@v5
         with:
@@ -52,8 +48,9 @@ jobs:
       - name: Build
         run: cd docs && npm run build
         env:
-          # Production URL for GitHub Pages
           NODE_ENV: production
+          # Force public GitHub Pages baseUrl (https://databrickslabs.github.io/geobrix/)
+          DOCS_PUBLIC_PAGES: '1'
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

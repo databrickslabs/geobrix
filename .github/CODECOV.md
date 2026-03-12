@@ -7,9 +7,9 @@ The README Codecov badge is:
 - **Badge image:** `https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg`
 - **Project page:** https://codecov.io/gh/databrickslabs/geobrix
 
-The badge updates when Codecov receives a new coverage upload for this repo.
+The badge updates when Codecov receives a new coverage upload for this repo. This repo is public, so the default badge works.
 
-**Private repos:** If the README badge does not update after a successful upload, the repo is likely private. Codecov’s default badge is for public repos; for private repos you may need to install the [Codecov GitHub App](https://docs.codecov.com/docs/github-app) or use a [token in the badge URL](https://docs.codecov.com/docs/adding-the-codecov-badge). The upload itself can still succeed; only the public badge display may be restricted.
+**Private repos (e.g. forks):** If the README badge does not update after a successful upload, the repo may be private. Codecov’s default badge is for public repos; for private repos you may need to install the [Codecov GitHub App](https://docs.codecov.com/docs/github-app) or use a [token in the badge URL](https://docs.codecov.com/docs/adding-the-codecov-badge). The upload itself can still succeed; only the public badge display may be restricted.
 
 ## How coverage gets uploaded (tests run once)
 

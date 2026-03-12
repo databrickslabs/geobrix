@@ -110,9 +110,14 @@ mvn test -P scala-2.13
 
 ### Run with Coverage
 
+This project uses **Scoverage** (not JaCoCo) for Scala coverage. From the repo root:
+
 ```bash
-mvn clean test jacoco:report
+mvn clean scoverage:test
+mvn scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true
 ```
+
+Or use the Cursor command: `gbx:coverage:scala` (runs in Docker with the same flow).
 
 ## Test Traits and Utilities
 

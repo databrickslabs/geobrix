@@ -8,7 +8,7 @@
 [![python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
 [![license](https://img.shields.io/badge/license-Databricks-blue.svg)](LICENSE)
 
-GeoBrix is a high-performance spatial processing library. Its heavy-weight readers and functions are powered by GDAL, implemented on Apache Spark, and built to run exclusively on the Databricks Runtime (DBR).
+GeoBrix is a high-performance spatial processing library. Its heavy-weight readers and functions are powered by GDAL, implemented on Apache Spark, and built to run exclusively on the Databricks Runtime (DBR), see [docs](https://databrickslabs.github.io/geobrix/) for more.
 
 ## Background
 
@@ -193,7 +193,7 @@ Cluster Config
 
 GeoBrix requires GDAL natives, which are best installed via an init script on a classic cluster
 
-1. Add the GeoBrix JAR and Shared Object ('*.so') to the Volume - currently these are delivered via artifacts in the the [beta-dist](resources/beta-dist) directory.
+1. Add the GeoBrix JAR and Shared Object ('*.so') to the Volume - currently these are delivered via [Releases](https://github.com/databrickslabs/geobrix/releases) artifacts.
 3. Add [geobrix-gdal-init.sh](./scripts/geobrix-gdal-init.sh) to a chosen Databricks Volume; note: prior to copying, modify 'VOL_DIR' to the location of the artifacts in (1).
 3. Add the WHL as a cluster library.
 
@@ -222,8 +222,6 @@ Describe any registered function for more details.
 ```
 
 <img src="resources/images/quickstart/func_descrip.png" width="50%" />
-
-See the included examples in [beta-dist](resources/beta-dist) directory for more.
 
 ### Scala Bindings
 The heavy-weight API is written in Scala with various spark optimizations implemented with best practices, including using Spark Connect to invoke the columnar expressions. The pattern for registering functions is `com.databricks.labs.gbx.<category>.functions` where ‘gbx’ is the convention for GeoBrix in classpaths:

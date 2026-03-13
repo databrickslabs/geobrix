@@ -34,7 +34,7 @@ This command generates static content into the `build` directory and can be serv
 
 ### GitHub Actions (recommended)
 
-Docs are built and deployed automatically by the [Deploy documentation](https://github.com/databrickslabs/geobrix/actions/workflows/deploy-docs.yml) workflow when you push to `main` (under `docs/`) or run it manually.
+Docs are built and deployed automatically by the [Deploy documentation](https://github.com/databrickslabs/geobrix/actions/workflows/deploy-docs.yml) workflow when you push to `master` (under `docs/`) or run it manually.
 
 **One-time setup:** In the repo go to **Settings → Pages**. Under **Build and deployment**, set **Source** to **GitHub Actions**. The site will be published at **https://databrickslabs.github.io/geobrix/**.
 

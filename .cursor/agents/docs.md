@@ -113,7 +113,7 @@ gbx:docs:restart
 
 ### Scenario 5: Build offline zip for distribution
 ```bash
-# Build with relative paths and create zip for resources/beta-dist/
+# Build with relative paths and create zip for offline distribution (e.g. --output ./docs-build)
 gbx:docs:static-build
 
 # Zip is written to resources/static/geobrix-docs-<version>.zip (version from docs/package.json)

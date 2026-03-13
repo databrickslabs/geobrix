@@ -7,7 +7,7 @@
 # Requirements:
 #   - Repo secret CODECOV_TOKEN (from https://codecov.io/gh/databrickslabs/geobrix → Settings).
 #
-# Badge: README uses https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg
+# Badge: README uses https://codecov.io/gh/databrickslabs/geobrix/branch/master/graph/badge.svg
 
 name: Upload coverage to Codecov
 

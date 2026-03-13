@@ -1,5 +1,5 @@
 #!/bin/bash
-# gbx:docs:static-build - Build docs for static zip (relative paths) and optionally zip to resources/beta-dist
+# gbx:docs:static-build - Build docs for static zip (relative paths) and optionally zip for offline distribution
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -30,7 +30,7 @@ EXAMPLES:
     bash .cursor/commands/gbx-docs-static-build.sh
 
     # Zip to a custom folder (zip name still uses version from docs/package.json)
-    bash .cursor/commands/gbx-docs-static-build.sh --output resources/beta-dist/v0.2.0
+    bash .cursor/commands/gbx-docs-static-build.sh --output ./docs-build
 
     # Build only (no zip)
     bash .cursor/commands/gbx-docs-static-build.sh --skip-zip

@@ -1,7 +1,7 @@
 <img src="resources/images/GeoBriX.png" width="50%" />
 
 [![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
-[![codecov](https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg)](https://codecov.io/gh/databrickslabs/geobrix)
+[![codecov](https://codecov.io/gh/databrickslabs/geobrix/branch/master/graph/badge.svg)](https://codecov.io/gh/databrickslabs/geobrix)
 [![docs](https://github.com/databrickslabs/geobrix/actions/workflows/doc-tests.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/doc-tests.yml)
 [![documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://databrickslabs.github.io/geobrix/)
 [![scala](https://img.shields.io/badge/scala-2.13-red.svg)](https://www.scala-lang.org/)

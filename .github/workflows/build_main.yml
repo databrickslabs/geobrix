@@ -1,6 +1,6 @@
 name: build main
 # Runs on: push to any branch (except python/** and scala/**), all PRs, and manual trigger.
-# Scala doc tests are excluded from the main Scala run; they run in a separate step only on push to main.
+# Scala doc tests are excluded from the main Scala run; they run in a separate step only on push to master.
 # Manual run: Actions → "build main" → Run workflow (workflow_dispatch).
 #
 # Use runs-on: larger for all jobs (ubuntu-latest gets 403 on actions/checkout for private repo).
@@ -17,10 +17,10 @@ permissions:
   contents: read
   id-token: write
 jobs:
-  # Regenerate doc-snippet-inventory and push to the PR branch (not main). Only for PRs targeting main.
+  # Regenerate doc-snippet-inventory and push to the PR branch (not master). Only for PRs targeting master.
   update-doc-inventory:
     runs-on: larger
-    if: github.event_name == 'pull_request' && github.base_ref == 'main'
+    if: github.event_name == 'pull_request' && github.base_ref == 'master'
     permissions:
       contents: write
     steps:
@@ -68,16 +68,16 @@ jobs:
         with:
           # Disable scoverage in main build to keep CI ~10–15 min (full Scala coverage is ~30+ min). Run "Upload coverage to Codecov" workflow manually for Scala+Python coverage.
           enable_coverage: "false"
-          fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+          fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'master' }}
       - name: build python
         uses: ./.github/actions/python_build
         with:
-          run_lint: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
+          run_lint: ${{ github.event_name == 'pull_request' && github.base_ref == 'master' }}
           enable_coverage: "true"
       - name: Rebuild doc-snippet-inventory
         run: python3 scripts/ci/inventory-doc-snippets.py
       # Disabled until project launch. Re-enable by restoring the condition below.
-      - name: Scala doc tests (main only, after everything else)
+      - name: Scala doc tests (master only, after everything else)
         if: false  # Disabled until project launch
         env:
           GBX_SAMPLE_DATA_ROOT: ${{ runner.temp }}/geobrix-sample-data

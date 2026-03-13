@@ -1,6 +1,6 @@
 # Docs Static Build (Offline Zip)
 
-Build the documentation with relative paths and optionally create a zip for offline/local viewing (e.g. for `resources/beta-dist/`).
+Build the documentation with relative paths and optionally create a zip for offline/local viewing.
 
 ## Usage
 
@@ -28,7 +28,7 @@ bash .cursor/commands/gbx-docs-static-build.sh [OPTIONS]
 bash .cursor/commands/gbx-docs-static-build.sh
 
 # Zip to a custom folder
-bash .cursor/commands/gbx-docs-static-build.sh --output resources/beta-dist/v0.2.0   # or any path; zip name still uses version from docs/package.json
+bash .cursor/commands/gbx-docs-static-build.sh --output ./docs-build   # or any path; zip name uses version from docs/package.json
 
 # Build only (no zip)
 bash .cursor/commands/gbx-docs-static-build.sh --skip-zip

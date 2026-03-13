@@ -26,7 +26,7 @@ GeoBrix requires the following artifacts:
 - **Shared Object**: `libgdalalljni.so` (GDAL native library)
 - **Python Wheel**: `geobrix-*-py3-none-any.whl`
 
-These are currently delivered via artifacts in the [beta-dist](https://github.com/databrickslabs/geobrix/tree/main/resources/beta-dist) directory.
+These are currently delivered via [Releases](https://github.com/databrickslabs/geobrix/releases) artifacts.
 
 ### 2. Upload to Databricks Volume
 
@@ -40,7 +40,7 @@ These are currently delivered via artifacts in the [beta-dist](https://github.co
 
 GeoBrix requires GDAL natives, which are currently best installed via an init script on a classic cluster.
 
-1. Use the init script from the repo: [scripts/geobrix-gdal-init.sh](https://github.com/databrickslabs/geobrix/blob/main/scripts/geobrix-gdal-init.sh) (shown below)
+1. Use the init script from the repo: [scripts/geobrix-gdal-init.sh](https://github.com/databrickslabs/geobrix/blob/master/scripts/geobrix-gdal-init.sh) (shown below)
 2. Modify the `VOL_DIR` variable to point to your Volume location where you uploaded the artifacts
 3. Upload the modified init script to your Databricks Volume
 
@@ -148,4 +148,3 @@ If you encounter permission errors:
 
 - Follow the [Quick Start Guide](./quick-start) to begin using GeoBrix
 - Explore the [Packages](./packages/overview) documentation
-- Check out [Example Notebooks](./examples/overview)

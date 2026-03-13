@@ -4,7 +4,7 @@
 
 The README Codecov badge is:
 
-- **Badge image:** `https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg`
+- **Badge image:** `https://codecov.io/gh/databrickslabs/geobrix/branch/master/graph/badge.svg`
 - **Project page:** https://codecov.io/gh/databrickslabs/geobrix
 
 The badge updates when Codecov receives a new coverage upload for this repo. This repo is public, so the default badge works.

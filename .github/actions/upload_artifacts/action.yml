@@ -4,12 +4,12 @@ runs:
   using: "composite"
   steps:
     - name: upload build artifacts
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       with:
         name: build-artifacts
         path: staging/build-artifacts/*
     - name: upload user artifacts
-      uses: actions/upload-artifact@v5
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
       with:
         name: user-artifacts
         path: staging/user-artifacts/*

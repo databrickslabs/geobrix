@@ -21,14 +21,14 @@ jobs:
         spark: [ 4.0.0 ]
     steps:
       - name: checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Create pip cache key file
         run: |
           echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
       - name: Cache apt packages
-        uses: actions/cache@v4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:
           path: .cache/apt-archives
           key: apt-${{ runner.os }}-${{ hashFiles('.github/actions/scala_build/action.yml', '.github/actions/python_build/action.yml') }}

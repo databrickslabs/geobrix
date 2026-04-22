@@ -7,7 +7,10 @@ ARG PDAL_VERSION=2.8.2
 # STAGE 1: OS Base & Java
 # e.g. `docker build --target base -t geobrix-base .`
 # ==========================================
-FROM --platform=${BUILDPLATFORM} ubuntu:24.04 AS base
+# Pinned by digest (Labs lockdown policy). To refresh, re-pull ubuntu:24.04 from
+# Docker Hub and update the sha256 below. Tag comment retained for readability.
+FROM --platform=${BUILDPLATFORM} ubuntu@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b AS base
+# ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl gnupg && mkdir -p /usr/share/keyrings
@@ -60,10 +63,17 @@ WORKDIR $ROOTDIR/
 FROM system-deps AS hadoop-builder
 ENV HADOOP_VERSION=3.4.0
 ENV HADOOP_HOME=/usr/local/hadoop
+# Pinned SHA-512 of the Apache Hadoop 3.4.0 source tarball (Labs lockdown policy).
+# Cross-checked against https://downloads.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz.sha512
+# To bump HADOOP_VERSION, update HADOOP_SHA512 in lockstep.
+ENV HADOOP_SHA512=6f653c0109f97430047bd3677c50da7c8a2809d153b231794cf980b3208a6b4beff8ff1a03a01094299d459a3a37a3fe16731629987165d71f328657dbf2f24c
 
-RUN mkdir -p $ROOTDIR/src && wget -qO- https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz | \
-    tar -xzC $ROOTDIR/src/ && \
-    mv $ROOTDIR/src/hadoop-${HADOOP_VERSION} $HADOOP_HOME && \
+RUN mkdir -p $ROOTDIR/src \
+    && wget -q -O /tmp/hadoop.tar.gz https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz \
+    && echo "${HADOOP_SHA512}  /tmp/hadoop.tar.gz" | sha512sum -c - \
+    && tar -xzf /tmp/hadoop.tar.gz -C $ROOTDIR/src/ \
+    && rm /tmp/hadoop.tar.gz \
+    && mv $ROOTDIR/src/hadoop-${HADOOP_VERSION} $HADOOP_HOME && \
     ln -s $HADOOP_HOME/bin/hadoop /usr/local/bin/hadoop && \
     ln -s $HADOOP_HOME/bin/hdfs /usr/local/bin/hdfs && \
     ln -s $HADOOP_HOME/bin/yarn /usr/local/bin/yarn && \
@@ -76,7 +86,15 @@ RUN mkdir -p $ROOTDIR/src && wget -qO- https://dlcdn.apache.org/hadoop/common/ha
 # ==========================================
 FROM hadoop-builder AS gdal-builder
 ARG GDAL_VERSION
-RUN wget -qO- https://download.osgeo.org/gdal/${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz | tar -xzC $ROOTDIR/src/
+# Pinned SHA-256 of the GDAL 3.11.4 source tarball (Labs lockdown policy).
+# Upstream OSGeo only publishes MD5; this SHA-256 was computed locally after
+# MD5-verifying the upstream download (md5: 9f4fa4b3be48fb60d5dd76fecb11a5f6).
+# To bump GDAL_VERSION, update GDAL_SHA256 in lockstep.
+ENV GDAL_SHA256=0fa36ee34d4451db586d2bf78ea0dbfa3b0dfae0516587f8130d21add0ac9dad
+RUN wget -q -O /tmp/gdal.tar.gz https://download.osgeo.org/gdal/${GDAL_VERSION}/gdal-${GDAL_VERSION}.tar.gz \
+    && echo "${GDAL_SHA256}  /tmp/gdal.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/gdal.tar.gz -C $ROOTDIR/src/ \
+    && rm /tmp/gdal.tar.gz
 
 RUN mkdir -p src/gdal-${GDAL_VERSION}/build && cd src/gdal-${GDAL_VERSION}/build \
     && cmake -G Ninja .. \
@@ -116,14 +134,17 @@ RUN git clone --depth 1 -b ${PDAL_VERSION} https://github.com/PDAL/PDAL.git /tmp
 # ==========================================
 FROM pdal-builder AS final
 
-# --- Maven Installation (With Dynamic Checksum) ---
+# --- Maven Installation (Pinned Checksum per Labs lockdown policy) ---
+# Pinning the SHA-512 in-Dockerfile prevents a compromised archive.apache.org
+# from serving both a bad tarball and a matching bad checksum. To bump
+# MAVEN_VERSION, update MAVEN_SHA512 in lockstep.
 ARG MAVEN_VERSION=3.9.9
+ARG MAVEN_SHA512=a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b
 RUN mkdir -p $ROOTDIR/share/maven \
   && curl -fsSL -o /tmp/apache-maven.tar.gz https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
-  && curl -fsSL -o /tmp/apache-maven.tar.gz.sha512 https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz.sha512 \
-  && echo "$(cat /tmp/apache-maven.tar.gz.sha512)  /tmp/apache-maven.tar.gz" | sha512sum -c - \
+  && echo "${MAVEN_SHA512}  /tmp/apache-maven.tar.gz" | sha512sum -c - \
   && tar -xzf /tmp/apache-maven.tar.gz -C $ROOTDIR/share/maven --strip-components=1 \
-  && ln -s $ROOTDIR/share/maven/bin/mvn $ROOTDIR/bin/mvn && rm /tmp/apache-maven.tar.gz*
+  && ln -s $ROOTDIR/share/maven/bin/mvn $ROOTDIR/bin/mvn && rm /tmp/apache-maven.tar.gz
 
 ENV MAVEN_HOME="$ROOTDIR/share/maven"
 ENV SPARK_VERSION=4.0.0

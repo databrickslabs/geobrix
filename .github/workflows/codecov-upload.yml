@@ -16,12 +16,13 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   coverage:
     name: Build, test with coverage, upload
     runs-on: larger
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:

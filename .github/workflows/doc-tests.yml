@@ -39,6 +39,8 @@ jobs:
     name: Python Documentation Tests
     runs-on: larger
     if: false  # Disabled until project launch
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
 
     steps:
       - name: Checkout code
@@ -92,7 +94,9 @@ jobs:
     name: Scala Documentation Tests
     runs-on: larger
     if: false  # Disabled until Scala doc tests are created
-    
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
+
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -114,6 +118,8 @@ jobs:
     name: Validate Documentation Structure
     runs-on: larger
     if: false  # Disabled until project launch
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
 
     steps:
       - name: Checkout code

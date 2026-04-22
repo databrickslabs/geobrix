@@ -10,6 +10,9 @@ on:
     - cron: '18 16 * * 0'
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze
@@ -17,6 +20,8 @@ jobs:
     # For private repos this may require GitHub Advanced Security. Remove this line once enabled.
     if: false
     runs-on: larger
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
     permissions:
       actions: read
       contents: read

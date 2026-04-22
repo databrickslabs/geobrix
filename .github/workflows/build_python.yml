@@ -6,10 +6,11 @@ on:
       - "python/**"
 permissions:
   contents: read
-  id-token: write
 jobs:
   build:
     runs-on: larger
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:

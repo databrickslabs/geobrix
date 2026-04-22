@@ -13,12 +13,13 @@ on:
 
 permissions:
   contents: read
-  id-token: write
 
 jobs:
   coverage-package:
     name: Coverage ${{ matrix.package }}
     runs-on: larger
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:
@@ -66,6 +67,8 @@ jobs:
     runs-on: larger
     needs: coverage-package
     if: always() && needs.coverage-package.result == 'success'
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

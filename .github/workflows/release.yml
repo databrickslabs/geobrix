@@ -1,13 +1,25 @@
 name: publish python package to pypi
+#
+# DISABLED per Databricks Labs Repository Lockdown policy.
+# GeoBrix is not publishing to PyPI from GitHub Actions at this time; PyPI release
+# automation (if/when re-enabled) will be reviewed with Labs first.
+#
+# To re-enable: remove the `if: false` on the `build-n-publish` job below and coordinate
+# with databrickslabs maintainers to restore the `release` trigger and required secrets.
 on:
   release:
     types: [published]
 
+permissions:
+  contents: read
+
 jobs:
   build-n-publish:
+    if: false  # Disabled per Labs lockdown policy — see banner above.
     name: Build project and publish to PyPI
     runs-on: larger
-    environment: release
+    # Use the single protected env `runtime` so REPO_ACCESS_TOKEN / OIDC issuance are gated.
+    environment: runtime
     permissions:
       # Used to authenticate to PyPI via OIDC and sign the release's artifacts with sigstore-python.
       id-token: write

@@ -18,8 +18,6 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: "pages"
@@ -28,6 +26,8 @@ concurrency:
 jobs:
   build:
     runs-on: larger
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
     steps:
       # For restricted GITHUB_TOKEN, add secret REPO_ACCESS_TOKEN (PAT with repo scope) if needed.
       - name: Checkout
@@ -58,6 +58,10 @@ jobs:
           path: docs/build
 
   deploy:
+    # Scoped perms (per policy least-privilege): only the deploy job needs pages/id-token write.
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}

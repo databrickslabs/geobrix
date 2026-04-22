@@ -15,13 +15,15 @@ on:
   workflow_dispatch: {}
 permissions:
   contents: read
-  id-token: write
 jobs:
   # Regenerate doc-snippet-inventory and push to the PR branch (not master). Only for PRs targeting master.
   update-doc-inventory:
     runs-on: larger
     if: github.event_name == 'pull_request' && github.base_ref == 'master'
+    # Scoped to protected env so REPO_ACCESS_TOKEN is only available to approved workflow runs.
+    environment: runtime
     permissions:
+      # Needed to push the regenerated inventory back onto the PR head branch.
       contents: write
     steps:
       - name: Checkout PR head branch
@@ -41,6 +43,8 @@ jobs:
           git push origin HEAD:${{ github.head_ref }}
   build:
     runs-on: larger
+    # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
+    environment: runtime
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     strategy:

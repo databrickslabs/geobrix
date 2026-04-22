@@ -7,8 +7,20 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Labs lockdown policy: wait 7 days after a release before opening a PR
+    # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "pip"
     directory: "/python/geobrix"
     schedule:
       interval: "weekly"
+    # Labs lockdown policy: wait 7 days after a release before opening a PR
+    # (reduces exposure to supply-chain attacks that rely on fast-propagating new versions).
+    cooldown:
+      default-days: 7
+
+  # NOTE: No `github-actions` ecosystem entry: the lockdown policy disables
+  # Dependabot updates for Actions so SHA pins are not silently bumped.
+  # Action SHAs are refreshed manually via `scripts/security/pin-gh-actions`.

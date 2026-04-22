@@ -1,0 +1,13 @@
+#!/bin/sh
+# List external GitHub Actions referenced in workflow files.
+# Output: one line per unique action, formatted as "action[@ref]".
+#
+# Requires: yq (https://github.com/mikefarah/yq/)
+
+set -eu
+
+root="$(git rev-parse --show-toplevel)"
+
+find "$root/.github" \( -name '*.yml' -o -name '*.yaml' \) -print0 |
+    xargs -0 yq -N '.. | .uses? | select(. and . != "./*")' |
+    sort -u

@@ -1,0 +1,78 @@
+#!/bin/sh
+#
+# Apply GitHub Actions pinning from resolve-action-ref output.
+#
+# Usage: ./list-external-actions | xargs ./resolve-action-ref | ./pin-gh-actions
+#
+# Reads resolve-action-ref output on stdin:
+#   ✓ lines are already pinned — skipped.
+#   ⚠ lines need updating — applied to workflow files.
+#
+# Staging behaviour: writes changes into the working tree and stages them
+# with git add .github/. The caller is responsible for reviewing and
+# committing. (We intentionally do not create or switch branches here —
+# GeoBrix manages branches manually, unlike the reference implementation.)
+#
+# Requires: git
+
+set -eu
+
+cutoff="2026-03-10T00:00:00Z"
+root="$(git rev-parse --show-toplevel)"
+
+ensure_no_staged_changes() {
+    # There must be no staged changes under .github — we stage our own, and
+    # the user needs to be able to verify them cleanly with git diff --cached.
+    if ! git diff --cached --quiet -- "$root/.github"
+    then
+        printf 'error: staged changes already present under .github; commit or unstage them first\n' 1>&2
+        exit 1
+    fi
+}
+
+requires_pinning() {
+    # Actions owned by Databricks do not need pinning.
+    owner="${1%%/*}"
+    case "${owner}" in
+        databricks|databrickslabs) return 1 ;;
+        *)                         return 0 ;;
+    esac
+}
+
+apply_pin() {
+    old_ref="$1"        # e.g. actions/checkout@v4
+    new_ref="$2"        # e.g. actions/checkout@abc123
+    tag="$3"            # e.g. v4.2.0
+
+    find "${root}/.github" \( -name '*.yml' -o -name '*.yaml' \) |
+    while IFS= read -r file
+    do
+        sed "s|uses: ${old_ref}|uses: ${new_ref}  # ${tag}|g" "${file}" > "${file}.$$"
+        mv "${file}.$$" "${file}"
+    done
+}
+
+stage_and_show() {
+    git add "$root/.github"
+
+    printf '\n'
+    git diff --cached -- "$root/.github"
+
+    printf '\nTo commit:\n'
+    printf '  git commit -m "Pin GitHub Actions to the commit associated with the last known release prior to %s"\n' "${cutoff}"
+}
+
+# --- Main ---
+
+ensure_no_staged_changes
+
+awk 'NF == 5 { sub(/:$/, "", $2); print $2, $3, $5 }' |
+while read -r old_ref new_ref tag
+do
+    if requires_pinning "${old_ref}"
+    then
+        apply_pin "${old_ref}" "${new_ref}" "${tag}"
+    fi
+done
+
+stage_and_show

@@ -1,0 +1,167 @@
+#!/bin/sh
+#
+# For each action@ref argument, find the latest release published before
+# a cutoff date and resolve its tag to a commit SHA.
+#
+# Usage: resolve-action-ref [action[@ref] ...]
+# Output: ✓/⚠ action[@ref]: action@sha  # tag
+#
+# Requires: gh, jq
+
+set -eu
+
+cutoff="2026-03-10T00:00:00Z"
+
+error() {
+    printf "error: %s\n" "$*" 1>&2
+}
+
+resolve_tag_sha() {
+    repo="$1"
+    tag="$2"
+
+    ref=$(gh api "repos/$repo/git/ref/tags/$tag" --jq '.object.type + " " + .object.sha')
+    obj_type="${ref%% *}"
+    sha="${ref#* }"
+
+    # Dereference annotated tags to the underlying commit.
+    if [ "$obj_type" = "tag" ]
+    then
+        sha=$(gh api "repos/$repo/git/tags/$sha" --jq '.object.sha')
+    fi
+
+    printf '%s\n' "$sha"
+}
+
+release_tags_since_cutoff() {
+    repo="$1"
+    cutoff="$2"
+
+    gh api "repos/$repo/releases" --paginate \
+            --jq '.[] | select(.draft == false and .prerelease == false) | {published_at, tag_name}' |
+        jq --raw-output --arg cutoff "${cutoff}" 'select(.published_at < $cutoff) | .tag_name'
+
+    # Output is a sequence of lines containing tags that match releases prior to the cutoff.
+}
+
+highest_tag() {
+    # Pipe in a sequence of lines containing version identifiers, only the highest will be returned as output.
+    sort --version-sort --reverse | head -1
+}
+
+# Fallback for repos that publish tags but no GitHub releases.
+# Uses GraphQL to fetch all tags with their commit dates in bulk,
+# filters to version-like names (v* or prefix/v*), prunes those
+# at or after the cutoff, and returns tag names for version-sorting.
+version_tags_before_cutoff() {
+    repo="$1"
+    cutoff="$2"
+    owner="${repo%%/*}"
+    name="${repo#*/}"
+
+    # All tags, and the date of the associated commit.
+    gh api graphql --paginate -f query='
+        query($owner: String!, $name: String!, $endCursor: String) {
+            repository(owner: $owner, name: $name) {
+                refs(refPrefix: "refs/tags/", first: 100, after: $endCursor,
+                     orderBy: {field: TAG_COMMIT_DATE, direction: DESC}) {
+                    pageInfo { hasNextPage endCursor }
+                    nodes {
+                        name
+                        target {
+                            ... on Commit { committedDate }
+                            ... on Tag { target { ... on Commit { committedDate } } }
+                        }
+                    }
+                }
+            }
+        }' -f owner="${owner}" -f name="${name}" \
+            --jq '.data.repository.refs.nodes[] | {name, date: (.target.committedDate // .target.target.committedDate)}' |
+        jq --raw-output --arg cutoff "${cutoff}" '
+            select(.name | test("^(v|.*/v)[0-9]")) |
+            select(.date < $cutoff) |
+            .name'
+}
+
+resolve_action() {
+    arg="$1"
+
+    # Expected formats:
+    #   owner/repo@ref              e.g. actions/checkout@v4
+    #   owner/repo/path...@ref      e.g. databrickslabs/sandbox/acceptance@acceptance/v0.4.4
+    #   owner/repo                  e.g. actions/checkout (ref not required)
+    #   owner/repo/path...          e.g. databrickslabs/sandbox/acceptance
+    case "$arg" in
+        */*@*)
+            ref="${arg##*@}"                      # After the trailing @
+            action="${arg%%@*}"                   # Before the trailing @
+            ;;
+        */*)
+            ref=""
+            action="$arg"
+            ;;
+        *)
+            error "unsupported action format: $arg"
+            return 1
+    esac
+
+    owner="${action%%/*}"                 # Before the first /
+    repo_and_path="${action#*/}"          # After the first /
+    repo="${owner}/${repo_and_path%%/*}"  # owner/repo (strip any sub-path)
+
+    # Detect if it's a mono-repo: convention is that a subpath is used as a tag prefix.
+    # For example: owner/repo/path -> @path/vX.Y
+    case "$repo_and_path" in
+        */*) path_in_repo="${repo_and_path#*/}" ;;
+        *)   path_in_repo="" ;;
+    esac
+
+    # Find the latest release published before the cutoff. We try the tag
+    # prefix filter first (mono-repos like databrickslabs/sandbox namespace
+    # tags as <subpath>/vX.Y); if nothing matches, fall back to unfiltered
+    # tags so mono-repos with a shared version (e.g. github/codeql-action,
+    # which publishes a single vX.Y.Z used by every subpath) still resolve.
+    releases="$(release_tags_since_cutoff "$repo" "$cutoff")"
+    tag="$(printf '%s\n' "$releases" |
+        awk -F/ -vtag_prefix="${path_in_repo}" '!tag_prefix || tag_prefix==$1' |
+        highest_tag)"
+    if [ -z "$tag" ] && [ -n "$path_in_repo" ]
+    then
+        tag="$(printf '%s\n' "$releases" | highest_tag)"
+    fi
+
+    # Fall back to the tags API for repos that use tags but have no GitHub releases.
+    if [ -z "$tag" ]
+    then
+        vtags="$(version_tags_before_cutoff "$repo" "$cutoff")"
+        tag="$(printf '%s\n' "$vtags" |
+            awk -F/ -vtag_prefix="${path_in_repo}" '!tag_prefix || tag_prefix==$1' |
+            highest_tag)"
+        if [ -z "$tag" ] && [ -n "$path_in_repo" ]
+        then
+            tag="$(printf '%s\n' "$vtags" | highest_tag)"
+        fi
+    fi
+
+    if [ -z "$tag" ]
+    then
+        return 1
+    fi
+
+    sha=$(resolve_tag_sha "$repo" "$tag")
+
+    if [ "$ref" = "$sha" ]
+    then
+        printf "✓ %s\n" "$arg"
+    else
+        printf "⚠ %s: %s@%s  # %s\n" "$arg" "$action" "$sha" "$tag"
+    fi
+}
+
+for arg in "$@"
+do
+    if ! resolve_action "$arg"
+    then
+        error "$arg: no release found before $cutoff"
+    fi
+done

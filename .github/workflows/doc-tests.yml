@@ -38,7 +38,16 @@ jobs:
   test-python-docs:
     name: Python Documentation Tests
     runs-on: larger
-    if: false  # Disabled until project launch
+    # SECURITY — READ BEFORE RE-ENABLING THIS JOB
+    # This job is workflow_run-triggered, checks out
+    #   ref: github.event.workflow_run.head_sha
+    # and binds environment: runtime (which exposes REPO_ACCESS_TOKEN).
+    # When the upstream "build main" runs from a fork PR, head_sha is the
+    # FORK's commit — re-enabling without an origin guard would execute
+    # attacker-controlled code with REPO_ACCESS_TOKEN in scope.
+    # Before removing `if: false`, REPLACE it with the origin guard:
+    #   if: github.event.workflow_run.head_repository.full_name == github.repository
+    if: false  # Disabled until project launch — see security banner above before re-enabling.
     # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
     environment: runtime
 
@@ -93,7 +102,16 @@ jobs:
   test-scala-docs:
     name: Scala Documentation Tests
     runs-on: larger
-    if: false  # Disabled until Scala doc tests are created
+    # SECURITY — READ BEFORE RE-ENABLING THIS JOB
+    # This job is workflow_run-triggered and binds environment: runtime
+    # (which exposes REPO_ACCESS_TOKEN). It does not currently set an
+    # explicit `ref:` on checkout, but the sibling jobs in this file do —
+    # so re-enablers commonly copy that pattern. Whether or not you add
+    # a head_sha ref, you MUST gate this job by origin or a fork PR can
+    # cause a workflow_run that exposes REPO_ACCESS_TOKEN to fork code.
+    # Before removing `if: false`, REPLACE it with the origin guard:
+    #   if: github.event.workflow_run.head_repository.full_name == github.repository
+    if: false  # Disabled until Scala doc tests are created — see security banner above before re-enabling.
     # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
     environment: runtime
 
@@ -117,7 +135,16 @@ jobs:
   validate-structure:
     name: Validate Documentation Structure
     runs-on: larger
-    if: false  # Disabled until project launch
+    # SECURITY — READ BEFORE RE-ENABLING THIS JOB
+    # This job is workflow_run-triggered, checks out
+    #   ref: github.event.workflow_run.head_sha
+    # and binds environment: runtime (which exposes REPO_ACCESS_TOKEN).
+    # When the upstream "build main" runs from a fork PR, head_sha is the
+    # FORK's commit — re-enabling without an origin guard would execute
+    # attacker-controlled code with REPO_ACCESS_TOKEN in scope.
+    # Before removing `if: false`, REPLACE it with the origin guard:
+    #   if: github.event.workflow_run.head_repository.full_name == github.repository
+    if: false  # Disabled until project launch — see security banner above before re-enabling.
     # Checkout uses REPO_ACCESS_TOKEN (non-exempt secret), so gate behind the protected env.
     environment: runtime
 

@@ -2,6 +2,11 @@
 ARG BUILDPLATFORM=linux/amd64
 ARG GDAL_VERSION=3.11.4
 ARG PDAL_VERSION=2.8.2
+# Pinned commit for PDAL ${PDAL_VERSION} (Labs lockdown policy: tags are mutable).
+# To bump PDAL_VERSION, resolve the new tag with:
+#   gh api repos/PDAL/PDAL/git/refs/tags/<version> --jq .object.sha
+# and update PDAL_SHA in lockstep.
+ARG PDAL_SHA=736fa0a66af4bed7105dff5fa152edf26bbb8a3a
 
 # ==========================================
 # STAGE 1: OS Base & Java
@@ -116,8 +121,13 @@ RUN ln -s $ROOTDIR/lib/libgdal.so /usr/lib/libgdal.so && \
 # ==========================================
 FROM gdal-builder AS pdal-builder
 ARG PDAL_VERSION
-RUN git clone --depth 1 -b ${PDAL_VERSION} https://github.com/PDAL/PDAL.git /tmp/pdal \
-    && cd /tmp/pdal && mkdir -p build && cd build \
+ARG PDAL_SHA
+RUN mkdir -p /tmp/pdal && cd /tmp/pdal \
+    && git init -q \
+    && git remote add origin https://github.com/PDAL/PDAL.git \
+    && git fetch --depth 1 -q origin ${PDAL_SHA} \
+    && git checkout -q FETCH_HEAD \
+    && mkdir -p build && cd build \
     && cmake -G Ninja .. \
         -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DGDAL_CONFIG=/usr/local/bin/gdal-config \

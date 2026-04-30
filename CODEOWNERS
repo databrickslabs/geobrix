@@ -1,0 +1,13 @@
+# CODEOWNERS for databrickslabs/geobrix
+#
+# Required by the Databricks Labs Repository Lockdown policy
+# (https://databricks.atlassian.net/wiki/spaces/UN/pages/778928444).
+# Combined with branch protection, listed owners must approve every PR
+# before it can be merged.
+#
+# Membership is managed at the org level on the GitHub team page:
+#   https://github.com/orgs/databrickslabs/teams/geobrix-write
+#
+# Syntax: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-security/customizing-your-repository/about-code-owners
+
+* @databrickslabs/geobrix-write

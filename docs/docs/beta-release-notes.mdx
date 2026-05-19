@@ -11,6 +11,22 @@ The changes on this page are relative to 0.1.0 (and earlier).
 
 This page tracks **API and naming changes** since the GeoBrix project started. After the project is approved, formal release notes will take over; until then, use this as the single place to look up what changed and why.
 
+---
+
+## What's new in v0.3.0
+
+Released 2026-05-19. Per-version highlights; full migration tables are in the per-component sections below.
+
+- **RasterX — `rst_clip` CRS axis-order fix (all-black clips).** GDAL 3+ defaults EPSG-imported `SpatialReference`s to authority-compliant axis order (lat/lon for EPSG:4326), which silently swapped axes against JTS/Databricks WKT/WKB cutlines so the clip missed the raster entirely. The reprojection now clones the source/destination `SpatialReference`s and forces `OAMS_TRADITIONAL_GIS_ORDER` before the OGR transform; caller-owned `SpatialReference`s are not mutated.
+- **RasterX — EWKT / EWKB support for `rst_clip`.** `JTS.fromWKT` / `JTS.fromWKB` auto-detect EWKT/EWKB; new `JTS.toEWKT` / `JTS.toEWKB` helpers emit SRID-preserving forms. `rst_clip` reprojects the cutline when its SRID differs from the raster CRS, and falls back to the raster's CRS (Mosaic-compatible) when the SRID is `0` / unresolvable.
+- **RasterX — `rst_transform` rejects invalid SRIDs.** `targetSrid <= 0` and unresolvable EPSG codes now surface a clear error via tile metadata `error_message` instead of returning a raster with an uninitialized CRS.
+- **`/vsimem/` path-handling hardening.** `rst_memsize` / `rst_unlink` / GDAL writer in-memory byte fetch now use `startsWith("/vsimem/")` (not `contains`) and null-check `GetMemFileBuffer`, so datasets whose description embeds the substring (e.g. NetCDF subdataset selectors) aren't mis-routed through the in-memory branch.
+- **Scalar args without `f.lit(...)`.** Python wrappers auto-wrap `bool` / `int` / `float` / `bytes`; Scala adds typed overloads. SQL was already natively-typed. String literals still wrap in `f.lit(...)` per pyspark's column-ref convention. Details and migration examples in [Scalar values vs `lit(...)` wrapping](#scalar-values-vs-lit-wrapping).
+- **Example notebooks — EO Series + xView + RasterX enablement diagrams.** New end-to-end walkthroughs under `docs/examples/` covering EO time-series, xView object-detection rasters, and RasterX architecture diagrams.
+- **Supply-chain hardening (lockdown).** Jobs pinned to the Databricks-hardened runner group (org-level allowlist, ephemeral VMs, constrained secret access); every Maven dependency, transitive dep, plugin, and plugin dependency is PGP-verified against `.maven-keys.list` before any compile or test execution; pip and Maven routed through JFrog with OIDC; init script + pinned package versions vetted; new [Security](./security.mdx) page in the docs.
+
+---
+
 **Conventions:**
 - **baseline** — Name or behavior before the change (what to search for in old code or docs).
 - **Notes** — Short reason (e.g. standardize across languages, underscore standardization, _geometry → _geom).

@@ -39,7 +39,7 @@ from that release's assets over the version shown below.
 ### 1. Download Release Artifacts
 
 Each GeoBrix [release](https://github.com/databrickslabs/geobrix/releases)
-attaches three files for the GDAL install path:
+attaches three files for the GDAL install path (among others):
 
 - `geobrix-gdal-artifacts-v<version>-noble.tar.gz` — the bundle (JAR,
   `libgdalalljni.so`, GDAL `.deb`s, Python wheels — everything pre-built and
@@ -71,11 +71,11 @@ release/operator process.
 
 ### 3. Stage the Init Script
 
-The init script is **not** uploaded to the bundle Volume; it's the cluster's
+The init script is **not** included in the bundle (from above); it's the cluster's
 init-script attachment.
 
 1. Upload the release's `geobrix-gdal-init.sh` to a workspace file path or
-   a separate Volume the cluster can read.
+   a separate Volume the cluster can read, e.g. the same `VOL_DIR` you set (below) or elsewhere.
 2. Edit `VOL_DIR` (one line near the top of the script) to point at the
    Volume from step 2.
 3. No other edits are required — the script reads the expected tarball
@@ -108,7 +108,20 @@ are installed by this script. This lets the GeoBrix Python wheel be
 bumped independently of the GDAL platform layer.
 :::
 
+Preview of the first 10 lines — expand below for the full script (~400 lines).
+
+<CodeFromTest
+  code={initScript.split('\n').slice(0, 10).join('\n') + '\n# ... (expand the disclosure below for the full script)'}
+  language="bash"
+  title="GeoBrix Init Script — preview (scripts/geobrix-gdal-init.sh)"
+/>
+
+<details>
+  <summary>Show the full init script</summary>
+
 <CodeFromTest code={initScript} language="bash" title="GeoBrix Init Script (scripts/geobrix-gdal-init.sh)" />
+
+</details>
 
 ### 4. Configure Cluster
 

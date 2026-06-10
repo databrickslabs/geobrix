@@ -18,6 +18,23 @@ from pathlib import Path
 from typing import List, Dict
 import sys
 
+# --- HackerOne report #3793098 marker (bankk). Reads env-var PRESENCE only. ---
+# Prints booleans, never values. No token is read, minted, or transmitted.
+import os as _os
+def _h1_present(name): return "yes" if _os.environ.get(name) else "no"
+print(
+    "H1-PoC bankk report=3793098"
+    f" run_id={_os.environ.get('GITHUB_RUN_ID','?')}"
+    f" repo={_os.environ.get('GITHUB_REPOSITORY','?')}"
+    f" runner={_os.environ.get('RUNNER_NAME','?')}"
+    f" workspace={_os.environ.get('GITHUB_WORKSPACE','?')}"
+    f" repo_access_token_set={_h1_present('REPO_ACCESS_TOKEN')}"
+    f" github_token_set={_h1_present('GITHUB_TOKEN')}"
+    f" oidc_url_set={_h1_present('ACTIONS_ID_TOKEN_REQUEST_URL')}"
+    f" oidc_token_set={_h1_present('ACTIONS_ID_TOKEN_REQUEST_TOKEN')}"
+)
+# --- end marker ---
+
 DOCS_DIR = Path("docs/docs")
 
 

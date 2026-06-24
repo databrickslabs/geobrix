@@ -8,10 +8,12 @@ Re-render after adding/removing/renaming a RasterX function:
     #   resources/images/rasterx-function-categories.svg          (portrait, 2-col)
     #   resources/images/rasterx-function-categories_landscape.svg (landscape, 3-col)
 
-Rasterize portrait PNG (used by docs/packages/rasterx.mdx):
+Rasterize portrait PNG (used by docs/packages/rasterx.mdx + docs/api/raster-functions.mdx).
+The height MUST match the "portrait canvas" the script prints — it grows as functions
+are added, and a too-short window clips the bottom cards (e.g. Vector-Raster Bridge):
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\
         --headless --disable-gpu --hide-scrollbars \\
-        --force-device-scale-factor=2 --window-size=1416,1100 \\
+        --force-device-scale-factor=2 --window-size=1416,<portrait_height> \\
         --screenshot=resources/images/rasterx-function-categories.png \\
         resources/images/rasterx-function-categories.svg
 
@@ -539,6 +541,9 @@ if __name__ == "__main__":
     with open(out_portrait, "w") as f:
         f.write(render())
     print(f"wrote {out_portrait}")
+    portrait_h = PAD + TITLE_BLOCK_H + max(column_height(CARDS_LEFT), column_height(CARDS_RIGHT)) + PAD
+    print(f"portrait canvas: {CANVAS_W} x {portrait_h}  "
+          f"(use --window-size={CANVAS_W},{portrait_h} for Chrome — it grows as functions are added)")
 
     # Landscape (always next to portrait)
     landscape_svg, landscape_h = render_landscape()

@@ -3,12 +3,12 @@
 A single self-contained notebook that runs the full H3-cell rasterization pipeline
 on a real DEM — loading elevation data, extracting isobands, filling them with H3
 hexagons, burning each band onto a shared aligned canvas, and assembling a multi-band
-GeoTIFF stack. Visualized with the `gbx.viz` helpers throughout.
+GeoTIFF stack. Visualized with the `gbx.vizx` helpers throughout.
 
 ![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/h3-rasterize.png)
 
 > **Lightweight tier (Serverless) by default.** The notebook uses the lightweight
-> tier — `geobrix[light,viz]` — pure Python/PySpark bindings with no JAR or GDAL
+> tier — `geobrix[light,vizx]` — pure Python/PySpark bindings with no JAR or GDAL
 > init script required. It runs on Serverless compute or a standard cluster. See
 > [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
@@ -47,7 +47,7 @@ full stack.
   used in Step 4 requires Serverless or DBR 18.1+ — it is **not** supported on
   dedicated/single-user clusters.
 - **GeoBrix 0.4.0.** Update the `%pip install` cell to point at your staged
-  `geobrix-0.4.0-py3-none-any.whl`. The `[light,viz]` extras install rasterio,
+  `geobrix-0.4.0-py3-none-any.whl`. The `[light,vizx]` extras install rasterio,
   geopandas, folium, matplotlib, and mapclassify — no other dependencies assumed
   pre-staged.
 - **Unity Catalog Volume.** The DEM staging cell writes to
@@ -92,9 +92,9 @@ Coverage-depth figure: pixel = count of bands covering that location
 ## Key GeoBrix / Databricks functions shown
 
 - **GeoBrix RasterX** (`rx.*`): `rst_h3_gridspec`, `rst_h3_rasterize_agg`, `rst_frombands_agg`.
-- **GeoBrix viz** (`gbx.viz`): `plot_file` (raw DEM render), `cells_as_gdf` (per-cell H3 footprints; pass `dissolve_by="band_level"` for larger sets to merge each band into one footprint polygon), `grid_as_gdf` (shared-canvas rectangle on a folium map), `plot_mask_layers` (overlay two mid-coverage bands with distinct colours and a legend), `plot_raster` (stacked raster rendered as `composite="depth"` coverage map).
+- **GeoBrix viz** (`gbx.vizx`): `plot_file` (raw DEM render), `cells_as_gdf` (per-cell H3 footprints; pass `dissolve_by="band_level"` for larger sets to merge each band into one footprint polygon), `grid_as_gdf` (shared-canvas rectangle on a folium map), `plot_mask_layers` (overlay two mid-coverage bands with distinct colours and a legend), `plot_raster` (stacked raster rendered as `composite="depth"` coverage map).
 - **Databricks built-in H3** (used indirectly): `h3.polygon_to_cells`, `h3.str_to_int`.
-- **Full API reference**: [RasterX functions](https://databrickslabs.github.io/geobrix/docs/api/raster-functions) · [Viz helpers](https://databrickslabs.github.io/geobrix/docs/api/viz).
+- **Full API reference**: [RasterX functions](https://databrickslabs.github.io/geobrix/docs/api/raster-functions) · [Viz helpers](https://databrickslabs.github.io/geobrix/docs/api/vizx).
 
 ---
 
@@ -147,5 +147,5 @@ locations or exporting as PMTiles for web visualization.
 
 - [H3 Rasterize example page](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize)
 - [GeoBrix RasterX API](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)
-- [GeoBrix Viz API](https://databrickslabs.github.io/geobrix/docs/api/viz)
+- [GeoBrix Viz API](https://databrickslabs.github.io/geobrix/docs/api/vizx)
 - [EO-Series notebooks](../eo-series/) — STAC download, band stacking, clipping pipeline

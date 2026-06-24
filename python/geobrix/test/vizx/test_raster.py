@@ -11,7 +11,7 @@ import rasterio  # noqa: E402
 from rasterio.io import MemoryFile  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
 
-from databricks.labs.gbx.viz import _raster, plot_file, plot_raster  # noqa: E402
+from databricks.labs.gbx.vizx import _raster, plot_file, plot_raster  # noqa: E402
 
 NODATA = -9999.0
 
@@ -242,7 +242,7 @@ def test_plot_mask_layers_overlays_distinct_colours_with_legend():
     Asserts real drawn content: two AxesImages, a 2-entry legend, and both requested
     colours present in the rasterized buffer (not a single blended/blank layer).
     """
-    from databricks.labs.gbx.viz import plot_mask_layers
+    from databricks.labs.gbx.vizx import plot_mask_layers
 
     # Two nested masks on the SAME 16x16 grid: big (12x12) and small (6x6).
     transform = from_origin(0.0, 16.0, 1.0, 1.0)

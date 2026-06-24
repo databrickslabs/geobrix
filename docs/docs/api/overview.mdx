@@ -9,6 +9,7 @@ import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.
 import RasterXIcon from '../../../resources/images/RasterX.png';
 import GridXIcon from '../../../resources/images/GridX.png';
 import VectorXIcon from '../../../resources/images/VectorX.png';
+import VizXIcon from '../../../resources/images/VizX.png';
 
 # Functions Overview
 
@@ -63,6 +64,17 @@ Augments Databricks built-in `ST_*` functions with vector-tile encoding, TIN sur
 
 ---
 
+### <img src={VizXIcon} alt="VizX" style={{height: '88px', width: 'auto', verticalAlign: 'middle'}} /> {#vizx}
+
+Tier-agnostic visualization helpers for inspecting GeoBrix outputs in a notebook — Python-only, no SQL functions.
+
+- Raster plotting (`plot_raster` / `plot_file`) with auto-decimation and percentile stretch, including coverage-depth and mask-layer composites for multi-band presence stacks
+- Spark DataFrame → GeoPandas adapters (`as_gdf` / `cells_as_gdf` / `grid_as_gdf`) for `.plot()` / `.explore()` maps
+
+[VizX Reference →](./vizx)
+
+---
+
 ### PMTiles
 
 Container format for serving raster (PNG / JPEG / WebP) or vector (MVT) tile pyramids from a single static file via HTTP range requests. Native Scala v3 encoder — no GDAL/OGR dependency.
@@ -76,13 +88,13 @@ Container format for serving raster (PNG / JPEG / WebP) or vector (MVT) tile pyr
 
 ## Package Comparison
 
-| Feature | RasterX | GridX | VectorX | PMTiles |
-|---------|---------|-------|---------|---------|
-| **Primary Use** | Raster processing | Discrete global grids | Vector encoding + legacy | Tile pyramid packaging |
-| **Product Gap** | Full gap-filling | Specialized grids (BNG, quadbin) | Vector-tile encoding, legacy migration | Net-new |
-| **GDAL Required** | Yes | No | Yes (readers + MVT) | No |
-| **Output Format** | Tile (struct) + arrays | Cell IDs (Long / String) + WKB | BINARY (MVT bytes), WKB | BINARY (PMTile blob) or file |
-| **Spark Surface** | 65+ SQL functions | 30+ SQL functions | 6+ SQL functions + DataSources | 1 UDAF + 1 DataSource |
+| Feature | RasterX | GridX | VectorX | PMTiles | VizX |
+|---------|---------|-------|---------|---------|------|
+| **Primary Use** | Raster processing | Discrete global grids | Vector encoding + legacy | Tile pyramid packaging | Notebook visualization |
+| **Product Gap** | Full gap-filling | Specialized grids (BNG, quadbin) | Vector-tile encoding, legacy migration | Net-new | Supporting layer |
+| **GDAL Required** | Yes | No | Yes (readers + MVT) | No | No |
+| **Output Format** | Tile (struct) + arrays | Cell IDs (Long / String) + WKB | BINARY (MVT bytes), WKB | BINARY (PMTile blob) or file | Matplotlib figure / GeoDataFrame |
+| **Spark Surface** | 65+ SQL functions | 30+ SQL functions | 6+ SQL functions + DataSources | 1 UDAF + 1 DataSource | Python only (no SQL) |
 
 ## Choosing the Right Package
 
@@ -93,6 +105,8 @@ Container format for serving raster (PNG / JPEG / WebP) or vector (MVT) tile pyr
 **Use VectorX when:** encoding features as Mapbox Vector Tiles; generating per-tile MVT layers; building TIN surfaces / interpolating elevation from Z-valued points; reading vector formats (Shapefile, GeoJSON, GeoPackage, FileGDB); migrating from DBLabs Mosaic.
 
 **Use PMTiles when:** publishing a tile pyramid (raster or vector) as a single static file; serving from S3/ABFS/GCS without a tile server; aggregating `(z, x, y, bytes)` rows into a deployable map.
+
+**Use VizX when:** inspecting GeoBrix raster tiles or files in a notebook (single-band, RGB, coverage-depth, or mask-layer composites); turning Spark geometry / H3-cell / gridspec DataFrames into GeoPandas for `.plot()` / `.explore()` maps. VizX is a Python-only supporting layer for visualization, not a spatial-processing package.
 
 ## Function Naming Convention
 

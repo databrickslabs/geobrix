@@ -1,4 +1,4 @@
-"""Spark DataFrame -> GeoDataFrame adapters for gbx.viz interactive maps.
+"""Spark DataFrame -> GeoDataFrame adapters for gbx.vizx interactive maps.
 
 Collect to the driver (single-node viz); guarded by max_rows so a large frame
 does not OOM the driver. Boundaries for H3 cells use the h3 lib (portable), not
@@ -14,7 +14,7 @@ def as_gdf(df, wkt_col="wkt", *, max_rows=10_000):
     Collects to the driver. With max_rows set (default 10_000) the frame is
     truncated to max_rows and a warning is emitted; pass max_rows=None to opt out.
     """
-    from databricks.labs.gbx.viz._env import assert_viz_available
+    from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
     import geopandas as gpd
@@ -54,7 +54,7 @@ def grid_as_gdf(grid, srid=None):
     Optional metadata columns ``pixel_size``, ``width``, and ``height`` are
     carried through if present on the input.
     """
-    from databricks.labs.gbx.viz._env import assert_viz_available
+    from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
 
@@ -114,7 +114,7 @@ def cells_as_gdf(
     that column (the union footprint) rather than one row per cell. Raises
     ``ValueError`` if ``dissolve_by`` is set but not in ``extra_cols``.
     """
-    from databricks.labs.gbx.viz._env import assert_viz_available
+    from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
 

@@ -64,5 +64,5 @@ runs:
         # dirs via test/conftest.py collect_ignore). Every light test dir must be
         # listed: pyrx, ds, pyvx, pygx (light GridX), pmtiles_light (light
         # pmtiles_agg), stac (light STAC client, [stac] extra),
-        # viz (gbx.viz, [viz] extra). See test/conftest.py for the maintained condition.
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/viz -m "not integration" -v
+        # vizx (gbx.vizx, [vizx] extra). See test/conftest.py for the maintained condition.
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/vizx -m "not integration" -v

@@ -1,34 +1,36 @@
 ---
 sidebar_position: 11
-title: Visualization (gbx.viz)
+title: VizX
 ---
 
-# Visualization (`gbx.viz`)
+import VizXIcon from '../../../resources/images/VizX.png';
 
-`databricks.labs.gbx.viz` renders rasters and turns Spark DataFrames into GeoDataFrames for interactive maps. It is **tier-agnostic** — the raster plotters take tile bytes (use them with `pyrx` *or* `rasterx` tiles), and the vector adapters take any Spark DataFrame.
+# <img src={VizXIcon} alt="VizX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> VizX
+
+`databricks.labs.gbx.vizx` renders rasters and turns Spark DataFrames into GeoDataFrames for interactive maps. It is **tier-agnostic** — the raster plotters take tile bytes (use them with `pyrx` *or* `rasterx` tiles), and the vector adapters take any Spark DataFrame.
 
 These are driver-side, single-node helpers for inspecting results in a notebook — not distributed operations. They collect to the driver, so the vector adapters guard the collect with `max_rows`.
 
 :::note Opt-in extra
-`gbx.viz` requires `geobrix[viz]`, which pulls in `matplotlib`, `geopandas`, `folium`, and `mapclassify`. The package itself imports only `matplotlib` (raster rendering) and `geopandas` (the GeoDataFrame adapters); `folium` + `mapclassify` are used by `GeoDataFrame.explore()` for interactive maps.
+`gbx.vizx` requires `geobrix[vizx]`, which pulls in `matplotlib`, `geopandas`, `folium`, and `mapclassify`. The package itself imports only `matplotlib` (raster rendering) and `geopandas` (the GeoDataFrame adapters); `folium` + `mapclassify` are used by `GeoDataFrame.explore()` for interactive maps.
 :::
 
 ## Installation
 
 ```bash
-pip install "geobrix[viz]"
+pip install "geobrix[vizx]"
 ```
 
 From a Databricks notebook (commonly alongside the lightweight tier):
 
 ```python
-%pip install --quiet "geobrix[light,viz] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.4.0-py3-none-any.whl"
+%pip install --quiet "geobrix[light,vizx] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-0.4.0-py3-none-any.whl"
 ```
 
 ## Import
 
 ```python
-from databricks.labs.gbx.viz import (
+from databricks.labs.gbx.vizx import (
     plot_raster,
     plot_file,
     plot_mask_layers,
@@ -60,7 +62,7 @@ plot_raster(raster_bytes, *, fig_w=10, fig_h=10, max_pixels=2000, composite="aut
 Render a raster from its in-memory bytes — e.g. a tile's `raster` field collected from a GeoBrix DataFrame:
 
 ```python
-from databricks.labs.gbx.viz import plot_raster
+from databricks.labs.gbx.vizx import plot_raster
 
 row = df.select("tile").first()
 plot_raster(row["tile"]["raster"])
@@ -78,7 +80,7 @@ plot_file(path, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto")
 Render a raster from disk (GeoTIFF, VRT, …) with the same decimation + stretch pipeline:
 
 ```python
-from databricks.labs.gbx.viz import plot_file
+from databricks.labs.gbx.vizx import plot_file
 
 plot_file("/Volumes/main/geobrix_samples/geobrix-examples/nyc/dem.tif")
 
@@ -108,7 +110,7 @@ Overlay several single-band presence-mask tiles on one axes, each drawn as a sol
 All tiles must share the same grid and extent — for example, produced on a shared canvas via [`rst_h3_gridspec`](./raster-functions#h3-grid). Layers are drawn in order: pass the largest footprint first and the smallest last so nested coverage remains visible.
 
 ```python
-from databricks.labs.gbx.viz import plot_mask_layers
+from databricks.labs.gbx.vizx import plot_mask_layers
 
 # Each raster is a single-band H3 presence mask for a different threshold.
 # Tiles share the same canvas (same gridspec extent).
@@ -137,10 +139,10 @@ as_gdf(df, wkt_col="wkt", *, max_rows=10_000)
 Convert a Spark DataFrame with a WKT geometry column into a `geopandas.GeoDataFrame`. Non-geometry columns are preserved; the WKT column is replaced by the geometry:
 
 ```python
-from databricks.labs.gbx.viz import as_gdf
+from databricks.labs.gbx.vizx import as_gdf
 
 gdf = as_gdf(df_with_wkt, wkt_col="wkt")
-gdf.explore()   # interactive folium map (needs the [viz] extra)
+gdf.explore()   # interactive folium map (needs the [vizx] extra)
 ```
 
 ### `cells_as_gdf`
@@ -164,11 +166,11 @@ Convert a DataFrame of H3 cell ids into a `GeoDataFrame` of cell-boundary polygo
 Without `dissolve_by`, each row represents one cell (useful for per-cell tooltips in `.explore()`). With `dissolve_by`, rows are merged per group into a single union footprint — far fewer geometries for large cell sets:
 
 ```python
-from databricks.labs.gbx.viz import cells_as_gdf
+from databricks.labs.gbx.vizx import cells_as_gdf
 
 # Per-cell choropleth:
 gdf = cells_as_gdf(df_cells, cell_col="cellid", extra_cols=["count"])
-gdf.explore(column="count")   # choropleth (needs mapclassify, bundled in [viz])
+gdf.explore(column="count")   # choropleth (needs mapclassify, bundled in [vizx])
 
 # Dissolve to one footprint polygon per category:
 gdf_dissolved = cells_as_gdf(
@@ -198,7 +200,7 @@ Convert a grid spec — as returned by [`rst_h3_gridspec`](./raster-functions#h3
 Optional metadata fields `pixel_size`, `width`, and `height` are carried through if present on the input.
 
 ```python
-from databricks.labs.gbx.viz import cells_as_gdf, grid_as_gdf
+from databricks.labs.gbx.vizx import cells_as_gdf, grid_as_gdf
 
 # grid_row is the 'grid' field from an rst_h3_gridspec result
 grid_gdf = grid_as_gdf(grid_row)

@@ -2,7 +2,7 @@ import builtins
 
 import pytest
 
-from databricks.labs.gbx.viz._env import assert_viz_available
+from databricks.labs.gbx.vizx._env import assert_viz_available
 
 
 def test_assert_viz_available_passes_when_present():
@@ -22,4 +22,4 @@ def test_assert_viz_available_raises_actionable_error(monkeypatch):
     with pytest.raises(ImportError) as ei:
         assert_viz_available()
     msg = str(ei.value)
-    assert "geopandas" in msg and "geobrix[viz]" in msg
+    assert "geopandas" in msg and "geobrix[vizx]" in msg

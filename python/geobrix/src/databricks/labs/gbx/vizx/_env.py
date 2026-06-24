@@ -1,4 +1,4 @@
-"""Lazy-dependency guard for gbx.viz (the [viz] extra).
+"""Lazy-dependency guard for gbx.vizx (the [vizx] extra).
 
 Visualization deps are heavy and optional. Package code imports them only inside
 functions, after calling assert_viz_available(), which raises a clear install
@@ -7,9 +7,9 @@ hint when they are absent — mirroring pyrx/_env.py::assert_rasterio_available(
 
 
 def assert_viz_available() -> None:
-    """Raise ImportError with [viz] guidance if matplotlib or geopandas is missing.
+    """Raise ImportError with [vizx] guidance if matplotlib or geopandas is missing.
 
-    Only the deps gbx.viz code actually imports are checked (matplotlib for raster
+    Only the deps gbx.vizx code actually imports are checked (matplotlib for raster
     rendering, geopandas for the GeoDataFrame adapters). folium / mapclassify are
     user-side GeoDataFrame.explore() deps and are not imported by this package.
     """
@@ -21,7 +21,7 @@ def assert_viz_available() -> None:
             missing.append(mod)
     if missing:
         raise ImportError(
-            "gbx.viz requires the [viz] extra (missing: "
+            "gbx.vizx requires the [vizx] extra (missing: "
             + ", ".join(missing)
-            + "). Install with: pip install 'geobrix[viz]'"
+            + "). Install with: pip install 'geobrix[vizx]'"
         )

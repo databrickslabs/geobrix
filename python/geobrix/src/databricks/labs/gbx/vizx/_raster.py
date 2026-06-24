@@ -1,4 +1,4 @@
-"""Raster rendering pipeline for gbx.viz (decimation + percentile stretch).
+"""Raster rendering pipeline for gbx.vizx (decimation + percentile stretch).
 
 Ported from notebooks/examples/eo-series/library.py. matplotlib/rasterio are
 lazy-imported inside the public plotters (Task 3); the numeric helpers here use
@@ -185,7 +185,7 @@ def plot_raster(raster_bytes, *, fig_w=10, fig_h=10, max_pixels=2000, composite=
 
     Auto-decimates above max_pixels; integer rasters whose values exceed 255
     (typical EO UInt16) get a per-band 2-98% percentile stretch. Single-band ->
-    viridis; multi-band -> RGB. Requires the [viz] extra.
+    viridis; multi-band -> RGB. Requires the [vizx] extra.
 
     Args:
         composite: ``"auto"`` (default) — 1 band → viridis; 3+ → RGB.
@@ -194,7 +194,7 @@ def plot_raster(raster_bytes, *, fig_w=10, fig_h=10, max_pixels=2000, composite=
                    are masked transparent.  Useful for multi-band presence masks
                    where an RGB composite would appear mostly black.
     """
-    from databricks.labs.gbx.viz._env import assert_viz_available
+    from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
     from rasterio.io import MemoryFile
@@ -224,7 +224,7 @@ def plot_mask_layers(
     colour → label. Tiles must share the same grid/extent (e.g. produced on a shared
     canvas via ``rst_h3_gridspec``). Layers are drawn in order, so pass the largest
     footprint first and the smallest last to keep nested coverage visible. Requires
-    the [viz] extra.
+    the [vizx] extra.
 
     Args:
         layers:     list of ``(label, raster_bytes)`` — each a single-band mask.
@@ -234,7 +234,7 @@ def plot_mask_layers(
                     the ``tab10`` qualitative cycle).
         title:      axes title.
     """
-    from databricks.labs.gbx.viz._env import assert_viz_available
+    from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
     import sys
@@ -287,7 +287,7 @@ def plot_file(path, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto"):
         composite: ``"auto"`` (default) — 1 band → viridis; 3+ → RGB.
                    ``"depth"`` — per-pixel coverage depth rendered as viridis.
     """
-    from databricks.labs.gbx.viz._env import assert_viz_available
+    from databricks.labs.gbx.vizx._env import assert_viz_available
 
     assert_viz_available()
     import rasterio

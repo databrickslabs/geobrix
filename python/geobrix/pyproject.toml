@@ -126,11 +126,11 @@ stac = [
     "tenacity>=8,<10",
     "requests>=2.25",
 ]
-# Visualization helpers (gbx.viz): matplotlib raster rendering + geopandas/folium
+# Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas/folium
 # map adapters. Optional so [light] users who don't visualize don't pull the GUI
 # stack. Package code imports only matplotlib + geopandas; folium + mapclassify are
 # for the user's GeoDataFrame.explore() maps.
-viz = [
+vizx = [
     "matplotlib>=3.7,<4",
     "geopandas>=1.0,<2",
     "folium>=0.16,<1",

@@ -45,7 +45,7 @@ _LIGHT_TEST_DIRS = [
     "pygx",
     "pmtiles_light",
     "stac",
-    "viz",
+    "vizx",
 ]
 
 # Skip the light-tier suites when their dependencies are not installed.

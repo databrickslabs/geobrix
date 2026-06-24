@@ -18,7 +18,7 @@ def spark():
 
 
 def test_as_gdf_crs_geometry_and_columns(spark):
-    from databricks.labs.gbx.viz import as_gdf
+    from databricks.labs.gbx.vizx import as_gdf
 
     df = spark.createDataFrame(
         [("a", "POINT (1 2)"), ("b", "POINT (3 4)")], ["name", "wkt"]
@@ -31,7 +31,7 @@ def test_as_gdf_crs_geometry_and_columns(spark):
 
 
 def test_as_gdf_truncates_and_warns_over_max_rows(spark):
-    from databricks.labs.gbx.viz import as_gdf
+    from databricks.labs.gbx.vizx import as_gdf
 
     df = spark.range(5).selectExpr("id", "concat('POINT (', id, ' 0)') AS wkt")
     with warnings.catch_warnings(record=True) as caught:
@@ -44,7 +44,7 @@ def test_as_gdf_truncates_and_warns_over_max_rows(spark):
 def test_cells_as_gdf_boundary_from_h3_lib(spark):
     import h3
 
-    from databricks.labs.gbx.viz import cells_as_gdf
+    from databricks.labs.gbx.vizx import cells_as_gdf
 
     cell_int = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
     df = spark.createDataFrame([(cell_int, 7)], ["cellid", "count"])
@@ -61,7 +61,7 @@ def test_cells_as_gdf_boundary_from_h3_lib(spark):
 
 def test_grid_as_gdf_from_dict_4326():
     """Dict with srid=4326 -> 1-row GDF with correct bounds and crs."""
-    from databricks.labs.gbx.viz import grid_as_gdf
+    from databricks.labs.gbx.vizx import grid_as_gdf
 
     grid = {
         "xmin": -73.0,
@@ -90,7 +90,7 @@ def test_grid_as_gdf_from_dict_4326():
 
 def test_grid_as_gdf_projected_srid_reprojects_to_4326():
     """UTM-27700 bounding box reprojects to sensible lon/lat range."""
-    from databricks.labs.gbx.viz import grid_as_gdf
+    from databricks.labs.gbx.vizx import grid_as_gdf
 
     # London area in EPSG:27700 (British National Grid)
     grid = {
@@ -112,7 +112,7 @@ def test_grid_as_gdf_projected_srid_reprojects_to_4326():
 
 def test_grid_as_gdf_srid_override():
     """Explicit srid kwarg overrides any srid stored in the grid."""
-    from databricks.labs.gbx.viz import grid_as_gdf
+    from databricks.labs.gbx.vizx import grid_as_gdf
 
     # Supply grid without srid field; pass srid explicitly as 4326
     grid = {"xmin": -73.0, "ymin": 40.0, "xmax": -72.0, "ymax": 41.0}
@@ -125,7 +125,7 @@ def test_grid_as_gdf_from_row(spark):
     """Spark Row input works the same as a plain dict."""
     from pyspark.sql import Row
 
-    from databricks.labs.gbx.viz import grid_as_gdf
+    from databricks.labs.gbx.vizx import grid_as_gdf
 
     row = Row(xmin=-73.0, ymin=40.0, xmax=-72.0, ymax=41.0, srid=4326)
     gdf = grid_as_gdf(row)
@@ -145,7 +145,7 @@ def test_cells_as_gdf_dissolve_by_merges_per_group(spark):
     """dissolve_by=band_level returns one merged polygon per distinct value."""
     import h3
 
-    from databricks.labs.gbx.viz import cells_as_gdf
+    from databricks.labs.gbx.vizx import cells_as_gdf
 
     # Two groups: band_level 1 and 2, each with 3 adjacent cells around
     # different lat/lng origins so geometries are distinct.
@@ -175,7 +175,7 @@ def test_cells_as_gdf_dissolve_by_not_in_extra_cols_raises(spark):
     """dissolve_by not in extra_cols raises ValueError."""
     import h3
 
-    from databricks.labs.gbx.viz import cells_as_gdf
+    from databricks.labs.gbx.vizx import cells_as_gdf
 
     cell_int = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
     df = spark.createDataFrame([(cell_int, 7)], ["cellid", "count"])

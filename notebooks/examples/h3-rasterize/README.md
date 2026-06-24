@@ -1,11 +1,11 @@
 # H3 Cell Rasterize + Band Stacking
 
-![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/h3-rasterize.png)
-
 A single self-contained notebook that runs the full H3-cell rasterization pipeline
 on a real DEM — loading elevation data, extracting isobands, filling them with H3
 hexagons, burning each band onto a shared aligned canvas, and assembling a multi-band
 GeoTIFF stack. Visualized with the `gbx.viz` helpers throughout.
+
+![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/h3-rasterize.png)
 
 > **Lightweight tier (Serverless) by default.** The notebook uses the lightweight
 > tier — `geobrix[light,viz]` — pure Python/PySpark bindings with no JAR or GDAL

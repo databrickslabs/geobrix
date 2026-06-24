@@ -9,6 +9,8 @@ An end-to-end example showing how to convert arbitrary polygon isobands — elev
 
 The notebook works through the San Francisco Bay Area: it reads a 1°×1° SRTM DEM tile (`srtm_n37w123.tif`, EPSG:4326) covering the SF Peninsula, Marin headlands, and East Bay hills, extracts eight 100 m elevation bands (0–700 m), polyfills each band with H3 resolution-8 hexagons, computes a shared pixel grid that spans all bands with `rst_h3_gridspec`, burns each band onto that grid with `rst_h3_rasterize_agg`, and assembles all eight single-band tiles into one multi-band GeoTIFF with `rst_frombands_agg`. A coverage-depth composite rendered by `plot_raster` closes the loop, showing at a glance how many elevation bands cover each pixel.
 
+![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/h3-rasterize.png)
+
 :::tip View on GitHub
 **[notebooks/examples/h3-rasterize](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/h3-rasterize)** — download `h3_rasterize_isobands.ipynb` and import it into your Databricks workspace to run.
 :::

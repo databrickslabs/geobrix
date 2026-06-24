@@ -1,6 +1,7 @@
 import io
 
 import matplotlib
+import pytest
 
 matplotlib.use("Agg")  # headless: no display needed
 from test.pyrx.conftest import make_geotiff_bytes  # noqa: E402
@@ -92,6 +93,19 @@ def test_plot_file_produces_a_figure(tmp_path):
     p.write_bytes(make_geotiff_bytes(width=8, height=8, count=3))
     plt.close("all")
     plot_file(str(p))
+    assert len(plt.get_fignums()) == 1
+    plt.close("all")
+
+
+@pytest.mark.parametrize("scheme", ["dbfs:", "file:", "file://"])
+def test_plot_file_strips_uri_scheme(tmp_path, scheme):
+    # Databricks paths are often scheme-qualified (dbfs:/..., file:///...);
+    # plot_file should read the FUSE-mount path by stripping the scheme rather
+    # than failing in rasterio.
+    p = tmp_path / "t.tif"
+    p.write_bytes(make_geotiff_bytes(width=8, height=8, count=1))
+    plt.close("all")
+    plot_file(f"{scheme}{p}")
     assert len(plt.get_fignums()) == 1
     plt.close("all")
 

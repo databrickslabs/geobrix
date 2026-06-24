@@ -77,7 +77,7 @@ plot_raster(row["tile"]["raster"], composite="depth")
 plot_file(path, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto")
 ```
 
-Render a raster from disk (GeoTIFF, VRT, …) with the same decimation + stretch pipeline:
+Render a raster from disk (GeoTIFF, VRT, …) with the same decimation + stretch pipeline. A leading `dbfs:` or `file:` scheme is stripped automatically, so scheme-qualified Databricks paths (`dbfs:/Volumes/…`, `file:///Volumes/…`) work as well as the bare FUSE path:
 
 ```python
 from databricks.labs.gbx.vizx import plot_file

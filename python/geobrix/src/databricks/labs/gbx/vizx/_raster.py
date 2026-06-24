@@ -292,6 +292,19 @@ def plot_file(path, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto"):
     assert_viz_available()
     import rasterio
 
+    # On Databricks, Volume/DBFS paths are often scheme-qualified (e.g.
+    # "dbfs:/Volumes/.../x.tif" or "file:///Volumes/.../x.tif"), but the FUSE
+    # mount rasterio reads is at the bare path ("/Volumes/.../x.tif"). Strip a
+    # leading dbfs:/file: scheme so any of those forms works.
+    path = str(path)
+    for scheme in ("dbfs:", "file:"):
+        if path.startswith(scheme):
+            path = path[len(scheme) :]
+            break
+    # file:// forms leave extra leading slashes (file:///p -> ///p); collapse.
+    if path.startswith("//"):
+        path = "/" + path.lstrip("/")
+
     with rasterio.open(path) as src:
         data, transform, scale = _decimated_read(src, max_pixels)
         _render(

@@ -47,6 +47,7 @@ quadbin==0.2.2
 pmtiles==3.7.0
 pyogrio==0.12.1
 pyproj==3.7.2
+contextily==1.6.2
 
 # --- contour (scikit-image) + viewshed (xarray-spatial) ---
 scikit-image==0.26.0

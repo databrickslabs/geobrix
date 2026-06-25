@@ -349,6 +349,7 @@ click==8.3.3 \
     # via
     #   black
     #   cligj
+    #   mercantile
     #   morecantile
     #   planetary-computer
     #   rasterio
@@ -396,6 +397,10 @@ comm==0.2.3 \
     # via
     #   ipykernel
     #   ipywidgets
+contextily==1.6.2 \
+    --hash=sha256:3c747925269be248a9b1a761859e05d1681286e04d5d0796bdaf1de3409474bb \
+    --hash=sha256:b06ead7258b34e73db2e318e33554f54a22d207b3c272b74d8b64801773b3fc3
+    # via -r requirements-dev-container.in
 contourpy==1.3.3 \
     --hash=sha256:023b44101dfe49d7d53932be418477dba359649246075c996866106da069af69 \
     --hash=sha256:07ce5ed73ecdc4a03ffe3e1b3e3c1166db35ae7584be76f65dbbe28a7791b0cc \
@@ -756,12 +761,20 @@ fqdn==1.5.1 \
     --hash=sha256:105ed3677e767fb5ca086a0c1f4bb66ebc3c100be518f0e0d755d9eae164d89f \
     --hash=sha256:3a179af3761e4df6eb2e026ff9e1a3033d3587bf980a0b1b2e1e5d08d7358014
     # via jsonschema
+geographiclib==2.1 \
+    --hash=sha256:6a6545e6262d0ed3522e13c515713718797e37ed8c672c31ad7b249f372ef108 \
+    --hash=sha256:e2a873b9b9e7fc38721ad73d5f4e6c9ed140d428a339970f505c07056997d40b
+    # via geopy
 geopandas==1.1.3 \
     --hash=sha256:90d62a64f95eaa3be2ccc115c5f3d6e24208bb11983b390fdc0621a3eccd0230 \
     --hash=sha256:91a31989b6f566012838d21d5f8033f37dce882079ccb7cfdc40d5ccce7f284f
     # via
     #   -r requirements-dev-container.in
     #   keplergl
+geopy==2.4.1 \
+    --hash=sha256:50283d8e7ad07d89be5cb027338c6365a32044df3ae2556ad3f52f4840b3d0d1 \
+    --hash=sha256:ae8b4bc5c1131820f4d75fce9d4aaaca0c85189b3aa5d64c3dcaf5e3b7b882a7
+    # via contextily
 h11==0.16.0 \
     --hash=sha256:4e35b956cf45792e4caa5885e69fba00bdbc6ffafbfa020300e549b208ee5ff1 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
@@ -880,6 +893,10 @@ jinja2==3.1.6 \
     #   jupyterlab
     #   jupyterlab-server
     #   nbconvert
+joblib==1.5.3 \
+    --hash=sha256:5fc3c5039fc5ca8c0276333a188bbd59d6b7ab37fe6632daa76bc7f9ec18e713 \
+    --hash=sha256:8561a3269e6801106863fd0d6d84bb737be9e7631e33aaed3fb9ce5953688da3
+    # via contextily
 json5==0.14.0 \
     --hash=sha256:56cf861bab076b1178eb8c92e1311d273a9b9acea2ccc82c276abf839ebaef3a \
     --hash=sha256:b3f492fad9f6cdbced8b7d40b28b9b1c9701c5f561bef0d33b81c2ff433fefcb
@@ -1268,7 +1285,9 @@ matplotlib==3.10.9 \
     --hash=sha256:f4399f64b3e94cd500195490972ae1ee81170df1636fa15364d157d5bdd7b921 \
     --hash=sha256:f76e640a5268850bfda54b5131b1b1941cc685e42c5fa98ed9f2d64038308cba \
     --hash=sha256:fd66508e8c6877d98e586654b608a0456db8d7e8a546eb1e2600efd957302358
-    # via xarray-spatial
+    # via
+    #   contextily
+    #   xarray-spatial
 matplotlib-inline==0.2.1 \
     --hash=sha256:d56ce5156ba6085e00a9d54fead6ed29a9c47e215cd1bba2e976ef39f5710a76 \
     --hash=sha256:e1ee949c340d771fc39e241ea75683deb94762c8fa5f2927ec57c83c4dffa9fe
@@ -1279,6 +1298,10 @@ mccabe==0.7.0 \
     --hash=sha256:348e0240c33b60bbdf4e523192ef919f28cb2c3d7d5c7794f74009290f236325 \
     --hash=sha256:6c2d30ab6be0e4a46919781807b4f0d834ebdd6c6e3dca0bda5a15f863427b6e
     # via flake8
+mercantile==1.2.1 \
+    --hash=sha256:30f457a73ee88261aab787b7069d85961a5703bb09dc57a170190bc042cd023f \
+    --hash=sha256:fa3c6db15daffd58454ac198b31887519a19caccee3f9d63d17ae7ff61b3b56b
+    # via contextily
 mistune==3.2.1 \
     --hash=sha256:78cdb0ba5e938053ccf63651b352508d2efa9411dc8810bfb05f2dc5140c0048 \
     --hash=sha256:7c8e5501d38bac1582e067e46c8343f17d57ea1aaa735823f3aba1fd59c88a28
@@ -1682,6 +1705,7 @@ pillow==12.2.0 \
     --hash=sha256:fb043ee2f06b41473269765c2feae53fc2e2fbf96e5e22ca94fb5ad677856f06 \
     --hash=sha256:fc3d34d4a8fbec3e88a79b92e5465e0f9b842b628675850d860b8bd300b159f5
     # via
+    #   contextily
     #   imageio
     #   matplotlib
     #   scikit-image
@@ -2383,6 +2407,7 @@ rasterio==1.5.0 \
     --hash=sha256:ff677c0a9d3ba667c067227ef2b76872488b37ff29b061bc3e576fad9baa3286
     # via
     #   -r requirements-dev-container.in
+    #   contextily
     #   rio-cogeo
     #   rio-tiler
     #   rioxarray
@@ -2398,6 +2423,7 @@ requests==2.32.3 \
     --hash=sha256:70761cfe03c773ceb22aa2f671b4757976145175cdfca038c02654d061d6dcc6
     # via
     #   -r requirements-dev-container.in
+    #   contextily
     #   jupyterlab-server
     #   planetary-computer
     #   pystac-client
@@ -2873,6 +2899,10 @@ xarray-spatial==0.9.9 \
     --hash=sha256:261f091d5043e8f9088782dd7cbf55b5b66314c679644463ea30de3d941a7cc3 \
     --hash=sha256:c6a6b13802f2f0a5f4c5b48ba57bfd67610ed2a25d96d8dcfcdf2798dd7140bf
     # via -r requirements-dev-container.in
+xyzservices==2026.3.0 \
+    --hash=sha256:503183d4b322bfebc3c50cdd21192aa3e81e36c5efbf9133d54ae82143e0576b \
+    --hash=sha256:d226866a5d8e9fef337034d8da37a8298f0a1d9d1489b4018e69579eb321fea4
+    # via contextily
 zstandard==0.25.0 \
     --hash=sha256:011d388c76b11a0c165374ce660ce2c8efa8e5d87f34996aa80f9c0816698b64 \
     --hash=sha256:01582723b3ccd6939ab7b3a78622c573799d5d8737b534b86d0e06ac18dbde4a \

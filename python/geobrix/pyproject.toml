@@ -135,6 +135,7 @@ vizx = [
     "geopandas>=1.0,<2",
     "folium>=0.16,<1",
     "mapclassify>=2.6,<3",
+    "contextily>=1.5,<2",
 ]
 
 [tool.coverage.run]

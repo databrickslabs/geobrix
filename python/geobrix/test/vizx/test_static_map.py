@@ -218,6 +218,32 @@ def test_plot_static_reprojects_to_3857_even_without_basemap(spark):
     plt.close("all")
 
 
+def test_detect_geom_col_no_geometry_column_raises(spark):
+    # grid_system=None and no native geo / wkt / geometry / geom column -> error.
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    df = spark.createDataFrame([(1, 2.0)], ["a", "b"])
+    with pytest.raises(ValueError):
+        sm._detect_geom_col(df, None)
+
+
+def test_detect_geom_col_ambiguous_cell_column_raises(spark):
+    # grid_system set, several columns, none named like a cell id -> error.
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    df = spark.createDataFrame([(1, 2)], ["a", "b"])
+    with pytest.raises(ValueError):
+        sm._detect_geom_col(df, "h3")
+
+
+def test_detect_geom_col_single_column_with_grid_system(spark):
+    # grid_system set + a lone column -> that column is used even if unnamed.
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    df = spark.createDataFrame([(123,)], ["my_cells"])
+    assert sm._detect_geom_col(df, "h3") == "my_cells"
+
+
 def _last_facecolor(ax):
     # geopandas draws polygons as a collection; return its facecolor RGBA array.
     return ax.collections[-1].get_facecolor()

@@ -213,6 +213,55 @@ grid_gdf.explore(m=m, color="black", style_kwds={"fill": False})
 
 See the [H3 rasterize notebook](../notebooks/h3-rasterize) for a worked example pairing `grid_as_gdf` with `cells_as_gdf` to build a shared-canvas overlay.
 
+## Static maps
+
+`plot_static` renders Spark- or GeoPandas-derived geometries (or H3 cells) over
+a basemap as a **static** matplotlib figure — the GitHub-renderable counterpart
+to `GeoDataFrame.explore()` (whose Leaflet/folium output renders a blank
+*"Make this Notebook Trusted"* placeholder on GitHub and the docs site).
+
+The basemap is fetched from a web tile server (via `contextily`) **at execution
+time** and rasterized into the figure, so it bakes into the committed notebook
+output PNG — GitHub then displays it with no network. If the executing
+environment has no egress, the map renders without a basemap and a warning is
+emitted (never a hard error).
+
+### `plot_static`
+
+```python
+plot_static(
+    data, *, geom_col=None, grid_system=None, column=None, cmap="viridis",
+    legend=True, basemap=True, basemap_source=None, alpha=0.8, edgecolor="face",
+    markersize=None, title=None, fig_w=10, fig_h=10, max_rows=10_000,
+    srid=None, ax=None,
+)
+```
+
+`data` is a Spark DataFrame **or** a `geopandas.GeoDataFrame`. Returns the
+matplotlib `Axes`; pass it back via `ax=` to overlay layers on one map.
+
+**Geometry columns** accept the same encodings as every other `gbx_st_*`
+function — WKT, EWKT, WKB, EWKB, and native `GEOMETRY` / `GEOGRAPHY` (coerced
+in-Spark via `st_asbinary`). Set **`grid_system`** to treat the column as DGGS
+cell ids instead:
+
+| `grid_system` | Behaviour |
+|---|---|
+| `None` (default) | Column is a geometry encoding (WKT/EWKT/WKB/EWKB/`GEOMETRY`/`GEOGRAPHY`). |
+| `'h3'` | Column holds H3 cell ids (string index **or** bigint); rendered as cell-boundary polygons. |
+| `'quadbin'`, `'bng'`, `'custom'` | Planned — currently raise `NotImplementedError`. |
+
+```python
+from databricks.labs.gbx.vizx import plot_static
+
+# H3 choropleth over a basemap, then overlay the shared-canvas boundary:
+ax = plot_static(cells_df, grid_system="h3", column="count", title="Coverage")
+plot_static(grid_boundary_df, basemap=False, ax=ax, edgecolor="red")
+```
+
+`basemap_source` overrides the default `contextily.providers.CartoDB.Positron`;
+`basemap=False` skips tiles entirely (deterministic, no network).
+
 ## Escape hatches
 
 When you need raster math that isn't in the `rst_*` surface, drop down to NumPy / rasterio per tile with the [pyrx escape hatches](./raster-functions#escape-hatches) (`tile_to_numpy`, `rst_apply`).

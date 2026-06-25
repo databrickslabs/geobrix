@@ -39,6 +39,16 @@ the notebook has egress. No basemap tiles are committed to the repo.
   but not implemented** in v1 (fast-follow). `'custom'` is the trickiest:
   custom grids need their own cell→boundary resolver, currently heavy-only.
 
+  **Fast-follow note (quadbin / bng):** these are nearly identical to the
+  native-`GEOMETRY` path — the project ships `quadbin_aswkb` and `bng_aswkb`
+  SQL functions, so the resolver is an in-Spark coercion
+  (`expr("quadbin_aswkb(col)")` / `expr("bng_aswkb(col)")`) → WKB → `parse_geom`,
+  not a pure-Python cell→boundary port. Each becomes one `_GRID_DISPATCH` entry
+  that coerces in Spark then reuses the existing geometry decode. (These SQL
+  functions only exist on a Spark runtime that registers them, so the unit
+  tests cover routing while the coercion itself is runtime-only — same testing
+  shape as the native-type path.)
+
 ## Public API
 
 ```python

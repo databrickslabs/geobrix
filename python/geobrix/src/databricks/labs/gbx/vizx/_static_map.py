@@ -79,6 +79,51 @@ def _collect_limited(df, max_rows):
     return pdf
 
 
+def _h3_boundary(cell):
+    import h3
+    from shapely.geometry import Polygon
+
+    idx = cell if isinstance(cell, str) else h3.int_to_str(int(cell))
+    ring = h3.cell_to_boundary(idx)  # (lat, lng) pairs in h3 v4
+    return Polygon([(lng, lat) for lat, lng in ring])
+
+
+def _h3_boundaries(values):
+    return [_h3_boundary(c) for c in values]
+
+
+def _nyi(name):
+    def _raise(_values):
+        raise NotImplementedError(
+            f"plot_static: grid_system={name!r} is a planned fast-follow; "
+            "not supported yet."
+        )
+
+    return _raise
+
+
+_GRID_DISPATCH = {
+    "h3": _h3_boundaries,
+    "quadbin": _nyi("quadbin"),
+    "bng": _nyi("bng"),
+    "custom": _nyi("custom"),
+}
+
+
+def _resolve_cells(data, col, grid_system, max_rows):
+    """DGGS cell-id column -> boundary-polygon GeoDataFrame (EPSG:4326)."""
+    import geopandas as gpd
+
+    if grid_system not in _GRID_DISPATCH:
+        raise ValueError(
+            f"plot_static: grid_system={grid_system!r} is not one of "
+            f"{sorted(_GRID_DISPATCH)} or None."
+        )
+    pdf = _collect_limited(data, max_rows)
+    geometry = _GRID_DISPATCH[grid_system](pdf[col].tolist())
+    return gpd.GeoDataFrame(pdf.drop(columns=[col]), geometry=geometry, crs=4326)
+
+
 def _resolve_gdf(data, geom_col, grid_system, max_rows, srid):
     """Spark DataFrame or GeoDataFrame -> geopandas.GeoDataFrame (EPSG:4326 or srid)."""
     import geopandas as gpd
@@ -89,7 +134,7 @@ def _resolve_gdf(data, geom_col, grid_system, max_rows, srid):
     col = geom_col or _detect_geom_col(data, grid_system)
 
     if grid_system is not None:
-        return _resolve_cells(data, col, grid_system, max_rows)  # noqa: F821
+        return _resolve_cells(data, col, grid_system, max_rows)
 
     from databricks.labs.gbx._geom import parse_geom
 

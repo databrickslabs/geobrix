@@ -108,3 +108,55 @@ def test_resolve_gdf_truncates_and_warns(spark):
         gdf = sm._resolve_gdf(df, None, None, 2, None)
     assert len(gdf) == 2
     assert any("max_rows" in str(w.message) for w in caught)
+
+
+def _ny_hex_string():
+    import h3
+
+    return h3.latlng_to_cell(40.7, -74.0, 9)  # string h3 index
+
+
+def test_resolve_cells_h3_string_and_long_match(spark):
+    import h3
+
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    s = _ny_hex_string()
+    as_long = h3.str_to_int(s)
+
+    df_str = spark.createDataFrame([(s,)], ["cellid"])
+    df_long = spark.createDataFrame([(as_long,)], ["cellid"])
+
+    g_str = sm._resolve_gdf(df_str, None, "h3", 10_000, None)
+    g_long = sm._resolve_gdf(df_long, None, "h3", 10_000, None)
+
+    assert g_str.crs.to_epsg() == 4326
+    # identical boundary polygon from either id form
+    assert g_str.geometry.iloc[0].equals(g_long.geometry.iloc[0])
+
+
+def test_resolve_cells_carries_attribute_columns(spark):
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    s = _ny_hex_string()
+    df = spark.createDataFrame([(s, 7)], ["cellid", "count"])
+    gdf = sm._resolve_gdf(df, "cellid", "h3", 10_000, None)
+    assert list(gdf["count"]) == [7]
+    assert "cellid" not in gdf.columns
+
+
+@pytest.mark.parametrize("gs", ["quadbin", "bng", "custom"])
+def test_resolve_cells_fast_follow_not_implemented(spark, gs):
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    df = spark.createDataFrame([(1,)], ["cellid"])
+    with pytest.raises(NotImplementedError):
+        sm._resolve_gdf(df, "cellid", gs, 10_000, None)
+
+
+def test_resolve_cells_unknown_grid_system_raises(spark):
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    df = spark.createDataFrame([(1,)], ["cellid"])
+    with pytest.raises(ValueError):
+        sm._resolve_gdf(df, "cellid", "geohash", 10_000, None)

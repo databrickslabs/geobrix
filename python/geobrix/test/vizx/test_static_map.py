@@ -202,6 +202,22 @@ def test_plot_static_overlay_reuses_axes(spark):
     plt.close("all")
 
 
+def test_plot_static_reprojects_to_3857_even_without_basemap(spark):
+    # Overlays must share a CRS to align. plot_static reprojects every layer to
+    # Web Mercator (EPSG:3857) regardless of `basemap`, so a basemap=False
+    # overlay lands in the same coordinate space as a basemap layer rather than
+    # in raw 4326 degrees. Guards against the layers-misaligned regression.
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    df = spark.createDataFrame([("POINT (-122 37)",)], ["wkt"])
+    ax = plot_static(df, basemap=False)
+    x = float(ax.collections[-1].get_offsets()[0][0])
+    # -122 deg lon -> ~-1.358e7 m in EPSG:3857; in 4326 it would be ~-122.
+    assert abs(x) > 1000, f"expected web-mercator meters, got {x}"
+    plt.close("all")
+
+
 def test_plot_static_basemap_fallback_warns(spark, monkeypatch):
     import contextily
 

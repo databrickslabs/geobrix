@@ -182,7 +182,9 @@ def plot_static(
     DGGS cell ids (string or long). The contextily basemap is rendered when
     ``basemap=True``; any failure (no egress / missing dep) degrades to a
     warning and a basemap-less render. Returns the matplotlib Axes; pass it back
-    via ``ax=`` to overlay layers. Requires the [vizx] extra.
+    via ``ax=`` to overlay layers -- every layer is reprojected to Web Mercator
+    (EPSG:3857), so a ``basemap=False`` overlay aligns with a basemap layer on
+    the same axes. Requires the [vizx] extra.
     """
     from databricks.labs.gbx.vizx._env import assert_viz_available
 
@@ -196,7 +198,12 @@ def plot_static(
     if created:
         _, ax = plt.subplots(1, figsize=(fig_w, fig_h))
 
-    plot_gdf = gdf.to_crs(3857) if basemap else gdf
+    # Reproject to Web Mercator (3857) regardless of `basemap` so that (a) a
+    # contextily basemap lines up and (b) layers drawn on the same `ax` via
+    # `ax=` share one coordinate system and overlay correctly -- `basemap` only
+    # toggles whether tiles are fetched, not the projection. A CRS-less
+    # GeoDataFrame cannot be reprojected, so it is plotted as-is.
+    plot_gdf = gdf.to_crs(3857) if gdf.crs is not None else gdf
 
     kwargs = {"ax": ax, "alpha": alpha, "edgecolor": edgecolor, "cmap": cmap}
     if column is not None:

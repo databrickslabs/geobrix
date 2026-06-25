@@ -218,6 +218,51 @@ def test_plot_static_reprojects_to_3857_even_without_basemap(spark):
     plt.close("all")
 
 
+def _last_facecolor(ax):
+    # geopandas draws polygons as a collection; return its facecolor RGBA array.
+    return ax.collections[-1].get_facecolor()
+
+
+def test_plot_static_fill_true_fills_polygon(spark):
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    df = spark.createDataFrame([("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",)], ["wkt"])
+    ax = plot_static(df, basemap=False)  # fill=True default
+    fc = _last_facecolor(ax)
+    assert fc.size > 0 and float(fc[0][3]) > 0.0  # visible (alpha>0) face
+    plt.close("all")
+
+
+def test_plot_static_fill_false_draws_outline_only(spark):
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    df = spark.createDataFrame([("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",)], ["wkt"])
+    ax = plot_static(df, basemap=False, fill=False, edgecolor="red")
+    fc = _last_facecolor(ax)
+    # facecolor "none" -> empty array or a fully transparent (alpha 0) face.
+    assert fc.size == 0 or float(fc[0][3]) == 0.0
+    plt.close("all")
+
+
+def test_plot_static_does_not_call_show(spark, monkeypatch):
+    # plot_static must NOT call pyplot.show() (the figure auto-displays at cell
+    # end); calling it on the creating call would flush the base before an
+    # ax= overlay is added. Guards the overlay-rendering regression.
+    import matplotlib.pyplot as plt_mod
+
+    from databricks.labs.gbx.vizx import plot_static
+
+    calls = []
+    monkeypatch.setattr(plt_mod, "show", lambda *a, **k: calls.append(1))
+    plt.close("all")
+    df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
+    plot_static(df, basemap=False)
+    assert calls == []  # show() never called
+    plt.close("all")
+
+
 def test_plot_static_basemap_fallback_warns(spark, monkeypatch):
     import contextily
 

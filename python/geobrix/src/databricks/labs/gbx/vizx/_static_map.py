@@ -166,6 +166,7 @@ def plot_static(
     basemap_source=None,
     alpha=0.8,
     edgecolor="face",
+    fill=True,
     markersize=None,
     title=None,
     fig_w=10,
@@ -184,7 +185,14 @@ def plot_static(
     warning and a basemap-less render. Returns the matplotlib Axes; pass it back
     via ``ax=`` to overlay layers -- every layer is reprojected to Web Mercator
     (EPSG:3857), so a ``basemap=False`` overlay aligns with a basemap layer on
-    the same axes. Requires the [vizx] extra.
+    the same axes.
+
+    ``plot_static`` does not call ``pyplot.show()``; in a notebook the figure
+    auto-displays at cell end with all overlaid layers present, and a script can
+    call ``plt.show()`` itself. Pass ``fill=False`` to draw geometries as
+    outlines only (no face) -- e.g. a canvas/footprint boundary over a filled
+    choropleth; combine with ``edgecolor`` to colour the outline. Requires the
+    [vizx] extra.
     """
     from databricks.labs.gbx.vizx._env import assert_viz_available
 
@@ -211,6 +219,11 @@ def plot_static(
         kwargs["legend"] = legend
     if markersize is not None:
         kwargs["markersize"] = markersize
+    if not fill:
+        # Outline-only: no face, so polygons don't cover layers beneath them.
+        # The caller supplies a visible `edgecolor` (default "face" would be
+        # invisible against a "none" face).
+        kwargs["facecolor"] = "none"
     plot_gdf.plot(**kwargs)
 
     if basemap:
@@ -231,6 +244,8 @@ def plot_static(
         ax.set_title(title)
     ax.set_axis_off()
 
-    if created:
-        plt.show()
+    # No pyplot.show(): the inline/Databricks backend auto-displays the figure at
+    # cell end with all overlaid layers; calling show() on the creating call
+    # would flush the base layer before an `ax=` overlay is added. (`created` is
+    # retained only to gate figure creation above.)
     return ax

@@ -232,13 +232,19 @@ emitted (never a hard error).
 plot_static(
     data, *, geom_col=None, grid_system=None, column=None, cmap="viridis",
     legend=True, basemap=True, basemap_source=None, alpha=0.8, edgecolor="face",
-    markersize=None, title=None, fig_w=10, fig_h=10, max_rows=10_000,
+    fill=True, markersize=None, title=None, fig_w=10, fig_h=10, max_rows=10_000,
     srid=None, ax=None,
 )
 ```
 
 `data` is a Spark DataFrame **or** a `geopandas.GeoDataFrame`. Returns the
-matplotlib `Axes`; pass it back via `ax=` to overlay layers on one map.
+matplotlib `Axes`; pass it back via `ax=` to overlay layers on one map. Every
+layer is reprojected to Web Mercator (EPSG:3857), so a `basemap=False` overlay
+lines up with a basemap layer on the same axes. `plot_static` does **not** call
+`pyplot.show()` — in a notebook the figure auto-displays at cell end with all
+overlaid layers; a script can call `plt.show()` itself. Pass `fill=False` to
+draw geometries as outlines only (no face), so a boundary doesn't cover the
+layers beneath it.
 
 **Geometry columns** accept the same encodings as every other `gbx_st_*`
 function — WKT, EWKT, WKB, EWKB, and native `GEOMETRY` / `GEOGRAPHY` (coerced
@@ -254,9 +260,11 @@ cell ids instead:
 ```python
 from databricks.labs.gbx.vizx import plot_static
 
-# H3 choropleth over a basemap, then overlay the shared-canvas boundary:
+# H3 choropleth over a basemap, then overlay the shared-canvas boundary as a
+# red outline (fill=False so it doesn't cover the cells; basemap=False so it
+# doesn't re-fetch tiles). Both layers reproject to 3857, so they align.
 ax = plot_static(cells_df, grid_system="h3", column="count", title="Coverage")
-plot_static(grid_boundary_df, basemap=False, ax=ax, edgecolor="red")
+plot_static(grid_gdf, ax=ax, fill=False, edgecolor="red", basemap=False)
 ```
 
 `basemap_source` overrides the default `contextily.providers.CartoDB.Positron`;

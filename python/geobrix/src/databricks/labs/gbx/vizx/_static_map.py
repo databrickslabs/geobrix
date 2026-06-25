@@ -152,3 +152,78 @@ def _resolve_gdf(data, geom_col, grid_system, max_rows, srid):
     geoms = [parse_geom(v) for v in pdf[col]]
     pdf = pdf.drop(columns=[col])
     return gpd.GeoDataFrame(pdf, geometry=geoms, crs=(srid or 4326))
+
+
+def plot_static(
+    data,
+    *,
+    geom_col=None,
+    grid_system=None,
+    column=None,
+    cmap="viridis",
+    legend=True,
+    basemap=True,
+    basemap_source=None,
+    alpha=0.8,
+    edgecolor="face",
+    markersize=None,
+    title=None,
+    fig_w=10,
+    fig_h=10,
+    max_rows=10_000,
+    srid=None,
+    ax=None,
+):
+    """Render geometries / DGGS cells over a basemap as a static figure.
+
+    ``data`` is a Spark DataFrame or a geopandas.GeoDataFrame. Geometry columns
+    accept WKT/EWKT/WKB/EWKB and native GEOMETRY/GEOGRAPHY (decoded via the
+    shared parse_geom); set ``grid_system`` ('h3' in v1) to treat the column as
+    DGGS cell ids (string or long). The contextily basemap is rendered when
+    ``basemap=True``; any failure (no egress / missing dep) degrades to a
+    warning and a basemap-less render. Returns the matplotlib Axes; pass it back
+    via ``ax=`` to overlay layers. Requires the [vizx] extra.
+    """
+    from databricks.labs.gbx.vizx._env import assert_viz_available
+
+    assert_viz_available()
+
+    import matplotlib.pyplot as plt
+
+    gdf = _resolve_gdf(data, geom_col, grid_system, max_rows, srid)
+
+    created = ax is None
+    if created:
+        _, ax = plt.subplots(1, figsize=(fig_w, fig_h))
+
+    plot_gdf = gdf.to_crs(3857) if basemap else gdf
+
+    kwargs = {"ax": ax, "alpha": alpha, "edgecolor": edgecolor, "cmap": cmap}
+    if column is not None:
+        kwargs["column"] = column
+        kwargs["legend"] = legend
+    if markersize is not None:
+        kwargs["markersize"] = markersize
+    plot_gdf.plot(**kwargs)
+
+    if basemap:
+        try:
+            import contextily as cx
+
+            source = basemap_source or cx.providers.CartoDB.Positron
+            cx.add_basemap(ax, source=source, crs=plot_gdf.crs)
+        except Exception as exc:  # noqa: BLE001 — offline/no-egress/missing -> fallback
+            warnings.warn(
+                f"plot_static: basemap unavailable ({type(exc).__name__}: {exc}); "
+                "rendering without basemap. Ensure network egress to the tile "
+                "server at execution time for the basemap to bake into the output.",
+                stacklevel=2,
+            )
+
+    if title:
+        ax.set_title(title)
+    ax.set_axis_off()
+
+    if created:
+        plt.show()
+    return ax

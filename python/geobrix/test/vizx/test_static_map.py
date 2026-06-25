@@ -1,8 +1,12 @@
 import logging
 import warnings
 
+import matplotlib
 import pytest
-from pyspark.sql.types import BinaryType, LongType, StringType
+
+matplotlib.use("Agg")  # headless: no display needed
+import matplotlib.pyplot as plt  # noqa: E402
+from pyspark.sql.types import BinaryType, LongType, StringType  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -160,3 +164,59 @@ def test_resolve_cells_unknown_grid_system_raises(spark):
     df = spark.createDataFrame([(1,)], ["cellid"])
     with pytest.raises(ValueError):
         sm._resolve_gdf(df, "cellid", "geohash", 10_000, None)
+
+
+def test_plot_static_returns_axes_and_one_figure(spark):
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
+    ax = plot_static(df, basemap=False)
+    assert ax is not None
+    assert len(plt.get_fignums()) == 1
+    plt.close("all")
+
+
+def test_plot_static_choropleth_column_with_legend(spark):
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    df = spark.createDataFrame(
+        [("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", 3)], ["wkt", "v"]
+    )
+    ax = plot_static(df, column="v", basemap=False)
+    assert ax.get_figure() is not None
+    plt.close("all")
+
+
+def test_plot_static_overlay_reuses_axes(spark):
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    df1 = spark.createDataFrame([("POINT (1 1)",)], ["wkt"])
+    df2 = spark.createDataFrame([("POINT (2 2)",)], ["wkt"])
+    ax = plot_static(df1, basemap=False)
+    ax2 = plot_static(df2, basemap=False, ax=ax)
+    assert ax2 is ax
+    assert len(plt.get_fignums()) == 1  # no new figure created for the overlay
+    plt.close("all")
+
+
+def test_plot_static_basemap_fallback_warns(spark, monkeypatch):
+    import contextily
+
+    from databricks.labs.gbx.vizx import plot_static
+
+    def _boom(*a, **k):
+        raise RuntimeError("no egress")
+
+    monkeypatch.setattr(contextily, "add_basemap", _boom)
+    plt.close("all")
+    df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        ax = plot_static(df, basemap=True)
+    assert ax is not None
+    assert len(plt.get_fignums()) == 1  # figure still produced
+    assert any("basemap unavailable" in str(w.message) for w in caught)
+    plt.close("all")

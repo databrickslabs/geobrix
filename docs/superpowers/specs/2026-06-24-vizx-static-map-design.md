@@ -39,15 +39,24 @@ the notebook has egress. No basemap tiles are committed to the repo.
   but not implemented** in v1 (fast-follow). `'custom'` is the trickiest:
   custom grids need their own cell→boundary resolver, currently heavy-only.
 
-  **Fast-follow note (quadbin / bng):** these are nearly identical to the
-  native-`GEOMETRY` path — the project ships `quadbin_aswkb` and `bng_aswkb`
-  SQL functions, so the resolver is an in-Spark coercion
-  (`expr("quadbin_aswkb(col)")` / `expr("bng_aswkb(col)")`) → WKB → `parse_geom`,
-  not a pure-Python cell→boundary port. Each becomes one `_GRID_DISPATCH` entry
-  that coerces in Spark then reuses the existing geometry decode. (These SQL
-  functions only exist on a Spark runtime that registers them, so the unit
-  tests cover routing while the coercion itself is runtime-only — same testing
-  shape as the native-type path.)
+  **Fast-follow note (quadbin / bng):** no pure-Python cell→boundary port is
+  needed — the light tier already ships driver-side scalar `_aswkb` impls that
+  mirror what `_h3_boundary` does for h3:
+  - quadbin: `databricks.labs.gbx.pygx._quadbin.as_wkb(cell: int) -> bytes`
+  - bng: `databricks.labs.gbx.pygx._bng.cell_aswkb(cell_id: int) -> bytes`
+
+  So each resolver is one `_GRID_DISPATCH` entry that, per collected cell id,
+  calls the scalar `_aswkb` → WKB `bytes` → `parse_geom` (shapely). This runs
+  **driver-side after the collect** (exactly like the h3 path), so it is
+  unit-testable in the dev container with **no Spark-runtime / SQL-registration
+  dependency**. (The columnar `quadbin_aswkb` / `bng_aswkb` SQL functions remain
+  available as an in-Spark coercion alternative, but the scalar impls are
+  preferred here for the same reason h3 uses the `h3` lib directly.)
+
+  `'custom'` stays the trickiest: its scalar impl is
+  `pygx._custom.cell_aswkb(conf: CustomGridConf, cell_id: int)` — it needs the
+  grid configuration threaded through, so it requires either an extra param or
+  resolving the conf from the frame, not just a cell-id column.
 
 ## Public API
 

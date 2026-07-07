@@ -57,6 +57,19 @@ Use `gbx:docker:start` / `gbx:docker:exec` rather than `docker run` directly. Th
 
 Default Maven profile is **`skipScoverage`** for fast compile/test (`mvn clean package -DskipTests`). Coverage commands explicitly trigger the `standard` profile.
 
+### Building/testing on the host (arca, outside the container)
+
+The container is still the canonical path, but the project also builds and tests directly on an arca host (Ubuntu 24.04 noble, x86_64) via a `$HOME`-local GDAL install — useful when Docker isn't wanted. This host setup lives in the **`geobrix-arca` plugin** (marketplace `experimental/general`), not in this repo — install it with `isaac plugin add geobrix-arca@experimental`. Its two skills:
+
+- **`geobrix-gdal-env`** — provisions native GDAL into `$HOME`. Its `setup-host-gdal.sh` adds the fingerprint-pinned UbuntuGIS PPA, downloads the pinned `.debs` (GDAL `3.11.4+dfsg-1~noble0`, matching `scripts/build-gdal-artifacts.sh`), extracts them under `$HOME/.local/gdal` (no root, no `/usr` writes), reuses the committed JNI (`scripts/gdal311/libgdalalljni.so` — a plain committed file, **not** LFS), and bridges the two `/usr` paths the Scala hardcodes. **The LFS platform tarball is unreachable from arca** (`lfs.github.com` is firewall-blocked), so the PPA-download path is the one that works here — not extracting the committed tarball.
+  - **Each fresh session:** `setup-host-gdal.sh --bridges-only` recreates the two root-owned `/usr` symlinks (they don't persist; `$HOME/.local/gdal` does).
+  - **In every build/test shell:** `source ~/.local/geobrix-gdal-env.sh`. It pins **Java 17** (arca defaults to 21; pom targets `release=17`), and sets `LD_LIBRARY_PATH` (so the JNI resolves `libgdal.so.37` + deps), `PROJ_DATA`/`GDAL_DATA`, and `PYTHONPATH` (extracted `osgeo`/`numpy` — required or GDAL's embedded-Python VRT pixel functions in RST_MapAlgebra/CombineAvg/DerivedBand/vegetation-indices silently no-op and the output raster is null).
+- **`geobrix-metals-nav`** — fixes Cursor/Metals code navigation on arca (the managed Metals is wired to the monorepo Bazel BSP, so geobrix imports underline as unresolved). Generates an analysis-only Bloop config (Scala 2.13.18 to match the mtags arca's Metals ships; the pom/build/JAR stay 2.13.16) and steers Metals to it.
+
+Then build with `mvn clean package -DskipTests -PskipScoverage`, or run suites with `mvn test -PskipScoverage -DskipTests=false -Dsuites='...'`. For `/Volumes` suites, symlink `/Volumes` → `sample-data/Volumes` (mirrors the container mount); the full sample bundles still require `gbx:data:download`.
+
+**Caveat:** the `gbx:test:*` commands are hardwired to `docker exec geobrix-dev` and do **not** run on the host — invoke `mvn` directly, or extend those commands with a `--host` mode.
+
 ## Commands (the `gbx:*` palette)
 
 The repo has **50 `gbx:*` commands** in `scripts/commands/` (each is a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`), and profile selection. Originally registered for Cursor's command palette (hence the `.md` files), they're now invoked directly from any shell or via the Task tool.

@@ -14,7 +14,7 @@ bash scripts/commands/gbx-test-notebooks.sh [OPTIONS]
 
 **Common**
 
-- `--host` – Run on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin); builds/reuses a `.venv-host` from the pinned lock and runs against a host-built JAR. See "Host mode" below.
+- `--host` – Run on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin); builds/reuses `.venv-host-pyrx` from the pinned CI lock and runs against a host-built JAR. See "Host mode" below.
 - `--rebuild-venv` – (with `--host`) force-rebuild the host test venv.
 - `--log <path>` – Write output to log (filename → `test-logs/<name>`).
 - `--path <path>` – Limit scope: subdir (e.g. `sample-data`, `fixtures`), a single `.ipynb`, or a test file (e.g. `test_notebook_via_script.py`). With a `.py` path, runs **pytest** for that file instead of the cell-by-cell runner.
@@ -23,7 +23,9 @@ bash scripts/commands/gbx-test-notebooks.sh [OPTIONS]
 
 ## Host mode (arca, no Docker)
 
-With `--host` the command runs directly on the host instead of `docker exec geobrix-dev`. Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The notebook runner executes from the host venv against the built JAR. The first run builds `.venv-host` from `python/geobrix/requirements-dev-container.txt` (the exact CI pins, minus native-source-only `pdal` which arca can't build). See the `geobrix-arca` plugin for the full setup.
+With `--host` the command runs directly on the host instead of `docker exec geobrix-dev`. Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The notebook runner executes from the host venv against the built JAR. The first run builds a host test venv from the exact CI-pinned lock via `uv` — `.venv-host-pyrx` from `python/geobrix/requirements-pyrx-ci.txt` (the light-tier deps: rasterio/pandas/h3/vizx), plus `nbformat`/`nbconvert` (needed by the runner, installed on demand). Neither CI lock contains `pdal` (source-only, unbuildable on arca and not needed here). Unlike the container, the host path runs the notebooks directly in `.venv-host-pyrx` (`GBX_NOTEBOOK_ISOLATED_ENV=0`) rather than a nested `python -m venv` (which fails on arca — no `ensurepip`/`python3-venv`).
+
+**Note (bare host):** notebooks that write sample bundles to the literal `/Volumes` path (the data-download notebook) fail on a bare host with `Permission denied: '/Volumes'` — those need a real UC Volumes mount (`sudo ln -sfn "$PWD/sample-data/Volumes" /Volumes`) and, for Sentinel-2 fixtures, `pystac-client`/`planetary-computer`. The runner itself works on host; these are data/mount limitations. See the `geobrix-arca` plugin for the full setup.
 
 **Read/write path behavior (absolute vs relative)**
 

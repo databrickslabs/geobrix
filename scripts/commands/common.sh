@@ -267,6 +267,40 @@ ensure_host_test_venv() {
     echo "${venv_dir}/bin"
 }
 
+# Prepare the process environment so a host --host pytest run drives Spark + rasterio correctly.
+# Call with the venv bin dir (from ensure_host_test_venv) BEFORE launching pytest. Two exports the
+# forked Spark JVM's Python workers and rasterio need:
+#   - PYSPARK_PYTHON / PYSPARK_DRIVER_PYTHON = the venv interpreter, so Spark workers use the venv
+#     (pandas/pyarrow for Arrow UDFs live there, not in system python3). These MUST be real exports
+#     in the current shell — a `VAR=x eval "..."` command-prefix does NOT propagate to the python
+#     grandchild, so workers would silently fall back to system python3 (ModuleNotFound: pandas).
+#   - unset PROJ_DATA / PROJ_LIB so the venv rasterio uses its own bundled proj.db (layout >=6);
+#     the arca env points these at the older $HOME GDAL proj.db (layout 3), which rasterio rejects
+#     (CRSError "... another PROJ installation"). unset (not empty-string) is required — an empty
+#     PROJ_DATA is a search path of "", not a fallback to bundled data. The JVM GDAL sets PROJ_LIB
+#     internally via SetConfigOption (the /usr/share/proj bridge), so the heavy tier is unaffected.
+# Usage:  activate_host_python_env "$VENV_BIN"
+activate_host_python_env() {
+    local venv_bin="$1"
+    export PYSPARK_PYTHON="${venv_bin}/python"
+    export PYSPARK_DRIVER_PYTHON="${venv_bin}/python"
+    unset PROJ_DATA PROJ_LIB
+}
+
+# The light-tier test dirs (single source of truth: python/geobrix/test/conftest.py _LIGHT_TEST_DIRS).
+# Their modules import light-only deps (rasterio/shapely/pandas/h3/…) at collection time, so they run
+# only in the pyrx venv; the ci venv's conftest collect_ignore skips them (rasterio absent). Echoed
+# space-separated. Falls back to a hardcoded list only if the conftest can't be parsed.
+host_light_test_dirs() {
+    local conftest="${PROJECT_ROOT}/python/geobrix/test/conftest.py"
+    local dirs
+    dirs="$(awk '/_LIGHT_TEST_DIRS *= *\[/{f=1;next} f&&/\]/{f=0} f{gsub(/[",[:space:]]/,""); if($0!="") print}' "$conftest" 2>/dev/null | tr '\n' ' ')"
+    if [ -z "${dirs// /}" ]; then
+        dirs="bench ds pyrx pyvx pygx pmtiles_light stac vizx sample"
+    fi
+    echo "$dirs"
+}
+
 # Run a command inside the isolated pyrx venv (host, no Docker).
 # Usage: run_in_pyrx_venv "<command string>"
 # Requires gbx:venv:sync to have been run (venv at $PROJECT_ROOT/.venv-pyrx).
@@ -291,4 +325,5 @@ export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
           print_banner print_separator setup_log run_in_pyrx_venv validate_set \
-          require_host_gdal_env ensure_host_test_venv 2>/dev/null || true
+          require_host_gdal_env ensure_host_test_venv activate_host_python_env \
+          host_light_test_dirs 2>/dev/null || true

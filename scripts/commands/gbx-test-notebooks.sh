@@ -133,17 +133,22 @@ if [ "$USE_HOST" = true ]; then
     # --- Host (arca) path: no Docker; run the notebook runner from .venv-host ---
     require_host_gdal_env || exit 1
     VENV_BIN=$(ensure_host_test_venv pyrx) || exit 1
-    # Spark Python workers must use the venv interpreter (pandas/pyarrow for Arrow UDFs live there, not in system python3).
-    export PYSPARK_PYTHON="$VENV_BIN/python"
-    export PYSPARK_DRIVER_PYTHON="$VENV_BIN/python"
-    # The venv rasterio bundles its own libproj/proj.db (layout >=6); the arca env points PROJ_DATA/PROJ_LIB
-    # at the older $HOME GDAL proj.db (layout 3), which rasterio refuses. Unset them for the Python side so
-    # rasterio uses its bundled data. The JVM GDAL sets PROJ_LIB internally via SetConfigOption (the
-    # /usr/share/proj bridge), so this does not affect the heavy tier.
-    unset PROJ_DATA PROJ_LIB
+    # The notebook runner needs nbformat/nbconvert (not in the pyrx lock — the runner normally installs
+    # them into its own nested venv). We run directly in .venv-host-pyrx (see below), so ensure they're
+    # present here. Idempotent; uv no-ops when already installed.
+    if ! "$VENV_BIN/python" -c "import nbformat, nbconvert" >/dev/null 2>&1; then
+        echo -e "${CYAN}Installing nbformat/nbconvert into the host venv...${NC}"
+        uv pip install --python "$VENV_BIN/python" -q nbformat nbconvert \
+            || { echo -e "${RED}❌ failed to install nbformat/nbconvert${NC}"; exit 1; }
+    fi
+    # Wire Spark workers to the venv python and unset PROJ_DATA/PROJ_LIB (see common.sh).
+    activate_host_python_env "$VENV_BIN"
     unset JAVA_TOOL_OPTIONS
     export JUPYTER_PLATFORM_DIRS=1
-    export GBX_NOTEBOOK_ISOLATED_ENV=1
+    # Do NOT force the runner's nested-venv isolation on host: .venv-host-pyrx (plus nbformat/nbconvert
+    # installed just above) is already the isolated env, and the runner's `python -m venv` nested-venv
+    # path fails on arca (no ensurepip / python3-venv). Running directly in .venv-host-pyrx is the isolation.
+    export GBX_NOTEBOOK_ISOLATED_ENV=0
     [ -n "$NOTEBOOK_VERBOSITY" ] && export GBX_NOTEBOOK_VERBOSITY="$NOTEBOOK_VERBOSITY"
     [ "$INCLUDE_INTEGRATION" = true ] && export GBX_NOTEBOOK_INCLUDE_INTEGRATION=1
     [ "$ALLOW_ABSOLUTE_READS" = true ] && export GBX_NOTEBOOK_ALLOW_ABSOLUTE_READS=1

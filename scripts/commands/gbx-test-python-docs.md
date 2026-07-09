@@ -58,7 +58,7 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 
 **Other**
 
-- `--host` – Run on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin); builds/reuses a `.venv-host` from the pinned lock and a host-built JAR. See "Host mode" below.
+- `--host` – Run on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin); builds/reuses `.venv-host-pyrx` from the pinned CI lock and a host-built JAR. See "Host mode" below.
 - `--rebuild-venv` – (with `--host`) force-rebuild the host test venv.
 - `--log <path>` – Log file (filename → `test-logs/<name>`). Prefer timestamped names for tracking.
 - `--markers <markers>` – Pytest markers (e.g. `"not slow"`).
@@ -69,7 +69,7 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 
 ## Host mode (arca, no Docker)
 
-With `--host` the command runs directly on the host instead of `docker exec geobrix-dev`. Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The first run builds `.venv-host` from `python/geobrix/requirements-dev-container.txt` (the exact CI pins, minus native-source-only `pdal` which arca can't build). Sample data reads from the on-disk `sample-data/…/test-data` mirror via `GBX_SAMPLE_DATA_ROOT`. See the `geobrix-arca` plugin for the full setup.
+With `--host` the command runs directly on the host instead of `docker exec geobrix-dev`. Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The first run builds `.venv-host-pyrx` from `python/geobrix/requirements-pyrx-ci.txt` (the exact light-tier CI pins: rasterio/pandas/h3/vizx) via `uv`; neither CI lock contains `pdal` (source-only, unbuildable on arca and not needed here). Sample data reads from the on-disk `sample-data/…/test-data` mirror via `GBX_SAMPLE_DATA_ROOT`. See the `geobrix-arca` plugin for the full setup.
 
 ## Examples
 

@@ -113,40 +113,48 @@ if [ "$USE_HOST" = true ]; then
     unset JAVA_TOOL_OPTIONS
     export JUPYTER_PLATFORM_DIRS=1
 
-    # Runs pytest for one leg in the given venv kind. Sets the Spark-worker interpreter to the venv
-    # python (pandas/pyarrow for Arrow UDFs live there, not system python3) and unsets PROJ_DATA/PROJ_LIB
-    # so the venv rasterio uses its own bundled proj.db (layout >=6) rather than the arca env's older one
-    # (layout 3); the JVM GDAL sets PROJ_LIB internally via SetConfigOption, so the heavy tier is unaffected.
-    _run_leg() {  # $1=kind  $2=pytest path/args string
+    # Runs pytest for one leg in the given venv kind. activate_host_python_env exports
+    # PYSPARK_PYTHON/PYSPARK_DRIVER_PYTHON (real exports — a VAR=x eval prefix would NOT reach the
+    # Spark Python workers) and unsets PROJ_DATA/PROJ_LIB (rasterio bundled proj.db). Runs in a
+    # subshell so those env changes don't leak between the two legs. Paths pass as real positional
+    # args (space-safe, no eval); only $MARKERS ("-m 'not integration'") is eval-split into an array.
+    _run_leg() {  # $1=kind  $2..=pytest paths
+        local kind="$1"; shift
         local vbin
-        vbin=$(ensure_host_test_venv "$1") || return 1
-        PYSPARK_PYTHON="$vbin/python" PYSPARK_DRIVER_PYTHON="$vbin/python" \
-            eval "PROJ_DATA= PROJ_LIB= \"$vbin/python\" -m pytest $2 -v --tb=short --color=yes $MARKERS"
+        vbin=$(ensure_host_test_venv "$kind") || return 1
+        local marker_args=()
+        [ -n "$MARKERS" ] && eval "marker_args=($MARKERS)"
+        (
+            activate_host_python_env "$vbin"
+            "$vbin/python" -m pytest "$@" -v --tb=short --color=yes "${marker_args[@]}"
+        )
     }
 
+    LIGHT_DIRS="$(host_light_test_dirs)"
     EXIT_CODE=0
     if [ "$REL_PATH" = "python/geobrix/test/" ]; then
-        # Default full run — mirror CI's two-environment split (CI never runs all unit tests in one env):
-        #   heavy (requirements-ci.txt): test/ minus the light dirs;  light (requirements-pyrx-ci.txt):
-        #   the pyrx/ds/pyvx/pygx/pmtiles_light/stac/vizx/sample dirs. Each leg in its own venv.
+        # Default full run — mirror CI's two-environment split (CI never runs all unit tests in one env).
+        # Heavy leg (requirements-ci.txt): run the whole test/ tree; python/geobrix/test/conftest.py's
+        # dependency-aware collect_ignore skips the light dirs automatically (rasterio absent), so we do
+        # NOT hand-maintain an --ignore list here. Light leg (requirements-pyrx-ci.txt): the light dirs,
+        # sourced from that same conftest's _LIGHT_TEST_DIRS via host_light_test_dirs (keeps them in sync).
         local_root="$PROJECT_ROOT/python/geobrix/test"
-        LIGHT_DIRS="pyrx pyvx pygx pmtiles_light stac vizx ds sample"
-        light_paths=""; ignore_args=""
-        for d in $LIGHT_DIRS; do light_paths="$light_paths \"$local_root/$d\""; ignore_args="$ignore_args --ignore=$local_root/$d"; done
+        light_paths=()
+        for d in $LIGHT_DIRS; do light_paths+=("$local_root/$d"); done
 
-        echo -e "${CYAN}▶ Heavy leg (requirements-ci.txt): test/ minus light dirs${NC}"
-        _run_leg ci "\"$local_root\" $ignore_args" || EXIT_CODE=$?
+        echo -e "${CYAN}▶ Heavy leg (requirements-ci.txt): test/ (light dirs auto-skipped by conftest)${NC}"
+        _run_leg ci "$local_root" || EXIT_CODE=$?
         echo ""
         echo -e "${CYAN}▶ Light leg (requirements-pyrx-ci.txt): $LIGHT_DIRS${NC}"
-        _run_leg pyrx "$light_paths" || EXIT_CODE=$?
+        _run_leg pyrx "${light_paths[@]}" || EXIT_CODE=$?
     else
-        # Explicit --path: route to the light venv if it's a light dir, else the heavy venv.
+        # Explicit --path: route to the light venv if the path is under a light dir, else the heavy venv.
         kind=ci
-        case "$REL_PATH" in
-            *test/pyrx*|*test/pyvx*|*test/pygx*|*test/pmtiles_light*|*test/stac*|*test/vizx*|*test/ds*|*test/sample*) kind=pyrx ;;
-        esac
+        for d in $LIGHT_DIRS; do
+            case "$REL_PATH" in *"test/$d"|*"test/$d/"*) kind=pyrx; break ;; esac
+        done
         echo -e "${CYAN}▶ Leg ($kind venv): $REL_PATH${NC}"
-        _run_leg "$kind" "\"$PROJECT_ROOT/$REL_PATH\"" || EXIT_CODE=$?
+        _run_leg "$kind" "$PROJECT_ROOT/$REL_PATH" || EXIT_CODE=$?
     fi
 else
     check_docker

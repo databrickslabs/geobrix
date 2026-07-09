@@ -71,14 +71,8 @@ if [ "$USE_HOST" = true ]; then
     # --- Host (arca) path: no Docker. The pytest registers functions via the built JAR. ---
     require_host_gdal_env || exit 1
     VENV_BIN=$(ensure_host_test_venv pyrx) || exit 1
-    # Spark Python workers must use the venv interpreter (pandas/pyarrow for Arrow UDFs live there, not in system python3).
-    export PYSPARK_PYTHON="$VENV_BIN/python"
-    export PYSPARK_DRIVER_PYTHON="$VENV_BIN/python"
-    # The venv rasterio bundles its own libproj/proj.db (layout >=6); the arca env points PROJ_DATA/PROJ_LIB
-    # at the older $HOME GDAL proj.db (layout 3), which rasterio refuses. Unset them for the Python side so
-    # rasterio uses its bundled data. The JVM GDAL sets PROJ_LIB internally via SetConfigOption (the
-    # /usr/share/proj bridge), so this does not affect the heavy tier.
-    unset PROJ_DATA PROJ_LIB
+    # Wire Spark workers to the venv python and unset PROJ_DATA/PROJ_LIB (see common.sh).
+    activate_host_python_env "$VENV_BIN"
     warn_if_jar_stale "$PROJECT_ROOT"
     unset JAVA_TOOL_OPTIONS
     export JUPYTER_PLATFORM_DIRS=1

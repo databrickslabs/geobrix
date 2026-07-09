@@ -116,14 +116,8 @@ if [ "$USE_HOST" = true ]; then
     SAMPLE_DATA_ROOT="$PROJECT_ROOT/sample-data/Volumes/main/default/test-data"
 
     VENV_BIN=$(ensure_host_test_venv pyrx) || exit 1
-    # Spark Python workers must use the venv interpreter (pandas/pyarrow for Arrow UDFs live there, not in system python3).
-    export PYSPARK_PYTHON="$VENV_BIN/python"
-    export PYSPARK_DRIVER_PYTHON="$VENV_BIN/python"
-    # The venv rasterio bundles its own libproj/proj.db (layout >=6); the arca env points PROJ_DATA/PROJ_LIB
-    # at the older $HOME GDAL proj.db (layout 3), which rasterio refuses. Unset them for the Python side so
-    # rasterio uses its bundled data. The JVM GDAL sets PROJ_LIB internally via SetConfigOption (the
-    # /usr/share/proj bridge), so this does not affect the heavy tier.
-    unset PROJ_DATA PROJ_LIB
+    # Wire Spark workers to the venv python and unset PROJ_DATA/PROJ_LIB (see common.sh).
+    activate_host_python_env "$VENV_BIN"
 
     if [ "$SKIP_BUILD" != true ]; then
         show_separator
@@ -139,7 +133,8 @@ if [ "$USE_HOST" = true ]; then
     show_separator
     echo -e "${CYAN}Running SQL/API documentation tests (host)...${NC}"
     show_separator
-    eval "\"$VENV_BIN/python\" -m pytest \"$PROJECT_ROOT/docs/tests/python/$REL_PATH\" -v $MARKERS --tb=short --color=yes"
+    marker_args=(); [ -n "$MARKERS" ] && eval "marker_args=($MARKERS)"
+    "$VENV_BIN/python" -m pytest "$PROJECT_ROOT/docs/tests/python/$REL_PATH" -v --tb=short --color=yes "${marker_args[@]}"
     EXIT_CODE=$?
 else
     # --- Docker path (unchanged) ---

@@ -142,8 +142,10 @@ if [ "$USE_HOST" = true ]; then
     require_host_gdal_env || exit 1
     local_base="$PROJECT_ROOT/docs/tests/python"
     TEST_PATH="${local_base}/${REL_PATH}"
-    IGNORE_API_ARG=""
-    [ "$SKIP_SQL_TESTS" = true ] && IGNORE_API_ARG="--ignore=${local_base}/api"
+    # Real args array (space-safe), not an eval-interpolated string, so a repo path with spaces
+    # doesn't word-split the --ignore value.
+    ignore_args=()
+    [ "$SKIP_SQL_TESTS" = true ] && ignore_args=(--ignore="${local_base}/api")
 
     echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}  ${CYAN}(host)${NC}"
     [ "$SKIP_SQL_TESTS" = true ] && echo -e "${CYAN}🚫 Excluding api/ (use gbx:test:sql-docs or --suite api)${NC}"
@@ -152,14 +154,8 @@ if [ "$USE_HOST" = true ]; then
     echo ""
 
     VENV_BIN=$(ensure_host_test_venv pyrx) || exit 1
-    # Spark Python workers must use the venv interpreter (pandas/pyarrow for Arrow UDFs live there, not in system python3).
-    export PYSPARK_PYTHON="$VENV_BIN/python"
-    export PYSPARK_DRIVER_PYTHON="$VENV_BIN/python"
-    # The venv rasterio bundles its own libproj/proj.db (layout >=6); the arca env points PROJ_DATA/PROJ_LIB
-    # at the older $HOME GDAL proj.db (layout 3), which rasterio refuses. Unset them for the Python side so
-    # rasterio uses its bundled data. The JVM GDAL sets PROJ_LIB internally via SetConfigOption (the
-    # /usr/share/proj bridge), so this does not affect the heavy tier.
-    unset PROJ_DATA PROJ_LIB
+    # Wire Spark workers to the venv python and unset PROJ_DATA/PROJ_LIB (see common.sh).
+    activate_host_python_env "$VENV_BIN"
 
     if [ "$SKIP_BUILD" != true ]; then
         show_separator
@@ -175,7 +171,8 @@ if [ "$USE_HOST" = true ]; then
     show_separator
     echo -e "${CYAN}Running Python documentation tests (host)...${NC}"
     show_separator
-    eval "\"$VENV_BIN/python\" -m pytest \"$TEST_PATH\" -v $MARKERS --tb=short --color=yes $IGNORE_API_ARG"
+    marker_args=(); [ -n "$MARKERS" ] && eval "marker_args=($MARKERS)"
+    "$VENV_BIN/python" -m pytest "$TEST_PATH" -v --tb=short --color=yes "${marker_args[@]}" "${ignore_args[@]}"
     EXIT_CODE=$?
 else
     # --- Docker path (unchanged) ---

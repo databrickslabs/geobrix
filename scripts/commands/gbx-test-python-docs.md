@@ -58,6 +58,8 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 
 **Other**
 
+- `--host` – Run on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin); builds/reuses a `.venv-host` from the pinned lock and a host-built JAR. See "Host mode" below.
+- `--rebuild-venv` – (with `--host`) force-rebuild the host test venv.
 - `--log <path>` – Log file (filename → `test-logs/<name>`). Prefer timestamped names for tracking.
 - `--markers <markers>` – Pytest markers (e.g. `"not slow"`).
 - `--include-integration` – Include integration tests (excluded by default).
@@ -65,11 +67,19 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 - `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use your env or path_config default).
 - `--help` – Help and suite timing.
 
+## Host mode (arca, no Docker)
+
+With `--host` the command runs directly on the host instead of `docker exec geobrix-dev`. Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The first run builds `.venv-host` from `python/geobrix/requirements-dev-container.txt` (the exact CI pins, minus native-source-only `pdal` which arca can't build). Sample data reads from the on-disk `sample-data/…/test-data` mirror via `GBX_SAMPLE_DATA_ROOT`. See the `geobrix-arca` plugin for the full setup.
+
 ## Examples
 
 ```bash
 # Quickstart only, no build, with log (typical during edits)
 bash scripts/commands/gbx-test-python-docs.sh --suite quickstart --skip-build --log quickstart.log
+
+# On the arca host (no Docker) — source the GDAL env first
+source ~/.local/geobrix-gdal-env.sh
+bash scripts/commands/gbx-test-python-docs.sh --host
 
 # Single failing test
 bash scripts/commands/gbx-test-python-docs.sh --test quickstart/test_examples.py::test_convert_to_databricks_geometry_with_nyc_data --skip-build

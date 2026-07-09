@@ -11,8 +11,14 @@ bash scripts/commands/gbx-test-function-info.sh [OPTIONS]
 ## Options
 
 - `--skip-generate` - Skip the generator; run only pytest in `docs/tests-function-info/`
+- `--host` - Run on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin); builds/reuses a `.venv-host` from the pinned lock and runs against a host-built JAR. See "Host mode" below.
+- `--rebuild-venv` - (with `--host`) force-rebuild the host test venv.
 - `--log <path>` - Write output to log file
 - `--help` - Display help
+
+## Host mode (arca, no Docker)
+
+With `--host` the command runs directly on the host instead of `docker exec geobrix-dev`. Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The pytest registers functions via the built JAR; no sample data is needed. The first run builds `.venv-host` from `python/geobrix/requirements-dev-container.txt` (the exact CI pins, minus native-source-only `pdal` which arca can't build). See the `geobrix-arca` plugin for the full setup.
 
 ## Default behavior (inside Docker)
 
@@ -28,6 +34,10 @@ bash scripts/commands/gbx-test-function-info.sh [OPTIONS]
 ```bash
 # Full run: generate then test
 gbx:test:function-info
+
+# On the arca host (no Docker) — source the GDAL env first
+source ~/.local/geobrix-gdal-env.sh
+gbx:test:function-info --host
 
 # Only run tests (do not regenerate JSON)
 gbx:test:function-info --skip-generate

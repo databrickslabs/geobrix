@@ -186,6 +186,87 @@ validate_set() {
     esac
 }
 
+# Assert the arca host GDAL environment is active (LD_LIBRARY_PATH points at the $HOME-local
+# GDAL install and gdalinfo is on PATH). The --host test paths need native GDAL in the forked
+# Spark JVM; that is provided by sourcing ~/.local/geobrix-gdal-env.sh (geobrix-arca plugin),
+# NOT by this repo. We only assert it — we never source it (it's user/plugin-owned).
+# Returns non-zero with a remediation message if the env is not active.
+require_host_gdal_env() {
+    if ! command -v gdalinfo >/dev/null 2>&1 || [[ "${LD_LIBRARY_PATH:-}" != *".local/gdal"* ]]; then
+        echo -e "${RED}❌ Host GDAL environment not active.${NC}" >&2
+        echo -e "${YELLOW}   --host mode needs native GDAL on the arca host. Source the env first:${NC}" >&2
+        echo -e "${YELLOW}     source ~/.local/geobrix-gdal-env.sh${NC}" >&2
+        echo -e "${YELLOW}   (provisioned by the geobrix-arca plugin's geobrix-gdal-env skill).${NC}" >&2
+        return 1
+    fi
+    return 0
+}
+
+# Ensure a host test venv exists, built from one of CI's exact hash-pinned locks via uv, with the
+# geobrix package installed editable+no-deps. Mirrors CI's TWO-environment split (CI never runs all
+# Python tests in one env) — pick the venv by the "kind" arg:
+#
+#   ci    -> $PROJECT_ROOT/.venv-host-ci   from requirements-ci.txt  (~27 pkgs: pyspark, py4j,
+#            numpy, pytest; NO rasterio/pandas/pdal). Matches CI's python_build "heavy" job, which
+#            runs `pytest test -m "not integration" --ignore=test/pyrx --ignore=test/pyvx`.
+#   pyrx  -> $PROJECT_ROOT/.venv-host-pyrx from requirements-pyrx-ci.txt (~104 pkgs: rasterio,
+#            shapely, pandas, pyarrow, h3, mapbox-vector-tile, vizx stack). Matches CI's pyrx_build
+#            "light" job (test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac
+#            test/vizx test/sample) and is also the right env for the doc-tests (rasterio/pandas).
+#
+# Both locks are pure wheels on arca (neither contains pdal, which is source-only and needs native
+# PDAL the container builds but arca lacks — so no package filtering is required, unlike the
+# container image lock). uv is required (stdlib `python3 -m venv` yields a pip-less venv on arca —
+# ensurepip is absent). The index is taken from ambient PIP_INDEX_URL/UV_INDEX_URL — never hardcoded.
+#
+# gdal/osgeo are NOT in either lock (CI installs gdal[numpy] from the apt-matched sdist); on the host
+# they are provided on PYTHONPATH by the sourced arca env, additive to the venv at runtime.
+#
+# A stamp holds the sha256 of the source lock so re-runs skip the install unless the lock changed.
+# Set GBX_REBUILD_VENV=1 to force a rebuild. Echoes the venv bin dir; callers use
+# "$(ensure_host_test_venv <kind>)/python -m pytest".
+ensure_host_test_venv() {
+    local kind="${1:-pyrx}"
+    local venv_dir reqs
+    case "$kind" in
+        ci)   venv_dir="${PROJECT_ROOT}/.venv-host-ci";   reqs="${PROJECT_ROOT}/python/geobrix/requirements-ci.txt" ;;
+        pyrx) venv_dir="${PROJECT_ROOT}/.venv-host-pyrx"; reqs="${PROJECT_ROOT}/python/geobrix/requirements-pyrx-ci.txt" ;;
+        *)    echo -e "${RED}❌ ensure_host_test_venv: unknown kind '$kind' (expected ci|pyrx)${NC}" >&2; return 1 ;;
+    esac
+    local stamp="${venv_dir}/.gbx-reqs-stamp"
+    local py_version="${GBX_HOST_PY_VERSION:-3.12}"
+
+    if ! command -v uv >/dev/null 2>&1; then
+        echo -e "${RED}❌ uv not found on PATH — required to build the host test venv.${NC}" >&2
+        echo -e "${YELLOW}   Install uv: https://docs.astral.sh/uv/ (or use the geobrix-arca plugin).${NC}" >&2
+        return 1
+    fi
+    if [ ! -f "$reqs" ]; then
+        echo -e "${RED}❌ Pinned requirements not found: $reqs${NC}" >&2
+        return 1
+    fi
+
+    # Stamp on the source lock's hash: if the committed lock changes, the venv rebuilds.
+    local want_hash cur_hash
+    want_hash="$(sha256sum "$reqs" | awk '{print $1}')"
+    cur_hash="$(cat "$stamp" 2>/dev/null || true)"
+
+    if [ "${GBX_REBUILD_VENV:-0}" = "1" ] || [ ! -x "${venv_dir}/bin/python" ] || [ "$want_hash" != "$cur_hash" ]; then
+        echo -e "${CYAN}🐍 Building host test venv (${kind}) at ${YELLOW}${venv_dir}${CYAN} from $(basename "$reqs")...${NC}" >&2
+        [ "${GBX_REBUILD_VENV:-0}" = "1" ] && rm -rf "$venv_dir"
+        uv venv "$venv_dir" --python "$py_version" >&2 \
+            || { echo -e "${RED}❌ uv venv failed${NC}" >&2; return 1; }
+        uv pip install --python "${venv_dir}/bin/python" --require-hashes -r "$reqs" >&2 \
+            || { echo -e "${RED}❌ uv pip install ($kind lock) failed — check PIP_INDEX_URL/proxy coverage${NC}" >&2; return 1; }
+        uv pip install --python "${venv_dir}/bin/python" --no-deps -e "${PROJECT_ROOT}/python/geobrix" >&2 \
+            || { echo -e "${RED}❌ editable geobrix install failed${NC}" >&2; return 1; }
+        printf '%s\n' "$want_hash" > "$stamp"
+        echo -e "${GREEN}✅ Host test venv (${kind}) ready.${NC}" >&2
+    fi
+
+    echo "${venv_dir}/bin"
+}
+
 # Run a command inside the isolated pyrx venv (host, no Docker).
 # Usage: run_in_pyrx_venv "<command string>"
 # Requires gbx:venv:sync to have been run (venv at $PROJECT_ROOT/.venv-pyrx).
@@ -209,4 +290,5 @@ run_in_pyrx_venv() {
 export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
-          print_banner print_separator setup_log run_in_pyrx_venv validate_set 2>/dev/null || true
+          print_banner print_separator setup_log run_in_pyrx_venv validate_set \
+          require_host_gdal_env ensure_host_test_venv 2>/dev/null || true

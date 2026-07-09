@@ -14,10 +14,16 @@ bash scripts/commands/gbx-test-notebooks.sh [OPTIONS]
 
 **Common**
 
+- `--host` – Run on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin); builds/reuses a `.venv-host` from the pinned lock and runs against a host-built JAR. See "Host mode" below.
+- `--rebuild-venv` – (with `--host`) force-rebuild the host test venv.
 - `--log <path>` – Write output to log (filename → `test-logs/<name>`).
 - `--path <path>` – Limit scope: subdir (e.g. `sample-data`, `fixtures`), a single `.ipynb`, or a test file (e.g. `test_notebook_via_script.py`). With a `.py` path, runs **pytest** for that file instead of the cell-by-cell runner.
 - `--include-integration` – Include full-notebook execution tests when running **pytest** (default: **false**).
 - `--help` – Help and examples.
+
+## Host mode (arca, no Docker)
+
+With `--host` the command runs directly on the host instead of `docker exec geobrix-dev`. Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The notebook runner executes from the host venv against the built JAR. The first run builds `.venv-host` from `python/geobrix/requirements-dev-container.txt` (the exact CI pins, minus native-source-only `pdal` which arca can't build). See the `geobrix-arca` plugin for the full setup.
 
 **Read/write path behavior (absolute vs relative)**
 
@@ -40,6 +46,10 @@ bash scripts/commands/gbx-test-notebooks.sh [OPTIONS]
 ```bash
 # Cell-by-cell run of fixtures + sample-data notebooks (default)
 bash scripts/commands/gbx-test-notebooks.sh
+
+# On the arca host (no Docker) — source the GDAL env first
+source ~/.local/geobrix-gdal-env.sh
+bash scripts/commands/gbx-test-notebooks.sh --host
 
 # Only sample-data notebooks
 bash scripts/commands/gbx-test-notebooks.sh --path sample-data

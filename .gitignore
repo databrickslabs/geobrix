@@ -50,4 +50,6 @@ __pycache__/
 !/.claude/qc-judge/
 /input/
 .venv-pyrx/
+.venv-host-ci/
+.venv-host-pyrx/
 test-logs/bench/

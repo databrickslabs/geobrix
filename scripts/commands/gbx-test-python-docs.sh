@@ -26,6 +26,9 @@ show_help() {
     echo -e "  ${YELLOW}integration${NC}   varies    integration/ (DBR or integration env; use with --include-integration or run alone)"
     echo ""
     echo -e "${CYAN}Other options:${NC}"
+    echo -e "  ${GREEN}--host${NC}                 Run on the host (arca), not Docker. Requires ${YELLOW}source ~/.local/geobrix-gdal-env.sh${NC}"
+    echo -e "                         first; builds/uses ${YELLOW}.venv-host${NC} from the pinned lock."
+    echo -e "  ${GREEN}--rebuild-venv${NC}         (with --host) force-rebuild the host test venv"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (use timestamp for tracking: python-docs-\$(date +%Y%m%d-%H%M%S).log)"
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers (e.g. \"not slow\")"
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
@@ -41,13 +44,13 @@ show_help() {
     echo ""
 }
 
-# Parse arguments
-BASE="/root/geobrix/docs/tests/python"
-TEST_PATH="${BASE}/"
+# Parse arguments. REL_PATH is relative to docs/tests/python; each mode prefixes it.
+REL_PATH=""
 LOG_PATH=""
 MARKERS="-m 'not integration'"
 INCLUDE_INTEGRATION=false
 SKIP_BUILD=false
+USE_HOST=false
 # Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
 SET_SAMPLE_DATA_ROOT=true
 
@@ -55,16 +58,16 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --test)
             # Single test: path relative to docs/tests/python, e.g. quickstart/test_examples.py::test_foo
-            TEST_PATH="${BASE}/$2"
+            REL_PATH="$2"
             shift 2
             ;;
         --suite)
             case "$2" in
                 quickstart|api|readers|rasterx|advanced|setup)
-                    TEST_PATH="${BASE}/$2/"
+                    REL_PATH="$2/"
                     ;;
                 integration)
-                    TEST_PATH="${BASE}/$2/"
+                    REL_PATH="$2/"
                     INCLUDE_INTEGRATION=true
                     MARKERS=""
                     ;;
@@ -77,8 +80,16 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --path)
-            TEST_PATH="${BASE}/$2"
+            REL_PATH="$2"
             shift 2
+            ;;
+        --host)
+            USE_HOST=true
+            shift
+            ;;
+        --rebuild-venv)
+            export GBX_REBUILD_VENV=1
+            shift
             ;;
         --log)
             LOG_PATH=$(resolve_log_path "$2")
@@ -114,55 +125,98 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# When running the default full suite (entire docs/tests/python/), exclude api/
+# When running the default full suite (entire docs/tests/python/, i.e. no REL_PATH), exclude api/
 # so gbx:test:python-docs and gbx:test:sql-docs stay isolated. Use --suite api to run SQL/API tests.
 SKIP_SQL_TESTS=false
-if [ "$TEST_PATH" = "${BASE}/" ]; then
+if [ -z "$REL_PATH" ]; then
     SKIP_SQL_TESTS=true
-fi
-IGNORE_API_ARG=""
-if [ "$SKIP_SQL_TESTS" = true ]; then
-    IGNORE_API_ARG="--ignore=${BASE}/api"
 fi
 
 cd "$PROJECT_ROOT"
 
 show_banner "📚 GeoBrix: Python Documentation Tests"
-check_docker
 setup_log_file "$LOG_PATH"
 
-# Ensure sample-data Volumes structure exists on host (mount target for start_docker_with_volumes.sh)
-mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
+if [ "$USE_HOST" = true ]; then
+    # --- Host (arca) path: no Docker; build JAR on host, run pytest from .venv-host ---
+    require_host_gdal_env || exit 1
+    local_base="$PROJECT_ROOT/docs/tests/python"
+    TEST_PATH="${local_base}/${REL_PATH}"
+    IGNORE_API_ARG=""
+    [ "$SKIP_SQL_TESTS" = true ] && IGNORE_API_ARG="--ignore=${local_base}/api"
 
-# Volumes must be mounted so tests can use sample data (minimal bundle in-repo or full at geobrix_samples)
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
-    echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
-    echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
+    echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}  ${CYAN}(host)${NC}"
+    [ "$SKIP_SQL_TESTS" = true ] && echo -e "${CYAN}🚫 Excluding api/ (use gbx:test:sql-docs or --suite api)${NC}"
+    [ "$INCLUDE_INTEGRATION" = true ] && echo -e "${CYAN}🐢 Including integration tests${NC}" || echo -e "${CYAN}⚡ Excluding integration tests${NC}"
+    [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build${NC}"
     echo ""
-    echo "Then run this command again so tests can run."
-    exit 1
-fi
 
-echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
-if [ "$SKIP_SQL_TESTS" = true ]; then
-    echo -e "${CYAN}🚫 Excluding api/ (SQL/API tests; use gbx:test:sql-docs or --suite api to run them)${NC}"
-fi
-if [ "$INCLUDE_INTEGRATION" = true ]; then
-    echo -e "${CYAN}🐢 Including integration tests (may be slow)${NC}"
+    VENV_BIN=$(ensure_host_test_venv pyrx) || exit 1
+    # Spark Python workers must use the venv interpreter (pandas/pyarrow for Arrow UDFs live there, not in system python3).
+    export PYSPARK_PYTHON="$VENV_BIN/python"
+    export PYSPARK_DRIVER_PYTHON="$VENV_BIN/python"
+    # The venv rasterio bundles its own libproj/proj.db (layout >=6); the arca env points PROJ_DATA/PROJ_LIB
+    # at the older $HOME GDAL proj.db (layout 3), which rasterio refuses. Unset them for the Python side so
+    # rasterio uses its bundled data. The JVM GDAL sets PROJ_LIB internally via SetConfigOption (the
+    # /usr/share/proj bridge), so this does not affect the heavy tier.
+    unset PROJ_DATA PROJ_LIB
+
+    if [ "$SKIP_BUILD" != true ]; then
+        show_separator
+        echo -e "${CYAN}Building JAR (mvn package -DskipTests -PskipScoverage)...${NC}"
+        show_separator
+        (cd "$PROJECT_ROOT" && mvn package -DskipTests -q -PskipScoverage) || exit $?
+        echo ""
+    fi
+
+    unset JAVA_TOOL_OPTIONS
+    export JUPYTER_PLATFORM_DIRS=1
+    [ "$SET_SAMPLE_DATA_ROOT" = true ] && export GBX_SAMPLE_DATA_ROOT="$PROJECT_ROOT/sample-data/Volumes/main/default/test-data"
+    show_separator
+    echo -e "${CYAN}Running Python documentation tests (host)...${NC}"
+    show_separator
+    eval "\"$VENV_BIN/python\" -m pytest \"$TEST_PATH\" -v $MARKERS --tb=short --color=yes $IGNORE_API_ARG"
+    EXIT_CODE=$?
 else
-    echo -e "${CYAN}⚡ Excluding integration tests (fast mode)${NC}"
-fi
-if [ "$SKIP_BUILD" = true ]; then
-    echo -e "${CYAN}⏭️  Skipping Maven and Python build (--skip-build)${NC}"
-fi
-echo ""
+    # --- Docker path (unchanged) ---
+    check_docker
+    BASE="/root/geobrix/docs/tests/python"
+    TEST_PATH="${BASE}/${REL_PATH}"
+    IGNORE_API_ARG=""
+    [ "$SKIP_SQL_TESTS" = true ] && IGNORE_API_ARG="--ignore=${BASE}/api"
 
-# Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
-SAMPLE_DATA_ROOT_EXPORT=""
-[ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data"
+    # Ensure sample-data Volumes structure exists on host (mount target for start_docker_with_volumes.sh)
+    mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
 
-# Run pre-steps and pytest inside Docker (single bash -c so env and cwd carry through)
-RUN_CMD="set -e
+    # Volumes must be mounted so tests can use sample data (minimal bundle in-repo or full at geobrix_samples)
+    if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+        echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
+        echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
+        echo ""
+        echo "Then run this command again so tests can run."
+        exit 1
+    fi
+
+    echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
+    if [ "$SKIP_SQL_TESTS" = true ]; then
+        echo -e "${CYAN}🚫 Excluding api/ (SQL/API tests; use gbx:test:sql-docs or --suite api to run them)${NC}"
+    fi
+    if [ "$INCLUDE_INTEGRATION" = true ]; then
+        echo -e "${CYAN}🐢 Including integration tests (may be slow)${NC}"
+    else
+        echo -e "${CYAN}⚡ Excluding integration tests (fast mode)${NC}"
+    fi
+    if [ "$SKIP_BUILD" = true ]; then
+        echo -e "${CYAN}⏭️  Skipping Maven and Python build (--skip-build)${NC}"
+    fi
+    echo ""
+
+    # Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
+    SAMPLE_DATA_ROOT_EXPORT=""
+    [ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data"
+
+    # Run pre-steps and pytest inside Docker (single bash -c so env and cwd carry through)
+    RUN_CMD="set -e
 unset JAVA_TOOL_OPTIONS
 export JUPYTER_PLATFORM_DIRS=1
 $SAMPLE_DATA_ROOT_EXPORT
@@ -203,8 +257,9 @@ echo '━━━━━━━━━━━━━━━━━━━━━━━━�
 python3 -m pytest $TEST_PATH -v $MARKERS --tb=short --color=yes $IGNORE_API_ARG
 "
 
-docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
-EXIT_CODE=$?
+    docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
+    EXIT_CODE=$?
+fi
 
 echo ""
 show_separator

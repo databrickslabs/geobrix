@@ -20,6 +20,8 @@ bash scripts/commands/gbx-test-docs.sh [OPTIONS]
 
 **Common**
 
+- `--host` – Run on the host (arca), not the Docker container. Passed through to each child suite (python-docs, sql-docs, scala-docs). Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin). See "Host mode" below.
+- `--rebuild-venv` – (with `--host`) force-rebuild the host test venv; forwarded to the venv-based child suites (python-docs, sql-docs).
 - `--log <path>` – Log file (filename → `test-logs/<name>`).
 - `--markers <markers>` – Pytest markers for Python (e.g. `"not slow"`).
 - `--include-integration` – Include Python integration tests (excluded by default).
@@ -30,6 +32,10 @@ bash scripts/commands/gbx-test-docs.sh [OPTIONS]
 - `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use your env or path_config default; e.g. full bundle).
 - `--help` – Help and examples.
 
+## Host mode (arca, no Docker)
+
+With `--host` the orchestrator runs on the host instead of `docker exec geobrix-dev`, forwarding `--host` to each child suite (python-docs, sql-docs, scala-docs). Prerequisites: `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) and `uv` on PATH, with `PIP_INDEX_URL` pointing at the internal pip proxy. The venv-based child suites build `.venv-host` from `python/geobrix/requirements-dev-container.txt` on first run (the exact CI pins, minus native-source-only `pdal` which arca can't build); `--rebuild-venv` is forwarded to them. The scala-docs child runs `mvn` directly and needs only the sourced GDAL env. See the `geobrix-arca` plugin for the full setup.
+
 **Sample data (default):** The command sets `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` inside the container so doc tests use the minimal bundle (host path `sample-data/Volumes/main/default/test-data`). This is required for running docs unit tests on remote/CI. Use `--no-sample-data-root` to leave it unset (e.g. to use a full bundle or your own env).
 
 ## Examples
@@ -37,6 +43,10 @@ bash scripts/commands/gbx-test-docs.sh [OPTIONS]
 ```bash
 # Full run with build
 bash scripts/commands/gbx-test-docs.sh
+
+# On the arca host (no Docker) — source the GDAL env first
+source ~/.local/geobrix-gdal-env.sh
+bash scripts/commands/gbx-test-docs.sh --host
 
 # Fast run (skip build), with log. Uses in-repo minimal bundle; no download.
 bash scripts/commands/gbx-test-docs.sh --skip-build --log docs.log

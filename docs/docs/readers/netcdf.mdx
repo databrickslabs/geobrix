@@ -1,0 +1,82 @@
+---
+sidebar_position: 6
+sidebar_label: NetCDF
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import netcdfExamples from '!!raw-loader!../../tests/python/readers/netcdf_gbx_read_examples.py';
+
+# NetCDF Reader
+
+Read CF-convention NetCDF into GeoBrix's existing schemas — no new downstream
+contracts. `netcdf_gbx` is the **lightweight** (`rasterio`/`netcdf4`-backed,
+JAR-free) reader; it is the initial NetCDF reader in GeoBrix (a writer and a
+heavyweight reader are planned follow-ups).
+
+A NetCDF file is a bag of labelled N-D arrays, and only some layouts *are* maps.
+The reader has **two modes**, chosen by the `mode` option:
+
+- **`raster`** (default) — a **regular lat/lon or projected grid** is transcoded
+  to the shared `(source, tile)` GeoTIFF schema, exactly like the other raster
+  readers. Everything downstream (`rst_h3_tessellate`, band math, tiling) works
+  unchanged. ERA5 reanalysis grids read this way.
+- **`vector`** — **point (discrete-sampling) data**, or **any 2-D field
+  including a curvilinear/swath grid**, is emitted as **one point per cell**
+  (cell-centre lon/lat + values). This reads swath products losslessly, with no
+  regridding or interpolation choices baked in. Sentinel-5P TROPOMI CH4 (a
+  netCDF-4 swath) reads this way.
+
+:::note Honest by construction
+The reader never resamples and never applies quality thresholds. In vector mode
+every requested variable — including a quality flag such as Sentinel-5P
+`qa_value` — travels through as its own column, so **you** decide how to filter.
+Raw sensor-geometry products (no per-pixel lon/lat) are rejected with an
+actionable error rather than silently guessed at.
+:::
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mode` | `"raster"` | `raster` (CF grid → tile) or `vector` (points / per-cell points). |
+| `variable` / `variables` | — (required) | NetCDF variable(s) to read. `variable` takes one; `variables` takes a comma-separated list (vector-mode attribute columns). |
+| `group` | — | HDF5 group path for grouped NetCDF-4 files (e.g. Sentinel-5P `"/PRODUCT"`). |
+| `bbox` / `bboxCrs` | — | Area-of-interest filter (`"minx,miny,maxx,maxy"`). |
+| `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches. |
+| `sizeInMB` | `"-1"` | Raster mode: `<= 0` = one whole tile per variable. |
+
+Register the lightweight DataSources once per session:
+
+<CodeFromTest code={netcdfExamples} language="python" functionName="REGISTER"
+  source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
+
+## Raster mode — CF grids → tiles
+
+<CodeFromTest code={netcdfExamples} language="python" functionName="READ_RASTER"
+  source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
+
+The output is the standard `(source, tile)` schema — see
+[Tile Structure](../api/tile-structure). Only regular lat/lon or projected
+(CF `grid_mapping`) grids are accepted in raster mode; a curvilinear/swath
+variable raises an error steering you to `mode=vector`.
+
+## Vector mode — points & swath → per-cell points
+
+<CodeFromTest code={netcdfExamples} language="python" functionName="READ_VECTOR"
+  source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
+
+Vector mode emits attribute columns (one per requested variable) followed by a
+`geom_0` WKB point column and `geom_0_srid` / `geom_0_srid_proj` string columns —
+the same shape as the other lightweight vector readers, so the GeoBrix built-in
+`gbx_st_*` functions, native Databricks ST, and H3 binning compose directly. A
+curvilinear/swath cell carries its own lon/lat, so each becomes an exact point;
+no target grid or resampling method is chosen for you.
+
+## Next Steps
+
+- [GeoTIFF Reader](./geotiff) — for COG/GeoTIFF rasters (e.g. Sentinel-2, EMIT CH4).
+- [Raster Functions](../api/raster-functions) — tessellation, band math, tiling.
+- [Execution Tiers](../api/execution-tiers) — lightweight vs. heavyweight.

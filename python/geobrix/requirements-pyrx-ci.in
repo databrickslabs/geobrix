@@ -62,6 +62,12 @@ quadbin==0.2.2
 scikit-image==0.26.0
 xarray-spatial==0.9.9
 
+# --- NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P,
+# ERA5). xarray comes transitively via xarray-spatial; netcdf4 is the one new
+# engine (single wheel bundling netcdf-c + HDF5). Pulls cftime. Keep in lockstep
+# with the pyproject [light] floor and requirements-dev-container.in. ---
+netcdf4==1.7.2
+
 # --- STAC light client deps the test/stac suite actually imports: requests
 # (stac/_download.py, module top) + tenacity (stac/_search.py search_one retry,
 # exercised by test_search). pystac-client / planetary-computer are NOT needed --

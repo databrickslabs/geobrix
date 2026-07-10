@@ -113,6 +113,14 @@ light = [
     "mapbox-vector-tile>=2.1,<2.2",
     "scikit-image>=0.22,<1",
     "xarray-spatial>=0.4,<1",
+    # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
+    # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
+    # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
+    # Folded into [light] (not a separate [netcdf] extra) so geobrix[light]
+    # reads NetCDF out of the box. Floor pinned; add a ceiling if a future
+    # release floats/breaks on Serverless env v5 (Py 3.12), same discipline as
+    # the rio-tiler / mapbox-vector-tile pins above.
+    "netcdf4>=1.6,<2",
 ]
 # For sample-data bundle uploads to Unity Catalog Volumes and gbx:test:bundle-databricks
 databricks = [

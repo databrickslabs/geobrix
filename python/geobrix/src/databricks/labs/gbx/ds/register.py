@@ -13,6 +13,7 @@ from pyspark.sql import SparkSession
 
 from databricks.labs.gbx import _register
 from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
 from databricks.labs.gbx.ds.pmtiles import PMTilesGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
 from databricks.labs.gbx.ds.vector import (
@@ -27,6 +28,7 @@ from databricks.labs.gbx.ds.vector import (
 _SOURCES = (
     RasterGbxDataSource,
     GTiffGbxDataSource,
+    NetcdfGbxDataSource,
     PMTilesGbxDataSource,
     VectorGbxDataSource,
     ShapefileGbxDataSource,

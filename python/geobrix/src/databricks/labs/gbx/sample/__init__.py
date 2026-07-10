@@ -17,10 +17,7 @@ from databricks.labs.gbx.sample._bundle import (
 from databricks.labs.gbx.sample.dem import DemDownloader, download_dem_aoi
 from databricks.labs.gbx.sample.naip import NaipDownloader, download_naip_aoi
 from databricks.labs.gbx.sample.overture import OvertureClient, download_overture_aoi
-from databricks.labs.gbx.sample.tropomi import (
-    TropomiDownloader,
-    download_tropomi_aoi,
-)
+from databricks.labs.gbx.sample.tropomi import TropomiDownloader, download_tropomi_aoi
 
 __all__ = [
     "DemDownloader",

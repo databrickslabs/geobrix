@@ -46,9 +46,7 @@ class NetcdfVectorReader(DataSourceReader):
         with _netcdf.open_dataset(member, self.group) as ds:
             for name in self.variables:
                 fields.append(
-                    StructField(
-                        name, _netcdf.np_to_spark(ds[name].values.dtype), True
-                    )
+                    StructField(name, _netcdf.np_to_spark(ds[name].values.dtype), True)
                 )
         fields.append(StructField("geom_0", BinaryType(), True))
         fields.append(StructField("geom_0_srid", StringType(), True))

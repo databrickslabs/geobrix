@@ -17,11 +17,7 @@ from pyspark.sql.datasource import DataSource, DataSourceReader
 from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import _encode, _netcdf
-from databricks.labs.gbx.ds.raster import (
-    RasterGbxReader,
-    _FilePartition,
-    reader_schema,
-)
+from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
 
 
 def _requested_variables(options: Dict[str, str]) -> List[str]:

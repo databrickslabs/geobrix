@@ -78,9 +78,7 @@ class TropomiDownloader:
         from pyspark.sql import SparkSession
 
         spark = spark or SparkSession.getActiveSession()
-        return spark.createDataFrame(
-            [(_bbox_to_geojson_polygon(bbox),)], ["geojson"]
-        )
+        return spark.createDataFrame([(_bbox_to_geojson_polygon(bbox),)], ["geojson"])
 
     def discover(self, bbox: Sequence[float], spark=None):
         from pyspark.sql import SparkSession

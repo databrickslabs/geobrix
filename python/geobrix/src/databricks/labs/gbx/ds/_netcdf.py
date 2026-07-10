@@ -10,8 +10,8 @@ from __future__ import annotations
 from contextlib import contextmanager
 from typing import Dict, Iterator, List, Optional, Tuple
 
-GRID = "grid"                # class 1/2 -> raster
-POINTS = "points"            # CF discrete sampling geometries -> vector
+GRID = "grid"  # class 1/2 -> raster
+POINTS = "points"  # CF discrete sampling geometries -> vector
 CURVILINEAR = "curvilinear"  # class 3 (2-D lat/lon) -> vector (per-cell points)
 UNSUPPORTED = "unsupported"  # class 4 (sensor geometry + GLT) / unknown
 

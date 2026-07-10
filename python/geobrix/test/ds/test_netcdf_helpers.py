@@ -15,7 +15,7 @@ def _write_regular_grid(path):
         lon = ds.createVariable("lon", "f8", ("lon",))
         lat.standard_name = "latitude"
         lon.standard_name = "longitude"
-        lat[:] = [50.0, 49.5, 49.0]   # descending (north-up)
+        lat[:] = [50.0, 49.5, 49.0]  # descending (north-up)
         lon[:] = [10.0, 10.5, 11.0, 11.5]
         v = ds.createVariable("ch4", "f4", ("lat", "lon"), fill_value=-9999.0)
         v[:] = np.arange(12, dtype="float32").reshape(3, 4)
@@ -76,7 +76,7 @@ def test_grid_transform_crs_north_up(tmp_path):
         transform, crs = _netcdf.grid_transform_crs(ds, "ch4")
     assert crs == "EPSG:4326"
     # origin at (lon min - half px, lat max + half px); px = 0.5
-    assert transform.a == pytest.approx(0.5)   # x pixel size
+    assert transform.a == pytest.approx(0.5)  # x pixel size
     assert transform.e == pytest.approx(-0.5)  # y pixel size (north-up => negative)
     assert transform.c == pytest.approx(9.75)  # ulx = 10.0 - 0.25
     assert transform.f == pytest.approx(50.25)  # uly = 50.0 + 0.25

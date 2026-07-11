@@ -76,6 +76,10 @@ netcdf4==1.7.2
 # match requirements-dev-container.in. ---
 requests==2.32.3
 tenacity==9.1.4
+# NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
+# Runtime-only for the real EMIT path; unit tests inject a fake. Keep in lockstep
+# with the [stac] pyproject extra + requirements-dev-container.in.
+earthaccess==0.14.0
 
 # --- Overture static-STAC catalog traversal (gbx.sample.overture). pystac is the
 # static-catalog reader (distinct from pystac-client, which is the search-API client

@@ -139,6 +139,10 @@ stac = [
     "planetary-computer>=1.0,<2",
     "tenacity>=8,<10",
     "requests>=2.25",
+    # NASA EMIT (CH4) fetch for the sample EmitDownloader — Earthdata-Login
+    # authenticated (earthaccess), used by the vapor-eyes series. Lives here with
+    # the other remote-data-acquisition clients (not base [light]).
+    "earthaccess>=0.11,<1",
 ]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based

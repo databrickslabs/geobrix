@@ -6,7 +6,8 @@ One DataSource, two modes (the `mode` option, default "raster"):
     per-cell points -> the light vector schema (attrs + geom_0 WKB + srid cols).
 
 Class 4 (raw sensor geometry + GLT) is rejected in both modes.
-Serverless-safe: no spark.conf/_jvm/.rdd/cache/persist.
+Serverless-safe: registers a DataSource and builds Column output only (no runtime
+Spark-config mutation or JVM-bridge access).
 """
 
 from __future__ import annotations

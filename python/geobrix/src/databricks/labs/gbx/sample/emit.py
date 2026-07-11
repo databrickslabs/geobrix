@@ -9,7 +9,7 @@ validate-fn, and ``read_enh``/``read_plumes``.
 Products: EMITL2BCH4ENH (60 m enhancement COGs — the CH4ENH band) and
 EMITL2BCH4PLM (plume-complex COG + GeoJSON outline + emission-rate estimate).
 Requires EARTHDATA_TOKEN for real pulls; unit tests inject a fake earthaccess.
-Serverless-safe (driver-side download, no spark.conf.set/_jvm/.rdd/cache/persist).
+Serverless-safe (driver-side download; no runtime Spark-config mutation or JVM bridge).
 """
 
 from __future__ import annotations

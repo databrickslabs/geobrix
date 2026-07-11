@@ -4,7 +4,7 @@ Open, no auth. Pages the FeatureServer (resultOffset / resultRecordCount, honori
 exceededTransferLimit), requests f=geojson (ArcGIS reprojects native EPSG:2277 ->
 WGS84 lon/lat automatically), merges pages into one GeoJSON on the Volume, and
 validates it. read() loads via geojson_gbx. Serverless-safe (driver-side fetch of
-one merged file; no spark.conf.set / _jvm / .rdd / cache / persist).
+one merged file; no runtime Spark-config mutation or JVM-bridge access).
 """
 
 from __future__ import annotations

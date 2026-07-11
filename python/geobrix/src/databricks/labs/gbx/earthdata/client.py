@@ -10,7 +10,7 @@ Per-dataset downloaders supply the CMR short-names, an ``asset_fn(url)`` classif
 (return an asset label or ``None`` to skip a link), and a ``validate_fn(path,
 asset)`` predicate. Download is DRIVER-SIDE (EMIT/LP DAAC auth mints short-lived
 per-request credentials that don't fan out like anonymous hrefs) — fine at demo
-scale. Serverless-safe: no spark.conf.set / _jvm / .rdd / cache / persist.
+scale. Serverless-safe: no runtime Spark-config mutation or JVM-bridge access.
 
 Injection seam: pass ``_earthaccess`` (a module-like object with
 login/search_data/download) for offline unit tests.

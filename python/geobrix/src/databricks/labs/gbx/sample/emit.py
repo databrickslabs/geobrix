@@ -116,16 +116,63 @@ class EmitDownloader:
             .select("source", "tile")
         )
 
+    # EMIT PLM-metadata property name -> (clean column, numeric?). The EMIT
+    # CH4PLMMETA GeoJSON carries JPL's per-plume estimate; plumes with no wind
+    # match store the numeric fields as the string "NA", so those infer as OGR
+    # String in some files and Real in others -- try_cast unifies them (NA->null).
+    _PLM_COLS = [
+        ("Plume ID", "plume_id", False),
+        ("UTC Time Observed", "utc_observed", False),
+        ("Orbit", "orbit", False),
+        ("DCID", "dcid", False),
+        ("Max Plume Concentration (ppm m)", "max_conc_ppmm", True),
+        ("Latitude of max concentration", "lat_max", True),
+        ("Longitude of max concentration", "lon_max", True),
+        ("Wind Speed (m/s)", "wind_speed_ms", True),
+        ("Wind Speed Std (m/s)", "wind_speed_std_ms", True),
+        ("Wind Speed Source", "wind_speed_source", False),
+        ("Emissions Rate Estimate (kg/hr)", "emission_rate_kg_hr", True),
+        (
+            "Emissions Rate Estimate Uncertainty (kg/hr)",
+            "emission_rate_uncert_kg_hr",
+            True,
+        ),
+        ("Fetch Length (m)", "fetch_length_m", True),
+    ]
+
     def read_plumes(self, out_dir: str, spark=None):
-        """Load EMIT plume-complex GeoJSON (geojson_gbx vector)."""
+        """Load EMIT plume-complex metadata (geojson_gbx) as a typed per-plume frame.
+
+        Each CH4PLMMETA GeoJSON is read individually (they have per-file schema
+        divergence from the "NA" quirk above, which the multi-file reader rejects),
+        normalized to clean typed columns, and unioned. ``plume_geom`` is the
+        outline polygon as WKB (native ST-ready)."""
+        import glob
+
         from pyspark.sql import SparkSession
+        from pyspark.sql import functions as F
 
         spark = spark or SparkSession.getActiveSession()
-        return (
-            spark.read.format("geojson_gbx")
-            .option("filterRegex", r".*CH4PLM.*\.json$")
-            .load(out_dir)
-        )
+        files = sorted(glob.glob(os.path.join(out_dir, "*CH4PLMMETA*.json")))
+        if not files:
+            raise FileNotFoundError(
+                f"no EMIT CH4 plume-metadata GeoJSON (*CH4PLMMETA*.json) under {out_dir}"
+            )
+
+        def _norm(df):
+            sels = []
+            for raw, clean, numeric in self._PLM_COLS:
+                c = "`" + raw + "`"
+                expr = f"try_cast({c} as double)" if numeric else f"cast({c} as string)"
+                sels.append(F.expr(expr).alias(clean))
+            sels.append(F.col("geom_0").alias("plume_geom"))
+            return df.select(*sels)
+
+        out = None
+        for f in files:
+            d = _norm(spark.read.format("geojson_gbx").load(f))
+            out = d if out is None else out.unionByName(d)
+        return out
 
 
 def download_emit_aoi(spark, bbox: Sequence[float], out_dir: str, **kw):

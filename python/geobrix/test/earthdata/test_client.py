@@ -51,6 +51,7 @@ class _FakeEarthaccess:
         count=-1,
         **kw,
     ):
+        self.last_temporal = temporal
         return list(self._granules)
 
     def download(self, granules, local_path=None, threads=8, **kw):
@@ -70,6 +71,29 @@ def _validate_nonempty(path, asset):
 BBOX = [-103.9, 31.65, -103.4, 32.15]
 
 
+def test_norm_temporal_slash_string_becomes_tuple():
+    from databricks.labs.gbx.earthdata.client import _norm_temporal
+
+    assert _norm_temporal("2024-08-01/2024-09-30") == ("2024-08-01", "2024-09-30")
+    assert _norm_temporal(None) is None
+    assert _norm_temporal(("2024-08-01", "2024-09-30")) == (
+        "2024-08-01",
+        "2024-09-30",
+    )
+    assert _norm_temporal("2024-08-01") == ("2024-08-01",)
+
+
+def test_search_normalizes_slash_temporal_for_cmr(spark):
+    g = _FakeGranule(["https://x/A_data.tif"])
+    fake = _FakeEarthaccess([g])
+    client = EarthdataClient(_earthaccess=fake)
+    # A STAC-style slash window must reach earthaccess as a (start, end) tuple.
+    client.search(
+        ["SHORT"], "002", BBOX, "2024-08-01/2024-09-30", _asset_tif, spark=spark
+    )
+    assert fake.last_temporal == ("2024-08-01", "2024-09-30")
+
+
 def test_search_returns_classified_rows(spark):
     g = _FakeGranule(["https://x/A_data.tif", "https://x/A_meta.xml"])
     client = EarthdataClient(_earthaccess=_FakeEarthaccess([g]))
@@ -83,9 +107,10 @@ def test_search_returns_classified_rows(spark):
 
 def test_download_validates_and_builds_result_frame(spark, tmp_path):
     def _writer(granules, local_path):
+        # client passes hrefs as strings (earthaccess.download's str/list[str] form)
         os.makedirs(local_path, exist_ok=True)
-        for gr in granules:
-            dest = os.path.join(local_path, os.path.basename(gr.data_links()[0]))
+        for url in granules:
+            dest = os.path.join(local_path, os.path.basename(url))
             with open(dest, "wb") as fh:
                 fh.write(b"x" * 100)
 

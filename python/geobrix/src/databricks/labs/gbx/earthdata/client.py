@@ -51,14 +51,20 @@ _DISCOVER_SCHEMA = StructType(
 )
 
 
-class _HrefGranule:
-    """Minimal granule adapter so earthaccess.download can fetch a single href."""
+def _norm_temporal(temporal):
+    """Normalize a temporal window to the (start, end) tuple earthaccess/CMR wants.
 
-    def __init__(self, href: str):
-        self._href = href
-
-    def data_links(self, access=None, in_region=False):
-        return [self._href]
+    Callers may pass the STAC-style slash string ``"start/end"`` (as the vapor-eyes
+    notebooks do, sharing one ``DATE_WINDOW`` across STAC and Earthdata searches);
+    earthaccess expects a 2-tuple and mis-parses a single slash string into an
+    out-of-range tz offset. A tuple/list passes through; ``None`` stays ``None``.
+    """
+    if temporal is None:
+        return None
+    if isinstance(temporal, str):
+        parts = [p.strip() for p in temporal.split("/") if p.strip()]
+        return tuple(parts) if len(parts) == 2 else (temporal,)
+    return tuple(temporal)
 
 
 class EarthdataClient:
@@ -86,14 +92,17 @@ class EarthdataClient:
     ) -> List[Tuple[str, str, str]]:
         ea = self._ea()
         w, s, e, n = bbox
+        temporal = _norm_temporal(temporal)
         out: List[Tuple[str, str, str]] = []
         for short in short_names:
-            for g in ea.search_data(
+            _kwargs = dict(
                 short_name=short,
                 version=version,
                 bounding_box=(w, s, e, n),
-                temporal=temporal,
-            ):
+            )
+            if temporal is not None:
+                _kwargs["temporal"] = temporal
+            for g in ea.search_data(**_kwargs):
                 for url in g.data_links(access="external"):
                     asset = asset_fn(url)
                     if asset is None:
@@ -133,6 +142,10 @@ class EarthdataClient:
 
         spark = spark or SparkSession.getActiveSession()
         ea = self._ea()
+        # earthaccess renders a tqdm/ipywidgets progress bar per file; in a
+        # Databricks notebook that surfaces as a stack of "Loading the widget is
+        # taking longer than expected" placeholders. Force tqdm to no-op.
+        os.environ["TQDM_DISABLE"] = "1"
         if hasattr(rows, "collect"):
             rows = [
                 (r["item_id"], r["asset_name"], r["href"])
@@ -147,13 +160,21 @@ class EarthdataClient:
                     (item_id, asset, dest, os.path.getsize(dest), True, datetime.now())
                 )
                 continue
+            # Pass the href STRING (not a granule wrapper): earthaccess.download
+            # dispatches via multimethod and only overloads str/list[str] and real
+            # DataGranule objects — a custom adapter raises DispatchError. Honor the
+            # returned path; fall back to the basename in out_dir.
+            got = None
             try:
-                ea.download([_HrefGranule(href)], local_path=out_dir)
+                ret = ea.download([href], local_path=out_dir)
+                if ret:
+                    got = str(ret[0])
             except Exception:
-                pass
-            if os.path.exists(dest) and validate_fn(dest, asset):
+                got = None
+            cand = got if (got and os.path.exists(got)) else dest
+            if os.path.exists(cand) and validate_fn(cand, asset):
                 results.append(
-                    (item_id, asset, dest, os.path.getsize(dest), True, datetime.now())
+                    (item_id, asset, cand, os.path.getsize(cand), True, datetime.now())
                 )
             else:
                 results.append((item_id, asset, None, 0, False, datetime.now()))

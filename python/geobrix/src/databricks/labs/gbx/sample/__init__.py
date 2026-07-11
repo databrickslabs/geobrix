@@ -15,19 +15,25 @@ from databricks.labs.gbx.sample._bundle import (
     run_essential_bundle,
 )
 from databricks.labs.gbx.sample.dem import DemDownloader, download_dem_aoi
+from databricks.labs.gbx.sample.emit import EmitDownloader, download_emit_aoi
 from databricks.labs.gbx.sample.naip import NaipDownloader, download_naip_aoi
 from databricks.labs.gbx.sample.overture import OvertureClient, download_overture_aoi
 from databricks.labs.gbx.sample.tropomi import TropomiDownloader, download_tropomi_aoi
+from databricks.labs.gbx.sample.wells import WellsDownloader, download_wells_aoi
 
 __all__ = [
     "DemDownloader",
+    "EmitDownloader",
     "NaipDownloader",
     "OvertureClient",
     "TropomiDownloader",
+    "WellsDownloader",
     "download_dem_aoi",
+    "download_emit_aoi",
     "download_naip_aoi",
     "download_overture_aoi",
     "download_tropomi_aoi",
+    "download_wells_aoi",
     "get_temp_dir",
     "get_volumes_path",
     "run_complete_bundle",

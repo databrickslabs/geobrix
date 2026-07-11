@@ -80,7 +80,7 @@ class TropomiDownloader:
         spark = spark or SparkSession.getActiveSession()
         return spark.createDataFrame([(_bbox_to_geojson_polygon(bbox),)], ["geojson"])
 
-    def discover(self, bbox: Sequence[float], spark=None):
+    def discover(self, bbox: Sequence[float], temporal: Optional[str] = None, spark=None):
         from pyspark.sql import SparkSession
         from pyspark.sql import functions as F
 
@@ -90,7 +90,7 @@ class TropomiDownloader:
             self._aoi_dataframe(bbox, spark),
             geojson_col="geojson",
             collections=[self.collection],
-            datetime=_S5P_DATETIME,
+            datetime=temporal or _S5P_DATETIME,
         )
         return (
             raw.filter(F.col("asset_name") == self.asset)
@@ -102,6 +102,7 @@ class TropomiDownloader:
         self,
         bbox: Sequence[float],
         out_dir: str,
+        temporal: Optional[str] = None,
         bbox_crs: str = "EPSG:4326",
         partitions: Optional[int] = None,
         spark=None,
@@ -115,7 +116,7 @@ class TropomiDownloader:
             self._aoi_dataframe(bbox, spark),
             geojson_col="geojson",
             collections=[self.collection],
-            datetime=_S5P_DATETIME,
+            datetime=temporal or _S5P_DATETIME,
         )
         granules = raw.filter(F.col("asset_name") == self.asset).select(
             "item_id", "asset_name", "href"

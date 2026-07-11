@@ -121,6 +121,32 @@ def g_swir_bands(cx, cy, color, tint):
     return "".join(out)
 
 
+def g_swir_index(cx, cy, color, tint):
+    """A single-band SWIR methane-proxy index raster (from B11/B12), hot = plume."""
+    cols, rows, cs = 6, 5, 20
+    x0 = cx - cols * cs / 2
+    y0 = cy - rows * cs / 2 + 8
+    hot = {(1, 3): 1.0, (2, 3): 0.95, (2, 4): 0.8, (1, 4): 0.68, (3, 3): 0.55}
+    out = []
+    for r in range(rows):
+        for c in range(cols):
+            op = hot.get((r, c), 0.14 + ((r * c) % 3) * 0.05)
+            out.append(
+                f'<rect x="{x0+c*cs}" y="{y0+r*cs}" width="{cs-1}" height="{cs-1}" '
+                f'fill="{color}" fill-opacity="{op:.2f}"/>'
+            )
+    out.append(
+        f'<rect x="{x0-2}" y="{y0-2}" width="{cols*cs+3}" height="{rows*cs+3}" '
+        f'rx="6" fill="none" stroke="{color}" stroke-width="2.2"/>'
+    )
+    out.append(
+        f'<text x="{cx}" y="{y0-12}" text-anchor="middle" '
+        f'font-family="ui-monospace, Menlo, monospace" font-size="12" '
+        f'font-weight="700" fill="{color}">(B11−B12)/(B11+B12)</text>'
+    )
+    return "".join(out)
+
+
 def g_layers(cx, cy, color, tint):
     """Three stacked map layers (hotspots / plumes / wells) with a hex motif."""
     out = [
@@ -273,7 +299,7 @@ NOTEBOOKS = {
                   chip_text="StacClient · B11/B12", glyph=g_swir_bands),
             Stage(title="SWIR index",
                   subtitle="rst_mapalgebra computes (B11-B12)/(B11+B12) — high where B12 absorbs: a methane proxy",
-                  chip_text="rst_mapalgebra", glyph=eo.g_multiband_tile),
+                  chip_text="rst_mapalgebra", glyph=g_swir_index),
             Stage(title="H3 plume cells",
                   subtitle="rst_h3_tessellate grids the index into fine H3 cells for a per-cell plume fraction",
                   chip_text="rst_h3_tessellate", glyph=eo.g_dense_hex_grid),

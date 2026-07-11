@@ -104,6 +104,23 @@ def g_well_pads(cx, cy, color, tint):
     )
 
 
+def g_swir_bands(cx, cy, color, tint):
+    """The two Sentinel-2 SWIR bands (B11, B12) that form the MBMP proxy."""
+    cols = {"B11": "#C05A2B", "B12": "#8A2D12"}
+    out = []
+    for i, b in enumerate(["B11", "B12"]):
+        y = cy - 42 + i * 84
+        c = cols[b]
+        out.append(
+            f'<circle cx="{cx}" cy="{y}" r="31" fill="{c}" fill-opacity="0.16" '
+            f'stroke="{c}" stroke-width="2.6"/>'
+            f'<text x="{cx}" y="{y + 6}" text-anchor="middle" '
+            f'font-family="ui-monospace, Menlo, monospace" font-size="16" '
+            f'font-weight="700" fill="{c}">{b}</text>'
+        )
+    return "".join(out)
+
+
 def g_layers(cx, cy, color, tint):
     """Three stacked map layers (hotspots / plumes / wells) with a hex motif."""
     out = [
@@ -253,8 +270,7 @@ NOTEBOOKS = {
                   chip_text="s5p_hotspots", glyph=eo.g_single_hex),
             Stage(title="Sentinel-2 SWIR",
                   subtitle="StacClient stages B11/B12 SWIR COGs windowed to the cell, from the least-cloudy item",
-                  chip_text="StacClient · B11/B12",
-                  glyph=lambda cx, cy, c, t: eo.g_band_fanout(cx, cy)),
+                  chip_text="StacClient · B11/B12", glyph=g_swir_bands),
             Stage(title="SWIR index",
                   subtitle="rst_mapalgebra computes (B11-B12)/(B11+B12) — high where B12 absorbs: a methane proxy",
                   chip_text="rst_mapalgebra", glyph=eo.g_multiband_tile),

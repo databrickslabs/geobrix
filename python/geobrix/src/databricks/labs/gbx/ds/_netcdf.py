@@ -66,19 +66,32 @@ def _find_lat_lon(ds):
     return lat, lon
 
 
+def _eff_ndim(var) -> int:
+    """Dimensionality ignoring size-1 dims (e.g. S5P's leading length-1 `time`)."""
+    return int(sum(1 for s in var.shape if s > 1))
+
+
 def classify(ds, variable: str) -> str:
     lat, lon = _find_lat_lon(ds)
     if lat is None or lon is None:
         return UNSUPPORTED
-    if lat.ndim == 2 and lon.ndim == 2:
+    # Use the squeezed dimensionality so a (time=1, scanline, ground_pixel) swath
+    # (Sentinel-5P) reads as effective 2-D curvilinear, not "unsupported".
+    lat_nd, lon_nd = _eff_ndim(lat), _eff_ndim(lon)
+    if lat_nd == 2 and lon_nd == 2:
         return CURVILINEAR
-    if lat.ndim == 1 and lon.ndim == 1:
+    if lat_nd <= 1 and lon_nd <= 1:
         var = ds[variable]
         # DSG points: the value var shares the single obs dimension with lat/lon.
-        if var.ndim == 1 and lat.dims == lon.dims == var.dims:
+        if _eff_ndim(var) <= 1 and lat.dims == lon.dims == var.dims:
             return POINTS
         # Regular grid: the value var's dims include the lat and lon dims.
-        if lat.dims[0] in var.dims and lon.dims[0] in var.dims:
+        if (
+            lat.dims
+            and lon.dims
+            and lat.dims[0] in var.dims
+            and lon.dims[0] in var.dims
+        ):
             return GRID
     return UNSUPPORTED
 

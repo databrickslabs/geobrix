@@ -41,7 +41,13 @@ class NetcdfVectorReader(DataSourceReader):
         return _listing.list_files(self.path, self.filter_regex)
 
     def schema(self) -> StructType:
-        member = self._members()[0]
+        members = self._members()
+        if not members:
+            raise ValueError(
+                f"netcdf_gbx: no files matched filterRegex {self.filter_regex!r} "
+                f"under {self.path!r} — nothing to infer a schema from."
+            )
+        member = members[0]
         fields: List[StructField] = []
         with _netcdf.open_dataset(member, self.group) as ds:
             for name in self.variables:

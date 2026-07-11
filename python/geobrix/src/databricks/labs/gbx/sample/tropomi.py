@@ -80,7 +80,9 @@ class TropomiDownloader:
         spark = spark or SparkSession.getActiveSession()
         return spark.createDataFrame([(_bbox_to_geojson_polygon(bbox),)], ["geojson"])
 
-    def discover(self, bbox: Sequence[float], temporal: Optional[str] = None, spark=None):
+    def discover(
+        self, bbox: Sequence[float], temporal: Optional[str] = None, spark=None
+    ):
         from pyspark.sql import SparkSession
         from pyspark.sql import functions as F
 
@@ -121,11 +123,18 @@ class TropomiDownloader:
         granules = raw.filter(F.col("asset_name") == self.asset).select(
             "item_id", "asset_name", "href"
         )
+        # S5P granules are NetCDF (not rasterio-decodable rasters) and are consumed
+        # whole — the netcdf_gbx vector reader emits all ground-pixel points and the
+        # notebook clips to the AOI downstream. So skip StacClient's rasterio
+        # read-validation and bbox windowing (both raster-only, and both reject a
+        # .nc); validate=False uses a size-floor existence check instead.
+        # name="{item_id}.nc": StacClient defaults to a .tif suffix, but these are
+        # NetCDF — save as .nc so read()'s r".*\.nc$" filter matches.
         return client.download(
             granules,
             out_dir,
-            bbox=list(bbox),
-            bbox_crs=bbox_crs,
+            name="{item_id}.nc",
+            validate=False,
             partitions=partitions,
         )
 

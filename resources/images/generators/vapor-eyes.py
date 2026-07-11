@@ -139,6 +139,27 @@ NOTEBOOKS = {
                "h3_centeraswkb"],
         note="databrickslabs/geobrix  ·  Sentinel-5P L2 CH4  ·  Planetary Computer",
     ),
+    2: dict(
+        title="Targeted detection",
+        subtitle="Sentinel-2 20 m SWIR (MBMP) at the flagged hotspot → H3 plume cells",
+        stages=[
+            Stage(title="Hotspot cell",
+                  subtitle="Take the strongest s5p_hotspots cell (NB01) and use its footprint as the AOI",
+                  chip_text="s5p_hotspots"),
+            Stage(title="Sentinel-2 SWIR",
+                  subtitle="StacClient stages B11/B12 SWIR COGs windowed to the cell, from the least-cloudy item",
+                  chip_text="StacClient · B11/B12"),
+            Stage(title="SWIR index",
+                  subtitle="rst_mapalgebra computes (B11-B12)/(B11+B12) — high where B12 absorbs: a methane proxy",
+                  chip_text="rst_mapalgebra"),
+            Stage(title="H3 plume cells",
+                  subtitle="rst_h3_tessellate grids the index into fine H3 cells for a per-cell plume fraction",
+                  chip_text="rst_h3_tessellate"),
+        ],
+        chips=["StacClient", "gtiff_gbx", "rst_mapalgebra", "rst_h3_tessellate",
+               "rst_summary"],
+        note="databrickslabs/geobrix  ·  Sentinel-2 L2A  ·  Planetary Computer",
+    ),
 }
 
 

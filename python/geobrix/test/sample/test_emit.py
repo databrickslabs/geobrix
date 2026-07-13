@@ -120,6 +120,45 @@ def _write_geojson(path):
         json.dump(fc, fh)
 
 
+def _write_plm_meta(path):
+    # EMIT CH4PLMMETA GeoJSON: the exact JPL property names read_plumes normalizes.
+    props = {
+        "Plume ID": "CH4_PlumeComplex-1",
+        "UTC Time Observed": "2024-08-23T17:34:10Z",
+        "Orbit": "2423611",
+        "DCID": "1408315670",
+        "Max Plume Concentration (ppm m)": 2715.0,
+        "Latitude of max concentration": 31.90,
+        "Longitude of max concentration": -103.65,
+        "Wind Speed (m/s)": 4.4,
+        "Wind Speed Std (m/s)": 0.2,
+        "Wind Speed Source": "HRRR",
+        "Emissions Rate Estimate (kg/hr)": 1622.3,
+        "Emissions Rate Estimate Uncertainty (kg/hr)": 115.4,
+        "Fetch Length (m)": 906.1,
+    }
+    fc = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": props,
+                "geometry": {
+                    "type": "Polygon",
+                    "coordinates": [
+                        [
+                            [-103.66, 31.89], [-103.64, 31.89], [-103.64, 31.91],
+                            [-103.66, 31.91], [-103.66, 31.89],
+                        ]
+                    ],
+                },
+            }
+        ],
+    }
+    with open(path, "w") as fh:
+        json.dump(fc, fh)
+
+
 def test_discover_extracts_enh_and_plm_assets(spark):
     dl = EmitDownloader(_earthaccess=_fake_ea())
     df = dl.discover(BBOX, spark=spark)
@@ -134,9 +173,9 @@ def test_discover_extracts_enh_and_plm_assets(spark):
 
 def test_download_validates_and_builds_result_frame(spark, tmp_path):
     def _writer(granules, local_path):
+        # client.download passes href strings (earthaccess.download's str form)
         os.makedirs(local_path, exist_ok=True)
-        for g in granules:
-            url = g.data_links()[0]
+        for url in granules:
             dest = os.path.join(local_path, os.path.basename(url))
             if dest.endswith(".json"):
                 _write_geojson(dest)
@@ -191,10 +230,15 @@ def test_read_plumes_uses_geojson_gbx(spark, tmp_path):
     register(spark)
     d = tmp_path / "emit4"
     d.mkdir()
-    _write_geojson(str(d / "EMIT_L2B_CH4PLM_002_p.json"))
+    _write_plm_meta(str(d / "EMIT_L2B_CH4PLMMETA_002_p.json"))
     df = EmitDownloader(_earthaccess=_fake_ea()).read_plumes(str(d), spark=spark)
     assert df.count() == 1
-    assert any(f.name.startswith("geom_0") for f in df.schema.fields)
+    cols = [f.name for f in df.schema.fields]
+    assert "plume_geom" in cols and "emission_rate_kg_hr" in cols
+    row = df.first()
+    assert row["plume_id"] == "CH4_PlumeComplex-1"
+    assert abs(row["emission_rate_kg_hr"] - 1622.3) < 1e-6
+    assert abs(row["max_conc_ppmm"] - 2715.0) < 1e-6
 
 
 def test_exports_from_sample():

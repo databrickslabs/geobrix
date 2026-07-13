@@ -1772,6 +1772,8 @@ def _resolve_pmtiles_bytes_or_url(layer) -> dict:
             "mode": "url",
             "url": data,
             "tile_type": "unknown",
+            "min_zoom": None,
+            "max_zoom": None,
             "vector_layer_names": [],
         }
 
@@ -1784,6 +1786,8 @@ def _resolve_pmtiles_bytes_or_url(layer) -> dict:
             "mode": "embed",
             "bytes": raw,
             "tile_type": info["tile_type"],
+            "min_zoom": info.get("min_zoom"),
+            "max_zoom": info.get("max_zoom"),
             "vector_layer_names": _vector_layer_names(
                 info.get("metadata", {}), raw, info["tile_type"]
             ),
@@ -1797,6 +1801,8 @@ def _resolve_pmtiles_bytes_or_url(layer) -> dict:
             "mode": "embed",
             "bytes": raw,
             "tile_type": info["tile_type"],
+            "min_zoom": info.get("min_zoom"),
+            "max_zoom": info.get("max_zoom"),
             "vector_layer_names": _vector_layer_names(
                 info.get("metadata", {}), raw, info["tile_type"]
             ),
@@ -1860,6 +1866,14 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
         # 256px tiles -- a 256 tile rendered as 512 lands at 2x scale and the wrong place.
         # Pin the actual tile pixel size so the raster registers correctly on the map.
         src[sid]["tileSize"] = _raster_tile_px(info)
+    # Declare the archive's zoom range on the SOURCE. Without maxzoom, zooming past the
+    # archive's top level makes MapLibre request tiles that don't exist (-> features blink
+    # out and snap back, a "jumpy" zoom); with it, MapLibre OVERZOOMS the top-level tiles
+    # smoothly. minzoom likewise stops requests below the coarsest level.
+    if info.get("min_zoom") is not None:
+        src[sid]["minzoom"] = int(info["min_zoom"])
+    if info.get("max_zoom") is not None:
+        src[sid]["maxzoom"] = int(info["max_zoom"])
     # Sidecar consumed (and popped) by the Task-5 HTML builder.
     src[sid]["_gbx_pmtiles"] = info
 
@@ -1902,12 +1916,17 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
             fill_pending = ([] if user_opacity else ["fill-opacity"]) + [
                 "fill-outline-color"
             ]
+            # Each sub-layer is filtered to its matching geometry type so a source-layer of
+            # polygons (e.g. building footprints) is NOT also drawn as a circle at every
+            # vertex -- MapLibre's circle type otherwise renders points for polygon/line
+            # geometry too, which looks like spurious dots on the buildings.
             layers.append(
                 {
                     "id": f"{sid}-{sl}-fill",
                     "type": "fill",
                     "source": sid,
                     "source-layer": sl,
+                    "filter": ["==", ["geometry-type"], "Polygon"],
                     "paint": {
                         "fill-color": col,
                         "fill-opacity": layer.opacity if user_opacity else 0.5,
@@ -1921,6 +1940,8 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
                     "type": "line",
                     "source": sid,
                     "source-layer": sl,
+                    # LineString features + polygon outlines; never points.
+                    "filter": ["!=", ["geometry-type"], "Point"],
                     "paint": {"line-color": col, "line-width": 1.4},
                     _GBX_EMPHASIS: ["line-width"],
                 }
@@ -1931,6 +1952,7 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
                     "type": "circle",
                     "source": sid,
                     "source-layer": sl,
+                    "filter": ["==", ["geometry-type"], "Point"],
                     "paint": {
                         "circle-color": col,
                         "circle-radius": 4,

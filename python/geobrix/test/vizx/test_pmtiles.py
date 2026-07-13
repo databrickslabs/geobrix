@@ -107,6 +107,15 @@ def test_pmtiles_renders_all_declared_source_layers():
         if ly["type"] == "fill"
     }
     assert len(set(fill_colors.values())) == 3  # distinct palette color per layer
+    # Each sub-layer is filtered to its geometry type so polygon layers don't also draw
+    # spurious circles at every vertex (fill=Polygon, circle=Point, line=non-Point).
+    for ly in layers:
+        if ly["type"] == "circle":
+            assert ly["filter"] == ["==", ["geometry-type"], "Point"]
+        elif ly["type"] == "fill":
+            assert ly["filter"] == ["==", ["geometry-type"], "Polygon"]
+        elif ly["type"] == "line":
+            assert ly["filter"] == ["!=", ["geometry-type"], "Point"]
 
 
 def test_pmtiles_emits_categorical_legend_per_source_layer():
@@ -138,6 +147,27 @@ def test_pmtiles_emits_categorical_legend_per_source_layer():
     for sl in ("hotspots", "plumes", "wells"):
         assert f">{sl}<" in html
     assert "_gbx_legend" not in html
+
+
+def test_pmtiles_source_declares_archive_zoom_range():
+    """The MapLibre source declares the archive's minzoom/maxzoom so the renderer
+    overzooms the top-level tiles instead of requesting non-existent tiles past max_zoom
+    (the "jumpy" zoom where features blink out and snap back)."""
+    from databricks.labs.gbx.vizx._layers import pmtiles_layer
+    from databricks.labs.gbx.vizx._maplibre import _pmtiles
+
+    # tiles spanning z10..z12 -> archive min_zoom 10, max_zoom 12
+    vec = _build_archive(
+        [
+            (10, 163, 395, _real_mvt_tile(10, 163, 395)),
+            (12, 654, 1583, _real_mvt_tile(12, 654, 1583)),
+        ],
+        TileType.MVT,
+    )
+    src, _layers, _ = _pmtiles(pmtiles_layer(vec), 0)
+    (sid,) = list(src)
+    assert src[sid]["minzoom"] == 10
+    assert src[sid]["maxzoom"] == 12
 
 
 def test_pmtiles_discovers_source_layer_from_tiles_when_no_metadata():

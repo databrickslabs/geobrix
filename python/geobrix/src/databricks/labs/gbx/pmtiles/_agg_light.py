@@ -38,6 +38,12 @@ def _merge_mvt_blobs(blobs: list[bytes], extent: int = 4096) -> bytes:
     (each blob is already tile-local for the same (z,x,y); decode/encode round-trips
     the local coords). Attributes are preserved per feature.
 
+    Decode and encode MUST use the SAME y orientation. Tiles are written y-down
+    (``y_coord_down=True``, MVT spec: origin top-left, y increases south). ``mvt.decode``
+    defaults to y-UP, so decoding without ``y_coord_down=True`` and re-encoding with it
+    FLIPS every merged tile's y (latitude mirrored within the tile) — features jump as
+    the tile grid changes per zoom. Decode y-down so the round-trip is identity.
+
     Returns one merged MVT blob. If the list has a single blob, returns it directly
     to avoid a decode/encode round-trip for the common single-feature case.
     """
@@ -46,7 +52,7 @@ def _merge_mvt_blobs(blobs: list[bytes], extent: int = 4096) -> bytes:
     layers: dict[str, list] = {}
     for blob in blobs:
         try:
-            decoded = mvt.decode(blob)
+            decoded = mvt.decode(blob, default_options={"y_coord_down": True})
         except Exception:
             # Malformed blob: skip rather than crashing the whole group.
             continue

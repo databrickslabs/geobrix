@@ -14,6 +14,13 @@ from ._serde import to_native_props
 MAX_ZOOM = 20
 MAX_TILES = 1_000_000
 DEFAULT_EXTENT = 4096
+# Tile buffer in tile-local pixels (at `extent`). Features straddling a tile boundary are
+# clipped to the tile box EXPANDED by this margin, so their geometry overhangs the [0,
+# extent] core into the buffer. Without it, polygons/lines are hard-clipped exactly at the
+# seam: the clip edge renders as a visible line and adjacent tiles' pieces don't join, so
+# seams shift as the tile grid changes per zoom (the "tiles moving/disappearing" artifact).
+# The renderer clips the overhang at draw time, so the join is seamless. 64/4096 ~= 1.5%.
+DEFAULT_BUFFER = 64
 
 
 def encode_layer(
@@ -95,6 +102,7 @@ def pyramid_tiles(
     max_z: int,
     layer_name: str,
     extent: int = DEFAULT_EXTENT,
+    buffer: int = DEFAULT_BUFFER,
 ) -> Iterator[Tuple[int, int, int, bytes]]:
     """Yield ``(z, x, y, mvt_bytes)`` for every tile a WGS-84 feature intersects across [min_z, max_z].
 
@@ -110,6 +118,9 @@ def pyramid_tiles(
         max_z: Maximum zoom level (inclusive).
         layer_name: MVT layer name written into each tile blob.
         extent: Tile coordinate extent (default 4096).
+        buffer: Tile-local-pixel overhang each tile keeps beyond its [0, extent] core, so
+            seam-straddling features aren't hard-clipped at tile edges (default 64). Set 0
+            to disable (exact-tile clip).
     """
     if min_z < 0:
         raise ValueError(f"min_z must be >= 0; got {min_z}")
@@ -144,7 +155,14 @@ def pyramid_tiles(
         xr, yr = spans[z]
         for x in xr:
             for y in yr:
-                tb = box(*_tile_bounds(z, x, y))
+                minx_t, miny_t, maxx_t, maxy_t = _tile_bounds(z, x, y)
+                # Clip to the tile box EXPANDED by `buffer` (converted from tile-local px to
+                # degrees), so seam-straddling geometry overhangs into the buffer instead of
+                # being hard-cut at the edge. _to_tile_local still uses the UNBUFFERED bounds,
+                # so overhang maps to coords in [-buffer, extent+buffer].
+                bx = (maxx_t - minx_t) * (buffer / extent)
+                by = (maxy_t - miny_t) * (buffer / extent)
+                tb = box(minx_t - bx, miny_t - by, maxx_t + bx, maxy_t + by)
                 clipped = shp.intersection(tb)
                 if clipped.is_empty:
                     continue

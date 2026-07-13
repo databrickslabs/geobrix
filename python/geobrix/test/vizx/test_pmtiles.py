@@ -111,11 +111,29 @@ def test_pmtiles_renders_all_declared_source_layers():
     # spurious circles at every vertex (fill=Polygon, circle=Point, line=non-Point).
     for ly in layers:
         if ly["type"] == "circle":
-            assert ly["filter"] == ["==", ["geometry-type"], "Point"]
+            assert ly["filter"] == [
+                "match",
+                ["geometry-type"],
+                ["Point", "MultiPoint"],
+                True,
+                False,
+            ]
         elif ly["type"] == "fill":
-            assert ly["filter"] == ["==", ["geometry-type"], "Polygon"]
+            assert ly["filter"] == [
+                "match",
+                ["geometry-type"],
+                ["Polygon", "MultiPolygon"],
+                True,
+                False,
+            ]
         elif ly["type"] == "line":
-            assert ly["filter"] == ["!=", ["geometry-type"], "Point"]
+            assert ly["filter"] == [
+                "match",
+                ["geometry-type"],
+                ["Point", "MultiPoint"],
+                False,
+                True,
+            ]
 
 
 def test_pmtiles_emits_categorical_legend_per_source_layer():

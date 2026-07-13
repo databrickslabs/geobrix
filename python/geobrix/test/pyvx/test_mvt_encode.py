@@ -107,3 +107,37 @@ def test_pyramid_rejects_inverted_range():
         list(
             _mvt.pyramid_tiles(to_wkb(Point(0.0, 0.0)), {"id": 1}, 3, 1, "layer", 4096)
         )
+
+
+def test_pyramid_buffers_tiles_across_seams():
+    """A polygon straddling a tile boundary must be encoded with a buffer: each covered
+    tile's geometry overhangs the [0, extent] core (coords < 0 or > extent) so MapLibre
+    renders the seam without a hard clip line (the "tiles moving/disappearing on zoom" bug).
+    """
+    from shapely.geometry import box as _box
+
+    extent = 4096
+    # A polygon spanning the z1 antimeridian-free split at lon=0 -> crosses the x=0|x=1
+    # tile boundary at z1, so both tiles must carry buffered overhang.
+    poly = _box(-10.0, -10.0, 10.0, 10.0)  # straddles lon=0 (z1 x-tile seam)
+    tiles = list(_mvt.pyramid_tiles(to_wkb(poly), {"id": 1}, 1, 1, "layer", extent))
+    assert tiles, "expected tiles at z1"
+    coords = []
+    for _z, _x, _y, blob in tiles:
+        for f in _decode(blob):
+
+            def _walk(c):
+                if c and isinstance(c[0], (int, float)):
+                    yield c
+                else:
+                    for e in c:
+                        yield from _walk(e)
+
+            coords.extend(_walk(f["geometry"]["coordinates"]))
+    xs = [c[0] for c in coords]
+    ys = [c[1] for c in coords]
+    # buffer overhang: at least one coordinate must fall outside the [0, extent] core.
+    assert min(xs) < 0 or max(xs) > extent or min(ys) < 0 or max(ys) > extent, (
+        f"no buffer overhang: x[{min(xs)},{max(xs)}] y[{min(ys)},{max(ys)}] "
+        f"all within [0,{extent}] -> hard-clipped at seams"
+    )

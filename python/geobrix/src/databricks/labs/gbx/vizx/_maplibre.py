@@ -1926,7 +1926,13 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
                     "type": "fill",
                     "source": sid,
                     "source-layer": sl,
-                    "filter": ["==", ["geometry-type"], "Polygon"],
+                    "filter": [
+                        "match",
+                        ["geometry-type"],
+                        ["Polygon", "MultiPolygon"],
+                        True,
+                        False,
+                    ],
                     "paint": {
                         "fill-color": col,
                         "fill-opacity": layer.opacity if user_opacity else 0.5,
@@ -1941,7 +1947,13 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
                     "source": sid,
                     "source-layer": sl,
                     # LineString features + polygon outlines; never points.
-                    "filter": ["!=", ["geometry-type"], "Point"],
+                    "filter": [
+                        "match",
+                        ["geometry-type"],
+                        ["Point", "MultiPoint"],
+                        False,
+                        True,
+                    ],
                     "paint": {"line-color": col, "line-width": 1.4},
                     _GBX_EMPHASIS: ["line-width"],
                 }
@@ -1952,7 +1964,13 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
                     "type": "circle",
                     "source": sid,
                     "source-layer": sl,
-                    "filter": ["==", ["geometry-type"], "Point"],
+                    "filter": [
+                        "match",
+                        ["geometry-type"],
+                        ["Point", "MultiPoint"],
+                        True,
+                        False,
+                    ],
                     "paint": {
                         "circle-color": col,
                         "circle-radius": 4,

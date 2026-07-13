@@ -4,6 +4,7 @@ import math
 from typing import Any, Dict, Iterator, List, Tuple
 
 import mapbox_vector_tile as mvt
+import numpy as np
 from shapely.geometry import box
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform
@@ -81,18 +82,32 @@ def _tile_bounds(z: int, x: int, y: int) -> Tuple[float, float, float, float]:
     return lon1, min(lat1, lat2), lon2, max(lat1, lat2)
 
 
+_MAX_MERC_LAT = 85.05112877980659  # Web Mercator latitude limit
+
+
 def _to_tile_local(geom, z: int, x: int, y: int, extent: int):
     """Project a WGS-84 geometry into [0, extent] tile-pixel space for tile (z, x, y).
 
-    Origin is NW corner (x=0, y=0), matching the XYZ/WebMercator convention.
+    X is linear in longitude; Y uses the **Web Mercator** projection because latitude
+    is nonlinear in the XYZ tile grid. A linear-in-latitude mapping is very wrong for
+    large low-zoom tiles (a feature drifts south by degrees) and only converges at high
+    zoom — which renders as data that "moves north as you zoom in". Origin is the NW
+    corner (x=0, y=0); coords outside [0, extent] are the buffer overhang.
     """
-    minx, miny, maxx, maxy = _tile_bounds(z, x, y)
-    sx = extent / (maxx - minx)
-    sy = extent / (maxy - miny)
-    return transform(
-        lambda xs, ys, zs=None: ((xs - minx) * sx, (maxy - ys) * sy),
-        geom,
-    )
+    n = 2**z
+    lon_min = x / n * 360.0 - 180.0
+    lon_scale = extent * n / 360.0
+
+    def _tx(xs, ys, zs=None):
+        xs = np.asarray(xs, dtype=float)
+        lat = np.clip(np.asarray(ys, dtype=float), -_MAX_MERC_LAT, _MAX_MERC_LAT)
+        s = np.sin(np.radians(lat))
+        merc = 0.5 - np.log((1.0 + s) / (1.0 - s)) / (4.0 * np.pi)  # [0,1], 0=north
+        px = (xs - lon_min) * lon_scale
+        py = (merc * n - y) * extent
+        return px, py
+
+    return transform(_tx, geom)
 
 
 def pyramid_tiles(

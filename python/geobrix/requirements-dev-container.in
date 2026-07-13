@@ -38,7 +38,10 @@ keplergl==0.3.2
 pystac-client==0.9.0
 planetary-computer==1.0.0
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
-earthaccess==0.14.0
+earthaccess==0.18.0
+# Constrain the transitive botocore (earthaccess -> s3fs -> aiobotocore -> botocore)
+# to the Serverless base boto3 range (<1.41,>=1.40.45). Mirror in [stac] + pyrx-ci.in.
+botocore>=1.40.45,<1.41.0
 # Overture static-STAC catalog traversal (gbx.sample.overture). pystac is the
 # static-catalog reader used directly by OvertureClient._open_catalog; pystac-client
 # (above) pulls it transitively, but listing it here pins it explicitly so any bump

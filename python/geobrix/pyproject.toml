@@ -143,6 +143,13 @@ stac = [
     # authenticated (earthaccess), used by the vapor-eyes series. Lives here with
     # the other remote-data-acquisition clients (not base [light]).
     "earthaccess>=0.11,<1",
+    # Constrain the transitive botocore (earthaccess -> s3fs -> aiobotocore ->
+    # botocore) to the Databricks Serverless base image's boto3 range, so
+    # installing [stac] doesn't upgrade botocore past what the base boto3 allows
+    # (boto3 1.40.x requires botocore <1.41,>=1.40.45). Keeps aiobotocore on 2.x;
+    # s3fs/fsspec/earthaccess are unaffected. We don't use boto3/S3 at runtime
+    # (earthaccess fetches over HTTPS) — this just silences the pip resolver clash.
+    "botocore>=1.40.45,<1.41.0",
 ]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based

@@ -206,6 +206,11 @@ _CARTO_STYLE = "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json"
 
 _DEFAULT_RASTER_MAX_PX = 1024
 
+# Cycled per source-layer for a multi-layer vector archive rendered without an
+# explicit pmtiles_layer color, so each layer gets its own hue (blue/orange/teal/
+# violet/rose/green).
+_VECTOR_PALETTE = ["#1F6FB5", "#E04E2A", "#0F8E8B", "#6B4FA0", "#C2255C", "#2FA56A"]
+
 
 # ---------------------------------------------------------------------------
 # public entry point
@@ -1685,6 +1690,43 @@ def _extract_vector_layer_names(metadata: dict) -> list[str]:
     return names
 
 
+def _mvt_layer_names_from_bytes(raw: bytes, *, max_tiles: int = 40) -> list:
+    """Discover MVT source-layer names by decoding sample tiles from the archive.
+
+    Used when the archive declares no ``vector_layers`` metadata, so we render the
+    source-layers the tiles ACTUALLY contain rather than guessing a name. Scans up to
+    ``max_tiles`` tiles and unions their layer keys (a single low-zoom tile may not
+    hold every layer). Best-effort: returns ``[]`` if the archive can't be decoded.
+    """
+    try:
+        import mapbox_vector_tile as mvt
+        from pmtiles.reader import MemorySource, all_tiles
+
+        from databricks.labs.gbx.vizx._pmtiles import _maybe_gunzip
+
+        names, seen = [], set()
+        for i, (_key, payload) in enumerate(all_tiles(MemorySource(raw))):
+            if i >= max_tiles:
+                break
+            for lname in mvt.decode(_maybe_gunzip(payload)).keys():
+                if lname not in seen:
+                    seen.add(lname)
+                    names.append(lname)
+        return names
+    except Exception:  # noqa: BLE001 — best-effort discovery
+        return []
+
+
+def _vector_layer_names(metadata: dict, raw: bytes, tile_type: str) -> list:
+    """Source-layer names for a vector archive: prefer the declared TileJSON
+    ``vector_layers``; else decode the tiles (embed archives self-describe). No
+    domain-specific name is ever guessed."""
+    names = _extract_vector_layer_names(metadata or {})
+    if not names and raw and (tile_type or "").lower() == "mvt":
+        names = _mvt_layer_names_from_bytes(raw)
+    return names
+
+
 def _resolve_pmtiles_bytes_or_url(layer) -> dict:
     """Return a sidecar info dict for the pmtiles layer.
 
@@ -1724,7 +1766,9 @@ def _resolve_pmtiles_bytes_or_url(layer) -> dict:
             "mode": "embed",
             "bytes": raw,
             "tile_type": info["tile_type"],
-            "vector_layer_names": _extract_vector_layer_names(info.get("metadata", {})),
+            "vector_layer_names": _vector_layer_names(
+                info.get("metadata", {}), raw, info["tile_type"]
+            ),
         }
 
     # Already bytes.
@@ -1735,7 +1779,9 @@ def _resolve_pmtiles_bytes_or_url(layer) -> dict:
             "mode": "embed",
             "bytes": raw,
             "tile_type": info["tile_type"],
-            "vector_layer_names": _extract_vector_layer_names(info.get("metadata", {})),
+            "vector_layer_names": _vector_layer_names(
+                info.get("metadata", {}), raw, info["tile_type"]
+            ),
         }
 
     raise TypeError(
@@ -1811,28 +1857,69 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
             }
         ]
     else:
-        # Derive the source-layer name from the archive's TileJSON metadata.
-        # `vector_layer_names` lists ids in declaration order; use the first.
-        # Fall back to "buildings" only when metadata carries no layer names
-        # (e.g. url-mode archives that cannot be pre-inspected).
+        # Render EVERY source-layer the archive declares (TileJSON `vector_layers`
+        # ids, else names discovered from the tiles), not just the first — a
+        # multi-layer archive (e.g. hotspots + plumes + wells) otherwise loses all
+        # but one layer. For each source-layer add fill + line + circle sub-layers so
+        # polygons, lines and points all render (MapLibre draws each feature only in
+        # the type-matching sub-layer); a single pmtiles_layer color applies to all,
+        # else a palette gives each source-layer its own color.
         vector_names = info.get("vector_layer_names", [])
-        source_layer = vector_names[0] if vector_names else "buildings"
+        if not vector_names:
+            import warnings
+
+            warnings.warn(
+                "plot_pmtiles: no vector source-layer could be resolved for this "
+                "archive (no vector_layers metadata and none discoverable from its "
+                "tiles) — pass metadata_json with vector_layers to gbx_pmtiles_agg. "
+                "Rendering the basemap only.",
+                stacklevel=2,
+            )
         user_opacity = layer.opacity is not None
-        fill_pending = [] if user_opacity else ["fill-opacity"]
-        fill_pending.append("fill-outline-color")
-        layers = [
-            {
-                "id": f"{sid}-fill",
-                "type": "fill",
-                "source": sid,
-                "source-layer": source_layer,
-                "paint": {
-                    "fill-color": layer.color or "#c33",
-                    "fill-opacity": layer.opacity if user_opacity else 0.5,
-                },
-                _GBX_EMPHASIS: fill_pending,
-            }
-        ]
+        layers = []
+        for li, sl in enumerate(vector_names):
+            col = layer.color or _VECTOR_PALETTE[li % len(_VECTOR_PALETTE)]
+            fill_pending = ([] if user_opacity else ["fill-opacity"]) + [
+                "fill-outline-color"
+            ]
+            layers.append(
+                {
+                    "id": f"{sid}-{sl}-fill",
+                    "type": "fill",
+                    "source": sid,
+                    "source-layer": sl,
+                    "paint": {
+                        "fill-color": col,
+                        "fill-opacity": layer.opacity if user_opacity else 0.5,
+                    },
+                    _GBX_EMPHASIS: fill_pending,
+                }
+            )
+            layers.append(
+                {
+                    "id": f"{sid}-{sl}-line",
+                    "type": "line",
+                    "source": sid,
+                    "source-layer": sl,
+                    "paint": {"line-color": col, "line-width": 1.4},
+                    _GBX_EMPHASIS: ["line-width"],
+                }
+            )
+            layers.append(
+                {
+                    "id": f"{sid}-{sl}-circle",
+                    "type": "circle",
+                    "source": sid,
+                    "source-layer": sl,
+                    "paint": {
+                        "circle-color": col,
+                        "circle-radius": 4,
+                        "circle-stroke-color": "#FFFFFF",
+                        "circle-stroke-width": 0.8,
+                    },
+                    _GBX_EMPHASIS: [],
+                }
+            )
 
     embed_bytes = len(info["bytes"]) if info["mode"] == "embed" else 0
     return src, layers, embed_bytes

@@ -14,7 +14,10 @@ matplotlib.use("Agg")
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
 
 
-def _build_archive(tiles, tile_type, *, name="demo"):
+_VL_DEFAULT = object()  # sentinel: distinguish "not given" from None ("omit metadata")
+
+
+def _build_archive(tiles, tile_type, *, name="demo", vector_layers=_VL_DEFAULT):
     buf = io.BytesIO()
     w = Writer(buf)
     zs = [z for z, _, _, _ in tiles]
@@ -36,7 +39,13 @@ def _build_archive(tiles, tile_type, *, name="demo"):
         tiles, key=lambda t: zxy_to_tileid(t[0], t[1], t[2])
     ):
         w.write_tile(zxy_to_tileid(z, x, y), payload)
-    w.finalize(header, {"name": name, "vector_layers": [{"id": "demo"}]})
+    md = {"name": name}
+    if vector_layers is _VL_DEFAULT:
+        md["vector_layers"] = [{"id": "demo"}]
+    elif vector_layers is not None:
+        md["vector_layers"] = vector_layers
+    # vector_layers=None -> omit entirely (a metadata-less archive)
+    w.finalize(header, md)
     return buf.getvalue()
 
 
@@ -70,6 +79,50 @@ def test_pmtiles_layer_opacity_and_color_reach_paint():
     assert vlayers[0]["type"] == "fill"
     assert vlayers[0]["paint"]["fill-opacity"] == 0.25
     assert vlayers[0]["paint"]["fill-color"] == "#3a3a3a"
+
+
+def test_pmtiles_renders_all_declared_source_layers():
+    """A multi-layer vector archive renders EVERY declared source-layer (not just the
+    first), each with fill+line+circle sub-layers so any geometry draws, and a distinct
+    palette color per layer when no explicit pmtiles_layer color is set.
+    """
+    from databricks.labs.gbx.vizx._layers import pmtiles_layer
+    from databricks.labs.gbx.vizx._maplibre import _pmtiles
+
+    vec = _build_archive(
+        [(0, 0, 0, _real_mvt_tile(0, 0, 0))],
+        TileType.MVT,
+        vector_layers=[{"id": "hotspots"}, {"id": "plumes"}, {"id": "wells"}],
+    )
+    _, layers, _ = _pmtiles(pmtiles_layer(vec), 0)
+    assert {ly["source-layer"] for ly in layers} == {"hotspots", "plumes", "wells"}
+    types_per = {}
+    for ly in layers:
+        types_per.setdefault(ly["source-layer"], set()).add(ly["type"])
+    for sl in ("hotspots", "plumes", "wells"):
+        assert types_per[sl] == {"fill", "line", "circle"}
+    fill_colors = {
+        ly["source-layer"]: ly["paint"]["fill-color"]
+        for ly in layers
+        if ly["type"] == "fill"
+    }
+    assert len(set(fill_colors.values())) == 3  # distinct palette color per layer
+
+
+def test_pmtiles_discovers_source_layer_from_tiles_when_no_metadata():
+    """No `vector_layers` metadata -> discover the source-layer from the tiles
+    (the "demo" layer _real_mvt_tile encodes), never a guessed domain name."""
+    from databricks.labs.gbx.vizx._layers import pmtiles_layer
+    from databricks.labs.gbx.vizx._maplibre import _pmtiles
+
+    vec = _build_archive(
+        [(0, 0, 0, _real_mvt_tile(0, 0, 0))], TileType.MVT, vector_layers=None
+    )
+    _, layers, _ = _pmtiles(pmtiles_layer(vec), 0)
+    assert {ly["source-layer"] for ly in layers} == {
+        "demo"
+    }  # from the tile, not a guess
+    assert len(layers) == 3  # fill + line + circle
 
 
 def test_archive_bytes_passthrough_and_path(tmp_path):

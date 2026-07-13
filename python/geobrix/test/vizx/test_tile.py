@@ -73,7 +73,8 @@ def test_plot_tile_window_beyond_raster_is_boundless():
     # out-of-raster area (masked) so the drawn array spans the full requested window
     # rather than collapsing into a corner (the plume-near-scene-edge bug).
     ax = plot_tile(
-        _tile_bytes(size=40), basemap=False,
+        _tile_bytes(size=40),
+        basemap=False,
         window_bounds=(-103.95, 31.55, -103.75, 31.75),
     )
     arr = ax.images[0].get_array()

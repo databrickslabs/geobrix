@@ -65,6 +65,22 @@ def test_plot_tile_absolute_mask_hides_background():
     plt.close("all")
 
 
+def test_plot_tile_window_beyond_raster_is_boundless():
+    from databricks.labs.gbx.vizx import plot_tile
+
+    plt.close("all")
+    # window extends beyond the tile's extent on all sides: a boundless read pads the
+    # out-of-raster area (masked) so the drawn array spans the full requested window
+    # rather than collapsing into a corner (the plume-near-scene-edge bug).
+    ax = plot_tile(
+        _tile_bytes(size=40), basemap=False,
+        window_bounds=(-103.95, 31.55, -103.75, 31.75),
+    )
+    arr = ax.images[0].get_array()
+    assert np.ma.isMaskedArray(arr) and arr.mask.any()  # padded edges are masked
+    plt.close("all")
+
+
 def test_plot_tile_window_bounds_crops():
     from databricks.labs.gbx.vizx import plot_tile
 

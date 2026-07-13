@@ -152,7 +152,12 @@ def plot_tile(
         crs = ds.crs
         if window_bounds is not None:
             win = from_bounds(*window_bounds, ds.transform)
-            arr = ds.read(band, window=win, masked=True)
+            # boundless: return the FULL requested window (pixels outside the raster
+            # masked) so arr matches window_transform(win). A plain read clips the
+            # array to the raster overlap while the transform stays full-window,
+            # which misplaces the data into a corner when the window extends past
+            # the scene (e.g. a plume near the scene edge).
+            arr = ds.read(band, window=win, masked=True, boundless=True)
             wt = ds.window_transform(win)
         else:
             arr = ds.read(band, masked=True)

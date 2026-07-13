@@ -109,6 +109,37 @@ def test_pmtiles_renders_all_declared_source_layers():
     assert len(set(fill_colors.values())) == 3  # distinct palette color per layer
 
 
+def test_pmtiles_emits_categorical_legend_per_source_layer():
+    """A multi-layer vector archive emits a categorical legend (one color swatch per
+    source-layer) so the rendered map is legible, and build_html renders those swatches.
+    """
+    from databricks.labs.gbx.vizx._layers import pmtiles_layer
+    from databricks.labs.gbx.vizx._maplibre import (
+        _pmtiles,
+        build_html,
+        layer_to_sources_layers,
+    )
+
+    vec = _build_archive(
+        [(0, 0, 0, _real_mvt_tile(0, 0, 0))],
+        TileType.MVT,
+        vector_layers=[{"id": "hotspots"}, {"id": "plumes"}, {"id": "wells"}],
+    )
+    src, layers, _ = _pmtiles(pmtiles_layer(vec), 0)
+    (sid,) = list(src)
+    legend = src[sid]["_gbx_legend"]
+    assert [it["label"] for it in legend["items"]] == ["hotspots", "plumes", "wells"]
+    colors = {it["color"] for it in legend["items"]}
+    assert len(colors) == 3  # distinct palette swatch per layer
+
+    # the legend swatches reach the rendered HTML, and the sidecar is stripped from
+    # the MapLibre source (unknown source keys are rejected by MapLibre).
+    html = build_html([layer_to_sources_layers(pmtiles_layer(vec), 0)])
+    for sl in ("hotspots", "plumes", "wells"):
+        assert f">{sl}<" in html
+    assert "_gbx_legend" not in html
+
+
 def test_pmtiles_discovers_source_layer_from_tiles_when_no_metadata():
     """No `vector_layers` metadata -> discover the source-layer from the tiles
     (the "demo" layer _real_mvt_tile encodes), never a guessed domain name."""

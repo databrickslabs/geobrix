@@ -1357,6 +1357,24 @@ def _legend_html(legends):
 
     entries = []
     for lg in legends:
+        if lg.get("items"):  # categorical: a colored swatch + label per item
+            rows = []
+            if lg.get("label"):
+                rows.append(
+                    '<div style="font:600 11px sans-serif;color:#222;margin-bottom:3px">'
+                    f'{_html.escape(str(lg["label"]))}</div>'
+                )
+            for it in lg["items"]:
+                rows.append(
+                    '<div style="display:flex;align-items:center;gap:6px;margin:2px 0">'
+                    '<span style="display:inline-block;width:12px;height:12px;'
+                    "border-radius:2px;border:1px solid #aaa;"
+                    f'background:{_html.escape(str(it["color"]))}"></span>'
+                    '<span style="font:11px sans-serif;color:#333">'
+                    f'{_html.escape(str(it["label"]))}</span></div>'
+                )
+            entries.append('<div style="margin:3px 0 5px">' + "".join(rows) + "</div>")
+            continue
         grad = ", ".join(lg["stops"])
         entries.append(
             '<div style="margin:3px 0 5px">'
@@ -1877,8 +1895,10 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
             )
         user_opacity = layer.opacity is not None
         layers = []
+        legend_items: list[dict] = []
         for li, sl in enumerate(vector_names):
             col = layer.color or _VECTOR_PALETTE[li % len(_VECTOR_PALETTE)]
+            legend_items.append({"label": sl, "color": col})
             fill_pending = ([] if user_opacity else ["fill-opacity"]) + [
                 "fill-outline-color"
             ]
@@ -1920,6 +1940,10 @@ def _pmtiles(layer, idx: int) -> tuple[dict, list[dict], int]:
                     _GBX_EMPHASIS: [],
                 }
             )
+        # Categorical legend (color swatch -> source-layer name) so a multi-layer
+        # archive is legible without guessing which color is which layer.
+        if legend_items:
+            src[sid]["_gbx_legend"] = {"label": layer.label, "items": legend_items}
 
     embed_bytes = len(info["bytes"]) if info["mode"] == "embed" else 0
     return src, layers, embed_bytes

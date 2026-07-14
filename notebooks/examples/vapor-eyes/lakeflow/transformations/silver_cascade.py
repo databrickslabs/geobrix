@@ -71,6 +71,27 @@ _S2_CELLS_SCHEMA = StructType(
     ]
 )
 
+# EMIT plume metadata carries no source-path column; observation_date comes from the
+# per-plume "UTC Time Observed" field (ISO8601, e.g. 2024-08-23T17:34:10Z) -> date part.
+# An AOI with no JPL plume complex has no *CH4PLMMETA*.json, so read_plumes raises
+# FileNotFoundError and emit_plumes materializes as this empty schema (a data condition,
+# not a failure) — the pipeline deploys clean and plume_quant/attribution stay empty.
+_PLUME_SCHEMA = StructType(
+    [
+        StructField("plume_id", StringType()),
+        StructField("observation_date", DateType()),
+        StructField("max_conc_ppmm", DoubleType()),
+        StructField("emission_rate_kg_hr", DoubleType()),
+        StructField("emission_rate_uncert_kg_hr", DoubleType()),
+        StructField("wind_speed_ms", DoubleType()),
+        StructField("fetch_length_m", DoubleType()),
+        StructField("lon_max", DoubleType()),
+        StructField("lat_max", DoubleType()),
+        StructField("plume_geom", BinaryType()),
+        StructField("_ingested_at", TimestampType()),
+    ]
+)
+
 
 def _read_s5p_file(spark, s5p_dir, filename, obs_date):
     """Read one staged granule (scoped by its exact filename) and tag it with the
@@ -225,3 +246,85 @@ def s2_plume_cells():
 
     frames = [_s2_index_cells(spark, s2_dir, d, c["s2_h3_res"]) for d in sorted(dates)]
     return reduce(lambda a, b: a.unionByName(b), frames)
+
+
+@dp.materialized_view(
+    name="emit_plumes",
+    comment="EMIT plume outlines + JPL emission-rate estimates (per overpass)",
+    partition_cols=["observation_date"],
+)
+@dp.expect("rate_nonneg", "emission_rate_kg_hr >= 0")
+@dp.expect("has_geom", "plume_geom IS NOT NULL")
+def emit_plumes():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    p = paths(spark)
+
+    from databricks.labs.gbx.sample import EmitDownloader
+    try:
+        plumes = EmitDownloader().read_plumes(p["emit"])
+    except FileNotFoundError:
+        return spark.createDataFrame([], _PLUME_SCHEMA)
+
+    # observation_date from the per-plume UTC observation time (date part). Robust to
+    # the trailing 'Z'/time by slicing the leading yyyy-MM-dd (avoids format edge cases).
+    return (
+        plumes.withColumn(
+            "observation_date",
+            F.to_date(F.substring(F.col("utc_observed"), 1, 10), "yyyy-MM-dd"),
+        )
+        .withColumn("_ingested_at", F.current_timestamp())
+        .select(
+            "plume_id", "observation_date", "max_conc_ppmm", "emission_rate_kg_hr",
+            "emission_rate_uncert_kg_hr", "wind_speed_ms", "fetch_length_m",
+            "lon_max", "lat_max", "plume_geom", "_ingested_at",
+        )
+    )
+
+
+@dp.materialized_view(
+    name="plume_quant",
+    comment="Per-plume GeoBrix-clipped CH4 enhancement (mean/max ppm-m) vs JPL rate",
+    partition_cols=["observation_date"],
+)
+@dp.expect("gbx_max_present", "gbx_max_ppmm IS NOT NULL")
+def plume_quant():
+    from pyspark.sql import SparkSession
+    from pyspark.sql.window import Window
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    p = paths(spark)
+
+    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.sample import EmitDownloader
+
+    plumes = spark.read.table("emit_plumes")
+    enh = EmitDownloader().read_enh(p["emit"])  # (source, tile) per overpass segment
+
+    # Clip each plume against every ENH segment, keep — per plume — the segment with
+    # the strongest clipped max (edge-segment slivers lose to the containing segment).
+    clipped = (
+        plumes.crossJoin(enh.select(F.col("tile").alias("scene")))
+        .withColumn("clip", rx.rst_clip("scene", "plume_geom", F.lit(True)))
+        .withColumn("summary", rx.rst_summary("clip"))
+        .withColumn("gbx_mean_ppmm",
+                    F.get_json_object("summary", "$.bands[0].mean").cast("double"))
+        .withColumn("gbx_max_ppmm",
+                    F.get_json_object("summary", "$.bands[0].max").cast("double"))
+        .withColumn(
+            "_rnk",
+            F.row_number().over(
+                Window.partitionBy("plume_id").orderBy(
+                    F.col("gbx_max_ppmm").desc_nulls_last())
+            ),
+        )
+        .filter(F.col("_rnk") == 1)
+        .drop("_rnk")
+    )
+    return clipped.select(
+        "plume_id", "observation_date", "emission_rate_kg_hr",
+        "emission_rate_uncert_kg_hr", "max_conc_ppmm", "wind_speed_ms",
+        "fetch_length_m", "gbx_mean_ppmm", "gbx_max_ppmm", "plume_geom",
+        F.current_timestamp().alias("_ingested_at"),
+    )

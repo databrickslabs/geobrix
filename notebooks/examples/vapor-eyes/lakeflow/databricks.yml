@@ -49,6 +49,31 @@ resources:
         vapor_eyes.max_z: ${var.max_z}
         vapor_eyes.overview_max_z: ${var.overview_max_z}
 
+  jobs:
+    vapor_eyes_lf_job:
+      name: vapor_eyes_lf_job
+      tasks:
+        - task_key: land
+          spark_python_task:
+            python_file: ./land/land.py
+            parameters:
+              ["--sources", "s5p", "--s5p-temporal", "${var.s5p_temporal}"]
+          environment_key: land_env
+        - task_key: pipeline
+          depends_on: [{task_key: land}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.vapor_eyes_lf_pipeline.id}
+      environments:
+        - environment_key: land_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              - "geobrix[light,stac,vizx] @ file://${var.gbx_wheel}"
+      schedule:
+        quartz_cron_expression: "0 0 7 * * ?"
+        timezone_id: "America/Chicago"
+        pause_status: PAUSED
+
 targets:
   dev:
     mode: development

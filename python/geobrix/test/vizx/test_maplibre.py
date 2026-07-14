@@ -452,9 +452,16 @@ def test_raster_layer_decimation(tmp_path):
 
 def test_pmtiles_layer_url_mode():
     """An http(s) URL -> url mode sidecar, embed_bytes=0."""
+    import pytest
+
     url = "https://example.com/tiles.pmtiles"
     layer = pmtiles_layer(url)
-    sources, layers, embed = layer_to_sources_layers(layer, 0)
+    # A remote archive's source-layers can't be discovered at build time (no bytes to
+    # sample, no metadata), and vizx does not guess a name -> it warns and renders the
+    # basemap only (0 overlay layers). The source itself is still wired up correctly so
+    # pmtiles.js resolves the archive at runtime.
+    with pytest.warns(UserWarning, match="no vector source-layer"):
+        sources, layers, embed = layer_to_sources_layers(layer, 0)
     src = sources["gbx0"]
     # URL mode: the source key must be the remote URL (pmtiles.js keys PMTiles(url) by
     # the URL), not the source id, or MapLibre can't resolve the archive.
@@ -464,7 +471,7 @@ def test_pmtiles_layer_url_mode():
     assert info["mode"] == "url"
     assert info["url"] == url
     assert embed == 0
-    assert len(layers) == 1
+    assert len(layers) == 0
 
 
 def test_pmtiles_layer_embed_mode_from_bytes():
@@ -479,7 +486,10 @@ def test_pmtiles_layer_embed_mode_from_bytes():
     assert "bytes" in info
     assert embed == len(info["bytes"])
     assert embed > 0
-    assert len(layers) == 1
+    # A vector source-layer renders as fill + line + circle sub-layers (so polygons,
+    # lines and points all draw), each filtered to its geometry type.
+    assert len(layers) == 3
+    assert {ly["type"] for ly in layers} == {"fill", "line", "circle"}
 
 
 def test_pmtiles_layer_embed_mode_from_path(tmp_path):

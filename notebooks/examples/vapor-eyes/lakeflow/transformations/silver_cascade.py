@@ -286,7 +286,12 @@ def s2_plume_cells():
     comment="EMIT plume outlines + JPL emission-rate estimates (per overpass)",
     partition_cols=["observation_date"],
 )
-@dp.expect("rate_nonneg", "emission_rate_kg_hr >= 0")
+# Concentration is the reliable intensity metric (this pipeline's headline);
+# JPL emission_rate is legitimately NULL/NA when no wind data exists, so it is
+# only checked non-negative WHEN PRESENT — never treat an absent rate as a
+# defect (that would flag ~75% of real plumes).
+@dp.expect("conc_present", "max_conc_ppmm > 0")
+@dp.expect("rate_valid_when_present", "emission_rate_kg_hr IS NULL OR emission_rate_kg_hr >= 0")
 @dp.expect("has_geom", "plume_geom IS NOT NULL")
 def emit_plumes():
     from pyspark.sql import SparkSession

@@ -10,7 +10,7 @@ def cfg(spark):
         "schema": g("vapor_eyes.schema", "vapor_eyes_lf"),
         "volume": g("vapor_eyes.volume", "data"),
         "full_aoi": full_aoi,
-        "bbox": (-103.60, 31.05, -102.60, 31.85) if full_aoi
+        "bbox": (-104.5, 30.8, -101.0, 33.0) if full_aoi
                 else (-103.25, 31.30, -102.85, 31.62),
         "date_window": g("vapor_eyes.date_window", "2023-07-15/2023-08-20"),
         "s5p_temporal": g("vapor_eyes.s5p_temporal", "2024-08-23/2024-08-24"),

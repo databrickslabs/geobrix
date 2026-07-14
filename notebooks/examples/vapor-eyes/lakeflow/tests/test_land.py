@@ -33,6 +33,47 @@ def test_run_land_s5p_calls_tropomi_download():
     assert kwargs.get("temporal") == "2024-08-23/2024-08-24"
 
 
+def test_run_land_s5p_multi_window():
+    # Multiple S5P windows -> one download per window, all into the same subtree;
+    # staged count is the sum across windows.
+    sample = _install_fakes()
+    from land.land import run_land
+    fake_spark = mock.MagicMock()
+    tropomi = sample.TropomiDownloader.return_value
+    fake_row = {"out_file_path": "/v/s5p/x.nc", "out_file_sz": 1,
+                "is_out_file_valid": True}
+    tropomi.download.return_value.select.return_value.collect.return_value = [fake_row]
+    wins = ["2026-04-01/2026-06-30", "2024-08-10/2024-08-26", "2025-09-18/2025-09-25"]
+    out = run_land(fake_spark, ["s5p"], catalog="c", schema="s", volume="data",
+                   date_window="2023-07-15/2023-08-20",
+                   s5p_temporal="ignored-when-windows-given",
+                   s5p_windows=wins)
+    # one download call per window, each with that window's temporal
+    assert tropomi.download.call_count == len(wins)
+    seen = [kw.get("temporal") for _, kw in tropomi.download.call_args_list]
+    assert seen == wins
+    # 1 granule per window, summed
+    assert out["s5p"] == len(wins)
+
+
+def test_run_land_emit_multi_window(monkeypatch):
+    # Multiple EMIT windows -> one download per window; staged count summed.
+    sample = _install_fakes()
+    from land.land import run_land
+    import land.land as land_mod
+    monkeypatch.setattr(land_mod, "_read_earthdata_token", lambda spark, ref: "tok")
+    dl = sample.EmitDownloader.return_value.download
+    dl.return_value.count.return_value = 4
+    wins = ["2023-06-01/2023-09-01", "2024-08-01/2024-12-15", "2025-09-01/2025-10-01"]
+    fake = mock.MagicMock()
+    out = run_land(fake, ["emit"], catalog="c", schema="s", volume="data",
+                   date_window="ignored", s5p_temporal="x", emit_windows=wins)
+    assert dl.call_count == len(wins)
+    seen = [kw.get("temporal") for _, kw in dl.call_args_list]
+    assert seen == wins
+    assert out["emit"] == 4 * len(wins)
+
+
 def test_run_land_emit_wells():
     sample = _install_fakes()
     from land.land import run_land

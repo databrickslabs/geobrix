@@ -13,14 +13,19 @@ variables:
   schema: {default: vapor_eyes_lf}
   volume: {default: data}
   full_aoi: {default: "true"}
-  # Seasonal window (summer 2023) — aligned across S5P + EMIT so screening and
-  # detection are contemporaneous, and wide enough for a production-scale record
-  # (~90 S5P overpass days -> rich hotspot/concentration trend + persistence,
-  # several EMIT overpasses). NOTE: this downloads ~10-15 GB of S5P granules on the
-  # first run; narrow both to a single day/overpass (e.g. 2023-07-31/2023-08-01) via
-  # databricks.override.yml for a quick, cheap trial.
+  # Single-window fallbacks (kept for back-compat + S2, which windows to the latest
+  # top hotspot over date_window). The multi-year record is driven by the
+  # semicolon-separated *_windows vars below, which override these for S5P/EMIT.
   date_window: {default: "2023-06-01/2023-08-31"}
   s5p_temporal: {default: "2023-06-01/2023-08-31"}
+  # Multi-year, multi-window ingest over the wider Permian. EMIT plume-complex
+  # products exist for 2023-2025 only (none in 2026 anywhere), so EMIT covers the
+  # historic active seasons. S5P covers the current 2026 quarter PLUS a ~2-week
+  # cluster around each known EMIT plume date so historic activity has
+  # contemporaneous screening (~150 S5P days total; NOT continuous multi-year).
+  # NOTE: this re-downloads a large volume of granules on a full run.
+  emit_windows: {default: "2023-06-01/2023-09-01;2024-08-01/2024-12-15;2025-09-01/2025-10-01"}
+  s5p_windows: {default: "2026-04-01/2026-06-30;2023-06-05/2023-06-12;2023-07-26/2023-08-04;2024-08-10/2024-08-26;2024-10-01/2024-10-07;2024-11-26/2024-12-02;2025-09-18/2025-09-25"}
   h3_res: {default: "6"}
   qa_min: {default: "0.5"}
   cloud_max: {default: "20"}
@@ -86,7 +91,7 @@ resources:
           spark_python_task:
             python_file: ./land/land.py
             parameters:
-              ["--sources", "s5p,emit,wells,s2", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--cloud-max", "${var.cloud_max}"]
+              ["--sources", "s5p,emit,wells,s2", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}"]
           environment_key: land_env
         - task_key: pipeline
           depends_on: [{task_key: land}]

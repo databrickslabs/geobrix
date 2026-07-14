@@ -28,22 +28,39 @@ def _subtree(catalog, schema, volume):
 
 
 def run_land(spark, sources, *, catalog, schema, volume, date_window,
-             s5p_temporal, bbox=(-103.60, 31.05, -102.60, 31.85),
+             s5p_temporal, bbox=(-104.5, 30.8, -101.0, 33.0),
              cloud_max=20,
-             earthdata_secret="geospatial_docs.vapor_eyes.earthdata_token"):
+             earthdata_secret="geospatial_docs.vapor_eyes.earthdata_token",
+             s5p_windows=None, emit_windows=None):
+    """Land raw files for the requested `sources`.
+
+    S5P and EMIT each accept MULTIPLE temporal windows so a single land run can
+    build a multi-year record: `s5p_windows` / `emit_windows` are lists of
+    `YYYY-MM-DD/YYYY-MM-DD` ranges. Each window is downloaded in turn into the
+    same Volume subtree — the downloaders and Auto Loader are idempotent/append,
+    so windows simply accumulate granules. When a list is not supplied the code
+    falls back to the single-window params (`s5p_temporal` for S5P, `date_window`
+    for EMIT), preserving back-compat. S2 always uses the single `date_window`."""
     from databricks.labs.gbx.sample import (
         EmitDownloader, TropomiDownloader, WellsDownloader)
     dirs = _subtree(catalog, schema, volume)
     for d in dirs.values():
         _mkdir(spark, d)
+    # Normalize to window lists; single-window params are the back-compat fallback.
+    s5p_wins = list(s5p_windows) if s5p_windows else [s5p_temporal]
+    emit_wins = list(emit_windows) if emit_windows else [date_window]
     staged = {}
     if "s5p" in sources:
-        df = TropomiDownloader().download(bbox, dirs["s5p"], temporal=s5p_temporal, spark=spark)
-        rows = df.select("out_file_path", "out_file_sz", "is_out_file_valid").collect()
-        for r in rows:
-            print(f"... s5p granule: valid={r['is_out_file_valid']} "
-                  f"sz={r['out_file_sz']} path={r['out_file_path']}")
-        staged["s5p"] = len(rows)
+        total = 0
+        for win in s5p_wins:
+            print(f"... s5p window {win}")
+            df = TropomiDownloader().download(bbox, dirs["s5p"], temporal=win, spark=spark)
+            rows = df.select("out_file_path", "out_file_sz", "is_out_file_valid").collect()
+            for r in rows:
+                print(f"... s5p granule: valid={r['is_out_file_valid']} "
+                      f"sz={r['out_file_sz']} path={r['out_file_path']}")
+            total += len(rows)
+        staged["s5p"] = total
         _list_dir(dirs["s5p"], "s5p")
     if "s2" in sources:
         from databricks.labs.gbx.stac import StacClient
@@ -64,8 +81,12 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
         else:
             print(f"... WARNING: no Earthdata token from '{earthdata_secret}'; "
                   f"EMIT download may fail (S5P/wells unaffected)")
-        df = EmitDownloader().download(bbox, dirs["emit"], temporal=date_window, spark=spark)
-        staged["emit"] = df.count()
+        total = 0
+        for win in emit_wins:
+            print(f"... emit window {win}")
+            df = EmitDownloader().download(bbox, dirs["emit"], temporal=win, spark=spark)
+            total += df.count()
+        staged["emit"] = total
         _list_dir(dirs["emit"], "emit")
     if "wells" in sources:
         df = WellsDownloader().download(bbox, dirs["wells"], spark=spark)
@@ -220,15 +241,25 @@ def main():
     ap.add_argument("--schema", default="vapor_eyes_lf")
     ap.add_argument("--volume", default="data")
     ap.add_argument("--s5p-temporal", default="2024-08-23/2024-08-24")
+    # Semicolon-separated lists of `YYYY-MM-DD/YYYY-MM-DD` windows. When present
+    # they override the single-window params for their source, letting one run
+    # accumulate a multi-year record (downloaders + Auto Loader are idempotent).
+    ap.add_argument("--s5p-windows")
+    ap.add_argument("--emit-windows")
     ap.add_argument("--cloud-max", type=int, default=20)
     ap.add_argument("--earthdata-secret",
                     default="geospatial_docs.vapor_eyes.earthdata_token")
     a = ap.parse_args()
     window = a.window or (asof_window(a.asof) if a.asof else "2023-07-15/2023-08-20")
+    s5p_windows = ([w for w in a.s5p_windows.split(";") if w.strip()]
+                   if a.s5p_windows else None)
+    emit_windows = ([w for w in a.emit_windows.split(";") if w.strip()]
+                    if a.emit_windows else None)
     spark = SparkSession.builder.getOrCreate()
     run_land(spark, a.sources.split(","), catalog=a.catalog, schema=a.schema,
              volume=a.volume, date_window=window, s5p_temporal=a.s5p_temporal,
-             cloud_max=a.cloud_max, earthdata_secret=a.earthdata_secret)
+             cloud_max=a.cloud_max, earthdata_secret=a.earthdata_secret,
+             s5p_windows=s5p_windows, emit_windows=emit_windows)
 
 
 if __name__ == "__main__":

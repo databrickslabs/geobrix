@@ -1,0 +1,55 @@
+bundle:
+  name: vapor_eyes_lf
+
+variables:
+  catalog: {default: geospatial_docs}
+  schema: {default: vapor_eyes_lf}
+  volume: {default: data}
+  full_aoi: {default: "true"}
+  date_window: {default: "2023-07-15/2023-08-20"}
+  s5p_temporal: {default: "2024-08-23/2024-08-24"}
+  h3_res: {default: "6"}
+  qa_min: {default: "0.5"}
+  cloud_max: {default: "20"}
+  s2_h3_res: {default: "10"}
+  k_candidates: {default: "5"}
+  min_z: {default: "6"}
+  max_z: {default: "13"}
+  overview_max_z: {default: "12"}
+  earthdata_secret: {default: "geospatial_docs.vapor_eyes.earthdata_token"}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.0-py3-none-any.whl"}
+
+resources:
+  pipelines:
+    vapor_eyes_lf_pipeline:
+      name: vapor_eyes_lf_pipeline
+      serverless: true
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      root_path: ./transformations
+      libraries:
+        - glob:
+            include: transformations/**
+      environment:
+        dependencies:
+          - "geobrix[light,stac,vizx] @ file://${var.gbx_wheel}"
+      configuration:
+        vapor_eyes.catalog: ${var.catalog}
+        vapor_eyes.schema: ${var.schema}
+        vapor_eyes.volume: ${var.volume}
+        vapor_eyes.full_aoi: ${var.full_aoi}
+        vapor_eyes.date_window: ${var.date_window}
+        vapor_eyes.s5p_temporal: ${var.s5p_temporal}
+        vapor_eyes.h3_res: ${var.h3_res}
+        vapor_eyes.qa_min: ${var.qa_min}
+        vapor_eyes.cloud_max: ${var.cloud_max}
+        vapor_eyes.s2_h3_res: ${var.s2_h3_res}
+        vapor_eyes.k_candidates: ${var.k_candidates}
+        vapor_eyes.min_z: ${var.min_z}
+        vapor_eyes.max_z: ${var.max_z}
+        vapor_eyes.overview_max_z: ${var.overview_max_z}
+
+targets:
+  dev:
+    mode: development
+    default: true

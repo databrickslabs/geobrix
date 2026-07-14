@@ -347,37 +347,68 @@ def plume_quant():
     from pyspark.sql.window import Window
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
+    c = cfg(spark)
     p = paths(spark)
 
     from databricks.labs.gbx.pyrx import functions as rx
     from databricks.labs.gbx.sample import EmitDownloader
 
-    # The CH4ENH rows of the bronze inventory carry the emit_scenes -> plume_quant edge.
-    enh_dates = (
+    # emit_scenes ENH inventory: carries observation_date per staged ENH COG AND the
+    # emit_scenes -> plume_quant dependency edge. Keyed by source_file basename so the
+    # join is robust to any URI-prefix difference between the bronze `path` and the
+    # raster reader's `source` column.
+    enh_bronze = (
         spark.read.table("emit_scenes")
         .filter(F.col("product_type") == "ENH")
-        .select("observation_date")
-        .distinct()
+        .select("source_file", "observation_date")
     )
     plumes = spark.read.table("emit_plumes")  # existing emit_plumes -> plume_quant edge
     try:
-        enh = EmitDownloader().read_enh(p["emit"])  # (source, tile) per overpass segment
+        # (source, tile) per overpass ENH segment.
+        enh_raw = EmitDownloader().read_enh(p["emit"])
     except FileNotFoundError:
         return _empty_ref(
             spark.read.table("emit_scenes").filter(F.col("product_type") == "ENH"),
             _QUANT_SCHEMA,
         )
 
-    # Clip each plume against every ENH segment, keep — per plume — the segment with
-    # the strongest clipped max (edge-segment slivers lose to the containing segment).
+    # Tag each ENH tile with its overpass date from the bronze inventory (join on the
+    # source filename basename). This gives every ENH segment an observation_date so
+    # each plume can be paired ONLY with the ENH tiles from its OWN overpass.
+    enh = (
+        enh_raw.withColumn(
+            "source_file", F.element_at(F.split(F.col("source"), "/"), -1))
+        .join(enh_bronze, "source_file")
+        .select("observation_date", F.col("tile").alias("scene"))
+    )
+
+    # DATE-SCOPED JOIN (was a crossJoin of every plume x EVERY ENH tile across all
+    # years -> Java-heap OOM). A plume's enhancement lives in its own overpass, so join
+    # on observation_date: the cross product is now bounded to (plumes x ENH segments)
+    # WITHIN a single date. Repartition by plume_id so each task holds only one plume's
+    # handful of clips (bounds executor memory; Serverless-safe column repartition).
+    paired = plumes.join(enh, "observation_date").repartition(64, "plume_id")
+
+    # EMIT retrieval QC (Gemini tip). We cannot co-align CH4SENS/CH4UNCERT here: the
+    # EmitDownloader stages only CH4ENH + CH4PLM (the SENS/UNCERT products are not
+    # downloaded), so the full sensitivity/uncertainty mask is out of reach live.
+    # Applied instead (the documented minimum): a positive-enhancement / sensitivity
+    # floor via rst_threshold -- pixels at/below `emit_enh_floor` (default 0.0) become
+    # NoData, which rst_summary then excludes from gbx_max/mean. This drops negative /
+    # sub-noise enhancement (retrieval artifacts) before summarizing; the product's own
+    # NoData is likewise excluded by rst_summary's valid-pixel statistics.
+    floor = c["emit_enh_floor"]
     clipped = (
-        plumes.crossJoin(enh.select(F.col("tile").alias("scene")))
-        .withColumn("clip", rx.rst_clip("scene", "plume_geom", F.lit(True)))
+        paired
+        .withColumn("scene_qc", rx.rst_threshold("scene", F.lit(">"), F.lit(floor)))
+        .withColumn("clip", rx.rst_clip("scene_qc", "plume_geom", F.lit(True)))
         .withColumn("summary", rx.rst_summary("clip"))
         .withColumn("gbx_mean_ppmm",
                     F.get_json_object("summary", "$.bands[0].mean").cast("double"))
         .withColumn("gbx_max_ppmm",
                     F.get_json_object("summary", "$.bands[0].max").cast("double"))
+        # Keep -- per plume -- the segment with the strongest clipped max (edge-segment
+        # slivers lose to the containing segment).
         .withColumn(
             "_rnk",
             F.row_number().over(
@@ -388,15 +419,12 @@ def plume_quant():
         .filter(F.col("_rnk") == 1)
         .drop("_rnk")
     )
-    result = clipped.select(
+    return clipped.select(
         "plume_id", "observation_date", "emission_rate_kg_hr",
         "emission_rate_uncert_kg_hr", "max_conc_ppmm", "wind_speed_ms",
         "fetch_length_m", "gbx_mean_ppmm", "gbx_max_ppmm", "plume_geom",
         F.current_timestamp().alias("_ingested_at"),
     )
-    # LEFT-SEMI join to the bronze ENH dates: no fan-out, places emit_scenes in the
-    # returned plan's lineage => the emit_scenes -> plume_quant edge is inferred.
-    return result.join(F.broadcast(enh_dates), "observation_date", "left_semi")
 
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,9 @@ variables:
   qa_min: {default: "0.5"}
   cloud_max: {default: "20"}
   s2_h3_res: {default: "10"}
+  # EMIT CH4 enhancement retrieval-QC floor (ppm-m); pixels at/below become NoData
+  # before rst_summary (drops negative/sub-noise enhancement). 0.0 = positive-only.
+  emit_enh_floor: {default: "0.0"}
   k_candidates: {default: "5"}
   min_z: {default: "6"}
   max_z: {default: "13"}
@@ -78,6 +81,7 @@ resources:
         vapor_eyes.qa_min: ${var.qa_min}
         vapor_eyes.cloud_max: ${var.cloud_max}
         vapor_eyes.s2_h3_res: ${var.s2_h3_res}
+        vapor_eyes.emit_enh_floor: ${var.emit_enh_floor}
         vapor_eyes.k_candidates: ${var.k_candidates}
         vapor_eyes.min_z: ${var.min_z}
         vapor_eyes.max_z: ${var.max_z}

@@ -18,6 +18,10 @@ def cfg(spark):
         "qa_min": float(g("vapor_eyes.qa_min", "0.5")),
         "cloud_max": int(g("vapor_eyes.cloud_max", "20")),
         "s2_h3_res": int(g("vapor_eyes.s2_h3_res", "10")),
+        # EMIT CH4 enhancement retrieval-QC floor (ppm-m). Pixels at/below the floor
+        # are masked to NoData before rst_summary so gbx_max/mean exclude negative /
+        # sub-noise enhancement (retrieval artifacts). Default 0.0 = positive-only.
+        "emit_enh_floor": float(g("vapor_eyes.emit_enh_floor", "0.0")),
         "k_candidates": int(g("vapor_eyes.k_candidates", "5")),
         "min_z": int(g("vapor_eyes.min_z", "6")),
         "max_z": int(g("vapor_eyes.max_z", "13")),

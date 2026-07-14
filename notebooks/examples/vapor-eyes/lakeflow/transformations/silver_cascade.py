@@ -1,24 +1,34 @@
 """Silver: the methane cascade, partitioned by observation_date.
 
-Resolves the plan's reader-to-incremental unknown against the live pipeline:
+WIRED TO BRONZE METADATA TABLES. Each silver MV reads FROM its bronze inventory
+table so a real bronze->silver dependency edge is inferred by Lakeflow (the DAG
+edge is inferred only when the MV's RETURNED DataFrame plan references the
+upstream table via `spark.read.table(...)`):
 
-* Source-path column (Task 1.5 Step 1): the netcdf_gbx light reader's vector-mode
-  schema is [<variables...>, geom_0, geom_0_srid, geom_0_srid_proj] — it exposes
-  NO source-path/filename column. So Branch 2a (join reader points to the bronze
-  inventory on a path) is NOT viable. We take Branch 2b: read each staged granule
-  scoped by its exact filename via the reader's `filterRegex` and tag its points
-  with the observation_date parsed from that filename. We enumerate the staged
-  granules with a driver-side os.listdir of the landing dir (the land task stages
-  them before this pipeline runs) rather than a collect() on the bronze table —
-  bronze is not materialized during flow analysis, so collecting it there yields an
-  empty list and the flow fails to resolve. The landing dir is the same source
-  bronze inventories, so the two layers stay consistent.
+* s5p_granules  -> s5p_hotspots
+* emit_scenes   -> emit_plumes AND -> plume_quant
+* s2_swir_assets-> s2_plume_cells
+* wells_raw     -> wells_shl  (already wired via the SCD2 change feed)
 
-* Streaming vs materialized (Task 1.5 unknown #2): the reader is a batch
-  (`spark.read`) Python DataSource, not a streaming source, so a streaming
-  `@dp.table` cannot wrap it. This dataset is a `@dp.materialized_view` that
-  recomputes from the landing dir while retaining observation_date per row
-  (partitioned by observation_date).
+Reader mechanics (unchanged from the per-file resolution): the netcdf_gbx and
+gtiff_gbx light readers expose NO source-path column, so a pure lazy join from the
+reader's rows to the bronze inventory is not possible. We therefore enumerate the
+staged payload files (driver-side os.listdir — the files are physically staged by
+the land task before this pipeline runs, so they are visible at flow-analysis time,
+whereas an eager collect() of a sibling pipeline table at analysis is not reliable),
+read each file content-scoped by its exact basename via the reader's `filterRegex`,
+tag it with its `source_file`, and then JOIN the union to `spark.read.table(<bronze>)`.
+The join is a LAZY plan reference resolved at EXECUTION (after the bronze table has
+materialized in this update), so it both (a) places the bronze table in the returned
+plan's lineage => the edge is inferred, and (b) sources `observation_date` (and other
+hoisted fields) FROM the bronze table — single source of truth, not re-parsed here.
+
+Every empty branch still returns a plan BUILT OFF the bronze table (via `_empty_ref`)
+so the dependency edge survives even when no payload files are staged.
+
+* Streaming vs materialized: the readers are batch (`spark.read`) Python DataSources,
+  not streaming sources, so these are `@dp.materialized_view`s (partitioned by
+  observation_date), not streaming `@dp.table`s.
 """
 import os
 import re
@@ -43,8 +53,6 @@ from _config import cfg, paths, register_gbx
 
 _S5P_GROUP = "/PRODUCT"
 _S5P_VARIABLES = "methane_mixing_ratio_bias_corrected,qa_value"
-# S5P granule filename sensing-date token: ..._YYYYMMDDT......
-_FILE_DATE = re.compile(r"_(\d{8})T\d{6}")
 
 _HOTSPOT_SCHEMA = StructType(
     [
@@ -73,9 +81,6 @@ _S2_CELLS_SCHEMA = StructType(
 
 # EMIT plume metadata carries no source-path column; observation_date comes from the
 # per-plume "UTC Time Observed" field (ISO8601, e.g. 2024-08-23T17:34:10Z) -> date part.
-# An AOI with no JPL plume complex has no *CH4PLMMETA*.json, so read_plumes raises
-# FileNotFoundError and emit_plumes materializes as this empty schema (a data condition,
-# not a failure) — the pipeline deploys clean and plume_quant/attribution stay empty.
 _PLUME_SCHEMA = StructType(
     [
         StructField("plume_id", StringType()),
@@ -92,10 +97,34 @@ _PLUME_SCHEMA = StructType(
     ]
 )
 
+_QUANT_SCHEMA = StructType(
+    [
+        StructField("plume_id", StringType()),
+        StructField("observation_date", DateType()),
+        StructField("emission_rate_kg_hr", DoubleType()),
+        StructField("emission_rate_uncert_kg_hr", DoubleType()),
+        StructField("max_conc_ppmm", DoubleType()),
+        StructField("wind_speed_ms", DoubleType()),
+        StructField("fetch_length_m", DoubleType()),
+        StructField("gbx_mean_ppmm", DoubleType()),
+        StructField("gbx_max_ppmm", DoubleType()),
+        StructField("plume_geom", BinaryType()),
+        StructField("_ingested_at", TimestampType()),
+    ]
+)
 
-def _read_s5p_file(spark, s5p_dir, filename, obs_date):
-    """Read one staged granule (scoped by its exact filename) and tag it with the
-    observation_date parsed from that filename."""
+
+def _empty_ref(src_df, schema):
+    """An empty DataFrame shaped to `schema` but BUILT OFF `src_df` so the returned
+    plan still references src_df's underlying table. This keeps the DLT dependency
+    edge alive even when no payload files are staged (the empty/analysis case)."""
+    cols = [F.lit(None).cast(f.dataType).alias(f.name) for f in schema.fields]
+    return src_df.select(*cols).where(F.lit(False))
+
+
+def _read_s5p_file(spark, s5p_dir, filename):
+    """Read one staged granule scoped by its exact filename. observation_date is NOT
+    tagged here — it is joined in from the s5p_granules bronze table."""
     # filterRegex is matched against the FULL path, so anchor with a leading `.*`
     # to absorb the /Volumes/.../s5p/ prefix (same convention as the gtiff_gbx reader).
     return (
@@ -105,7 +134,7 @@ def _read_s5p_file(spark, s5p_dir, filename, obs_date):
         .option("variables", _S5P_VARIABLES)
         .option("filterRegex", r".*" + re.escape(filename) + r"$")
         .load(s5p_dir)
-        .withColumn("observation_date", F.lit(obs_date))
+        .withColumn("source_file", F.lit(filename))
     )
 
 
@@ -125,25 +154,24 @@ def s5p_hotspots():
     minx, miny, maxx, maxy = c["bbox"]
     s5p_dir = p["s5p"]
 
-    # Enumerate staged granules on the driver; read each one filename-scoped and tag
-    # with the date from its filename (Branch 2b). Resolvable at flow-analysis time.
+    bronze = spark.read.table("s5p_granules")
+
+    # Enumerate staged granules (driver-side, visible at flow-analysis); read each one
+    # filename-scoped and tag with its basename. The bronze JOIN below supplies the
+    # date + the dependency edge.
     try:
         names = sorted(os.listdir(s5p_dir))
     except FileNotFoundError:
         names = []
-    frames = []
-    for fn in names:
-        if not fn.endswith(".nc"):
-            continue
-        m = _FILE_DATE.search(fn)
-        if not m:
-            continue
-        obs = datetime.strptime(m.group(1), "%Y%m%d").date()
-        frames.append(_read_s5p_file(spark, s5p_dir, fn, obs))
+    frames = [
+        _read_s5p_file(spark, s5p_dir, fn) for fn in names if fn.endswith(".nc")
+    ]
     if not frames:
-        return spark.createDataFrame([], _HOTSPOT_SCHEMA)
+        return _empty_ref(bronze, _HOTSPOT_SCHEMA)
 
     pts = reduce(lambda a, b: a.unionByName(b), frames)
+    # JOIN to bronze -> observation_date (single source of truth) + inferred edge.
+    pts = pts.join(bronze.select("source_file", "observation_date"), "source_file")
     pts = pts.filter(
         (F.col("qa_value") >= c["qa_min"])
         & F.col("methane_mixing_ratio_bias_corrected").isNotNull()
@@ -227,9 +255,10 @@ def s2_plume_cells():
     p = paths(spark)
     s2_dir = p["s2"]
 
-    # Enumerate staged S2 band COGs on the driver (resolvable at flow-analysis); one
-    # scene date per land run (least-cloudy item), but grouped by date to stay robust
-    # if several scenes accumulate. Empty until an S2 scene is staged (data condition).
+    bronze = spark.read.table("s2_swir_assets")
+
+    # Enumerate staged S2 band COGs (driver-side, visible at flow-analysis) to derive
+    # the scene dates that drive the readers; the bronze JOIN below supplies the edge.
     try:
         names = sorted(os.listdir(s2_dir))
     except FileNotFoundError:
@@ -242,10 +271,14 @@ def s2_plume_cells():
         if m:
             dates.add(m.group(1))
     if not dates:
-        return spark.createDataFrame([], _S2_CELLS_SCHEMA)
+        return _empty_ref(bronze, _S2_CELLS_SCHEMA)
 
     frames = [_s2_index_cells(spark, s2_dir, d, c["s2_h3_res"]) for d in sorted(dates)]
-    return reduce(lambda a, b: a.unionByName(b), frames)
+    cells = reduce(lambda a, b: a.unionByName(b), frames)
+    # JOIN to bronze distinct scene dates -> inferred edge (1:1 on the same dates).
+    return cells.join(
+        bronze.select("observation_date").distinct(), "observation_date"
+    )
 
 
 @dp.materialized_view(
@@ -262,14 +295,25 @@ def emit_plumes():
     p = paths(spark)
 
     from databricks.labs.gbx.sample import EmitDownloader
+
+    # The CH4PLMMETA rows of the bronze inventory both drive this MV and carry the edge.
+    meta_dates = (
+        spark.read.table("emit_scenes")
+        .filter(F.col("product_type") == "PLMMETA")
+        .select("observation_date")
+        .distinct()
+    )
     try:
         plumes = EmitDownloader().read_plumes(p["emit"])
     except FileNotFoundError:
-        return spark.createDataFrame([], _PLUME_SCHEMA)
+        return _empty_ref(
+            spark.read.table("emit_scenes").filter(F.col("product_type") == "PLMMETA"),
+            _PLUME_SCHEMA,
+        )
 
     # observation_date from the per-plume UTC observation time (date part). Robust to
     # the trailing 'Z'/time by slicing the leading yyyy-MM-dd (avoids format edge cases).
-    return (
+    plumes = (
         plumes.withColumn(
             "observation_date",
             F.to_date(F.substring(F.col("utc_observed"), 1, 10), "yyyy-MM-dd"),
@@ -281,6 +325,10 @@ def emit_plumes():
             "lon_max", "lat_max", "plume_geom", "_ingested_at",
         )
     )
+    # LEFT-SEMI join to the bronze PLMMETA dates: keeps plume columns/count intact
+    # (1 distinct date, no fan-out) while placing emit_scenes in the returned plan's
+    # lineage => the emit_scenes -> emit_plumes edge is inferred.
+    return plumes.join(F.broadcast(meta_dates), "observation_date", "left_semi")
 
 
 @dp.materialized_view(
@@ -299,8 +347,21 @@ def plume_quant():
     from databricks.labs.gbx.pyrx import functions as rx
     from databricks.labs.gbx.sample import EmitDownloader
 
-    plumes = spark.read.table("emit_plumes")
-    enh = EmitDownloader().read_enh(p["emit"])  # (source, tile) per overpass segment
+    # The CH4ENH rows of the bronze inventory carry the emit_scenes -> plume_quant edge.
+    enh_dates = (
+        spark.read.table("emit_scenes")
+        .filter(F.col("product_type") == "ENH")
+        .select("observation_date")
+        .distinct()
+    )
+    plumes = spark.read.table("emit_plumes")  # existing emit_plumes -> plume_quant edge
+    try:
+        enh = EmitDownloader().read_enh(p["emit"])  # (source, tile) per overpass segment
+    except FileNotFoundError:
+        return _empty_ref(
+            spark.read.table("emit_scenes").filter(F.col("product_type") == "ENH"),
+            _QUANT_SCHEMA,
+        )
 
     # Clip each plume against every ENH segment, keep — per plume — the segment with
     # the strongest clipped max (edge-segment slivers lose to the containing segment).
@@ -322,12 +383,15 @@ def plume_quant():
         .filter(F.col("_rnk") == 1)
         .drop("_rnk")
     )
-    return clipped.select(
+    result = clipped.select(
         "plume_id", "observation_date", "emission_rate_kg_hr",
         "emission_rate_uncert_kg_hr", "max_conc_ppmm", "wind_speed_ms",
         "fetch_length_m", "gbx_mean_ppmm", "gbx_max_ppmm", "plume_geom",
         F.current_timestamp().alias("_ingested_at"),
     )
+    # LEFT-SEMI join to the bronze ENH dates: no fan-out, places emit_scenes in the
+    # returned plan's lineage => the emit_scenes -> plume_quant edge is inferred.
+    return result.join(F.broadcast(enh_dates), "observation_date", "left_semi")
 
 
 # ---------------------------------------------------------------------------

@@ -74,7 +74,7 @@ resources:
           spark_python_task:
             python_file: ./land/land.py
             parameters:
-              ["--sources", "s5p", "--s5p-temporal", "${var.s5p_temporal}"]
+              ["--sources", "s5p,emit,wells", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}"]
           environment_key: land_env
         - task_key: pipeline
           depends_on: [{task_key: land}]

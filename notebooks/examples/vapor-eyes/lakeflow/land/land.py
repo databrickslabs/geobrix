@@ -6,6 +6,7 @@ Volume subtree. Emits NO Delta tables — the pipeline's Auto Loader bronze laye
 inventories the staged files. This file is NOT part of the pipeline and must not
 import pyspark.pipelines."""
 import argparse
+import os
 
 # Dual-context import. Under pytest (tests/conftest.py puts `lakeflow/` on
 # sys.path) `land` is a namespace package, so `from land._dates` resolves. As a
@@ -27,7 +28,8 @@ def _subtree(catalog, schema, volume):
 
 
 def run_land(spark, sources, *, catalog, schema, volume, date_window,
-             s5p_temporal, bbox=(-103.60, 31.05, -102.60, 31.85)):
+             s5p_temporal, bbox=(-103.60, 31.05, -102.60, 31.85),
+             earthdata_secret="geospatial_docs.vapor_eyes.earthdata_token"):
     from databricks.labs.gbx.sample import (
         EmitDownloader, TropomiDownloader, WellsDownloader)
     dirs = _subtree(catalog, schema, volume)
@@ -46,13 +48,65 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
         from databricks.labs.gbx.stac import StacClient
         staged["s2"] = _land_s2(spark, StacClient(), bbox, dirs["s2"], date_window)
     if "emit" in sources:
+        # EMIT (NASA LP DAAC) needs an Earthdata bearer token. Read it from the
+        # UC secret and export EARTHDATA_TOKEN so the downloader's HTTP client
+        # picks it up. Guarded: if the secret is unreadable we log and continue —
+        # S5P/wells do not need it, and EMIT then fails loudly on its own.
+        token = _read_earthdata_token(spark, earthdata_secret)
+        if token:
+            os.environ["EARTHDATA_TOKEN"] = token
+            print(f"... EARTHDATA_TOKEN set from secret '{earthdata_secret}' "
+                  f"({len(token)} chars)")
+        else:
+            print(f"... WARNING: no Earthdata token from '{earthdata_secret}'; "
+                  f"EMIT download may fail (S5P/wells unaffected)")
         df = EmitDownloader().download(bbox, dirs["emit"], temporal=date_window, spark=spark)
         staged["emit"] = df.count()
+        _list_dir(dirs["emit"], "emit")
     if "wells" in sources:
         df = WellsDownloader().download(bbox, dirs["wells"], spark=spark)
         staged["wells"] = int(df.first()["feature_count"])
+        _list_dir(dirs["wells"], "wells")
     print(f"... landed: {staged}")
     return staged
+
+
+def _get_dbutils(spark):
+    """Return a dbutils handle usable from a serverless spark_python_task.
+    `pyspark.dbutils.DBUtils(spark)` is the in-cluster path; fall back to the
+    SDK's RemoteDbUtils if that import is unavailable."""
+    try:
+        from pyspark.dbutils import DBUtils
+        return DBUtils(spark)
+    except Exception:  # pragma: no cover - depends on runtime
+        from databricks.sdk.dbutils import RemoteDbUtils
+        return RemoteDbUtils()
+
+
+def _read_earthdata_token(spark, secret_ref):
+    """Read the Earthdata token from a UC secret.
+
+    `secret_ref` is a dotted path. A 3-part ref (`catalog.schema.key`) uses the
+    3-arg UC-secret overload `dbutils.secrets.get(catalog, schema, key)` (matches
+    the notebook series); a 2-part ref falls back to the classic
+    `dbutils.secrets.get(scope, key)`. Returns None (never raises) on any failure
+    so the caller can degrade gracefully."""
+    parts = secret_ref.split(".")
+    try:
+        dbutils = _get_dbutils(spark)
+    except Exception as e:
+        print(f"... dbutils unavailable for secret read: {type(e).__name__}: {e}")
+        return None
+    try:
+        if len(parts) == 3:
+            return dbutils.secrets.get(parts[0], parts[1], parts[2])
+        if len(parts) == 2:
+            return dbutils.secrets.get(parts[0], parts[1])
+        print(f"... unexpected secret ref '{secret_ref}' (want catalog.schema.key)")
+        return None
+    except Exception as e:
+        print(f"... secret read failed for '{secret_ref}': {type(e).__name__}: {e}")
+        return None
 
 
 def _list_dir(path, label):
@@ -90,11 +144,14 @@ def main():
     ap.add_argument("--schema", default="vapor_eyes_lf")
     ap.add_argument("--volume", default="data")
     ap.add_argument("--s5p-temporal", default="2024-08-23/2024-08-24")
+    ap.add_argument("--earthdata-secret",
+                    default="geospatial_docs.vapor_eyes.earthdata_token")
     a = ap.parse_args()
     window = a.window or (asof_window(a.asof) if a.asof else "2023-07-15/2023-08-20")
     spark = SparkSession.builder.getOrCreate()
     run_land(spark, a.sources.split(","), catalog=a.catalog, schema=a.schema,
-             volume=a.volume, date_window=window, s5p_temporal=a.s5p_temporal)
+             volume=a.volume, date_window=window, s5p_temporal=a.s5p_temporal,
+             earthdata_secret=a.earthdata_secret)
 
 
 if __name__ == "__main__":

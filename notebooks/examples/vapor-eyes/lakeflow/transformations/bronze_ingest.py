@@ -105,6 +105,50 @@ def wells_raw():
     )
 
 
+@dp.table(
+    name="cm_scenes",
+    comment="Carbon Mapper annotated CH4 plume detections (one row per plume record)",
+)
+def cm_scenes():
+    """Carbon Mapper rated-plume records, streamed from the JSONL the land task writes
+    under cm/. Unlike the other bronze tables these are DATA rows (not file pointers):
+    one row per plume detection, with the flat API fields, an `observation_date`
+    derived from `scene_timestamp`, `_ingested_at`, and the source `path`.
+    `geometry_json` arrives as a JSON STRING (the land task stringifies the nested
+    GeoJSON geometry), which silver feeds straight to st_geomfromgeojson."""
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    p = paths(spark)
+    df = (
+        spark.readStream.format("cloudFiles")
+        .option("cloudFiles.format", "json")
+        .option("cloudFiles.schemaLocation", f"{p['schema_loc']}/cm")
+        .option("cloudFiles.inferColumnTypes", "true")
+        .load(p["cm"])
+    )
+    return df.select(
+        F.col("id"),
+        F.col("plume_id"),
+        F.col("gas"),
+        F.col("geometry_json"),
+        F.col("scene_id"),
+        F.col("scene_timestamp"),
+        F.col("instrument"),
+        F.col("platform"),
+        F.col("emission_auto"),
+        F.col("emission_uncertainty_auto"),
+        F.col("sector"),
+        F.col("plume_quality"),
+        F.col("wind_speed_avg_auto"),
+        F.col("wind_direction_avg_auto"),
+        F.col("is_offshore"),
+        F.col("published_at"),
+        F.to_date(F.to_timestamp(F.col("scene_timestamp"))).alias("observation_date"),
+        F.col("_metadata.file_path").alias("path"),
+        F.current_timestamp().alias("_ingested_at"),
+    )
+
+
 @dp.table(name="s2_swir_assets", comment="Staged Sentinel-2 B11/B12 SWIR COG inventory (metadata)")
 def s2_swir_assets():
     from pyspark.sql import SparkSession

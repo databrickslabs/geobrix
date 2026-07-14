@@ -537,3 +537,108 @@ def plume_candidate_wells():
         "well_lon", "well_lat", "dist_m", "rank",
         F.current_timestamp().alias("_ingested_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Carbon Mapper rated plumes — the headline authoritative current-detection layer.
+#
+# cm_scenes (bronze, one row per plume record) -> cm_detections (parsed GEOMETRY +
+# hoisted emission-rate/quality/wind fields + H3) -> cm_candidate_wells (nearest-K
+# TX RRC wells feeding the operator emissions leaderboard). Carbon Mapper publishes a
+# real, non-null emission rate (kg/hr), which revives the kg/hr leaderboard that the
+# EMIT source could not carry (JPL rates are frequently NA without wind).
+# ---------------------------------------------------------------------------
+
+
+@dp.materialized_view(
+    name="cm_detections",
+    comment="Carbon Mapper rated CH4 plumes: GEOMETRY + emission rate (kg/hr) + H3",
+    partition_cols=["observation_date"],
+)
+# Carbon Mapper emission rates are real, non-null estimates -> non-negative always.
+@dp.expect("emission_rate_nonneg", "emission_rate_kg_hr >= 0")
+@dp.expect("has_geom", "plume_geom IS NOT NULL")
+def cm_detections():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    c = cfg(spark)
+
+    cm = spark.read.table("cm_scenes")
+    # Parse the GeoJSON geometry to a native GEOMETRY tagged SRID 4326 (coords are
+    # WGS84 lon/lat), then derive the plume centroid lon/lat and its H3 cell.
+    return (
+        cm.withColumn(
+            "plume_geom",
+            F.expr("st_setsrid(st_geomfromgeojson(geometry_json), 4326)"),
+        )
+        .withColumn("lon", F.expr("st_x(st_centroid(plume_geom))"))
+        .withColumn("lat", F.expr("st_y(st_centroid(plume_geom))"))
+        .withColumn(
+            "h3_cellid",
+            DBF.h3_longlatash3("lon", "lat", F.lit(c["cm_h3_res"])),
+        )
+        .withColumn("emission_rate_kg_hr", F.col("emission_auto").cast("double"))
+        .withColumn(
+            "emission_uncertainty_kg_hr",
+            F.col("emission_uncertainty_auto").cast("double"),
+        )
+        .withColumn("wind_speed_ms", F.col("wind_speed_avg_auto").cast("double"))
+        .withColumn(
+            "wind_direction_deg", F.col("wind_direction_avg_auto").cast("double"))
+        .select(
+            "plume_id", "observation_date", "scene_id", "scene_timestamp",
+            "gas", "instrument", "platform", "sector", "plume_quality",
+            "emission_rate_kg_hr", "emission_uncertainty_kg_hr",
+            "wind_speed_ms", "wind_direction_deg", "is_offshore",
+            "lon", "lat", "h3_cellid", "plume_geom",
+            F.current_timestamp().alias("_ingested_at"),
+        )
+    )
+
+
+@dp.materialized_view(
+    name="cm_candidate_wells",
+    comment="k nearest TX RRC wells per Carbon Mapper plume (operator attribution)",
+    partition_cols=["observation_date"],
+)
+def cm_candidate_wells():
+    from pyspark.sql import SparkSession
+    from pyspark.sql.window import Window
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    c = cfg(spark)
+    k = c["k_candidates"]
+
+    plumes = spark.read.table("cm_detections")
+    # Attribute against the currently-valid well version (see plume_candidate_wells for
+    # the SCD2 as-of rationale: the wells snapshot postdates historical plume dates).
+    wells = (
+        spark.read.table("wells_shl")
+        .filter(F.col("__END_AT").isNull())
+        .select(
+            "api", "operator", "lease", "well_no", "field", "county", "well_url",
+            F.expr("st_x(st_geomfromwkb(well_geom))").alias("well_lon"),
+            F.expr("st_y(st_geomfromwkb(well_geom))").alias("well_lat"),
+            F.expr("st_geomfromwkb(well_geom)").alias("well_pt"),
+        )
+    )
+    p_pt = plumes.withColumn("plume_pt", F.expr("st_point(lon, lat)"))
+    paired = p_pt.crossJoin(wells).withColumn(
+        "dist_m", F.expr("st_distancesphere(plume_pt, well_pt)")
+    )
+    candidates = (
+        paired.withColumn(
+            "rank",
+            F.row_number().over(Window.partitionBy("plume_id").orderBy("dist_m")),
+        )
+        .filter(F.col("rank") <= k)
+        .drop("plume_pt", "well_pt")
+    )
+    return candidates.select(
+        "plume_id", "observation_date", "emission_rate_kg_hr",
+        "emission_uncertainty_kg_hr", "sector", "plume_quality", "lon", "lat",
+        "api", "operator", "lease", "well_no", "field", "county", "well_url",
+        "well_lon", "well_lat", "dist_m", "rank",
+        F.current_timestamp().alias("_ingested_at"),
+    )

@@ -120,6 +120,107 @@ def test_run_land_emit_reads_secret_and_sets_env(monkeypatch):
     assert seen["token"] == "tok-abc123"
 
 
+class _FakeResp:
+    def __init__(self, items):
+        self._items = items
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"items": self._items}
+
+
+def _install_fake_requests(pages):
+    """Insert a fake `requests` module whose get() returns successive pages and
+    records the params it was called with. Returns (module, calls_list)."""
+    calls = []
+    fake = types.ModuleType("requests")
+
+    def _get(url, headers=None, params=None, timeout=None):
+        calls.append({"url": url, "headers": headers, "params": params})
+        idx = len(calls) - 1
+        return _FakeResp(pages[idx] if idx < len(pages) else [])
+
+    fake.get = _get
+    sys.modules["requests"] = fake
+    return fake, calls
+
+
+def test_land_cm_paginates_and_writes_jsonl(tmp_path):
+    import json
+    from land.land import _land_cm
+
+    # Page 1 = full 1000 (triggers a second page); page 2 = 1 (< limit -> stops).
+    page1 = [{"plume_id": f"p{i}", "scene_timestamp": "2025-06-01T12:00:00Z",
+              "emission_auto": 100.0 + i,
+              "geometry_json": {"type": "Point", "coordinates": [-103.0, 31.5]}}
+             for i in range(1000)]
+    page2 = [{"plume_id": "pA", "scene_timestamp": "2026-01-02T00:00:00Z",
+              "emission_auto": 57.0,
+              "geometry_json": {"type": "Point", "coordinates": [-102.0, 31.0]}}]
+    _fake, calls = _install_fake_requests([page1, page2])
+
+    n = _land_cm(str(tmp_path), (-104.5, 30.8, -101.0, 33.0),
+                 "2024-01-01/2026-07-14", "tok-xyz")
+
+    assert n == 1001
+    # bbox went as FOUR repeated params (not a comma string); Bearer token set.
+    p = calls[0]["params"]
+    bbox_vals = [v for (k, v) in p if k == "bbox"]
+    assert bbox_vals == [-104.5, 30.8, -101.0, 33.0]
+    assert dict(p)["datetime"] == "2024-01-01/2026-07-14"
+    assert dict(p)["plume_gas"] == "CH4"
+    assert calls[0]["headers"]["Authorization"] == "Bearer tok-xyz"
+    # two pages fetched (offset advanced by limit on the second call)
+    assert len(calls) == 2
+    assert dict(calls[1]["params"])["offset"] == 1000
+    # JSONL written to the window-tagged path, one object per line, geometry stringified
+    out = tmp_path / "cm_plumes_2024-01-01_2026-07-14.jsonl"
+    assert out.exists()
+    lines = out.read_text().splitlines()
+    assert len(lines) == 1001
+    rec = json.loads(lines[0])
+    assert isinstance(rec["geometry_json"], str)
+    assert json.loads(rec["geometry_json"])["type"] == "Point"
+
+
+def test_run_land_cm_reads_secret_and_lands(monkeypatch):
+    _install_fakes()
+    import land.land as land_mod
+    from land.land import run_land
+    monkeypatch.setattr(land_mod, "_read_secret", lambda spark, ref: "cm-tok")
+    seen = {}
+
+    def _fake_cm(cm_dir, bbox, cm_window, token):
+        seen.update(cm_dir=cm_dir, bbox=bbox, cm_window=cm_window, token=token)
+        return 7
+
+    monkeypatch.setattr(land_mod, "_land_cm", _fake_cm)
+    fake = mock.MagicMock()
+    out = run_land(fake, ["cm"], catalog="geospatial_docs", schema="vapor_eyes_lf",
+                   volume="data", date_window="x", s5p_temporal="x",
+                   cm_secret="geospatial_docs.vapor_eyes.carbon_mapper_token",
+                   cm_window="2024-01-01/2026-07-14")
+    assert out["cm"] == 7
+    # landed under the vapor-eyes-lf/cm subtree with the token + window threaded through
+    assert seen["cm_dir"] == (
+        "/Volumes/geospatial_docs/vapor_eyes_lf/data/vapor-eyes-lf/cm")
+    assert seen["token"] == "cm-tok"
+    assert seen["cm_window"] == "2024-01-01/2026-07-14"
+
+
+def test_run_land_cm_skips_without_token(monkeypatch):
+    _install_fakes()
+    import land.land as land_mod
+    from land.land import run_land
+    monkeypatch.setattr(land_mod, "_read_secret", lambda spark, ref: None)
+    fake = mock.MagicMock()
+    out = run_land(fake, ["cm"], catalog="c", schema="s", volume="data",
+                   date_window="x", s5p_temporal="x")
+    assert out["cm"] == 0
+
+
 def test_run_land_emit_continues_when_secret_absent(monkeypatch):
     # If the secret cannot be read, EMIT download is still attempted (fails
     # loudly on its own); S5P/wells are unaffected. run_land must not raise.

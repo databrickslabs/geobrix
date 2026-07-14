@@ -23,7 +23,7 @@ def _subtree(catalog, schema, volume):
     root = f"/Volumes/{catalog}/{schema}/{volume}/vapor-eyes-lf"
     return {
         "root": root, "s5p": f"{root}/s5p", "s2": f"{root}/sentinel2",
-        "emit": f"{root}/emit", "wells": f"{root}/wells",
+        "emit": f"{root}/emit", "wells": f"{root}/wells", "cm": f"{root}/cm",
     }
 
 
@@ -31,6 +31,8 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
              s5p_temporal, bbox=(-104.5, 30.8, -101.0, 33.0),
              cloud_max=20,
              earthdata_secret="geospatial_docs.vapor_eyes.earthdata_token",
+             cm_secret="geospatial_docs.vapor_eyes.carbon_mapper_token",
+             cm_window="2024-01-01/2026-07-14",
              s5p_windows=None, emit_windows=None):
     """Land raw files for the requested `sources`.
 
@@ -92,8 +94,76 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
         df = WellsDownloader().download(bbox, dirs["wells"], spark=spark)
         staged["wells"] = int(df.first()["feature_count"])
         _list_dir(dirs["wells"], "wells")
+    if "cm" in sources:
+        # Carbon Mapper rated plumes (BYOT free token via UC secret). Runtime fetch
+        # only -- the collected items land as JSONL on the Volume (NEVER committed to
+        # git). Guarded like EMIT: without a token we log and skip (CM is additive).
+        token = _read_secret(spark, cm_secret)
+        if token:
+            staged["cm"] = _land_cm(dirs["cm"], bbox, cm_window, token)
+            _list_dir(dirs["cm"], "cm")
+        else:
+            print(f"... WARNING: no Carbon Mapper token from '{cm_secret}'; "
+                  f"skipping CM source (other sources unaffected)")
+            staged["cm"] = 0
     print(f"... landed: {staged}")
     return staged
+
+
+def _land_cm(cm_dir, bbox, cm_window, token):
+    """Fetch Carbon Mapper annotated CH4 plumes for the AOI + window and write them
+    as JSONL to the Volume (one JSON object per line). Runtime-only; never committed.
+
+    API contract (verified via live probe):
+      GET https://api.carbonmapper.org/api/v1/catalog/plumes/annotated
+      - Bearer token auth.
+      - bbox as FOUR REPEATED params (min_lon,min_lat,max_lon,max_lat); the comma
+        form 422s.
+      - datetime=<start>/<end> (RFC3339); plume_gas=CH4; limit=1000; offset paginates.
+      - Response JSON has a flat `items[]`; each item is flat (no nested properties).
+    Pagination loops until a page returns fewer than `limit` items. Each item's nested
+    `geometry_json` (a GeoJSON geometry object) is coerced to a JSON STRING so the
+    bronze Auto Loader reads a stable string column that silver feeds straight to
+    st_geomfromgeojson (no per-file struct-schema drift)."""
+    import json
+    import requests
+
+    minx, miny, maxx, maxy = bbox
+    start, end = cm_window.split("/")
+    url = "https://api.carbonmapper.org/api/v1/catalog/plumes/annotated"
+    headers = {"Authorization": f"Bearer {token}"}
+    limit = 1000
+    offset = 0
+    items = []
+    while True:
+        params = [
+            ("bbox", minx), ("bbox", miny), ("bbox", maxx), ("bbox", maxy),
+            ("datetime", f"{start}/{end}"), ("plume_gas", "CH4"),
+            ("limit", limit), ("offset", offset),
+        ]
+        resp = requests.get(url, headers=headers, params=params, timeout=120)
+        resp.raise_for_status()
+        page = resp.json().get("items", []) or []
+        items.extend(page)
+        print(f"... cm page offset={offset}: {len(page)} items (total {len(items)})")
+        if len(page) < limit:
+            break
+        offset += limit
+
+    os.makedirs(cm_dir, exist_ok=True)
+    win_tag = cm_window.replace("/", "_")
+    out_path = f"{cm_dir}/cm_plumes_{win_tag}.jsonl"
+    with open(out_path, "w") as fh:
+        for it in items:
+            rec = dict(it)
+            # Coerce the nested GeoJSON geometry to a JSON string for stable ingest.
+            if rec.get("geometry_json") is not None and not isinstance(
+                rec["geometry_json"], str
+            ):
+                rec["geometry_json"] = json.dumps(rec["geometry_json"])
+            fh.write(json.dumps(rec) + "\n")
+    print(f"... cm wrote {len(items)} plume records -> {out_path}")
+    return len(items)
 
 
 def _get_dbutils(spark):
@@ -109,13 +179,17 @@ def _get_dbutils(spark):
 
 
 def _read_earthdata_token(spark, secret_ref):
-    """Read the Earthdata token from a UC secret.
+    """Back-compat alias: read the Earthdata token from a UC secret."""
+    return _read_secret(spark, secret_ref)
 
-    `secret_ref` is a dotted path. A 3-part ref (`catalog.schema.key`) uses the
-    3-arg UC-secret overload `dbutils.secrets.get(catalog, schema, key)` (matches
-    the notebook series); a 2-part ref falls back to the classic
-    `dbutils.secrets.get(scope, key)`. Returns None (never raises) on any failure
-    so the caller can degrade gracefully."""
+
+def _read_secret(spark, secret_ref):
+    """Read a UC secret by dotted ref.
+
+    A 3-part ref (`catalog.schema.key`) uses the 3-arg UC-secret overload
+    `dbutils.secrets.get(catalog, schema, key)` (matches the notebook series); a
+    2-part ref falls back to the classic `dbutils.secrets.get(scope, key)`. Returns
+    None (never raises) on any failure so the caller can degrade gracefully."""
     parts = secret_ref.split(".")
     try:
         dbutils = _get_dbutils(spark)
@@ -249,6 +323,10 @@ def main():
     ap.add_argument("--cloud-max", type=int, default=20)
     ap.add_argument("--earthdata-secret",
                     default="geospatial_docs.vapor_eyes.earthdata_token")
+    ap.add_argument("--cm-secret",
+                    default="geospatial_docs.vapor_eyes.carbon_mapper_token")
+    # Carbon Mapper fetch window (RFC3339 start/end). Default = full history.
+    ap.add_argument("--cm-window", default="2024-01-01/2026-07-14")
     a = ap.parse_args()
     window = a.window or (asof_window(a.asof) if a.asof else "2023-07-15/2023-08-20")
     s5p_windows = ([w for w in a.s5p_windows.split(";") if w.strip()]
@@ -259,6 +337,7 @@ def main():
     run_land(spark, a.sources.split(","), catalog=a.catalog, schema=a.schema,
              volume=a.volume, date_window=window, s5p_temporal=a.s5p_temporal,
              cloud_max=a.cloud_max, earthdata_secret=a.earthdata_secret,
+             cm_secret=a.cm_secret, cm_window=a.cm_window,
              s5p_windows=s5p_windows, emit_windows=emit_windows)
 
 

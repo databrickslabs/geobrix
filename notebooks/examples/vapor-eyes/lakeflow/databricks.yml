@@ -30,9 +30,14 @@ variables:
   qa_min: {default: "0.5"}
   cloud_max: {default: "20"}
   s2_h3_res: {default: "10"}
+  cm_h3_res: {default: "9"}
   # EMIT CH4 enhancement retrieval-QC floor (ppm-m); pixels at/below become NoData
   # before rst_summary (drops negative/sub-noise enhancement). 0.0 = positive-only.
   emit_enh_floor: {default: "0.0"}
+  # Carbon Mapper fetch window (full history by default). Runtime fetch only; the
+  # collected plume JSONL lands on the Volume and is NEVER committed to git.
+  cm_window: {default: "2024-01-01/2026-07-14"}
+  cm_secret: {default: "geospatial_docs.vapor_eyes.carbon_mapper_token"}
   k_candidates: {default: "5"}
   min_z: {default: "6"}
   max_z: {default: "13"}
@@ -81,6 +86,7 @@ resources:
         vapor_eyes.qa_min: ${var.qa_min}
         vapor_eyes.cloud_max: ${var.cloud_max}
         vapor_eyes.s2_h3_res: ${var.s2_h3_res}
+        vapor_eyes.cm_h3_res: ${var.cm_h3_res}
         vapor_eyes.emit_enh_floor: ${var.emit_enh_floor}
         vapor_eyes.k_candidates: ${var.k_candidates}
         vapor_eyes.min_z: ${var.min_z}
@@ -95,7 +101,7 @@ resources:
           spark_python_task:
             python_file: ./land/land.py
             parameters:
-              ["--sources", "s5p,emit,wells,s2", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}"]
+              ["--sources", "s5p,emit,wells,s2,cm", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}", "--cm-window", "${var.cm_window}", "--cm-secret", "${var.cm_secret}"]
           environment_key: land_env
         - task_key: pipeline
           depends_on: [{task_key: land}]

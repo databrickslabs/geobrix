@@ -18,6 +18,7 @@ def cfg(spark):
         "qa_min": float(g("vapor_eyes.qa_min", "0.5")),
         "cloud_max": int(g("vapor_eyes.cloud_max", "20")),
         "s2_h3_res": int(g("vapor_eyes.s2_h3_res", "10")),
+        "cm_h3_res": int(g("vapor_eyes.cm_h3_res", "9")),
         # EMIT CH4 enhancement retrieval-QC floor (ppm-m). Pixels at/below the floor
         # are masked to NoData before rst_summary so gbx_max/mean exclude negative /
         # sub-noise enhancement (retrieval artifacts). Default 0.0 = positive-only.
@@ -38,6 +39,7 @@ def paths(spark):
         "s2": f"{root}/sentinel2",
         "emit": f"{root}/emit",
         "wells": f"{root}/wells",
+        "cm": f"{root}/cm",
         "tiles": f"{root}/tiles",
         "schema_loc": f"{root}/_schema",     # Auto Loader schema locations
     }

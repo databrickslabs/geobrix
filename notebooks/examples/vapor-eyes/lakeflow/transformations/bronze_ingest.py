@@ -25,10 +25,14 @@ def _autoload(spark, src_dir, schema_loc, glob):
     )
 
 
-# EMIT / S2 filenames embed the acquisition instant the same way as S5P
-# (..._YYYYMMDDT<HHMMSS>...). Confirmed against staged files with `databricks fs
-# ls` on the vapor-eyes-lf subtree (see Phase-2 validation).
+# EMIT filenames embed one acquisition instant (..._YYYYMMDDT<HHMMSS>...).
 _YMD_TOKEN = r".*_(\d{8})T\d{6}.*"
+# Sentinel-2 filenames carry TWO tokens — the datatake SENSING start (first) and the
+# processing-baseline stamp (last), e.g. B12_S2A_MSIL2A_20230813T172901_..._20240913T093541.tif.
+# regexp_extract with a leading greedy `.*_` would capture the LAST (processing) token;
+# an un-anchored pattern captures the FIRST (sensing) match — the true observation date,
+# and the token the silver s2_plume_cells date is parsed from (keeps the layers consistent).
+_S2_DATE_TOKEN = r"_(\d{8})T\d{6}"
 
 
 @dp.table(name="s5p_granules", comment="Staged Sentinel-5P CH4 granule inventory")
@@ -77,6 +81,6 @@ def s2_swir_assets():
         _autoload(spark, p["s2"], f"{p['schema_loc']}/s2", "*.tif")
         .withColumn(
             "observation_date",
-            F.to_date(F.regexp_extract("source_file", _YMD_TOKEN, 1), "yyyyMMdd"),
+            F.to_date(F.regexp_extract("source_file", _S2_DATE_TOKEN, 1), "yyyyMMdd"),
         )
     )

@@ -1,0 +1,23 @@
+# --- databricks.override.yml.example -------------------------------------
+# Copy this file to `databricks.override.yml` (git-ignored) and fill in the
+# actual values for YOUR workspace. The committed `databricks.yml` is a
+# portable template with defaults; this override supplies the workspace-specific
+# bits (CLI profile, SQL warehouse, and any variable you want to change) and is
+# layered in automatically via the `include: ["*.override.yml"]` glob.
+#
+# A fresh clone with NO databricks.override.yml still validates/deploys using
+# the committed defaults; create this file only to point the bundle at your
+# own profile/warehouse.
+# -------------------------------------------------------------------------
+targets:
+  dev:
+    workspace:
+      # Databricks CLI profile authorized for your workspace (see ~/.databrickscfg).
+      profile: YOUR_CLI_PROFILE
+    variables:
+      # SQL warehouse id used for post-deploy validation queries and the AI/BI dashboard.
+      warehouse_id: YOUR_SQL_WAREHOUSE_ID
+      # Override any other databricks.yml variable here, e.g.:
+      # catalog: my_catalog
+      # schema: my_vapor_eyes_lf
+      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.4.0-py3-none-any.whl

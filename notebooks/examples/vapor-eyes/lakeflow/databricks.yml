@@ -1,6 +1,13 @@
 bundle:
   name: vapor_eyes_lf
 
+# Layer in a git-ignored databricks.override.yml (workspace profile, warehouse id,
+# any local variable overrides) when present. The glob tolerates its absence, so a
+# fresh clone validates/deploys with the committed defaults below.
+# See databricks.override.yml.example.
+include:
+  - "*.override.yml"
+
 variables:
   catalog: {default: geospatial_docs}
   schema: {default: vapor_eyes_lf}
@@ -18,6 +25,9 @@ variables:
   overview_max_z: {default: "12"}
   earthdata_secret: {default: "geospatial_docs.vapor_eyes.earthdata_token"}
   gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.0-py3-none-any.whl"}
+  # SQL warehouse for validation queries + the AI/BI dashboard. No portable default —
+  # set it in databricks.override.yml (see databricks.override.yml.example).
+  warehouse_id: {default: ""}
 
 resources:
   pipelines:

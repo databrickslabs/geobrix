@@ -192,3 +192,53 @@ def pmtiles_shards():
         F.col("min_z"),
         F.col("max_z"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 5.3 — overview_manifest: one light PMTiles archive of the whole cascade.
+#
+# Same lazy-plan + UDF-write contract as pmtiles_shards (see the note above): the
+# single archive is folded over the z <= overview_max_z slice of portfolio_mvt_tiles
+# and written to {tiles}/vapor_eyes_overview.pmtiles during execution.
+# ---------------------------------------------------------------------------
+@dp.materialized_view(
+    name="overview_manifest",
+    comment=(
+        "Single-row manifest for the light overview PMTiles archive "
+        "(vapor_eyes_overview.pmtiles, z <= overview_max_z, all three layers)"
+    ),
+)
+def overview_manifest():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    from databricks.labs.gbx.pmtiles.functions import pmtiles_agg
+
+    c = cfg(spark)
+    p = paths(spark)
+    overview_max_z = c["overview_max_z"]
+    out_path = f"{p['tiles']}/vapor_eyes_overview.pmtiles"
+
+    @F.udf(LongType())
+    def _write_overview(archive):
+        import os
+        if archive is None:
+            return None
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)  # Volume-FUSE-safe
+        with open(out_path, "wb") as f:  # sequential single-file write
+            f.write(bytes(archive))
+        return int(os.path.getsize(out_path))
+
+    filtered = spark.read.table("portfolio_mvt_tiles").filter(F.col("z") <= overview_max_z)
+    archive = filtered.groupBy(F.lit(1).alias("_g")).agg(
+        pmtiles_agg("mvt_bytes", "z", "x", "y", PORTFOLIO_META).alias("archive")
+    )
+    max_zoom = filtered.groupBy(F.lit(1).alias("_g")).agg(
+        F.max("z").cast("int").alias("max_zoom")
+    )
+    joined = archive.join(max_zoom, "_g")
+
+    return joined.select(
+        F.lit(out_path).alias("path"),
+        _write_overview("archive").alias("byte_size"),
+        F.col("max_zoom"),
+    )

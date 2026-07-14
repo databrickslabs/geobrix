@@ -204,10 +204,96 @@ def aoi_kpis_latest():
 
 
 @dp.materialized_view(
-    name="concentration_trend_daily",
-    comment="Daily plume concentration intensity trend (per observation_date)",
+    name="regional_ch4_trend_daily",
+    comment=(
+        "Headline basin-wide CH4-over-time line: one row per S5P observation_date "
+        "(regional mean/max/p95, active cell count, total obs) + same-day EMIT plume count"
+    ),
 )
-def concentration_trend_daily():
+def regional_ch4_trend_daily():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+
+    hs = spark.read.table("s5p_hotspots")
+    daily = hs.groupBy("observation_date").agg(
+        F.avg("ch4_mean").alias("regional_ch4_mean"),
+        F.max("ch4_max").alias("regional_ch4_max"),
+        F.percentile_approx("ch4_max", 0.95).alias("ch4_p95"),
+        F.countDistinct("h3_cellid").alias("active_cells"),
+        F.sum("n_obs").alias("total_obs"),
+    )
+
+    plumes = spark.read.table("emit_plumes")
+    plume_counts = plumes.groupBy("observation_date").agg(
+        F.count("plume_id").alias("plume_count")
+    )
+
+    return (
+        daily.join(plume_counts, "observation_date", "left")
+        .withColumn("plume_count", F.coalesce(F.col("plume_count"), F.lit(0)))
+        .orderBy("observation_date")
+    )
+
+
+@dp.materialized_view(
+    name="hotspot_persistence",
+    comment=(
+        "Chronic-vs-transient emitter analytic: per h3_cellid over the whole "
+        "backfilled window, how often it was observed vs elevated (map + ranking)"
+    ),
+)
+def hotspot_persistence():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+
+    hs = spark.read.table("s5p_hotspots")
+
+    # AOI-wide elevated threshold: approx 90th percentile of ch4_max over ALL rows,
+    # computed in-body (never hardcoded) and broadcast via crossJoin to a 1-row frame.
+    thresh_row = hs.agg(
+        F.percentile_approx("ch4_max", 0.90).alias("elevated_threshold")
+    )
+
+    tagged = hs.crossJoin(F.broadcast(thresh_row))
+
+    return (
+        tagged.groupBy("h3_cellid")
+        .agg(
+            F.countDistinct("observation_date").alias("dates_observed"),
+            F.countDistinct(
+                F.when(
+                    F.col("ch4_max") >= F.col("elevated_threshold"),
+                    F.col("observation_date"),
+                )
+            ).alias("dates_elevated"),
+            F.avg("ch4_mean").alias("mean_ch4"),
+            F.max("ch4_max").alias("max_ch4"),
+            F.max("geom_wkb").alias("_geom_wkb"),
+        )
+        .withColumn(
+            "persistence_ratio",
+            F.col("dates_elevated") / F.col("dates_observed"),
+        )
+        .withColumn("center_lon", F.expr("st_x(st_geomfromwkb(_geom_wkb))"))
+        .withColumn("center_lat", F.expr("st_y(st_geomfromwkb(_geom_wkb))"))
+        .withColumn("hex_geom", F.expr("st_geomfromwkb(h3_boundaryaswkb(h3_cellid))"))
+        .drop("_geom_wkb")
+        .select(
+            "h3_cellid", "dates_observed", "dates_elevated", "persistence_ratio",
+            "mean_ch4", "max_ch4", "center_lon", "center_lat", "hex_geom",
+        )
+        .orderBy(F.col("persistence_ratio").desc(), F.col("max_ch4").desc())
+    )
+
+
+@dp.materialized_view(
+    name="plume_detection_timeline",
+    comment=(
+        "EMIT plume detections per overpass observation_date: plume count + peak "
+        "concentration intensity (supersedes concentration_trend_daily)"
+    ),
+)
+def plume_detection_timeline():
     from pyspark.sql import SparkSession
     spark = SparkSession.getActiveSession()
 
@@ -216,7 +302,8 @@ def concentration_trend_daily():
         F.count("plume_id").alias("plume_count"),
         F.max("max_conc_ppmm").alias("max_peak_ppmm"),
         F.avg("max_conc_ppmm").alias("avg_peak_ppmm"),
-    )
+        F.max("gbx_max_ppmm").alias("max_gbx_ppmm"),
+    ).orderBy("observation_date")
 
 
 @dp.materialized_view(

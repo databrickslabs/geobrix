@@ -379,15 +379,29 @@ def plume_quant():
         enh_raw.withColumn(
             "source_file", F.element_at(F.split(F.col("source"), "/"), -1))
         .join(enh_bronze, "source_file")
-        .select("observation_date", F.col("tile").alias("scene"))
+        # keep source_file: it is the per-ENH-tile half of the pair key used to
+        # spread rasters one-per-task below.
+        .select("observation_date", "source_file", F.col("tile").alias("scene"))
     )
 
     # DATE-SCOPED JOIN (was a crossJoin of every plume x EVERY ENH tile across all
     # years -> Java-heap OOM). A plume's enhancement lives in its own overpass, so join
     # on observation_date: the cross product is now bounded to (plumes x ENH segments)
-    # WITHIN a single date. Repartition by plume_id so each task holds only one plume's
-    # handful of clips (bounds executor memory; Serverless-safe column repartition).
-    paired = plumes.join(enh, "observation_date").repartition(64, "plume_id")
+    # WITHIN a single date. Then repartition KEYED by the unique per-pair id
+    # (plume_id, source_file) so each (plume x ENH-tile) pair lands in its own task:
+    # the rst_threshold -> rst_clip -> rst_summary chain materializes THREE full rasters
+    # per row at once, so >1 pair per Arrow batch blew the Serverless 1024 MB per-UDF cap.
+    # A KEYED repartition is required — a keyless repartition(N) is coalesced away by AQE
+    # on Serverless and would not spread anything. N is sized to the data magnitude (the
+    # date-scoped plume x ENH-tile pairs number in the low hundreds for this AOI/windows;
+    # 256 keyed buckets give ~1 pair/partition). We cannot size N to a live count here:
+    # a DLT MV body is evaluated at flow-analysis with upstreams unmaterialized, so an
+    # eager .count() returns 0.
+    _PAIR_BUCKETS = 256
+    paired = (
+        plumes.join(enh, "observation_date")
+        .repartition(_PAIR_BUCKETS, "plume_id", "source_file")
+    )
 
     # EMIT retrieval QC (Gemini tip). We cannot co-align CH4SENS/CH4UNCERT here: the
     # EmitDownloader stages only CH4ENH + CH4PLM (the SENS/UNCERT products are not
@@ -569,8 +583,13 @@ def cm_detections():
     # WGS84 lon/lat), then derive the plume centroid lon/lat and its H3 cell.
     return (
         cm.withColumn(
+            # Carbon Mapper's geometry_json carries a non-standard `"bbox": null`
+            # member that st_geomfromgeojson rejects; strip it before parsing.
             "plume_geom",
-            F.expr("st_setsrid(st_geomfromgeojson(geometry_json), 4326)"),
+            F.expr(
+                "st_setsrid(st_geomfromgeojson("
+                "regexp_replace(geometry_json, '\"bbox\": null, ', '')), 4326)"
+            ),
         )
         .withColumn("lon", F.expr("st_x(st_centroid(plume_geom))"))
         .withColumn("lat", F.expr("st_y(st_centroid(plume_geom))"))

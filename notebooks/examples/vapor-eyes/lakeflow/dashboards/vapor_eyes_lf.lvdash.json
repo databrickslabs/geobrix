@@ -297,8 +297,8 @@
                   "datasetName": "ds_hotspot_latest",
                   "fields": [
                     {
-                      "name": "geo_hex_geom",
-                      "expression": "ST_ASGEOJSON(ST_SetSrid(`hex_geom`, 4326))"
+                      "name": "hex_geom",
+                      "expression": "`hex_geom`"
                     },
                     {
                       "name": "ch4_max",
@@ -323,7 +323,7 @@
               "encodings": {
                 "region": {
                   "regionType": "custom",
-                  "fieldName": "geo_hex_geom"
+                  "fieldName": "hex_geom"
                 },
                 "color": {
                   "fieldName": "ch4_max",
@@ -503,8 +503,8 @@
                   "datasetName": "ds_hotspot_persistence",
                   "fields": [
                     {
-                      "name": "geo_hex_geom",
-                      "expression": "ST_ASGEOJSON(ST_SetSrid(`hex_geom`, 4326))"
+                      "name": "hex_geom",
+                      "expression": "`hex_geom`"
                     },
                     {
                       "name": "persistence_ratio",
@@ -533,7 +533,7 @@
               "encodings": {
                 "region": {
                   "regionType": "custom",
-                  "fieldName": "geo_hex_geom"
+                  "fieldName": "hex_geom"
                 },
                 "color": {
                   "fieldName": "persistence_ratio",
@@ -717,6 +717,83 @@
         },
         {
           "widget": {
+            "name": "p3_plume_choropleth",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_plume_leaderboard",
+                  "fields": [
+                    {
+                      "name": "plume_geom_native",
+                      "expression": "`plume_geom_native`"
+                    },
+                    {
+                      "name": "max_conc_ppmm",
+                      "expression": "`max_conc_ppmm`"
+                    },
+                    {
+                      "name": "plume_id",
+                      "expression": "`plume_id`"
+                    },
+                    {
+                      "name": "lead_operator",
+                      "expression": "`lead_operator`"
+                    },
+                    {
+                      "name": "lead_field",
+                      "expression": "`lead_field`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "choropleth-map",
+              "encodings": {
+                "region": {
+                  "regionType": "custom",
+                  "fieldName": "plume_geom_native"
+                },
+                "color": {
+                  "fieldName": "max_conc_ppmm",
+                  "displayName": "Peak Concentration (ppm\u00b7m)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "plume_id",
+                    "displayName": "Plume ID"
+                  },
+                  {
+                    "fieldName": "lead_operator",
+                    "displayName": "Lead Operator"
+                  },
+                  {
+                    "fieldName": "lead_field",
+                    "displayName": "Lead Field"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Plume Outlines by Peak Concentration"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 6,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
             "name": "p3_plume_point_map",
             "queries": [
               {
@@ -797,15 +874,15 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Plume Leaderboard \u2014 Peak Concentration"
+                "title": "Plume Peak Locations"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 3,
+            "y": 10,
             "width": 6,
-            "height": 7
+            "height": 5
           }
         },
         {
@@ -885,7 +962,7 @@
           },
           "position": {
             "x": 0,
-            "y": 10,
+            "y": 15,
             "width": 6,
             "height": 6
           }
@@ -901,7 +978,7 @@
           },
           "position": {
             "x": 0,
-            "y": 16,
+            "y": 21,
             "width": 6,
             "height": 1
           }
@@ -961,7 +1038,7 @@
           },
           "position": {
             "x": 0,
-            "y": 17,
+            "y": 22,
             "width": 3,
             "height": 6
           }
@@ -1021,7 +1098,7 @@
           },
           "position": {
             "x": 3,
-            "y": 17,
+            "y": 22,
             "width": 3,
             "height": 6
           }
@@ -1037,7 +1114,7 @@
           },
           "position": {
             "x": 0,
-            "y": 23,
+            "y": 28,
             "width": 6,
             "height": 1
           }
@@ -1123,7 +1200,7 @@
           },
           "position": {
             "x": 0,
-            "y": 24,
+            "y": 29,
             "width": 6,
             "height": 7
           }

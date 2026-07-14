@@ -320,3 +320,184 @@ def hotspot_trend():
         F.expr("st_x(st_geomfromwkb(geom_wkb))").alias("center_lon"),
         F.expr("st_y(st_geomfromwkb(geom_wkb))").alias("center_lat"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Carbon Mapper "leakiest operators" gold layer (demo headline).
+#
+# GOOD-CITIZEN / ATTRIBUTION NOTE: every MV below is derived from Carbon Mapper
+# rated-plume data (`cm_detections` / `cm_candidate_wells`, silver_cascade.py).
+# Per Carbon Mapper's terms, any user-facing visualization (dashboard, map,
+# chart) built on this data MUST display "Data © Carbon Mapper" attribution.
+# The dashboard-side attribution widget/caption is a follow-up task -- this
+# comment is the tripwire so it isn't forgotten when the dashboard is wired up.
+# ---------------------------------------------------------------------------
+
+
+@dp.materialized_view(
+    name="cm_plume_attributed",
+    comment=(
+        "One row per Carbon Mapper plume joined to its rank-1 nearest well "
+        "(operator attribution); map + drill-down layer"
+    ),
+)
+def cm_plume_attributed():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+
+    d = spark.read.table("cm_detections")
+    lead = (
+        spark.read.table("cm_candidate_wells")
+        .filter("rank = 1")
+        .select(
+            "plume_id", "observation_date",
+            F.col("operator").alias("lead_operator"),
+            F.col("lease").alias("lead_lease"),
+            F.col("field").alias("lead_field"),
+            F.col("county").alias("lead_county"),
+            F.col("dist_m").alias("lead_dist_m"),
+        )
+    )
+    joined = d.join(lead, ["plume_id", "observation_date"], "left")
+
+    return joined.select(
+        "plume_id", "observation_date", "scene_timestamp",
+        "emission_rate_kg_hr", "emission_uncertainty_kg_hr",
+        "plume_quality", "instrument", "sector",
+        "lead_operator", "lead_lease", "lead_field", "lead_county", "lead_dist_m",
+        "lon", "lat",
+        # Re-tag SRID 4326 explicitly: GEOMETRY columns round-tripped through a
+        # materialized view have been observed to come back SRID 0 (Phase 6
+        # finding), which AI/BI silently refuses to render.
+        F.expr("st_setsrid(plume_geom, 4326)").alias("plume_geom"),
+    )
+
+
+@dp.materialized_view(
+    name="operator_emissions_leaderboard",
+    comment=(
+        "THE headline: operators ranked by total Carbon Mapper-attributed CH4 "
+        "emission rate (kg/hr) across their nearest-well plumes"
+    ),
+)
+def operator_emissions_leaderboard():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+
+    board = spark.read.table("cm_plume_attributed").withColumn(
+        "lead_operator", F.coalesce(F.col("lead_operator"), F.lit("Unattributed"))
+    )
+
+    # Trailing-90d window is relative to the latest observation_date actually
+    # present in the data (not wall-clock current_date), broadcast via crossJoin
+    # -- same no-collect pattern as hotspot_persistence's elevated_threshold.
+    max_date_row = board.agg(F.max("observation_date").alias("max_obs_date"))
+    recent = (
+        board.crossJoin(F.broadcast(max_date_row))
+        .filter(F.col("observation_date") >= F.date_sub(F.col("max_obs_date"), 90))
+    )
+
+    base = board.groupBy("lead_operator").agg(
+        F.sum("emission_rate_kg_hr").alias("total_emission_kg_hr"),
+        F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
+        F.avg("emission_rate_kg_hr").alias("mean_emission_kg_hr"),
+        F.count("plume_id").alias("plume_count"),
+        F.min("observation_date").alias("first_detection"),
+        F.max("observation_date").alias("last_detection"),
+    )
+    recent_agg = recent.groupBy("lead_operator").agg(
+        F.sum("emission_rate_kg_hr").alias("emission_last_90d_kg_hr")
+    )
+
+    wells = (
+        spark.read.table("cm_candidate_wells")
+        .filter("rank = 1")
+        .withColumn("operator", F.coalesce(F.col("operator"), F.lit("Unattributed")))
+        .groupBy("operator")
+        .agg(F.approx_count_distinct("api").alias("well_count"))
+    )
+
+    joined = (
+        base.join(recent_agg, "lead_operator", "left")
+        .join(wells, base["lead_operator"] == wells["operator"], "left")
+        .withColumn(
+            "emission_last_90d_kg_hr",
+            F.coalesce(F.col("emission_last_90d_kg_hr"), F.lit(0.0)),
+        )
+        .withColumn("well_count", F.coalesce(F.col("well_count"), F.lit(0)))
+    )
+
+    return joined.select(
+        F.col("lead_operator").alias("lead_operator"),
+        "total_emission_kg_hr", "max_emission_kg_hr", "mean_emission_kg_hr",
+        "plume_count", "well_count", "first_detection", "last_detection",
+        "emission_last_90d_kg_hr",
+    ).orderBy(F.col("total_emission_kg_hr").desc())
+
+
+@dp.materialized_view(
+    name="cm_monitoring_status",
+    comment="Single-row current-status panel: quiet-now vs active, last 90d Carbon Mapper activity",
+)
+def cm_monitoring_status():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+
+    board = spark.read.table("cm_plume_attributed")
+
+    all_time = board.agg(
+        F.max("observation_date").alias("last_detection_date"),
+        F.count("plume_id").alias("total_plumes_all_time"),
+        F.sum("emission_rate_kg_hr").alias("total_emission_all_time_kg_hr"),
+    )
+
+    tagged = board.crossJoin(F.broadcast(all_time.select("last_detection_date")))
+    last_90d = (
+        tagged.filter(
+            F.col("observation_date") >= F.date_sub(F.col("last_detection_date"), 90)
+        )
+        .agg(
+            F.count("plume_id").alias("plumes_last_90d"),
+            F.sum("emission_rate_kg_hr").alias("total_emission_last_90d_kg_hr"),
+            F.countDistinct("lead_operator").alias("active_operators_last_90d"),
+        )
+    )
+
+    return (
+        all_time.crossJoin(last_90d)
+        .withColumn(
+            "days_since_last_detection",
+            F.datediff(F.current_date(), F.col("last_detection_date")),
+        )
+        .select(
+            "last_detection_date", "days_since_last_detection",
+            "plumes_last_90d", "total_emission_last_90d_kg_hr",
+            "active_operators_last_90d",
+            "total_plumes_all_time", "total_emission_all_time_kg_hr",
+        )
+    )
+
+
+@dp.materialized_view(
+    name="cm_activity_monthly",
+    comment="Per-month Carbon Mapper activity: active-vs-quiet timeline",
+)
+def cm_activity_monthly():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+
+    board = spark.read.table("cm_plume_attributed").withColumn(
+        "lead_operator", F.coalesce(F.col("lead_operator"), F.lit("Unattributed"))
+    )
+
+    return (
+        board.withColumn("month", F.trunc(F.col("observation_date"), "month"))
+        .groupBy("month")
+        .agg(
+            F.count("plume_id").alias("plume_count"),
+            F.sum("emission_rate_kg_hr").alias("total_emission_kg_hr"),
+            F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
+            F.countDistinct("lead_operator").alias("active_operators"),
+        )
+        .orderBy("month")
+    )

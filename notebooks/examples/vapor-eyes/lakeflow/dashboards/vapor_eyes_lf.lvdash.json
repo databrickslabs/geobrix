@@ -1,24 +1,52 @@
 {
   "datasets": [
     {
-      "name": "ds_kpis",
-      "displayName": "AOI KPIs (latest)",
+      "name": "ds_monitoring_status",
+      "displayName": "Monitoring Status (current)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.aoi_kpis_latest"
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.cm_monitoring_status"
       ]
     },
     {
-      "name": "ds_hotspot_latest",
-      "displayName": "Hotspot Cells (latest)",
+      "name": "ds_leaderboard",
+      "displayName": "Operator Emissions Leaderboard",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.hotspot_latest"
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.operator_emissions_leaderboard ORDER BY detection_rank "
+      ]
+    },
+    {
+      "name": "ds_leaderboard_top15",
+      "displayName": "Operator Emissions Leaderboard (Top 15)",
+      "queryLines": [
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.operator_emissions_leaderboard ORDER BY detection_rank LIMIT 15 "
+      ]
+    },
+    {
+      "name": "ds_cm_plumes",
+      "displayName": "Carbon Mapper Plumes (attributed)",
+      "queryLines": [
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.cm_plume_attributed"
+      ]
+    },
+    {
+      "name": "ds_activity_monthly",
+      "displayName": "Carbon Mapper Activity (monthly)",
+      "queryLines": [
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.cm_activity_monthly ORDER BY month "
       ]
     },
     {
       "name": "ds_regional_trend",
       "displayName": "Regional CH4 Trend (daily)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.regional_ch4_trend_daily"
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.regional_ch4_trend_daily ORDER BY observation_date "
+      ]
+    },
+    {
+      "name": "ds_hotspot_latest",
+      "displayName": "Hotspot Cells (latest overpass)",
+      "queryLines": [
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.hotspot_latest"
       ]
     },
     {
@@ -29,54 +57,24 @@
       ]
     },
     {
-      "name": "ds_hotspot_persistence_top",
-      "displayName": "Hotspot Persistence (top cells)",
+      "name": "ds_aoi_kpis",
+      "displayName": "AOI KPIs (latest)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.hotspot_persistence ",
-        "ORDER BY persistence_ratio DESC, dates_elevated DESC ",
-        "LIMIT 25"
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.aoi_kpis_latest"
       ]
     },
     {
-      "name": "ds_plume_leaderboard",
-      "displayName": "Plume Leaderboard (latest)",
+      "name": "ds_plume_quant",
+      "displayName": "Plume Quant (EMIT / GeoBrix cross-check)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.plume_leaderboard_latest"
-      ]
-    },
-    {
-      "name": "ds_operator_intensity",
-      "displayName": "Operator Intensity (latest)",
-      "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.operator_intensity_latest"
-      ]
-    },
-    {
-      "name": "ds_field_county_intensity",
-      "displayName": "Field/County Intensity (latest)",
-      "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.field_county_intensity_latest"
-      ]
-    },
-    {
-      "name": "ds_plume_candidate_wells",
-      "displayName": "Plume Candidate Wells",
-      "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.plume_candidate_wells"
-      ]
-    },
-    {
-      "name": "ds_detection_timeline",
-      "displayName": "Plume Detection Timeline",
-      "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.plume_detection_timeline"
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.plume_quant ORDER BY observation_date DESC "
       ]
     }
   ],
   "pages": [
     {
-      "name": "page_regional_screen",
-      "displayName": "Regional Screen",
+      "name": "page_current_status",
+      "displayName": "Current Status & Leakiest Operators",
       "pageType": "PAGE_TYPE_CANVAS",
       "layout": [
         {
@@ -84,7 +82,7 @@
             "name": "p1_title",
             "multilineTextboxSpec": {
               "lines": [
-                "## Regional Screen"
+                "## Current Status & Leakiest Operators"
               ]
             }
           },
@@ -100,7 +98,7 @@
             "name": "p1_subtitle",
             "multilineTextboxSpec": {
               "lines": [
-                "AOI-wide methane snapshot: current KPIs, hotspot footprint, and the daily regional trend."
+                "Live Carbon Mapper methane detections across the Permian Basin \u2014 current monitoring status and the operators with the most confirmed plume detections."
               ]
             }
           },
@@ -113,56 +111,32 @@
         },
         {
           "widget": {
-            "name": "p1_kpi_total_plumes",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_kpis",
-                  "fields": [
-                    {
-                      "name": "total_plumes",
-                      "expression": "`total_plumes`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "total_plumes",
-                  "displayName": "Total Plumes Detected"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Total Plumes"
-              }
+            "name": "p1_attribution",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Data \u00a9 Carbon Mapper \u2014 public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
+              ]
             }
           },
           "position": {
             "x": 0,
             "y": 2,
-            "width": 3,
-            "height": 3
+            "width": 6,
+            "height": 1
           }
         },
         {
           "widget": {
-            "name": "p1_kpi_max_conc",
+            "name": "p1_kpi_plumes_90d",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_kpis",
+                  "datasetName": "ds_monitoring_status",
                   "fields": [
                     {
-                      "name": "max_concentration_ppmm",
-                      "expression": "`max_concentration_ppmm`"
+                      "name": "plumes_last_90d",
+                      "expression": "`plumes_last_90d`"
                     }
                   ],
                   "disaggregated": true
@@ -174,75 +148,35 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "max_concentration_ppmm",
-                  "displayName": "Max Concentration (ppm\u00b7m)"
+                  "fieldName": "plumes_last_90d",
+                  "displayName": "Plumes (last 90d)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Max Concentration"
-              }
-            }
-          },
-          "position": {
-            "x": 3,
-            "y": 2,
-            "width": 3,
-            "height": 3
-          }
-        },
-        {
-          "widget": {
-            "name": "p1_kpi_wells",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_kpis",
-                  "fields": [
-                    {
-                      "name": "wells_scanned",
-                      "expression": "`wells_scanned`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "counter",
-              "encodings": {
-                "value": {
-                  "fieldName": "wells_scanned",
-                  "displayName": "Wells Scanned"
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Wells Scanned"
+                "title": "Plumes Detected \u2014 Last 90 Days"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 5,
+            "y": 3,
             "width": 3,
             "height": 3
           }
         },
         {
           "widget": {
-            "name": "p1_kpi_hotspots",
+            "name": "p1_kpi_active_operators",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_kpis",
+                  "datasetName": "ds_monitoring_status",
                   "fields": [
                     {
-                      "name": "hotspot_cells",
-                      "expression": "`hotspot_cells`"
+                      "name": "active_operators_last_90d",
+                      "expression": "`active_operators_last_90d`"
                     }
                   ],
                   "disaggregated": true
@@ -254,21 +188,267 @@
               "widgetType": "counter",
               "encodings": {
                 "value": {
-                  "fieldName": "hotspot_cells",
-                  "displayName": "Hotspot Cells"
+                  "fieldName": "active_operators_last_90d",
+                  "displayName": "Active Operators (last 90d)"
                 }
               },
               "frame": {
                 "showTitle": true,
-                "title": "Hotspot Cells"
+                "title": "Active Operators \u2014 Last 90 Days"
               }
             }
           },
           "position": {
             "x": 3,
-            "y": 5,
+            "y": 3,
             "width": 3,
             "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p1_kpi_days_since",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_monitoring_status",
+                  "fields": [
+                    {
+                      "name": "days_since_last_detection",
+                      "expression": "`days_since_last_detection`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "days_since_last_detection",
+                  "displayName": "Days Since Last Detection"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Days Since Last Detection"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p1_kpi_total_plumes_all_time",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_monitoring_status",
+                  "fields": [
+                    {
+                      "name": "total_plumes_all_time",
+                      "expression": "`total_plumes_all_time`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "total_plumes_all_time",
+                  "displayName": "Total Plumes (all time)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Plumes \u2014 All Time"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 6,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p1_leaderboard_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Leaderboard \u2014 Operators Ranked by Plume Detections"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p1_leaderboard_table",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_leaderboard",
+                  "fields": [
+                    {
+                      "name": "detection_rank",
+                      "expression": "`detection_rank`"
+                    },
+                    {
+                      "name": "lead_operator",
+                      "expression": "`lead_operator`"
+                    },
+                    {
+                      "name": "plume_count",
+                      "expression": "`plume_count`"
+                    },
+                    {
+                      "name": "mean_emission_kg_hr",
+                      "expression": "`mean_emission_kg_hr`"
+                    },
+                    {
+                      "name": "max_emission_kg_hr",
+                      "expression": "`max_emission_kg_hr`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "detection_rank",
+                    "displayName": "Rank"
+                  },
+                  {
+                    "fieldName": "lead_operator",
+                    "displayName": "Operator"
+                  },
+                  {
+                    "fieldName": "plume_count",
+                    "displayName": "Plume Count"
+                  },
+                  {
+                    "fieldName": "mean_emission_kg_hr",
+                    "displayName": "Mean Emission (kg/hr)"
+                  },
+                  {
+                    "fieldName": "max_emission_kg_hr",
+                    "displayName": "Max Emission (kg/hr)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Operator Emissions Leaderboard (Ranked by Detections)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 10,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p1_bar_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Top 15 Operators by Plume Detections"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p1_operator_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_leaderboard_top15",
+                  "fields": [
+                    {
+                      "name": "lead_operator",
+                      "expression": "`lead_operator`"
+                    },
+                    {
+                      "name": "max(plume_count)",
+                      "expression": "MAX(`plume_count`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "lead_operator",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "y-reversed"
+                    }
+                  },
+                  "displayName": "Operator"
+                },
+                "y": {
+                  "fieldName": "max(plume_count)",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Plume Count"
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Top 15 Operators by Plume Count"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 19,
+            "width": 6,
+            "height": 6
           }
         },
         {
@@ -276,41 +456,49 @@
             "name": "p1_map_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Hotspot Concentration Map"
+                "### Live Plume Map \u2014 Colored by Emission Rate (kg/hr)"
               ]
             }
           },
           "position": {
             "x": 0,
-            "y": 8,
+            "y": 25,
             "width": 6,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "p1_hotspot_choropleth",
+            "name": "p1_plume_point_map",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_hotspot_latest",
+                  "datasetName": "ds_cm_plumes",
                   "fields": [
                     {
-                      "name": "hex_geom",
-                      "expression": "`hex_geom`"
+                      "name": "lon",
+                      "expression": "`lon`"
                     },
                     {
-                      "name": "ch4_max",
-                      "expression": "`ch4_max`"
+                      "name": "lat",
+                      "expression": "`lat`"
                     },
                     {
-                      "name": "n_obs",
-                      "expression": "`n_obs`"
+                      "name": "emission_rate_kg_hr",
+                      "expression": "`emission_rate_kg_hr`"
                     },
                     {
-                      "name": "h3_cellid",
-                      "expression": "`h3_cellid`"
+                      "name": "lead_operator",
+                      "expression": "`lead_operator`"
+                    },
+                    {
+                      "name": "sector",
+                      "expression": "`sector`"
+                    },
+                    {
+                      "name": "plume_quality",
+                      "expression": "`plume_quality`"
                     }
                   ],
                   "disaggregated": true
@@ -318,63 +506,320 @@
               }
             ],
             "spec": {
-              "version": 1,
-              "widgetType": "choropleth-map",
+              "version": 2,
+              "widgetType": "symbol-map",
               "encodings": {
-                "region": {
-                  "regionType": "custom",
-                  "fieldName": "hex_geom"
+                "coordinates": {
+                  "coordinateType": "longitude-latitude",
+                  "longitude": {
+                    "fieldName": "lon"
+                  },
+                  "latitude": {
+                    "fieldName": "lat"
+                  }
                 },
                 "color": {
-                  "fieldName": "ch4_max",
-                  "displayName": "Peak CH4 (ppm\u00b7m)",
+                  "fieldName": "emission_rate_kg_hr",
+                  "displayName": "Emission Rate (kg/hr)",
                   "scale": {
                     "type": "quantitative"
                   }
                 },
                 "extra": [
                   {
-                    "fieldName": "n_obs",
-                    "displayName": "Observations"
+                    "fieldName": "lead_operator",
+                    "displayName": "Operator"
                   },
                   {
-                    "fieldName": "h3_cellid",
-                    "displayName": "H3 Cell"
+                    "fieldName": "sector",
+                    "displayName": "Sector"
+                  },
+                  {
+                    "fieldName": "plume_quality",
+                    "displayName": "Quality"
                   }
                 ]
               },
               "frame": {
                 "showTitle": true,
-                "title": "Hotspot Cells by Peak CH4 Concentration"
+                "title": "Carbon Mapper Plumes \u2014 Emission Rate"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 9,
+            "y": 26,
             "width": 6,
             "height": 8
           }
-        },
+        }
+      ]
+    },
+    {
+      "name": "page_activity_over_time",
+      "displayName": "Activity Over Time",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
         {
           "widget": {
-            "name": "p1_trend_header",
+            "name": "p2_title",
             "multilineTextboxSpec": {
               "lines": [
-                "### Regional CH4 Trend"
+                "## Activity Over Time"
               ]
             }
           },
           "position": {
             "x": 0,
-            "y": 17,
+            "y": 0,
             "width": 6,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "p1_trend_line",
+            "name": "p2_subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Monthly Carbon Mapper detection activity and the daily basin-wide CH4 concentration trend from Sentinel-5P."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2_attribution",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Data \u00a9 Carbon Mapper \u2014 public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2_date_filter",
+            "queries": [
+              {
+                "name": "ds_activity_monthly_datefilter",
+                "query": {
+                  "datasetName": "ds_activity_monthly",
+                  "fields": [
+                    {
+                      "name": "month",
+                      "expression": "`month`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              },
+              {
+                "name": "ds_regional_trend_datefilter",
+                "query": {
+                  "datasetName": "ds_regional_trend",
+                  "fields": [
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "month",
+                    "displayName": "Month",
+                    "queryName": "ds_activity_monthly_datefilter"
+                  },
+                  {
+                    "fieldName": "observation_date",
+                    "displayName": "Observation Date",
+                    "queryName": "ds_regional_trend_datefilter"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Date Range (scopes both charts below)"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "p2_monthly_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Monthly Activity \u2014 Detections & Total Emission Rate"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2_monthly_plume_bar",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_activity_monthly",
+                  "fields": [
+                    {
+                      "name": "month",
+                      "expression": "`month`"
+                    },
+                    {
+                      "name": "plume_count",
+                      "expression": "`plume_count`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "month",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "plume_count",
+                      "displayName": "Plume Count"
+                    }
+                  ]
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Plume Detections by Month"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 6,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p2_monthly_emission_line",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_activity_monthly",
+                  "fields": [
+                    {
+                      "name": "month",
+                      "expression": "`month`"
+                    },
+                    {
+                      "name": "total_emission_kg_hr",
+                      "expression": "`total_emission_kg_hr`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "month",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "fields": [
+                    {
+                      "fieldName": "total_emission_kg_hr",
+                      "displayName": "Total Emission (kg/hr)"
+                    }
+                  ]
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Total Emission Rate by Month"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 6,
+            "width": 3,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "p2_regional_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Daily Regional CH4 \u2014 Max & 95th Percentile"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p2_regional_trend_line",
             "queries": [
               {
                 "name": "main_query",
@@ -433,24 +878,24 @@
           },
           "position": {
             "x": 0,
-            "y": 18,
+            "y": 13,
             "width": 6,
-            "height": 6
+            "height": 7
           }
         }
       ]
     },
     {
-      "name": "page_chronic_emitters",
-      "displayName": "Chronic Emitters",
+      "name": "page_regional_screen",
+      "displayName": "Regional Screen (Sentinel-5P)",
       "pageType": "PAGE_TYPE_CANVAS",
       "layout": [
         {
           "widget": {
-            "name": "p2_title",
+            "name": "p3_title",
             "multilineTextboxSpec": {
               "lines": [
-                "## Chronic Emitters"
+                "## Regional Screen (Sentinel-5P)"
               ]
             }
           },
@@ -463,10 +908,10 @@
         },
         {
           "widget": {
-            "name": "p2_subtitle",
+            "name": "p3_subtitle",
             "multilineTextboxSpec": {
               "lines": [
-                "Hotspot cells that repeatedly show elevated methane across the observation window \u2014 chronic vs. transient emitters."
+                "AOI-wide Sentinel-5P TROPOMI methane screen: current hotspot footprint and chronic emitters over the full observation window."
               ]
             }
           },
@@ -479,23 +924,276 @@
         },
         {
           "widget": {
-            "name": "p2_map_header",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Persistence Choropleth"
-              ]
+            "name": "p3_kpi_hotspot_cells",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_aoi_kpis",
+                  "fields": [
+                    {
+                      "name": "hotspot_cells",
+                      "expression": "`hotspot_cells`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "hotspot_cells",
+                  "displayName": "Hotspot Cells"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Hotspot Cells (Latest Overpass)"
+              }
             }
           },
           "position": {
             "x": 0,
             "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p3_kpi_max_conc",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_aoi_kpis",
+                  "fields": [
+                    {
+                      "name": "max_concentration_ppmm",
+                      "expression": "`max_concentration_ppmm`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "max_concentration_ppmm",
+                  "displayName": "Max Concentration (ppm\u00b7m)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Max Concentration"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p3_kpi_area",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_aoi_kpis",
+                  "fields": [
+                    {
+                      "name": "aoi_area_km2",
+                      "expression": "`aoi_area_km2`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "aoi_area_km2",
+                  "displayName": "AOI Area (km\u00b2)"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "AOI Area"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p3_kpi_wells",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_aoi_kpis",
+                  "fields": [
+                    {
+                      "name": "wells_scanned",
+                      "expression": "`wells_scanned`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "wells_scanned",
+                  "displayName": "Wells Scanned"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Wells Scanned"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 5,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "p3_hotspot_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Hotspot Cells \u2014 Latest Overpass (Peak CH4)"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
             "width": 6,
             "height": 1
           }
         },
         {
           "widget": {
-            "name": "p2_persistence_choropleth",
+            "name": "p3_hotspot_choropleth",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_hotspot_latest",
+                  "fields": [
+                    {
+                      "name": "hex_geom",
+                      "expression": "`hex_geom`"
+                    },
+                    {
+                      "name": "ch4_max",
+                      "expression": "`ch4_max`"
+                    },
+                    {
+                      "name": "n_obs",
+                      "expression": "`n_obs`"
+                    },
+                    {
+                      "name": "h3_cellid",
+                      "expression": "`h3_cellid`"
+                    },
+                    {
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "choropleth-map",
+              "encodings": {
+                "region": {
+                  "regionType": "custom",
+                  "fieldName": "hex_geom"
+                },
+                "color": {
+                  "fieldName": "ch4_max",
+                  "displayName": "Peak CH4 (ppm\u00b7m)",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "n_obs",
+                    "displayName": "Observations"
+                  },
+                  {
+                    "fieldName": "h3_cellid",
+                    "displayName": "H3 Cell"
+                  },
+                  {
+                    "fieldName": "observation_date",
+                    "displayName": "Observation Date"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Hotspot Cells by Peak CH4 Concentration"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 9,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p3_persistence_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Chronic Emitters \u2014 Persistence Ratio"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 17,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p3_persistence_choropleth",
             "queries": [
               {
                 "name": "main_query",
@@ -559,120 +1257,30 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Hotspot Persistence Ratio"
+                "title": "Hotspot Persistence Ratio (Chronic vs. Transient)"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 3,
+            "y": 18,
             "width": 6,
             "height": 8
-          }
-        },
-        {
-          "widget": {
-            "name": "p2_table_header",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Top Persistent Cells"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 11,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p2_persistence_table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_hotspot_persistence_top",
-                  "fields": [
-                    {
-                      "name": "h3_cellid",
-                      "expression": "`h3_cellid`"
-                    },
-                    {
-                      "name": "persistence_ratio",
-                      "expression": "`persistence_ratio`"
-                    },
-                    {
-                      "name": "dates_elevated",
-                      "expression": "`dates_elevated`"
-                    },
-                    {
-                      "name": "dates_observed",
-                      "expression": "`dates_observed`"
-                    },
-                    {
-                      "name": "max_ch4",
-                      "expression": "`max_ch4`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "h3_cellid",
-                    "displayName": "H3 Cell"
-                  },
-                  {
-                    "fieldName": "persistence_ratio",
-                    "displayName": "Persistence Ratio"
-                  },
-                  {
-                    "fieldName": "dates_elevated",
-                    "displayName": "Elevated Days"
-                  },
-                  {
-                    "fieldName": "dates_observed",
-                    "displayName": "Observed Days"
-                  },
-                  {
-                    "fieldName": "max_ch4",
-                    "displayName": "Max CH4 (ppm\u00b7m)"
-                  }
-                ]
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Top Persistent Hotspot Cells"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 12,
-            "width": 6,
-            "height": 6
           }
         }
       ]
     },
     {
-      "name": "page_quantify_attribute",
-      "displayName": "Quantify & Attribute",
+      "name": "page_plume_detail",
+      "displayName": "Plume Detail & Validation",
       "pageType": "PAGE_TYPE_CANVAS",
       "layout": [
         {
           "widget": {
-            "name": "p3_title",
+            "name": "p4_title",
             "multilineTextboxSpec": {
               "lines": [
-                "## Quantify & Attribute"
+                "## Plume Detail & Validation"
               ]
             }
           },
@@ -685,10 +1293,10 @@
         },
         {
           "widget": {
-            "name": "p3_subtitle",
+            "name": "p4_subtitle",
             "multilineTextboxSpec": {
               "lines": [
-                "Leading plumes ranked by peak concentration, attributed to nearby operators, leases, and wells."
+                "Per-plume Carbon Mapper detail with operator attribution, cross-checked against an independent EMIT/GeoBrix concentration retrieval."
               ]
             }
           },
@@ -701,10 +1309,10 @@
         },
         {
           "widget": {
-            "name": "p3_map_header",
+            "name": "p4_attribution",
             "multilineTextboxSpec": {
               "lines": [
-                "### Plume Leaderboard Map"
+                "Data \u00a9 Carbon Mapper \u2014 public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
               ]
             }
           },
@@ -717,202 +1325,52 @@
         },
         {
           "widget": {
-            "name": "p3_plume_choropleth",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_plume_leaderboard",
-                  "fields": [
-                    {
-                      "name": "plume_geom_native",
-                      "expression": "`plume_geom_native`"
-                    },
-                    {
-                      "name": "max_conc_ppmm",
-                      "expression": "`max_conc_ppmm`"
-                    },
-                    {
-                      "name": "plume_id",
-                      "expression": "`plume_id`"
-                    },
-                    {
-                      "name": "lead_operator",
-                      "expression": "`lead_operator`"
-                    },
-                    {
-                      "name": "lead_field",
-                      "expression": "`lead_field`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 1,
-              "widgetType": "choropleth-map",
-              "encodings": {
-                "region": {
-                  "regionType": "custom",
-                  "fieldName": "plume_geom_native"
-                },
-                "color": {
-                  "fieldName": "max_conc_ppmm",
-                  "displayName": "Peak Concentration (ppm\u00b7m)",
-                  "scale": {
-                    "type": "quantitative"
-                  }
-                },
-                "extra": [
-                  {
-                    "fieldName": "plume_id",
-                    "displayName": "Plume ID"
-                  },
-                  {
-                    "fieldName": "lead_operator",
-                    "displayName": "Lead Operator"
-                  },
-                  {
-                    "fieldName": "lead_field",
-                    "displayName": "Lead Field"
-                  }
-                ]
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Plume Outlines by Peak Concentration"
-              }
+            "name": "p4_cm_table_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Carbon Mapper Plume Detail"
+              ]
             }
           },
           "position": {
             "x": 0,
             "y": 3,
             "width": 6,
-            "height": 7
+            "height": 1
           }
         },
         {
           "widget": {
-            "name": "p3_plume_point_map",
+            "name": "p4_cm_table",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_plume_leaderboard",
-                  "fields": [
-                    {
-                      "name": "lon_max",
-                      "expression": "`lon_max`"
-                    },
-                    {
-                      "name": "lat_max",
-                      "expression": "`lat_max`"
-                    },
-                    {
-                      "name": "max_conc_ppmm",
-                      "expression": "`max_conc_ppmm`"
-                    },
-                    {
-                      "name": "plume_id",
-                      "expression": "`plume_id`"
-                    },
-                    {
-                      "name": "lead_operator",
-                      "expression": "`lead_operator`"
-                    },
-                    {
-                      "name": "lead_field",
-                      "expression": "`lead_field`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "symbol-map",
-              "encodings": {
-                "coordinates": {
-                  "coordinateType": "longitude-latitude",
-                  "longitude": {
-                    "fieldName": "lon_max"
-                  },
-                  "latitude": {
-                    "fieldName": "lat_max"
-                  }
-                },
-                "color": {
-                  "fieldName": "max_conc_ppmm",
-                  "displayName": "Peak Concentration (ppm\u00b7m)",
-                  "scale": {
-                    "type": "quantitative"
-                  }
-                },
-                "extra": [
-                  {
-                    "fieldName": "plume_id",
-                    "displayName": "Plume ID"
-                  },
-                  {
-                    "fieldName": "lead_operator",
-                    "displayName": "Lead Operator"
-                  },
-                  {
-                    "fieldName": "lead_field",
-                    "displayName": "Lead Field"
-                  }
-                ],
-                "size": {
-                  "fieldName": "max_conc_ppmm",
-                  "displayName": "Peak Concentration (ppm\u00b7m)",
-                  "scale": {
-                    "type": "quantitative"
-                  }
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Plume Peak Locations"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 10,
-            "width": 6,
-            "height": 5
-          }
-        },
-        {
-          "widget": {
-            "name": "p3_plume_table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_plume_leaderboard",
+                  "datasetName": "ds_cm_plumes",
                   "fields": [
                     {
                       "name": "plume_id",
                       "expression": "`plume_id`"
                     },
                     {
-                      "name": "max_conc_ppmm",
-                      "expression": "`max_conc_ppmm`"
-                    },
-                    {
-                      "name": "gbx_max_ppmm",
-                      "expression": "`gbx_max_ppmm`"
+                      "name": "observation_date",
+                      "expression": "`observation_date`"
                     },
                     {
                       "name": "lead_operator",
                       "expression": "`lead_operator`"
                     },
                     {
-                      "name": "lead_field",
-                      "expression": "`lead_field`"
+                      "name": "sector",
+                      "expression": "`sector`"
+                    },
+                    {
+                      "name": "emission_rate_kg_hr",
+                      "expression": "`emission_rate_kg_hr`"
+                    },
+                    {
+                      "name": "plume_quality",
+                      "expression": "`plume_quality`"
                     },
                     {
                       "name": "lead_dist_m",
@@ -933,466 +1391,50 @@
                     "displayName": "Plume ID"
                   },
                   {
-                    "fieldName": "max_conc_ppmm",
-                    "displayName": "Max Concentration (ppm\u00b7m)"
-                  },
-                  {
-                    "fieldName": "gbx_max_ppmm",
-                    "displayName": "GeoBrix Max (ppm\u00b7m)"
+                    "fieldName": "observation_date",
+                    "displayName": "Observation Date"
                   },
                   {
                     "fieldName": "lead_operator",
-                    "displayName": "Lead Operator"
-                  },
-                  {
-                    "fieldName": "lead_field",
-                    "displayName": "Lead Field"
-                  },
-                  {
-                    "fieldName": "lead_dist_m",
-                    "displayName": "Lead Distance (m)"
-                  }
-                ]
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Plume Leaderboard Detail"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 15,
-            "width": 6,
-            "height": 6
-          }
-        },
-        {
-          "widget": {
-            "name": "p3_intensity_header",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Operator & Field Intensity"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 21,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p3_operator_bar",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_operator_intensity",
-                  "fields": [
-                    {
-                      "name": "operator",
-                      "expression": "`operator`"
-                    },
-                    {
-                      "name": "max(max_peak_ppmm)",
-                      "expression": "MAX(`max_peak_ppmm`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 3,
-              "widgetType": "bar",
-              "encodings": {
-                "x": {
-                  "fieldName": "operator",
-                  "scale": {
-                    "type": "categorical",
-                    "sort": {
-                      "by": "y-reversed"
-                    }
-                  },
-                  "displayName": "Operator"
-                },
-                "y": {
-                  "fieldName": "max(max_peak_ppmm)",
-                  "scale": {
-                    "type": "quantitative"
-                  },
-                  "displayName": "Max Peak CH4 (ppm\u00b7m)"
-                },
-                "label": {
-                  "show": true
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Top Operators by Peak Concentration"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 22,
-            "width": 3,
-            "height": 6
-          }
-        },
-        {
-          "widget": {
-            "name": "p3_field_bar",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_field_county_intensity",
-                  "fields": [
-                    {
-                      "name": "field",
-                      "expression": "`field`"
-                    },
-                    {
-                      "name": "max(max_peak_ppmm)",
-                      "expression": "MAX(`max_peak_ppmm`)"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 3,
-              "widgetType": "bar",
-              "encodings": {
-                "x": {
-                  "fieldName": "field",
-                  "scale": {
-                    "type": "categorical",
-                    "sort": {
-                      "by": "y-reversed"
-                    }
-                  },
-                  "displayName": "Field"
-                },
-                "y": {
-                  "fieldName": "max(max_peak_ppmm)",
-                  "scale": {
-                    "type": "quantitative"
-                  },
-                  "displayName": "Max Peak CH4 (ppm\u00b7m)"
-                },
-                "label": {
-                  "show": true
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Top Fields by Peak Concentration"
-              }
-            }
-          },
-          "position": {
-            "x": 3,
-            "y": 22,
-            "width": 3,
-            "height": 6
-          }
-        },
-        {
-          "widget": {
-            "name": "p3_wells_header",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Candidate Wells Near Plumes"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 28,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p3_wells_point_map",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_plume_candidate_wells",
-                  "fields": [
-                    {
-                      "name": "well_lon",
-                      "expression": "`well_lon`"
-                    },
-                    {
-                      "name": "well_lat",
-                      "expression": "`well_lat`"
-                    },
-                    {
-                      "name": "rank",
-                      "expression": "`rank`"
-                    },
-                    {
-                      "name": "plume_id",
-                      "expression": "`plume_id`"
-                    },
-                    {
-                      "name": "operator",
-                      "expression": "`operator`"
-                    },
-                    {
-                      "name": "dist_m",
-                      "expression": "`dist_m`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "symbol-map",
-              "encodings": {
-                "coordinates": {
-                  "coordinateType": "longitude-latitude",
-                  "longitude": {
-                    "fieldName": "well_lon"
-                  },
-                  "latitude": {
-                    "fieldName": "well_lat"
-                  }
-                },
-                "color": {
-                  "fieldName": "rank",
-                  "displayName": "Proximity Rank",
-                  "scale": {
-                    "type": "quantitative"
-                  }
-                },
-                "extra": [
-                  {
-                    "fieldName": "plume_id",
-                    "displayName": "Plume ID"
-                  },
-                  {
-                    "fieldName": "operator",
                     "displayName": "Operator"
                   },
                   {
-                    "fieldName": "dist_m",
-                    "displayName": "Distance (m)"
-                  }
-                ]
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Candidate Wells Near Plumes (Ranked by Proximity)"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 29,
-            "width": 6,
-            "height": 7
-          }
-        }
-      ]
-    },
-    {
-      "name": "page_detection_timeline",
-      "displayName": "Detection Timeline",
-      "pageType": "PAGE_TYPE_CANVAS",
-      "layout": [
-        {
-          "widget": {
-            "name": "p4_title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Detection Timeline"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 0,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_subtitle",
-            "multilineTextboxSpec": {
-              "lines": [
-                "EMIT plume detections and regional CH4 activity across the observation window."
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 1,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_date_filter",
-            "queries": [
-              {
-                "name": "ds_detection_timeline_datefilter",
-                "query": {
-                  "datasetName": "ds_detection_timeline",
-                  "fields": [
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              },
-              {
-                "name": "ds_regional_trend_datefilter",
-                "query": {
-                  "datasetName": "ds_regional_trend",
-                  "fields": [
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    }
-                  ],
-                  "disaggregated": false
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "filter-date-range-picker",
-              "encodings": {
-                "fields": [
-                  {
-                    "fieldName": "observation_date",
-                    "displayName": "Observation Date",
-                    "queryName": "ds_detection_timeline_datefilter"
+                    "fieldName": "sector",
+                    "displayName": "Sector"
                   },
                   {
-                    "fieldName": "observation_date",
-                    "displayName": "Observation Date",
-                    "queryName": "ds_regional_trend_datefilter"
+                    "fieldName": "emission_rate_kg_hr",
+                    "displayName": "Emission Rate (kg/hr)"
+                  },
+                  {
+                    "fieldName": "plume_quality",
+                    "displayName": "Quality"
+                  },
+                  {
+                    "fieldName": "lead_dist_m",
+                    "displayName": "Distance to Well (m)"
                   }
                 ]
               },
               "frame": {
                 "showTitle": true,
-                "title": "Observation Date Range"
+                "title": "Carbon Mapper Plumes \u2014 Attributed Detail"
               }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 2,
-            "width": 6,
-            "height": 2
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_timeline_header",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Detection Timeline"
-              ]
             }
           },
           "position": {
             "x": 0,
             "y": 4,
             "width": 6,
-            "height": 1
+            "height": 8
           }
         },
         {
           "widget": {
-            "name": "p4_detection_line",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_detection_timeline",
-                  "fields": [
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    },
-                    {
-                      "name": "plume_count",
-                      "expression": "`plume_count`"
-                    },
-                    {
-                      "name": "max_peak_ppmm",
-                      "expression": "`max_peak_ppmm`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 3,
-              "widgetType": "line",
-              "encodings": {
-                "x": {
-                  "fieldName": "observation_date",
-                  "scale": {
-                    "type": "temporal"
-                  },
-                  "displayName": "Observation Date"
-                },
-                "y": {
-                  "scale": {
-                    "type": "quantitative"
-                  },
-                  "fields": [
-                    {
-                      "fieldName": "plume_count",
-                      "displayName": "Plume Count"
-                    },
-                    {
-                      "fieldName": "max_peak_ppmm",
-                      "displayName": "Max Peak CH4 (ppm\u00b7m)"
-                    }
-                  ]
-                }
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Plume Detections & Peak Concentration"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 5,
-            "width": 6,
-            "height": 7
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_activity_header",
+            "name": "p4_quant_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Regional Activity"
+                "### EMIT / GeoBrix Cross-Check (Independent Validation)"
               ]
             }
           },
@@ -1405,24 +1447,52 @@
         },
         {
           "widget": {
-            "name": "p4_activity_line",
+            "name": "p4_quant_note",
+            "multilineTextboxSpec": {
+              "lines": [
+                "`plume_quant` cross-checks JPL EMIT `max_conc_ppmm` against GeoBrix's own `gbx_max_ppmm` / `gbx_mean_ppmm` raster-clip retrieval \u2014 an independent, second-instrument concentration read that corroborates the Carbon Mapper detections above."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4_plume_quant_table",
             "queries": [
               {
                 "name": "main_query",
                 "query": {
-                  "datasetName": "ds_regional_trend",
+                  "datasetName": "ds_plume_quant",
                   "fields": [
+                    {
+                      "name": "plume_id",
+                      "expression": "`plume_id`"
+                    },
                     {
                       "name": "observation_date",
                       "expression": "`observation_date`"
                     },
                     {
-                      "name": "active_cells",
-                      "expression": "`active_cells`"
+                      "name": "max_conc_ppmm",
+                      "expression": "`max_conc_ppmm`"
                     },
                     {
-                      "name": "plume_count",
-                      "expression": "`plume_count`"
+                      "name": "gbx_max_ppmm",
+                      "expression": "`gbx_max_ppmm`"
+                    },
+                    {
+                      "name": "gbx_mean_ppmm",
+                      "expression": "`gbx_mean_ppmm`"
+                    },
+                    {
+                      "name": "emission_rate_kg_hr",
+                      "expression": "`emission_rate_kg_hr`"
                     }
                   ],
                   "disaggregated": true
@@ -1430,43 +1500,47 @@
               }
             ],
             "spec": {
-              "version": 3,
-              "widgetType": "line",
+              "version": 2,
+              "widgetType": "table",
               "encodings": {
-                "x": {
-                  "fieldName": "observation_date",
-                  "scale": {
-                    "type": "temporal"
+                "columns": [
+                  {
+                    "fieldName": "plume_id",
+                    "displayName": "Plume ID"
                   },
-                  "displayName": "Observation Date"
-                },
-                "y": {
-                  "scale": {
-                    "type": "quantitative"
+                  {
+                    "fieldName": "observation_date",
+                    "displayName": "Observation Date"
                   },
-                  "fields": [
-                    {
-                      "fieldName": "active_cells",
-                      "displayName": "Active Cells"
-                    },
-                    {
-                      "fieldName": "plume_count",
-                      "displayName": "Plume Count"
-                    }
-                  ]
-                }
+                  {
+                    "fieldName": "max_conc_ppmm",
+                    "displayName": "EMIT Max Conc (ppm\u00b7m)"
+                  },
+                  {
+                    "fieldName": "gbx_max_ppmm",
+                    "displayName": "GeoBrix Max (ppm\u00b7m)"
+                  },
+                  {
+                    "fieldName": "gbx_mean_ppmm",
+                    "displayName": "GeoBrix Mean (ppm\u00b7m)"
+                  },
+                  {
+                    "fieldName": "emission_rate_kg_hr",
+                    "displayName": "JPL Emission Rate (kg/hr)"
+                  }
+                ]
               },
               "frame": {
                 "showTitle": true,
-                "title": "Active Cells & Plume Count Over Time"
+                "title": "EMIT / GeoBrix Concentration Cross-Check"
               }
             }
           },
           "position": {
             "x": 0,
-            "y": 13,
+            "y": 14,
             "width": 6,
-            "height": 7
+            "height": 6
           }
         }
       ]

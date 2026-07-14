@@ -51,7 +51,7 @@ variables:
 resources:
   dashboards:
     vapor_eyes_lf_dashboard:
-      display_name: "Vapor-Eyes — Methane Cascade (Lakeflow)"
+      display_name: "Vapor-Eyes — Permian Methane Monitoring (Lakeflow)"
       file_path: ./dashboards/vapor_eyes_lf.lvdash.json
       warehouse_id: ${var.warehouse_id}
 

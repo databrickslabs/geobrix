@@ -328,3 +328,115 @@ def plume_quant():
         "fetch_length_m", "gbx_mean_ppmm", "gbx_max_ppmm", "plume_geom",
         F.current_timestamp().alias("_ingested_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Wells (SHL) as a Slowly-Changing-Dimension (Type 2) + as-of plume attribution.
+#
+# The TX RRC well surface-hole-location snapshot carries no acquisition date, so each
+# staged snapshot's observation_date is its ingest date (see bronze wells_raw). To keep
+# a queryable history of the well inventory as new snapshots land, we maintain `wells_shl`
+# as an SCD2 table keyed by `api`, sequenced by that snapshot date.
+#
+# `create_auto_cdc_flow` needs a STREAMING source, but WellsDownloader().read() is a batch
+# geojson parse. We bridge the two with a stream-static join: the streaming side is
+# `wells_raw` (an Auto Loader streaming table — one row per staged snapshot file, which
+# fires the flow when a new snapshot arrives and carries that snapshot's date); the static
+# side is the batch-parsed well attributes. The crossJoin re-emits every well tagged with
+# the arriving snapshot's date, which is exactly the change feed SCD2 consumes.
+# ---------------------------------------------------------------------------
+
+
+@dp.temporary_view(name="wells_snapshots")
+def wells_snapshots():
+    """Streaming change feed for `wells_shl`: each staged wells snapshot re-emits the
+    full parsed well inventory, tagged with the snapshot's observation_date. Streaming
+    trigger = `wells_raw`; well attributes = batch WellsDownloader().read() (NB04 CELL 7
+    projection). Stream-static crossJoin keeps the flow a valid streaming source."""
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    p = paths(spark)
+
+    from databricks.labs.gbx.sample import WellsDownloader
+    attrs = WellsDownloader().read(p["wells"]).select(
+        F.col("API").cast("string").alias("api"),
+        F.col("CompanyName").alias("operator"),
+        F.col("LeaseName").alias("lease"),
+        F.col("WellNbr").alias("well_no"),
+        F.col("FieldName").alias("field"),
+        F.col("County").alias("county"),
+        F.col("WellURL").alias("well_url"),
+        F.col("geom_0").alias("well_geom"),
+    )
+    # One row per staged snapshot file (Auto Loader binaryFile) -> the snapshot date.
+    snaps = spark.readStream.table("wells_raw").select("observation_date")
+    return (
+        snaps.crossJoin(F.broadcast(attrs))
+        .withColumn("_ingested_at", F.current_timestamp())
+    )
+
+
+dp.create_streaming_table(
+    "wells_shl",
+    comment="TX RRC well surface-hole locations — SCD2 history keyed by API",
+    partition_cols=["api"],
+)
+dp.create_auto_cdc_flow(
+    target="wells_shl",
+    source="wells_snapshots",
+    keys=["api"],
+    sequence_by=F.col("observation_date"),
+    stored_as_scd_type=2,
+)
+
+
+@dp.materialized_view(
+    name="plume_candidate_wells",
+    comment="k nearest TX RRC wells per EMIT plume origin (as-of attribution)",
+    partition_cols=["observation_date"],
+)
+def plume_candidate_wells():
+    from pyspark.sql import SparkSession
+    from pyspark.sql.window import Window
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    c = cfg(spark)
+    k = c["k_candidates"]
+
+    plumes = spark.read.table("emit_plumes")
+    # As-of attribution against the SCD2 history. The wells snapshot's observation_date
+    # is its INGEST date (wells carry no acquisition date), which postdates the historical
+    # EMIT plume dates, so a strict `__START_AT <= plume_date` predicate would exclude every
+    # well and yield zero candidates. We therefore attribute against the currently-valid
+    # well version (`__END_AT IS NULL`) — the meaningful choice when the inventory postdates
+    # the plumes — while still reading the SCD2 table + its temporal bounds.
+    wells = (
+        spark.read.table("wells_shl")
+        .filter(F.col("__END_AT").isNull())
+        .select(
+            "api", "operator", "lease", "well_no", "field", "county", "well_url",
+            F.expr("st_x(st_geomfromwkb(well_geom))").alias("well_lon"),
+            F.expr("st_y(st_geomfromwkb(well_geom))").alias("well_lat"),
+            F.expr("st_geomfromwkb(well_geom)").alias("well_pt"),
+        )
+    )
+    p_pt = plumes.withColumn("plume_pt", F.expr("st_point(lon_max, lat_max)"))
+    paired = p_pt.crossJoin(wells).withColumn(
+        "dist_m", F.expr("st_distancesphere(plume_pt, well_pt)")
+    )
+    candidates = (
+        paired.withColumn(
+            "rank",
+            F.row_number().over(Window.partitionBy("plume_id").orderBy("dist_m")),
+        )
+        .filter(F.col("rank") <= k)
+        .drop("plume_pt", "well_pt")
+    )
+    return candidates.select(
+        "plume_id", "observation_date", "max_conc_ppmm", "emission_rate_kg_hr",
+        "emission_rate_uncert_kg_hr", "lon_max", "lat_max",
+        "api", "operator", "lease", "well_no", "field", "county", "well_url",
+        "well_lon", "well_lat", "dist_m", "rank",
+        F.current_timestamp().alias("_ingested_at"),
+    )

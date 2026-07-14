@@ -32,6 +32,7 @@ from pyspark.sql.types import (
     DateType,
     DoubleType,
     LongType,
+    StringType,
     StructField,
     StructType,
     TimestampType,
@@ -53,6 +54,19 @@ _HOTSPOT_SCHEMA = StructType(
         StructField("ch4_max", DoubleType()),
         StructField("n_obs", LongType()),
         StructField("geom_wkb", BinaryType()),
+        StructField("_ingested_at", TimestampType()),
+    ]
+)
+
+# S2 band filename token: gtiff_gbx writes `{asset_name}_{item_id}.tif`, e.g.
+# `B12_S2A_MSIL2A_20230730T172901_...tif`. The date lives in the item_id (_YYYYMMDDT).
+_S2_TIF_DATE = re.compile(r"_(\d{8})T\d{6}")
+
+_S2_CELLS_SCHEMA = StructType(
+    [
+        StructField("h3_cellid", LongType()),
+        StructField("observation_date", DateType()),
+        StructField("stats", StringType()),
         StructField("_ingested_at", TimestampType()),
     ]
 )
@@ -130,3 +144,84 @@ def s5p_hotspots():
         .withColumn("geom_wkb", DBF.h3_centeraswkb("h3_cellid"))
         .withColumn("_ingested_at", F.current_timestamp())
     )
+
+
+def _s2_index_cells(spark, s2_dir, date_tok, s2_h3_res):
+    """Port NB02 CELL 10 for one S2 scene date: read B12/B11 SWIR tiles scoped to
+    this date's filenames, compute the methane-proxy index (B11-B12)/(B11+B12) via
+    rst_mapalgebra (band 1 of each tile binds A=B12, B=B11), tessellate the index
+    raster into H3 cells (LATERAL UDTF), and summarize per cell. Tagged with the
+    observation_date parsed from the S2 filename token."""
+    from databricks.labs.gbx.pyrx import functions as rx
+
+    def _band_tile(band):
+        return (
+            spark.read.format("gtiff_gbx")
+            # filterRegex matches the FULL path -> lead with `.*`; scope to this
+            # band AND this scene date so multiple staged scenes stay separated.
+            .option("filterRegex", rf".*{band}.*_{date_tok}T\d{{6}}.*\.tif$")
+            .load(s2_dir)
+            .select(F.col("tile").alias(f"tile_{band.lower()}"))
+        )
+
+    b12 = _band_tile("B12")
+    b11 = _band_tile("B11")
+    mbmp = (
+        b12.crossJoin(b11)
+        .withColumn("tile", rx.rst_mapalgebra(F.array("tile_b12", "tile_b11"),
+                                              "(B - A) / (A + B)"))
+        .select("tile")
+    )
+    obs = datetime.strptime(date_tok, "%Y%m%d").date()
+    view = f"_mbmp_{date_tok}"
+    mbmp.createOrReplaceTempView(view)
+    # gbx_rst_h3_tessellate is a UDTF — invoke via SQL LATERAL; rebuild the tile
+    # struct for gbx_rst_summary and cast the summary to a JSON string.
+    cells = spark.sql(
+        f"""
+        SELECT
+            t.cellid AS h3_cellid,
+            CAST(gbx_rst_summary(named_struct('cellid', t.cellid, 'raster', t.raster,
+                                              'metadata', t.metadata)) AS STRING) AS stats
+        FROM {view} s, LATERAL gbx_rst_h3_tessellate(s.tile, {s2_h3_res}) t
+        """
+    )
+    return (
+        cells.withColumn("observation_date", F.lit(obs))
+        .withColumn("_ingested_at", F.current_timestamp())
+        .select("h3_cellid", "observation_date", "stats", "_ingested_at")
+    )
+
+
+@dp.materialized_view(
+    name="s2_plume_cells",
+    comment="Sentinel-2 SWIR methane-proxy index shredded to H3 cells over the top hotspot",
+    partition_cols=["observation_date"],
+)
+def s2_plume_cells():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    c = cfg(spark)
+    p = paths(spark)
+    s2_dir = p["s2"]
+
+    # Enumerate staged S2 band COGs on the driver (resolvable at flow-analysis); one
+    # scene date per land run (least-cloudy item), but grouped by date to stay robust
+    # if several scenes accumulate. Empty until an S2 scene is staged (data condition).
+    try:
+        names = sorted(os.listdir(s2_dir))
+    except FileNotFoundError:
+        names = []
+    dates = set()
+    for fn in names:
+        if not fn.endswith(".tif"):
+            continue
+        m = _S2_TIF_DATE.search(fn)
+        if m:
+            dates.add(m.group(1))
+    if not dates:
+        return spark.createDataFrame([], _S2_CELLS_SCHEMA)
+
+    frames = [_s2_index_cells(spark, s2_dir, d, c["s2_h3_res"]) for d in sorted(dates)]
+    return reduce(lambda a, b: a.unionByName(b), frames)

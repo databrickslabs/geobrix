@@ -29,6 +29,7 @@ def _subtree(catalog, schema, volume):
 
 def run_land(spark, sources, *, catalog, schema, volume, date_window,
              s5p_temporal, bbox=(-103.60, 31.05, -102.60, 31.85),
+             cloud_max=20,
              earthdata_secret="geospatial_docs.vapor_eyes.earthdata_token"):
     from databricks.labs.gbx.sample import (
         EmitDownloader, TropomiDownloader, WellsDownloader)
@@ -46,7 +47,10 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
         _list_dir(dirs["s5p"], "s5p")
     if "s2" in sources:
         from databricks.labs.gbx.stac import StacClient
-        staged["s2"] = _land_s2(spark, StacClient(), bbox, dirs["s2"], date_window)
+        staged["s2"] = _land_s2(
+            spark, StacClient(), dirs["s2"], date_window,
+            catalog=catalog, schema=schema, cloud_max=cloud_max)
+        _list_dir(dirs["s2"], "s2")
     if "emit" in sources:
         # EMIT (NASA LP DAAC) needs an Earthdata bearer token. Read it from the
         # UC secret and export EARTHDATA_TOKEN so the downloader's HTTP client
@@ -129,9 +133,81 @@ def _mkdir(spark, path):
         print(f"... mkdir skipped {path}: {type(e).__name__}")
 
 
-def _land_s2(spark, stac, bbox, out_dir, date_window):
-    # Filled in Phase 2 (S2 needs a computed top-hotspot window); Phase 1 no-op.
-    return 0
+def _land_s2(spark, stac, out_dir, date_window, *, catalog, schema, cloud_max=20):
+    """Stage Sentinel-2 B11/B12 SWIR COGs windowed to the top S5P hotspot cell.
+
+    Ports NB02 CELL 6-8: reads the pipeline's `s5p_hotspots` silver (produced by a
+    prior pipeline run — the land task runs before the pipeline within a job, so this
+    consumes the latest available hotspots; on the very first run the table is
+    missing/empty and S2 is skipped, then populates on the next daily run). Picks the
+    top cell by ch4_max for the latest observation_date, derives its H3-boundary bbox
+    (+3 km pad), searches sentinel-2-l2a over that AOI for the date_window, keeps the
+    least-cloudy item's B11/B12 assets, and downloads them windowed to the cell bbox.
+
+    Returns the number of staged band assets (0 if skipped / no cloud-free scene)."""
+    from pyspark.sql import functions as F
+
+    tbl = f"{catalog}.{schema}.s5p_hotspots"
+    try:
+        exists = spark.catalog.tableExists(tbl)
+    except Exception as e:
+        print(f"... s2 skipped: tableExists({tbl}) failed: {type(e).__name__}: {e}")
+        return 0
+    if not exists:
+        print(f"... s2 skipped: {tbl} does not exist yet (first-run ordering)")
+        return 0
+
+    hs = spark.table(tbl)
+    latest = hs.agg(F.max("observation_date").alias("d")).first()["d"]
+    if latest is None:
+        print(f"... s2 skipped: {tbl} is empty (no hotspots yet)")
+        return 0
+    top = (hs.filter(F.col("observation_date") == F.lit(latest))
+             .orderBy(F.desc("ch4_max")).first())
+    if top is None:
+        print(f"... s2 skipped: no hotspot rows for {latest}")
+        return 0
+    top_cellid = top["h3_cellid"]
+
+    import h3
+    # h3 cellid stored as bigint -> unsigned hex string for the h3 python client.
+    _h = format(int(top_cellid) & 0xFFFFFFFFFFFFFFFF, "015x")
+    _boundary = h3.cell_to_boundary(_h)  # list[(lat, lon)]
+    _lats = [p[0] for p in _boundary]
+    _lons = [p[1] for p in _boundary]
+    pad = 0.03  # ~3 km pad around the cell for scene context
+    s2_bbox = (min(_lons) - pad, min(_lats) - pad,
+               max(_lons) + pad, max(_lats) + pad)
+    print(f"... s2 target hotspot cell {_h} (date {latest}); AOI bbox {s2_bbox}")
+
+    aoi = spark.createDataFrame(
+        [(f'{{"type":"Polygon","coordinates":[[[{s2_bbox[0]},{s2_bbox[1]}],'
+          f'[{s2_bbox[2]},{s2_bbox[1]}],[{s2_bbox[2]},{s2_bbox[3]}],'
+          f'[{s2_bbox[0]},{s2_bbox[3]}],[{s2_bbox[0]},{s2_bbox[1]}]]]}}',)],
+        ["geojson"],
+    )
+    found = stac.search(
+        aoi, geojson_col="geojson", collections=["sentinel-2-l2a"], datetime=date_window
+    )
+    cloud = F.col("item_properties")["eo:cloud_cover"].cast("double")
+    best = (found.withColumn("cloud", cloud)
+            .filter(F.col("cloud") <= cloud_max)
+            .orderBy("cloud").first())
+    if best is None:
+        print(f"... s2: no sentinel-2 item <= {cloud_max}% cloud in {date_window}; "
+              f"leaving s2 empty (data condition, not an error)")
+        return 0
+    best_item = best["item_id"]
+    print(f"... s2 least-cloudy item {best_item} (cloud={best['cloud']}%)")
+    bands = found.filter(
+        (F.col("item_id") == best_item) & F.col("asset_name").isin("B11", "B12")
+    ).select("item_id", "asset_name", "href")
+    s2_dl = stac.download(bands, out_dir, bbox=list(s2_bbox), bbox_crs="EPSG:4326")
+    rows = s2_dl.select("asset_name", "out_file_path", "is_out_file_valid").collect()
+    for r in rows:
+        print(f"... s2 band: {r['asset_name']} valid={r['is_out_file_valid']} "
+              f"path={r['out_file_path']}")
+    return len(rows)
 
 
 def main():
@@ -144,6 +220,7 @@ def main():
     ap.add_argument("--schema", default="vapor_eyes_lf")
     ap.add_argument("--volume", default="data")
     ap.add_argument("--s5p-temporal", default="2024-08-23/2024-08-24")
+    ap.add_argument("--cloud-max", type=int, default=20)
     ap.add_argument("--earthdata-secret",
                     default="geospatial_docs.vapor_eyes.earthdata_token")
     a = ap.parse_args()
@@ -151,7 +228,7 @@ def main():
     spark = SparkSession.builder.getOrCreate()
     run_land(spark, a.sources.split(","), catalog=a.catalog, schema=a.schema,
              volume=a.volume, date_window=window, s5p_temporal=a.s5p_temporal,
-             earthdata_secret=a.earthdata_secret)
+             cloud_max=a.cloud_max, earthdata_secret=a.earthdata_secret)
 
 
 if __name__ == "__main__":

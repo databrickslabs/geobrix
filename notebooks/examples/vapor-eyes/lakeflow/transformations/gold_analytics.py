@@ -82,8 +82,8 @@ def plume_leaderboard_latest():
         "lead_operator", "lead_lease", "lead_field", "lead_county", "lead_dist_m",
         "concentration_rank",
         "lon_max", "lat_max",
-        F.expr("st_point(lon_max, lat_max)").alias("origin_geom"),
-        F.expr("st_geomfromwkb(plume_geom)").alias("plume_geom_native"),
+        F.expr("st_setsrid(st_point(lon_max, lat_max), 4326)").alias("origin_geom"),
+        F.expr("st_setsrid(st_geomfromwkb(plume_geom), 4326)").alias("plume_geom_native"),
     )
 
 
@@ -164,7 +164,7 @@ def hotspot_latest():
         "hotspot_rank",
         F.expr("st_x(st_geomfromwkb(geom_wkb))").alias("center_lon"),
         F.expr("st_y(st_geomfromwkb(geom_wkb))").alias("center_lat"),
-        F.expr("st_geomfromwkb(h3_boundaryaswkb(h3_cellid))").alias("hex_geom"),
+        F.expr("st_setsrid(st_geomfromwkb(h3_boundaryaswkb(h3_cellid)), 4326)").alias("hex_geom"),
     )
 
 
@@ -276,7 +276,7 @@ def hotspot_persistence():
         )
         .withColumn("center_lon", F.expr("st_x(st_geomfromwkb(_geom_wkb))"))
         .withColumn("center_lat", F.expr("st_y(st_geomfromwkb(_geom_wkb))"))
-        .withColumn("hex_geom", F.expr("st_geomfromwkb(h3_boundaryaswkb(h3_cellid))"))
+        .withColumn("hex_geom", F.expr("st_setsrid(st_geomfromwkb(h3_boundaryaswkb(h3_cellid)), 4326)"))
         .drop("_geom_wkb")
         .select(
             "h3_cellid", "dates_observed", "dates_elevated", "persistence_ratio",

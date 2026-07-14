@@ -13,8 +13,14 @@ variables:
   schema: {default: vapor_eyes_lf}
   volume: {default: data}
   full_aoi: {default: "true"}
-  date_window: {default: "2023-07-15/2023-08-20"}
-  s5p_temporal: {default: "2024-08-23/2024-08-24"}
+  # Seasonal window (summer 2023) — aligned across S5P + EMIT so screening and
+  # detection are contemporaneous, and wide enough for a production-scale record
+  # (~90 S5P overpass days -> rich hotspot/concentration trend + persistence,
+  # several EMIT overpasses). NOTE: this downloads ~10-15 GB of S5P granules on the
+  # first run; narrow both to a single day/overpass (e.g. 2023-07-31/2023-08-01) via
+  # databricks.override.yml for a quick, cheap trial.
+  date_window: {default: "2023-06-01/2023-08-31"}
+  s5p_temporal: {default: "2023-06-01/2023-08-31"}
   h3_res: {default: "6"}
   qa_min: {default: "0.5"}
   cloud_max: {default: "20"}

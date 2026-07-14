@@ -22,7 +22,9 @@ def test_run_land_s5p_calls_tropomi_download():
     from land.land import run_land
     fake_spark = mock.MagicMock()
     tropomi = sample.TropomiDownloader.return_value
-    tropomi.download.return_value.count.return_value = 1
+    fake_row = {"out_file_path": "/v/s5p/x.nc", "out_file_sz": 123,
+                "is_out_file_valid": True}
+    tropomi.download.return_value.select.return_value.collect.return_value = [fake_row]
     run_land(fake_spark, ["s5p"], catalog="c", schema="s", volume="data",
              date_window="2023-07-15/2023-08-20", s5p_temporal="2024-08-23/2024-08-24")
     assert tropomi.download.called

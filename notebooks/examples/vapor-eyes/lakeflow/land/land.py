@@ -7,7 +7,15 @@ inventories the staged files. This file is NOT part of the pipeline and must not
 import pyspark.pipelines."""
 import argparse
 
-from land._dates import asof_window
+# Dual-context import. Under pytest (tests/conftest.py puts `lakeflow/` on
+# sys.path) `land` is a namespace package, so `from land._dates` resolves. As a
+# job `spark_python_task` the file is exec()'d with its own dir `land/` on
+# sys.path[0] and no `__file__`, so `import land` finds land.py itself (not a
+# package) — fall back to the flat sibling import `from _dates`.
+try:
+    from land._dates import asof_window
+except ImportError:  # pragma: no cover - exercised only in the job runtime
+    from _dates import asof_window
 
 
 def _subtree(catalog, schema, volume):
@@ -28,7 +36,12 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
     staged = {}
     if "s5p" in sources:
         df = TropomiDownloader().download(bbox, dirs["s5p"], temporal=s5p_temporal, spark=spark)
-        staged["s5p"] = df.count()
+        rows = df.select("out_file_path", "out_file_sz", "is_out_file_valid").collect()
+        for r in rows:
+            print(f"... s5p granule: valid={r['is_out_file_valid']} "
+                  f"sz={r['out_file_sz']} path={r['out_file_path']}")
+        staged["s5p"] = len(rows)
+        _list_dir(dirs["s5p"], "s5p")
     if "s2" in sources:
         from databricks.labs.gbx.stac import StacClient
         staged["s2"] = _land_s2(spark, StacClient(), bbox, dirs["s2"], date_window)
@@ -40,6 +53,18 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
         staged["wells"] = int(df.first()["feature_count"])
     print(f"... landed: {staged}")
     return staged
+
+
+def _list_dir(path, label):
+    """Driver-side listing of a staged Volume dir — confirms files persisted
+    (the download UDF writes on executors; a swallowed executor-side write leaves
+    a nonzero row count but an empty dir)."""
+    try:
+        import os
+        entries = os.listdir(path)
+        print(f"... {label} dir {path}: {len(entries)} file(s): {entries[:10]}")
+    except Exception as e:
+        print(f"... {label} dir listing failed {path}: {type(e).__name__}: {e}")
 
 
 def _mkdir(spark, path):

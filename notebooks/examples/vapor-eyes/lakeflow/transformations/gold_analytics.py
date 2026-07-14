@@ -427,12 +427,25 @@ def operator_emissions_leaderboard():
         .withColumn("well_count", F.coalesce(F.col("well_count"), F.lit(0)))
     )
 
-    return joined.select(
+    # DEFENSIBLE FRAMING: rank operators by number of high-confidence plume
+    # DETECTIONS and report MEAN/MAX per-detection rate. A per-detection rate is an
+    # instantaneous kg/hr at one overpass, so summing rates across 2024-2026 is NOT a
+    # continuous flow rate and double-counts repeat detections of the same source —
+    # so the summed value is retained ONLY as a clearly-labeled secondary context
+    # column (cumulative_detected_rate_kg_hr), never the headline/rank.
+    ranked = joined.withColumn(
+        "detection_rank",
+        F.row_number().over(Window.orderBy(F.col("plume_count").desc_nulls_last())),
+    )
+    return ranked.select(
         F.col("lead_operator").alias("lead_operator"),
-        "total_emission_kg_hr", "max_emission_kg_hr", "mean_emission_kg_hr",
-        "plume_count", "well_count", "first_detection", "last_detection",
+        "detection_rank",
+        "plume_count",
+        "mean_emission_kg_hr", "max_emission_kg_hr",
         "emission_last_90d_kg_hr",
-    ).orderBy(F.col("total_emission_kg_hr").desc())
+        F.col("total_emission_kg_hr").alias("cumulative_detected_rate_kg_hr"),
+        "well_count", "first_detection", "last_detection",
+    ).orderBy(F.col("plume_count").desc())
 
 
 @dp.materialized_view(

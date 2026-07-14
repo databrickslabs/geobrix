@@ -32,7 +32,45 @@ resources:
             include: transformations/**
       environment:
         dependencies:
-          - "geobrix[light,stac,vizx] @ file://${var.gbx_wheel}"
+          # DAB path-normalizes every dependency string, which rejects the PEP 508
+          # direct-reference form "geobrix[light,stac,vizx] @ file://...". Use a
+          # bare Volume wheel path instead, plus the extras spelled out below —
+          # these mirror the union of the light, stac, and vizx arrays in
+          # [project.optional-dependencies] (python/geobrix/pyproject.toml).
+          - ${var.gbx_wheel}
+          - "rasterio>=1.3.0"
+          - "shapely>=2.0.0"
+          - "numpy>=1.24.0"
+          - "pandas>=2.0.0"
+          - "pyarrow>=11.0.0"
+          - "scipy>=1.11.0"
+          - "numexpr>=2.8.0"
+          - "typing_extensions>=4.13"
+          - "rio-tiler>=9.0,<9.3"
+          - "httpcore>=1.0.9"
+          - "idna<3.8"
+          - "rio-cogeo>=7.0,<8"
+          - "h3>=4.0,<5"
+          - "quadbin>=0.2,<0.3"
+          - "pmtiles>=3.4,<4"
+          - "pyogrio>=0.12,<1"
+          - "pyproj>=3.6,<4"
+          - "mapbox-vector-tile>=2.1,<2.2"
+          - "scikit-image>=0.22,<1"
+          - "xarray-spatial>=0.4,<1"
+          - "netcdf4>=1.6,<2"
+          - "pystac-client>=0.7,<1"
+          - "planetary-computer>=1.0,<2"
+          - "tenacity>=8,<10"
+          - "requests>=2.25"
+          - "earthaccess>=0.11,<1"
+          - "botocore>=1.40.45,<1.41.0"
+          - "matplotlib>=3.7,<4"
+          - "geopandas>=1.0,<2"
+          - "mapclassify>=2.6,<3"
+          - "contextily>=1.5,<2"
+          - "anywidget>=0.9,<1"
+          - "tippecanoe>=2.45,<3"
       configuration:
         vapor_eyes.catalog: ${var.catalog}
         vapor_eyes.schema: ${var.schema}
@@ -68,7 +106,43 @@ resources:
           spec:
             environment_version: "5"
             dependencies:
-              - "geobrix[light,stac,vizx] @ file://${var.gbx_wheel}"
+              # Mirrors the pipeline environment above: bare Volume wheel path +
+              # explicit geobrix[light,stac,vizx] extras (see
+              # python/geobrix/pyproject.toml [project.optional-dependencies]).
+              - ${var.gbx_wheel}
+              - "rasterio>=1.3.0"
+              - "shapely>=2.0.0"
+              - "numpy>=1.24.0"
+              - "pandas>=2.0.0"
+              - "pyarrow>=11.0.0"
+              - "scipy>=1.11.0"
+              - "numexpr>=2.8.0"
+              - "typing_extensions>=4.13"
+              - "rio-tiler>=9.0,<9.3"
+              - "httpcore>=1.0.9"
+              - "idna<3.8"
+              - "rio-cogeo>=7.0,<8"
+              - "h3>=4.0,<5"
+              - "quadbin>=0.2,<0.3"
+              - "pmtiles>=3.4,<4"
+              - "pyogrio>=0.12,<1"
+              - "pyproj>=3.6,<4"
+              - "mapbox-vector-tile>=2.1,<2.2"
+              - "scikit-image>=0.22,<1"
+              - "xarray-spatial>=0.4,<1"
+              - "netcdf4>=1.6,<2"
+              - "pystac-client>=0.7,<1"
+              - "planetary-computer>=1.0,<2"
+              - "tenacity>=8,<10"
+              - "requests>=2.25"
+              - "earthaccess>=0.11,<1"
+              - "botocore>=1.40.45,<1.41.0"
+              - "matplotlib>=3.7,<4"
+              - "geopandas>=1.0,<2"
+              - "mapclassify>=2.6,<3"
+              - "contextily>=1.5,<2"
+              - "anywidget>=0.9,<1"
+              - "tippecanoe>=2.45,<3"
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"
         timezone_id: "America/Chicago"

@@ -7,7 +7,7 @@ point-in-polygon rollups. The reader emits geometry as WKB in `geom_0`."""
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 
-from _config import paths, register_gbx
+from _config import cfg, paths, register_gbx
 
 
 @dp.materialized_view(
@@ -40,14 +40,29 @@ def ref_counties():
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
     p = paths(spark)
+    # Clip to counties that intersect the Permian AOI bbox so the choropleth frames
+    # the basin (not all of TX+NM) — whole counties are kept if they touch the AOI.
+    minx, miny, maxx, maxy = cfg(spark)["bbox"]
+    aoi = (
+        f"POLYGON(({minx} {miny}, {maxx} {miny}, {maxx} {maxy}, "
+        f"{minx} {maxy}, {minx} {miny}))"
+    )
     src = f"{p['context']}/counties/cb_2024_us_county_500k.zip"
     return (
         spark.read.format("shapefile_gbx").load(src)
         .filter(F.col("STATEFP").isin("48", "35"))
+        .withColumn(
+            "county_geom", F.expr("st_setsrid(st_geomfromwkb(geom_0), 4326)")
+        )
+        .filter(
+            F.expr(
+                f"st_intersects(county_geom, st_setsrid(st_geomfromtext('{aoi}'), 4326))"
+            )
+        )
         .select(
             F.col("NAME").alias("county_name"),
             F.col("STATEFP").alias("state_fp"),
             F.col("GEOID").alias("geoid"),
-            F.expr("st_setsrid(st_geomfromwkb(geom_0), 4326)").alias("county_geom"),
+            F.col("county_geom"),
         )
     )

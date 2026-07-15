@@ -62,21 +62,18 @@ All map-facing columns are native `GEOMETRY` (tagged `SRID 4326`) or plain lon/l
 KPI tiles from `cm_monitoring_status` (plumes in the last 90 days, active operators, days since last detection, all-time plume count), the `operator_emissions_leaderboard` table and bar chart, and a Carbon Mapper point map (`cm_plume_attributed`, colored by emission rate) with the required attribution note.
 
 ![Current Status & Leakiest Operators](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-current-status.png)
-<!-- TODO-screenshot: capture from the deployed dashboard, page 1 -->
 
 ### Activity Over Time
 
 `cm_activity_monthly` bar/line combo (plume count + emission rate by month) and the `regional_ch4_trend_daily` regional CH4 trend line, scoped by a shared date-range filter.
 
 ![Activity Over Time](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-activity.png)
-<!-- TODO-screenshot: capture from the deployed dashboard, page 2 -->
 
 ### Regional Screen (Sentinel-5P)
 
 `aoi_kpis_latest` KPI tiles plus the `hotspot_latest` and `hotspot_persistence` H3 hexagon choropleths — the wide-area CH4 screen and chronic-vs-transient emitter view. No Carbon Mapper data on this page, so no attribution widget here (attribution is shown only where Carbon Mapper data appears).
 
 ![Regional Screen (Sentinel-5P)](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-screen.png)
-<!-- TODO-screenshot: capture from the deployed dashboard, page 3 -->
 
 ---
 

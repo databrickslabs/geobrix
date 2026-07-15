@@ -1990,17 +1990,20 @@ rst_fillnodata_sql_example_output = """
 def rst_sample_sql_example():
     """Sample raster pixel values at a POINT geometry (one Double per band)."""
     return """
--- Sample at a known lon/lat (point must be in the raster's CRS).
-SELECT gbx_rst_sample(tile, 'POINT(-0.13 51.5)') AS values FROM rasters;
+-- Sample at a known lon/lat. Tagging the point with an SRID (EWKT
+-- `SRID=4326;...`) makes gbx_rst_sample reproject it to each raster's CRS, so
+-- this lon/lat over NYC lands correctly on the (UTM) Sentinel-2 raster.
+SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS values FROM rasters;
 """
 
 
 rst_sample_sql_example_output = """
-+-------------------+
-|values             |
-+-------------------+
-|[12.5, 88.0, 240.0]|
-+-------------------+
++--------+
+|values  |
++--------+
+|[1894.0]|
+|NULL    |
++--------+
 """
 
 

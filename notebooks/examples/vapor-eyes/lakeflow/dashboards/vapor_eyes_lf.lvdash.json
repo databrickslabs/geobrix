@@ -69,6 +69,20 @@
       "queryLines": [
         "SELECT * FROM geospatial_docs.vapor_eyes_lf.plume_quant ORDER BY observation_date DESC "
       ]
+    },
+    {
+      "name": "ds_emissions_by_play",
+      "displayName": "Detections by Shale Play",
+      "queryLines": [
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.emissions_by_play"
+      ]
+    },
+    {
+      "name": "ds_detections_by_county",
+      "displayName": "Detections by County",
+      "queryLines": [
+        "SELECT * FROM geospatial_docs.vapor_eyes_lf.detections_by_county"
+      ]
     }
   ],
   "pages": [
@@ -1264,6 +1278,271 @@
           "position": {
             "x": 0,
             "y": 18,
+            "width": 6,
+            "height": 8
+          }
+        }
+      ]
+    },
+    {
+      "name": "page_regional_context",
+      "displayName": "Regional Context",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layout": [
+        {
+          "widget": {
+            "name": "p4_title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Regional Context"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4_subtitle",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Carbon Mapper plume detections rolled up to the Permian's named shale plays and to TX/NM counties — where the detections concentrate geographically."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 1,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4_attribution",
+            "multilineTextboxSpec": {
+              "lines": [
+                "Data © Carbon Mapper — public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4_play_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Leakiest Plays — Detections by Shale Play"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 3,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4_play_choropleth",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_emissions_by_play",
+                  "fields": [
+                    {
+                      "name": "geo(play_geom)",
+                      "expression": "ST_ASGEOJSON(`play_geom`)"
+                    },
+                    {
+                      "name": "plume_count",
+                      "expression": "`plume_count`"
+                    },
+                    {
+                      "name": "play_name",
+                      "expression": "`play_name`"
+                    },
+                    {
+                      "name": "mean_emission_kg_hr",
+                      "expression": "`mean_emission_kg_hr`"
+                    },
+                    {
+                      "name": "max_emission_kg_hr",
+                      "expression": "`max_emission_kg_hr`"
+                    },
+                    {
+                      "name": "active_operators",
+                      "expression": "`active_operators`"
+                    },
+                    {
+                      "name": "area_sq_km",
+                      "expression": "`area_sq_km`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "choropleth-map",
+              "encodings": {
+                "region": {
+                  "regionType": "custom",
+                  "fieldName": "geo(play_geom)"
+                },
+                "color": {
+                  "fieldName": "plume_count",
+                  "displayName": "Plume Detections",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "play_name",
+                    "displayName": "Play"
+                  },
+                  {
+                    "fieldName": "mean_emission_kg_hr",
+                    "displayName": "Mean Emission (kg/hr)"
+                  },
+                  {
+                    "fieldName": "max_emission_kg_hr",
+                    "displayName": "Max Emission (kg/hr)"
+                  },
+                  {
+                    "fieldName": "active_operators",
+                    "displayName": "Active Operators"
+                  },
+                  {
+                    "fieldName": "area_sq_km",
+                    "displayName": "Area (km²)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Detections by Shale Play"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "p4_county_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "### Leakiest Counties — Detections by County"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 12,
+            "width": 6,
+            "height": 1
+          }
+        },
+        {
+          "widget": {
+            "name": "p4_county_choropleth",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "ds_detections_by_county",
+                  "fields": [
+                    {
+                      "name": "geo(county_geom)",
+                      "expression": "ST_ASGEOJSON(`county_geom`)"
+                    },
+                    {
+                      "name": "plume_count",
+                      "expression": "`plume_count`"
+                    },
+                    {
+                      "name": "county_name",
+                      "expression": "`county_name`"
+                    },
+                    {
+                      "name": "state_fp",
+                      "expression": "`state_fp`"
+                    },
+                    {
+                      "name": "mean_emission_kg_hr",
+                      "expression": "`mean_emission_kg_hr`"
+                    },
+                    {
+                      "name": "max_emission_kg_hr",
+                      "expression": "`max_emission_kg_hr`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "widgetType": "choropleth-map",
+              "encodings": {
+                "region": {
+                  "regionType": "custom",
+                  "fieldName": "geo(county_geom)"
+                },
+                "color": {
+                  "fieldName": "plume_count",
+                  "displayName": "Plume Detections",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "county_name",
+                    "displayName": "County"
+                  },
+                  {
+                    "fieldName": "state_fp",
+                    "displayName": "State FIPS"
+                  },
+                  {
+                    "fieldName": "mean_emission_kg_hr",
+                    "displayName": "Mean Emission (kg/hr)"
+                  },
+                  {
+                    "fieldName": "max_emission_kg_hr",
+                    "displayName": "Max Emission (kg/hr)"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Detections by County"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
             "width": 6,
             "height": 8
           }

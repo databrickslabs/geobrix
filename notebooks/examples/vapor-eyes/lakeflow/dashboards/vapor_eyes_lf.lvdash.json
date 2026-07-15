@@ -98,7 +98,7 @@
             "name": "p1_subtitle",
             "multilineTextboxSpec": {
               "lines": [
-                "Live Carbon Mapper methane detections across the Permian Basin \u2014 current monitoring status and the operators with the most confirmed plume detections."
+                "Live Carbon Mapper methane detections across the Permian Basin — current monitoring status and the operators with the most confirmed plume detections."
               ]
             }
           },
@@ -114,7 +114,7 @@
             "name": "p1_attribution",
             "multilineTextboxSpec": {
               "lines": [
-                "Data \u00a9 Carbon Mapper \u2014 public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
+                "Data © Carbon Mapper — public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
               ]
             }
           },
@@ -154,7 +154,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Plumes Detected \u2014 Last 90 Days"
+                "title": "Plumes Detected — Last 90 Days"
               }
             }
           },
@@ -194,7 +194,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Active Operators \u2014 Last 90 Days"
+                "title": "Active Operators — Last 90 Days"
               }
             }
           },
@@ -274,7 +274,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Total Plumes \u2014 2024\u20132026"
+                "title": "Total Plumes — 2024+"
               }
             }
           },
@@ -290,7 +290,7 @@
             "name": "p1_leaderboard_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Leaderboard \u2014 Operators Ranked by Plume Detections"
+                "### Leaderboard — Operators Ranked by Plume Detections"
               ]
             }
           },
@@ -456,7 +456,7 @@
             "name": "p1_map_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Live Plume Map \u2014 Colored by Emission Rate (kg/hr)"
+                "### Live Plume Map — Colored by Emission Rate (kg/hr)"
               ]
             }
           },
@@ -542,7 +542,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Carbon Mapper Plumes \u2014 Emission Rate"
+                "title": "Carbon Mapper Plumes — Emission Rate"
               }
             }
           },
@@ -597,7 +597,7 @@
             "name": "p2_attribution",
             "multilineTextboxSpec": {
               "lines": [
-                "Data \u00a9 Carbon Mapper \u2014 public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
+                "Data © Carbon Mapper — public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
               ]
             }
           },
@@ -674,7 +674,7 @@
             "name": "p2_monthly_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Monthly Activity \u2014 Detections & Total Emission Rate"
+                "### Monthly Activity — Detections & Total Emission Rate"
               ]
             }
           },
@@ -806,7 +806,7 @@
             "name": "p2_regional_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Daily Regional CH4 \u2014 Max & 95th Percentile"
+                "### Daily Regional CH4 — Max & 95th Percentile"
               ]
             }
           },
@@ -986,7 +986,7 @@
               "encodings": {
                 "value": {
                   "fieldName": "max_concentration_ppmm",
-                  "displayName": "Max Concentration (ppm\u00b7m)"
+                  "displayName": "Max Concentration (ppm·m)"
                 }
               },
               "frame": {
@@ -1026,7 +1026,7 @@
               "encodings": {
                 "value": {
                   "fieldName": "aoi_area_km2",
-                  "displayName": "AOI Area (km\u00b2)"
+                  "displayName": "AOI Area (km²)"
                 }
               },
               "frame": {
@@ -1087,7 +1087,7 @@
             "name": "p3_hotspot_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Hotspot Cells \u2014 Latest Overpass (Peak CH4)"
+                "### Hotspot Cells — Latest Overpass (Peak CH4)"
               ]
             }
           },
@@ -1142,7 +1142,7 @@
                 },
                 "color": {
                   "fieldName": "ch4_max",
-                  "displayName": "Peak CH4 (ppm\u00b7m)",
+                  "displayName": "Peak CH4 (ppm·m)",
                   "scale": {
                     "type": "quantitative"
                   }
@@ -1180,7 +1180,7 @@
             "name": "p3_persistence_header",
             "multilineTextboxSpec": {
               "lines": [
-                "### Chronic Emitters \u2014 Persistence Ratio"
+                "### Chronic Emitters — Persistence Ratio"
               ]
             }
           },
@@ -1266,281 +1266,6 @@
             "y": 18,
             "width": 6,
             "height": 8
-          }
-        }
-      ]
-    },
-    {
-      "name": "page_plume_detail",
-      "displayName": "Plume Detail & Validation",
-      "pageType": "PAGE_TYPE_CANVAS",
-      "layout": [
-        {
-          "widget": {
-            "name": "p4_title",
-            "multilineTextboxSpec": {
-              "lines": [
-                "## Plume Detail & Validation"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 0,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_subtitle",
-            "multilineTextboxSpec": {
-              "lines": [
-                "Per-plume Carbon Mapper detail with operator attribution, cross-checked against an independent EMIT/GeoBrix concentration retrieval."
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 1,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_attribution",
-            "multilineTextboxSpec": {
-              "lines": [
-                "Data \u00a9 Carbon Mapper \u2014 public-good data; users bring their own API token. For commercial or low-latency use, contact Planet Labs."
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 2,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_cm_table_header",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### Carbon Mapper Plume Detail"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 3,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_cm_table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_cm_plumes",
-                  "fields": [
-                    {
-                      "name": "plume_id",
-                      "expression": "`plume_id`"
-                    },
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    },
-                    {
-                      "name": "lead_operator",
-                      "expression": "`lead_operator`"
-                    },
-                    {
-                      "name": "sector",
-                      "expression": "`sector`"
-                    },
-                    {
-                      "name": "emission_rate_kg_hr",
-                      "expression": "`emission_rate_kg_hr`"
-                    },
-                    {
-                      "name": "plume_quality",
-                      "expression": "`plume_quality`"
-                    },
-                    {
-                      "name": "lead_dist_m",
-                      "expression": "`lead_dist_m`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "plume_id",
-                    "displayName": "Plume ID"
-                  },
-                  {
-                    "fieldName": "observation_date",
-                    "displayName": "Observation Date"
-                  },
-                  {
-                    "fieldName": "lead_operator",
-                    "displayName": "Operator"
-                  },
-                  {
-                    "fieldName": "sector",
-                    "displayName": "Sector"
-                  },
-                  {
-                    "fieldName": "emission_rate_kg_hr",
-                    "displayName": "Emission Rate (kg/hr)"
-                  },
-                  {
-                    "fieldName": "plume_quality",
-                    "displayName": "Quality"
-                  },
-                  {
-                    "fieldName": "lead_dist_m",
-                    "displayName": "Distance to Well (m)"
-                  }
-                ]
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "Carbon Mapper Plumes \u2014 Attributed Detail"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 4,
-            "width": 6,
-            "height": 8
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_quant_header",
-            "multilineTextboxSpec": {
-              "lines": [
-                "### EMIT / GeoBrix Cross-Check (Independent Validation)"
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 12,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_quant_note",
-            "multilineTextboxSpec": {
-              "lines": [
-                "`plume_quant` cross-checks JPL EMIT `max_conc_ppmm` against GeoBrix's own `gbx_max_ppmm` / `gbx_mean_ppmm` raster-clip retrieval \u2014 an independent, second-instrument concentration read that corroborates the Carbon Mapper detections above."
-              ]
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 13,
-            "width": 6,
-            "height": 1
-          }
-        },
-        {
-          "widget": {
-            "name": "p4_plume_quant_table",
-            "queries": [
-              {
-                "name": "main_query",
-                "query": {
-                  "datasetName": "ds_plume_quant",
-                  "fields": [
-                    {
-                      "name": "plume_id",
-                      "expression": "`plume_id`"
-                    },
-                    {
-                      "name": "observation_date",
-                      "expression": "`observation_date`"
-                    },
-                    {
-                      "name": "max_conc_ppmm",
-                      "expression": "`max_conc_ppmm`"
-                    },
-                    {
-                      "name": "gbx_max_ppmm",
-                      "expression": "`gbx_max_ppmm`"
-                    },
-                    {
-                      "name": "gbx_mean_ppmm",
-                      "expression": "`gbx_mean_ppmm`"
-                    },
-                    {
-                      "name": "emission_rate_kg_hr",
-                      "expression": "`emission_rate_kg_hr`"
-                    }
-                  ],
-                  "disaggregated": true
-                }
-              }
-            ],
-            "spec": {
-              "version": 2,
-              "widgetType": "table",
-              "encodings": {
-                "columns": [
-                  {
-                    "fieldName": "plume_id",
-                    "displayName": "Plume ID"
-                  },
-                  {
-                    "fieldName": "observation_date",
-                    "displayName": "Observation Date"
-                  },
-                  {
-                    "fieldName": "max_conc_ppmm",
-                    "displayName": "EMIT Max Conc (ppm\u00b7m)"
-                  },
-                  {
-                    "fieldName": "gbx_max_ppmm",
-                    "displayName": "GeoBrix Max (ppm\u00b7m)"
-                  },
-                  {
-                    "fieldName": "gbx_mean_ppmm",
-                    "displayName": "GeoBrix Mean (ppm\u00b7m)"
-                  },
-                  {
-                    "fieldName": "emission_rate_kg_hr",
-                    "displayName": "JPL Emission Rate (kg/hr)"
-                  }
-                ]
-              },
-              "frame": {
-                "showTitle": true,
-                "title": "EMIT / GeoBrix Concentration Cross-Check"
-              }
-            }
-          },
-          "position": {
-            "x": 0,
-            "y": 14,
-            "width": 6,
-            "height": 6
           }
         }
       ]

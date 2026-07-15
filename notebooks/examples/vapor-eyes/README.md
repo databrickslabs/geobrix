@@ -10,6 +10,8 @@ The notebooks follow a detection cascade, each tier narrowing and sharpening the
 
 > _Note: the Sentinel-2 SWIR band-ratio (NB02) is an illustrative proxy, not an operational methane retrieval; EMIT (NB03) is the purpose-built methane instrument. Attribution (NB04) surfaces candidate wells near the plume origin — the definitive source among them depends on wind transport, not proximity alone._
 
+> **Looking for the production version?** [`lakeflow/`](lakeflow/README.md) packages this same idea as a standalone, production-grade Lakeflow Declarative Pipeline + AI/BI dashboard: incremental medallion tables on a schedule instead of one-off notebook outputs, and a fifth data source — Carbon Mapper Tanager — that makes it a *current* (through 2026) monitoring view rather than a single historical overpass. See [`lakeflow/README.md`](lakeflow/README.md).
+
 ---
 
 ## Notebooks at a glance
@@ -66,6 +68,7 @@ The notebooks follow a detection cascade, each tier narrowing and sharpening the
 | `03_emit_quantification.ipynb` | Stages EMIT L2B CH4 enhancement COG + plume-complex GeoJSON via `EmitDownloader`, reads the plume metadata (`emit_plumes`) with `geojson_gbx`, clips the enhancement raster to each plume (`gbx_rst_clip`) and summarizes it (`gbx_rst_summary`) into `plume_quant` — cross-checking GeoBrix's measured enhancement against JPL's reported max concentration. |
 | `04_well_attribution.ipynb` | Stages TX RRC `WellSHL` wells for the AOI via `WellsDownloader`, reads them (`geojson_gbx`, `wells_shl`), and ranks the K nearest candidate wells to each plume origin (`plume_candidate_wells`) with Databricks-native `st_distancesphere` — surfacing operator, lease and field. |
 | `05_portfolio_pmtiles.ipynb` | Assembles the cascade's hotspots, plumes and wells into three MVT layers, pyramids each with the `gbx_st_asmvt_pyramid` UDTF, and folds the whole pyramid into one shareable `vapor_eyes.pmtiles` archive with `gbx_pmtiles_agg`. |
+| [`lakeflow/`](lakeflow/README.md) | The production counterpart: a Databricks Asset Bundle running a Lakeflow Declarative Pipeline + AI/BI dashboard on a schedule, adding Carbon Mapper Tanager as a fifth, current-through-2026 data source. See [`lakeflow/README.md`](lakeflow/README.md). |
 
 ---
 

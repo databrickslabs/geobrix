@@ -1,0 +1,52 @@
+---
+sidebar_position: 5
+title: Vapor-Eyes Lakeflow — Permian Methane Monitoring
+---
+
+# Vapor-Eyes Lakeflow — Permian Methane Monitoring (SDP + AI/BI)
+
+A standalone, production-grade Permian Basin methane-monitoring pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), packaged as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running on the GeoBrix lightweight tier over Serverless compute.
+
+This is the production counterpart to the five-notebook [Vapor-Eyes methane-detection cascade](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes) — same Permian AOI and satellite sources, but running on a schedule with incremental medallion tables instead of one-off notebook outputs, and a fifth data source that makes it a *current* (through 2026) monitoring view rather than a single historical case study.
+
+:::tip View on GitHub
+**[notebooks/examples/vapor-eyes/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes/lakeflow)** — the bundle, pipeline transformations, dashboard, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes/lakeflow/README.md) for deploy/run steps, prerequisites, and good-citizen usage notes for Carbon Mapper.
+:::
+
+:::info Runs on the lightweight tier (Serverless)
+The pipeline and its `land` downloader task both install `geobrix[light,stac,vizx]` from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout (environment version 5). See [Execution Tiers](../api/execution-tiers).
+:::
+
+## Five data sources
+
+| Source | License | Role |
+|---|---|---|
+| Sentinel-5P TROPOMI | Copernicus, open | Regional CH4 screen (H3 hotspot surface) |
+| Sentinel-2 SWIR | Copernicus, open | Targeted band-ratio detection at the strongest hotspot |
+| EMIT | NASA LP DAAC, open (Earthdata token) | Spectral validation — GeoBrix `rst_clip`/`rst_summary` cross-check against JPL's reported concentration |
+| **Carbon Mapper Tanager** | Carbon Mapper, public-good (free token) | The authoritative **current**, quantified (`emission_rate_kg_hr`), wind-corrected plume layer |
+| TX RRC WellSHL | Public (ArcGIS REST) | Attribution — nearest-well / operator lookup |
+
+EMIT is a science mission on the ISS with sparse revisit and roughly a 10-month lag before plume products publish, so it validates historical detections rather than driving current status. Carbon Mapper is what keeps the pipeline current: it's the only source here with a wind-corrected emission rate, and it's what the headline leaderboard and monitoring-status panels are built on.
+
+## Medallion pipeline
+
+Auto Loader **bronze** metadata tables (one per source, with hoisted fields like `item_id`/`product_type`/`granule_id`) feed a **silver** cascade that is bi-temporal throughout (`observation_date` for the satellite/detection event, `_ingested_at` for processing time) and wired bronze → silver by table reference, not by re-scanning the Volume — so Lakeflow's lineage graph is real. Wells are tracked with SCD2 (`create_auto_cdc_flow`), and plume-to-well attribution is an as-of join against the well version valid at the plume's `observation_date`. **Gold** analytics roll this up into ranked, map-ready materialized views.
+
+## The leaderboard, done defensibly
+
+`operator_emissions_leaderboard` ranks operators by **number of high-confidence Carbon Mapper plume detections**, with mean/max per-detection emission rate (kg/hr) as the intensity columns — not a summed flow rate. A detection's `emission_rate_kg_hr` is an instantaneous rate at one overpass; summing it across a multi-year window would double-count repeat detections of the same source rather than describe a continuous flow, so the sum is retained only as a clearly-labeled secondary column, never used to rank.
+
+`cm_monitoring_status` and `cm_activity_monthly` give the "is anything active right now" read (last detection date, plumes in the trailing 90 days, active operators) and the month-by-month activity timeline. `hotspot_latest` and `hotspot_persistence` carry the Sentinel-5P side: a current regional CH4 screen and a chronic-vs-transient emitter view.
+
+## Dashboard
+
+Three pages, all built on AI/BI's native-geometry map widgets — H3 hexagon choropleths for the regional CH4 screen and a point map for Carbon Mapper detections colored by emission rate:
+
+1. **Current Status & Leakiest Operators** — monitoring-status KPIs, the operator leaderboard, and the Carbon Mapper point map with attribution.
+2. **Activity Over Time** — monthly Carbon Mapper activity and the regional CH4 trend, both scoped by a shared date-range filter.
+3. **Regional Screen (Sentinel-5P)** — the wide-area CH4 hotspot choropleth and the persistence choropleth.
+
+## Good-citizen use of Carbon Mapper
+
+Carbon Mapper's plume catalog is public-good data, and this example is built to use it responsibly: every user brings their own free token (BYOT — the pipeline is a client, not a redistributor), the dashboard shows a "Data © Carbon Mapper" attribution wherever Carbon Mapper data appears, and no Carbon Mapper data is ever committed to the repository — it's fetched at runtime straight to your own Unity Catalog Volume. This example is scoped for public-good analytics and demonstration; for commercial or low-latency operational use of Carbon Mapper/Tanager data, contact Planet Labs. See the [lakeflow README](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes/lakeflow/README.md#good-citizen-use--carbon-mapper) for the full terms-of-use notes and token setup.

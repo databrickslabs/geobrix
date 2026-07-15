@@ -29,6 +29,7 @@ const sidebars = {
         'notebooks/xview',
         'notebooks/h3-rasterize',
         'notebooks/helios',
+        'notebooks/vapor-eyes-lakeflow',
       ],
     },
     {

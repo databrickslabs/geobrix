@@ -2,6 +2,8 @@
 
 A standalone, production-grade **Permian Basin methane-monitoring pipeline**: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), built as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
+> **Requires GeoBrix 0.4.1+.** This example depends on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so the staged wheel (`gbx_wheel`) must be `geobrix-0.4.1-py3-none-any.whl` or newer, installed with the `[light,stac,vizx]` extras.
+
 This is not the notebook cascade documented in [`../README.md`](../README.md) — it's a different artifact with a different purpose. The notebook series is a five-step teaching walkthrough of one overpass. **This pipeline is the production shape**: it runs on a schedule, ingests incrementally across a multi-year date range, cascades bronze → silver → gold through a declared dependency graph with data-quality expectations, and serves a live dashboard off Delta tables instead of one-off notebook outputs. It also adds a fifth data source — Carbon Mapper Tanager — that the notebook cascade does not use, making it the *current* (through 2026) view of Permian methane activity rather than a single historical case study.
 
 ---

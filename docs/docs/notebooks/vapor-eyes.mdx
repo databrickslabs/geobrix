@@ -14,6 +14,10 @@ on Databricks. It comes in two flavors: a **production-ready Lakeflow pipeline**
 on a schedule to stay current, and an **interactive notebook series** that is more of a quick
 start for understanding the GeoBrix functions involved in the detection cascade.
 
+:::note Requires GeoBrix 0.4.1+
+Both flavors depend on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader (Sentinel-5P swath → points) and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so install `geobrix[light,stac,vizx]` **0.4.1 or newer**.
+:::
+
 <Tabs groupId="vapor-eyes-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP + AI/BI Maps" default>
 

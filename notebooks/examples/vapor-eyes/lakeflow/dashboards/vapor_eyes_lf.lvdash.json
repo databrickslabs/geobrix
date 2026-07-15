@@ -1138,10 +1138,7 @@
               "encodings": {
                 "region": {
                   "regionType": "custom",
-                  "fieldName": "hex_geom"
-                },
-                "geometry": {
-                  "fieldName": "hex_geom"
+                  "fieldName": "geo(hex_geom)"
                 },
                 "color": {
                   "fieldName": "ch4_max",
@@ -1234,10 +1231,7 @@
               "encodings": {
                 "region": {
                   "regionType": "custom",
-                  "fieldName": "hex_geom"
-                },
-                "geometry": {
-                  "fieldName": "hex_geom"
+                  "fieldName": "geo(hex_geom)"
                 },
                 "color": {
                   "fieldName": "persistence_ratio",

@@ -85,7 +85,7 @@ def test_rows_to_dataframe_schema_and_where(spark):
 
 def test_build_bench_notebook_cells():
     cfg = dict(
-        wheel="/Volumes/c/s/v/geobrix-0.4.0-py3-none-any.whl",
+        wheel="/Volumes/c/s/v/geobrix-0.4.1-py3-none-any.whl",
         corpus="/Volumes/c/s/v/bench-corpus",
         out_dir="/Volumes/c/s/v/bench-out/run1",
         table="main.default.bench_results",
@@ -100,7 +100,7 @@ def test_build_bench_notebook_cells():
     )
     nb = cl.build_bench_notebook(cfg)
     src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    assert "geobrix-0.4.0-py3-none-any.whl[light]" in src
+    assert "geobrix-0.4.1-py3-none-any.whl[light]" in src
     assert "restartPython" in src
     assert "HeavyBenchMain" in src and "_jvm" in src
     assert "run_spark_path" in src or "run_pure_core" in src
@@ -155,7 +155,7 @@ def test_build_bench_notebook_heavyweight_only_omits_lightweight():
 
 def _cfg(**kw):
     base = dict(
-        wheel="/Volumes/c/s/v/geobrix-0.4.0-py3-none-any.whl",
+        wheel="/Volumes/c/s/v/geobrix-0.4.1-py3-none-any.whl",
         corpus="/Volumes/c/s/v/bench-corpus",
         out_dir="/Volumes/c/s/v/bench-out/run1",
         table="main.default.bench_results",

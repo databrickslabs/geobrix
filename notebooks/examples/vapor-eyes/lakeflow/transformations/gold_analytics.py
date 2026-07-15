@@ -514,3 +514,48 @@ def cm_activity_monthly():
         )
         .orderBy("month")
     )
+
+
+@dp.materialized_view(
+    name="emissions_by_play",
+    comment="Carbon Mapper plume detections rolled up to EIA shale plays (map-ready)",
+)
+def emissions_by_play():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    plumes = spark.read.table("cm_plume_attributed").select(
+        "plume_id", "emission_rate_kg_hr", "lead_operator",
+        F.expr("st_setsrid(st_point(lon, lat), 4326)").alias("pt"),
+    )
+    plays = spark.read.table("ref_shale_plays")
+    joined = plays.join(
+        plumes, F.expr("st_contains(play_geom, pt)"), "left"
+    )
+    return joined.groupBy("play_name", "play_geom").agg(
+        F.count("plume_id").alias("plume_count"),
+        F.avg("emission_rate_kg_hr").alias("mean_emission_kg_hr"),
+        F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
+        F.countDistinct("lead_operator").alias("active_operators"),
+    )
+
+
+@dp.materialized_view(
+    name="detections_by_county",
+    comment="Carbon Mapper plume detections rolled up to TX/NM counties (map-ready)",
+)
+def detections_by_county():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+    plumes = spark.read.table("cm_plume_attributed").select(
+        "plume_id", "emission_rate_kg_hr",
+        F.expr("st_setsrid(st_point(lon, lat), 4326)").alias("pt"),
+    )
+    counties = spark.read.table("ref_counties")
+    joined = counties.join(
+        plumes, F.expr("st_contains(county_geom, pt)"), "left"
+    )
+    return joined.groupBy("county_name", "state_fp", "geoid", "county_geom").agg(
+        F.count("plume_id").alias("plume_count"),
+        F.avg("emission_rate_kg_hr").alias("mean_emission_kg_hr"),
+        F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
+    )

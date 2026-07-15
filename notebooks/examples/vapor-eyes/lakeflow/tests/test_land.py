@@ -265,3 +265,18 @@ def test_land_context_guarded_on_download_error(tmp_path, monkeypatch):
     monkeypatch.setattr(L, "_http_get_to_file", boom)
     n = L._land_context(str(tmp_path))
     assert n == 0
+
+
+def test_land_context_partial_failure_still_lands_other(tmp_path, monkeypatch):
+    """The two sources are guarded INDEPENDENTLY: one failing must not stop the
+    other from being attempted. EIA down + TIGER up -> exactly one file lands."""
+    import land.land as L
+
+    def selective(url, dst, timeout=180):
+        if "arcgis" in url:            # EIA plays -> fail
+            raise RuntimeError("EIA down")
+        open(dst, "wb").close()        # TIGER counties -> succeed
+
+    monkeypatch.setattr(L, "_http_get_to_file", selective)
+    n = L._land_context(str(tmp_path))
+    assert n == 1

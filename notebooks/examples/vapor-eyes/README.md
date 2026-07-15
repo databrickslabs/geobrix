@@ -1,5 +1,12 @@
 # Vapor-Eyes — Methane Detection Cascade
 
+> ## 🏭 Two ways to run Vapor-Eyes
+> **This directory is the notebook series** — an interactive, historical case study you step through cell by cell.
+>
+> **For the production example, see [`lakeflow/`](lakeflow/README.md).** It packages the same Permian methane idea as a standalone, production-grade [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) + [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), shipped as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/): incremental medallion tables on a schedule instead of one-off notebook outputs, and a fifth source — Carbon Mapper Tanager — that makes it a *current* (through 2026) monitoring view rather than a single historical overpass.
+>
+> **→ [Lakeflow SDP + AI/BI example](lakeflow/README.md)**
+
 A five-notebook series that takes one Permian (Delaware Basin) bounding box and works a satellite methane signal from a wide-area screen down to a named operator's candidate well pads — then packages the whole result as a shareable [PMTiles](https://protomaps.com/docs/pmtiles) map, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks.
 
 The notebooks follow a detection cascade, each tier narrowing and sharpening the last: **screen** the region with Sentinel-5P TROPOMI methane (NB01), **detect** a plume at the strongest hotspot with Sentinel-2 20 m SWIR (NB02), **quantify** it with EMIT 60 m imaging spectroscopy (NB03), **attribute** the plume origin to nearby Texas Railroad Commission wells and their operators (NB04), and **synthesize** the cascade into one self-contained vector PMTiles portfolio (NB05). Each step composes GeoBrix functions with Databricks-native `st_*` / `h3_*` spatial SQL.
@@ -9,8 +16,6 @@ The notebooks follow a detection cascade, each tier narrowing and sharpening the
 > **Data sources.** Sentinel-5P L2 CH4 (NB01, via `TropomiDownloader`) and Sentinel-2 L2A SWIR (NB02, via `StacClient`) are retrieved from the Microsoft Planetary Computer STAC API. EMIT L2B CH4 enhancement + plume-complex products (NB03, via `EmitDownloader`) come from the NASA LP DAAC through `earthaccess` and **require an Earthdata Login token** (a Unity Catalog secret; see Prerequisites). TX RRC well surface-hole locations (NB04, via `WellsDownloader`) come from the open TX RRC `WellSHL` ArcGIS REST service (no auth). All downloaders live in `databricks.labs.gbx.sample` and stage idempotently to the Volume, so a re-run skips already-valid files.
 
 > _Note: the Sentinel-2 SWIR band-ratio (NB02) is an illustrative proxy, not an operational methane retrieval; EMIT (NB03) is the purpose-built methane instrument. Attribution (NB04) surfaces candidate wells near the plume origin — the definitive source among them depends on wind transport, not proximity alone._
-
-> **Looking for the production version?** [`lakeflow/`](lakeflow/README.md) packages this same idea as a standalone, production-grade Lakeflow Declarative Pipeline + AI/BI dashboard: incremental medallion tables on a schedule instead of one-off notebook outputs, and a fifth data source — Carbon Mapper Tanager — that makes it a *current* (through 2026) monitoring view rather than a single historical overpass. See [`lakeflow/README.md`](lakeflow/README.md).
 
 ---
 

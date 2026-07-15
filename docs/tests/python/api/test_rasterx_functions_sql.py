@@ -549,7 +549,7 @@ def test_rst_color_relief_sql_example(spark, rasters_view, tmp_path):
     ("rst_fillnodata_sql_example",
      "SELECT gbx_rst_fillnodata(tile, 100.0, 0) AS filled FROM rasters"),
     ("rst_sample_sql_example",
-     "SELECT gbx_rst_sample(tile, 'POINT(-0.13 51.5)') AS vals FROM rasters"),
+     "SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS vals FROM rasters"),
     ("rst_setsrid_sql_example",
      "SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters"),
     ("rst_histogram_sql_example",

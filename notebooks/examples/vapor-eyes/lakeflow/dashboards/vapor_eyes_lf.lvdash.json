@@ -1108,8 +1108,8 @@
                   "datasetName": "ds_hotspot_latest",
                   "fields": [
                     {
-                      "name": "hex_geom",
-                      "expression": "`hex_geom`"
+                      "name": "geo(hex_geom)",
+                      "expression": "ST_ASGEOJSON(`hex_geom`)"
                     },
                     {
                       "name": "ch4_max",
@@ -1201,8 +1201,8 @@
                   "datasetName": "ds_hotspot_persistence",
                   "fields": [
                     {
-                      "name": "hex_geom",
-                      "expression": "`hex_geom`"
+                      "name": "geo(hex_geom)",
+                      "expression": "ST_ASGEOJSON(`hex_geom`)"
                     },
                     {
                       "name": "persistence_ratio",

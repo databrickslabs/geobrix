@@ -106,6 +106,113 @@ def _render_cog(
     return ax
 
 
+def plot_tile(
+    tile,
+    *,
+    band=1,
+    window_bounds=None,
+    mask_below=None,
+    mask_below_percentile=None,
+    stretch=(2, 98),
+    cmap="inferno",
+    colorbar_label=None,
+    basemap=True,
+    basemap_source=None,
+    title=None,
+    fig_w=10,
+    fig_h=9,
+    ax=None,
+):
+    """Drape a single raster-tile band over a contextily basemap (static figure).
+
+    The in-memory companion to :func:`plot_cog`: takes a GeoBrix tile struct (a
+    Row/dict with a ``raster`` GeoTIFF ``bytes`` member) or raw ``bytes`` rather
+    than a file path. Reads ``band`` (1-based), optionally windowed to
+    ``window_bounds`` ``(minx, miny, maxx, maxy)`` in the tile's own CRS for a
+    zoomed-in view; and masks the background so the basemap shows through and the
+    signal glows in place — pass ``mask_below`` (an absolute value, robust across
+    zoom levels) or ``mask_below_percentile`` (a percentile of the window). The
+    contrast ``stretch`` percentile pair is computed on the VISIBLE (post-mask)
+    values so the signal keeps its contrast at any zoom. A labeled colorbar is
+    drawn when ``colorbar_label`` is given. The basemap is rendered in the tile's
+    CRS; any fetch failure (no egress) degrades to a warning and a basemap-less
+    render. Requires the [vizx] extra plus rasterio. Returns the matplotlib Axes.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import array_bounds
+    from rasterio.windows import from_bounds
+
+    from databricks.labs.gbx.vizx._env import assert_viz_available
+
+    assert_viz_available()
+    raw = tile if isinstance(tile, (bytes, bytearray)) else tile["raster"]
+    with MemoryFile(bytes(raw)) as mf, mf.open() as ds:
+        crs = ds.crs
+        if window_bounds is not None:
+            win = from_bounds(*window_bounds, ds.transform)
+            # boundless: return the FULL requested window (pixels outside the raster
+            # masked) so arr matches window_transform(win). A plain read clips the
+            # array to the raster overlap while the transform stays full-window,
+            # which misplaces the data into a corner when the window extends past
+            # the scene (e.g. a plume near the scene edge).
+            arr = ds.read(band, window=win, masked=True, boundless=True)
+            wt = ds.window_transform(win)
+        else:
+            arr = ds.read(band, masked=True)
+            wt = ds.transform
+    left, bottom, right, top = array_bounds(arr.shape[0], arr.shape[1], wt)
+
+    valid = arr.compressed() if np.ma.isMaskedArray(arr) else arr[np.isfinite(arr)]
+    shown = arr
+    alpha = 1.0
+    thr = None
+    if mask_below is not None:
+        thr = float(mask_below)
+    elif mask_below_percentile is not None:
+        thr = float(np.percentile(valid, mask_below_percentile))
+    if thr is not None:
+        shown = np.ma.masked_less(arr, thr)
+        alpha = 0.85  # let the basemap read through around the masked signal
+    # stretch over the VISIBLE values so the signal keeps contrast at any zoom
+    basis = shown.compressed() if np.ma.isMaskedArray(shown) else valid
+    basis = basis if basis.size else valid
+    lo, hi = (float(x) for x in np.percentile(basis, list(stretch)))
+
+    owns_fig = ax is None
+    if owns_fig:
+        _, ax = plt.subplots(1, figsize=(fig_w, fig_h))
+    im = ax.imshow(
+        shown,
+        cmap=cmap,
+        extent=(left, right, bottom, top),
+        vmin=lo,
+        vmax=hi,
+        alpha=alpha,
+        zorder=2,
+    )
+    ax.set_xlim(left, right)
+    ax.set_ylim(bottom, top)
+    if basemap and crs is not None:
+        try:
+            import contextily as cx
+
+            source = basemap_source or cx.providers.CartoDB.Positron
+            cx.add_basemap(ax, source=source, crs=crs, zorder=1)
+        except Exception as exc:  # noqa: BLE001 — offline/no-egress -> warn + skip
+            warnings.warn(
+                f"plot_tile: basemap unavailable ({type(exc).__name__}: {exc}); "
+                "rendering without basemap.",
+                stacklevel=2,
+            )
+    if colorbar_label:
+        ax.figure.colorbar(im, ax=ax, shrink=0.82).set_label(colorbar_label)
+    if title:
+        ax.set_title(title)
+    return ax
+
+
 def plot_cog(
     path,
     *,

@@ -49,3 +49,7 @@ __pycache__/
 /input/
 .venv-pyrx/
 test-logs/bench/
+
+# Lakeflow DAB local override files (real per-workspace values; template committed as *.override.yml.example)
+*.override.yml
+.databricks/

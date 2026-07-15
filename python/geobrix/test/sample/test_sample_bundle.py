@@ -36,11 +36,17 @@ def test_sample_package_all():
     assert hasattr(sample, "run_complete_bundle")
     assert set(sample.__all__) == {
         "DemDownloader",
+        "EmitDownloader",
         "NaipDownloader",
         "OvertureClient",
+        "TropomiDownloader",
+        "WellsDownloader",
         "download_dem_aoi",
+        "download_emit_aoi",
         "download_naip_aoi",
         "download_overture_aoi",
+        "download_tropomi_aoi",
+        "download_wells_aoi",
         "get_temp_dir",
         "get_volumes_path",
         "run_complete_bundle",

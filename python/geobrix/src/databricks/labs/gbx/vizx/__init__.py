@@ -8,7 +8,7 @@ GeoDataFrame adapters (as_gdf / cells_as_gdf), layer constructors
 with ``pip install 'geobrix[vizx]'``.
 """
 
-from databricks.labs.gbx.vizx._cog import plot_cog
+from databricks.labs.gbx.vizx._cog import plot_cog, plot_tile
 from databricks.labs.gbx.vizx._interactive import plot_interactive
 from databricks.labs.gbx.vizx._layers import (
     grid_layer,
@@ -48,6 +48,7 @@ __all__ = [
     "plot_interactive_dynamic",
     "plot_pmtiles",
     "plot_cog",
+    "plot_tile",
     "as_gdf",
     "cells_as_gdf",
     "grid_as_gdf",

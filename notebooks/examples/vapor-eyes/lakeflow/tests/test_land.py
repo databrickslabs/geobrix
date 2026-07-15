@@ -236,3 +236,32 @@ def test_run_land_emit_continues_when_secret_absent(monkeypatch):
     assert sample.EmitDownloader.return_value.download.called
     assert "EARTHDATA_TOKEN" not in __import__("os").environ
     assert out["emit"] == 0
+
+
+def test_subtree_includes_context():
+    from land.land import _subtree
+    dirs = _subtree("cat", "sch", "vol")
+    assert dirs["context"].endswith("/vapor-eyes-lf/context")
+
+
+def test_eia_plays_url_is_permian_geojson():
+    from land.land import _EIA_PLAYS_URL
+    assert _EIA_PLAYS_URL.startswith("https://hub.arcgis.com/api/download/v1/items/")
+    assert "geojson" in _EIA_PLAYS_URL
+
+
+def test_tiger_counties_url():
+    from land.land import _TIGER_COUNTIES_URL
+    assert _TIGER_COUNTIES_URL == (
+        "https://www2.census.gov/geo/tiger/GENZ2024/shp/cb_2024_us_county_500k.zip"
+    )
+
+
+def test_land_context_guarded_on_download_error(tmp_path, monkeypatch):
+    """A download failure must not raise — it logs and returns 0."""
+    import land.land as L
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+    monkeypatch.setattr(L, "_http_get_to_file", boom)
+    n = L._land_context(str(tmp_path))
+    assert n == 0

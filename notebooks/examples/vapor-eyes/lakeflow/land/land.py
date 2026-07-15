@@ -24,6 +24,7 @@ def _subtree(catalog, schema, volume):
     return {
         "root": root, "s5p": f"{root}/s5p", "s2": f"{root}/sentinel2",
         "emit": f"{root}/emit", "wells": f"{root}/wells", "cm": f"{root}/cm",
+        "context": f"{root}/context",
     }
 
 

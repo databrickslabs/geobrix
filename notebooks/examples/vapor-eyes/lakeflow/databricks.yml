@@ -101,7 +101,7 @@ resources:
           spark_python_task:
             python_file: ./land/land.py
             parameters:
-              ["--sources", "s5p,emit,wells,s2,cm", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}", "--cm-window", "${var.cm_window}", "--cm-secret", "${var.cm_secret}"]
+              ["--sources", "s5p,emit,wells,s2,cm,context", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}", "--cm-window", "${var.cm_window}", "--cm-secret", "${var.cm_secret}"]
           environment_key: land_env
         - task_key: pipeline
           depends_on: [{task_key: land}]
@@ -121,8 +121,8 @@ resources:
         pause_status: PAUSED
 
 targets:
+  # No `mode: development` on purpose: dev mode force-prefixes every resource with
+  # "[dev <user>]" and ignores an empty name_prefix override, which we don't want for
+  # a demo/showcase. Omitting mode deploys with clean, unprefixed resource names.
   dev:
-    mode: development
     default: true
-    presets:
-      name_prefix: ""

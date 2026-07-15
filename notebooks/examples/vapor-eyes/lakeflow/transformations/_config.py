@@ -40,6 +40,7 @@ def paths(spark):
         "emit": f"{root}/emit",
         "wells": f"{root}/wells",
         "cm": f"{root}/cm",
+        "context": f"{root}/context",
         "tiles": f"{root}/tiles",
         "schema_loc": f"{root}/_schema",     # Auto Loader schema locations
     }

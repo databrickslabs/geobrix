@@ -164,7 +164,7 @@ def hotspot_latest():
         "hotspot_rank",
         F.expr("st_x(st_geomfromwkb(geom_wkb))").alias("center_lon"),
         F.expr("st_y(st_geomfromwkb(geom_wkb))").alias("center_lat"),
-        F.expr("st_setsrid(st_geomfromwkb(h3_boundaryaswkb(h3_cellid)), 4326)").alias("hex_geom"),
+        F.expr("st_geomfromwkb(h3_boundaryaswkb(h3_cellid), 4326)").alias("hex_geom"),
     )
 
 
@@ -276,7 +276,7 @@ def hotspot_persistence():
         )
         .withColumn("center_lon", F.expr("st_x(st_geomfromwkb(_geom_wkb))"))
         .withColumn("center_lat", F.expr("st_y(st_geomfromwkb(_geom_wkb))"))
-        .withColumn("hex_geom", F.expr("st_setsrid(st_geomfromwkb(h3_boundaryaswkb(h3_cellid)), 4326)"))
+        .withColumn("hex_geom", F.expr("st_geomfromwkb(h3_boundaryaswkb(h3_cellid), 4326)"))
         .drop("_geom_wkb")
         .select(
             "h3_cellid", "dates_observed", "dates_elevated", "persistence_ratio",

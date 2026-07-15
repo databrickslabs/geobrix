@@ -5,11 +5,22 @@ title: Beta Release Notes
 
 # Beta Release Notes
 
-:::info Current version: 0.4.0
+:::info Current version: 0.4.1
 The changes on this page are relative to 0.1.0 (and earlier).
 :::
 
 This page tracks **API and naming changes** since the GeoBrix project started. After the project is approved, formal release notes will take over; until then, use this as the single place to look up what changed and why.
+
+---
+
+## What's new in v0.4.1
+
+In-flight beta release. Adds the satellite-data readers and clients for atmospheric/methane workflows and a full worked example, on top of the v0.4.0 lightweight tier.
+
+- **`netcdf_gbx` reader.** A net-new lightweight vector DataSource that transcodes a netCDF-4 swath (e.g. a Sentinel-5P TROPOMI L2 granule) directly to one point per ground pixel — no regridding, with science/quality variables (e.g. `qa_value`) passed through untouched — so H3 binning or quality filtering runs on the native per-pixel measurements. Registered via `databricks.labs.gbx.ds`. See [netCDF Reader](./readers/netcdf).
+- **Earthdata client (`databricks.labs.gbx.earthdata`).** A NASA Earthdata Login token client for authenticated access to LP DAAC products (used by the EMIT downloader). See [Sample Data](./sample-data/overview).
+- **Methane-source sample downloaders (`databricks.labs.gbx.sample`).** Three new AOI-driven, Serverless-safe stagers alongside the v0.4.0 Overture/NAIP/3DEP helpers, sharing the same discover → download → read shape: `TropomiDownloader` (Sentinel-5P TROPOMI L2 CH₄, via Planetary Computer), `EmitDownloader` (EMIT L2B CH₄ enhancement + plume-complex products from NASA LP DAAC, Earthdata-authenticated), and `WellsDownloader` (Texas Railroad Commission WellSHL surface-hole locations). See [Sample Data](./sample-data/overview).
+- **Vapor-Eyes — Permian methane monitoring example.** A new end-to-end example in two flavors. An interactive **five-notebook detection cascade** — screen with Sentinel-5P, detect at the strongest hotspot with Sentinel-2 SWIR, quantify with EMIT, attribute to Texas Railroad Commission operator well pads, and synthesize a shareable PMTiles portfolio. And a production **Lakeflow Declarative Pipeline + AI/BI dashboard** — a bi-temporal bronze→silver→gold medallion with SCD2 wells and as-of operator attribution, a *current* (through 2026) Carbon Mapper rated-plume layer, a defensible "leakiest operators" leaderboard (ranked by detection count + mean/max emission rate, not summed flow), a four-page native-geometry map dashboard (H3 hotspot and play/county rollup choropleths plus a Carbon Mapper point map), Permian context geometries (EIA shale plays + Census TIGER counties), and a sharded PMTiles portfolio for a custom app. Both flavors run on the lightweight tier over Serverless. See [Vapor-Eyes](./notebooks/vapor-eyes).
 
 ---
 

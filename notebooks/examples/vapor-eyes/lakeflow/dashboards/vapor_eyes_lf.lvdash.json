@@ -274,7 +274,7 @@
               },
               "frame": {
                 "showTitle": true,
-                "title": "Total Plumes \u2014 All Time"
+                "title": "Total Plumes \u2014 2024\u20132026"
               }
             }
           },
@@ -1140,6 +1140,9 @@
                   "regionType": "custom",
                   "fieldName": "hex_geom"
                 },
+                "geometry": {
+                  "fieldName": "hex_geom"
+                },
                 "color": {
                   "fieldName": "ch4_max",
                   "displayName": "Peak CH4 (ppm\u00b7m)",
@@ -1231,6 +1234,9 @@
               "encodings": {
                 "region": {
                   "regionType": "custom",
+                  "fieldName": "hex_geom"
+                },
+                "geometry": {
                   "fieldName": "hex_geom"
                 },
                 "color": {

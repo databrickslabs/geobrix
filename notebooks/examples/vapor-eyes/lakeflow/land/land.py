@@ -107,8 +107,59 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
             print(f"... WARNING: no Carbon Mapper token from '{cm_secret}'; "
                   f"skipping CM source (other sources unaffected)")
             staged["cm"] = 0
+    if "context" in sources:
+        staged["context"] = _land_context(dirs["context"])
+        _list_dir(dirs["context"], "context")
     print(f"... landed: {staged}")
     return staged
+
+
+_EIA_PLAYS_URL = (
+    "https://hub.arcgis.com/api/download/v1/items/"
+    "3f001fba00dc4add8dbd00542d61e4da/geojson?redirect=true&layers=0"
+)
+_TIGER_COUNTIES_URL = (
+    "https://www2.census.gov/geo/tiger/GENZ2024/shp/cb_2024_us_county_500k.zip"
+)
+
+
+def _http_get_to_file(url, dst, timeout=180):
+    """Stream an HTTP GET to a local/Volume file path. Raises on non-200."""
+    import requests
+    resp = requests.get(url, timeout=timeout, stream=True)
+    resp.raise_for_status()
+    with open(dst, "wb") as fh:
+        for chunk in resp.iter_content(chunk_size=1 << 20):
+            if chunk:
+                fh.write(chunk)
+
+
+def _land_context(context_dir):
+    """Download the two static Permian context geometry sources into
+    context_dir/{plays,counties}. Returns the number of files landed.
+
+    Guarded: any download failure logs a WARNING and is skipped — context is
+    additive, so a failure must not abort the (already-valuable) core demo."""
+    landed = 0
+    plays_dir = os.path.join(context_dir, "plays")
+    counties_dir = os.path.join(context_dir, "counties")
+    os.makedirs(plays_dir, exist_ok=True)
+    os.makedirs(counties_dir, exist_ok=True)
+    try:
+        dst = os.path.join(plays_dir, "plays.geojson")
+        _http_get_to_file(_EIA_PLAYS_URL, dst)
+        print(f"... context: EIA plays -> {dst}")
+        landed += 1
+    except Exception as e:  # noqa: BLE001 - guarded, additive source
+        print(f"... WARNING: EIA plays download failed ({e}); skipping")
+    try:
+        dst = os.path.join(counties_dir, "cb_2024_us_county_500k.zip")
+        _http_get_to_file(_TIGER_COUNTIES_URL, dst)
+        print(f"... context: TIGER counties -> {dst}")
+        landed += 1
+    except Exception as e:  # noqa: BLE001 - guarded, additive source
+        print(f"... WARNING: TIGER counties download failed ({e}); skipping")
+    return landed
 
 
 def _land_cm(cm_dir, bbox, cm_window, token):

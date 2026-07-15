@@ -6,6 +6,22 @@ This is not the notebook cascade documented in [`../README.md`](../README.md) �
 
 ---
 
+## How it works: from a raw satellite signal to a leaderboard
+
+![Vapor-Eyes Lakeflow pipeline — five raw sources land on a Volume, become bronze inventory, cascade through silver detection and attribution into gold ranked map-ready tables, and serve an AI/BI dashboard plus a shareable PMTiles map](../../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-flow.png)
+
+Every scheduled run turns raw satellite files into one ranked, map-ready answer — *who is leaking methane in the Permian, and where* — by moving the data through five stages:
+
+1. **Land.** A downloader task pulls the period's satellite scenes, plume catalogs, and well records onto a Unity Catalog Volume. Nothing is interpreted yet — it just arrives.
+2. **Bronze — what landed.** Auto Loader records one row per file as it appears, lifting the dates and IDs out of each filename. Bronze is the pipeline's memory of *what it has already seen*, so re-runs pick up only new data.
+3. **Silver — the detective work.** Raw pixels become findings: Sentinel-5P screens the whole basin for CH₄ hotspots, Sentinel-2 and EMIT sharpen and quantify a plume, Carbon Mapper contributes current wind-corrected detections, and each plume is tied to the operator whose well was valid *on the day it was seen* (wells are version-tracked, so attribution doesn't drift as ownership changes).
+4. **Gold — the answer, ranked and map-ready.** Silver findings roll up into the tables the dashboard reads directly: the leakiest-operators leaderboard, the "is anything active now" monitoring panel, the regional CH₄ hotspot surface, and by-play / by-county rollups — every geometry tagged so a map widget can draw it.
+5. **Serve.** Gold feeds the four-page AI/BI dashboard; a parallel branch folds the same findings into a self-contained PMTiles map you can hand to anyone or drop into an app.
+
+Each stage reads only the one before it — declared as table-to-table dependencies, not re-scans of the Volume — so Lakeflow builds the lineage graph for you, runs the stages in the right order, and recomputes only what changed. The sections below are the precise version of this same story.
+
+---
+
 ## Architecture
 
 ```
@@ -47,33 +63,45 @@ databricks bundle  →  vapor_eyes_lf_job
 - **`cm_monitoring_status`** — single-row current-status panel: `last_detection_date`, `days_since_last_detection`, `plumes_last_90d`, `active_operators_last_90d`, `total_plumes_all_time` — the "is anything active right now" read.
 - **`cm_activity_monthly`** — per-month plume count / emission-rate / active-operator counts — the activity timeline.
 - **`hotspot_latest`** / **`hotspot_persistence`** — S5P H3 hexagon choropleths: the current regional CH4 screen, and a persistence view distinguishing chronic emitters (elevated on most overpasses) from transient ones.
-- **`plume_leaderboard_latest`**, **`operator_intensity_latest`**, **`field_county_intensity_latest`**, **`aoi_kpis_latest`**, **`regional_ch4_trend_daily`**, **`plume_detection_timeline`**, **`hotspot_trend`** — supporting concentration-framed views feeding the S5P/EMIT side of the dashboard.
+- **`aoi_kpis_latest`** / **`regional_ch4_trend_daily`** — the Regional Screen KPI tiles and the daily basin-wide CH4 trend line. **`plume_quant`** carries the EMIT-quantified per-plume concentration cross-check.
+- **`emissions_by_play`** / **`detections_by_county`** — Carbon Mapper detections rolled up to the EIA shale plays and TX/NM counties (the Regional Context choropleths).
 
 All map-facing columns are native `GEOMETRY` (tagged `SRID 4326`) or plain lon/lat doubles — AI/BI cannot render raw WKB or H3 cell IDs directly.
+
+### Ad-hoc analytics you can query
+
+Four more gold materialized views are built every run but are **not wired to the dashboard** — they're the EMIT + Sentinel-5P "historical validation & intensity" lens (the dashboard headlines the *current* Carbon Mapper layer). Query them directly in the SQL editor or a notebook:
+
+| Materialized view | What it gives you | Example |
+|---|---|---|
+| `operator_intensity_latest` | Operators ranked by EMIT-measured peak **concentration** (ppm·m) + candidate well count — a concentration lens complementing the detection-count leaderboard | `SELECT * FROM operator_intensity_latest ORDER BY max_peak_ppmm DESC` |
+| `field_county_intensity_latest` | Plume count + peak concentration per **oil-&-gas field** and county — finer than the play/county choropleths | `SELECT * FROM field_county_intensity_latest ORDER BY plume_count DESC` |
+| `plume_detection_timeline` | EMIT plume count + peak concentration **per overpass date** — the validation-era activity timeline | `SELECT * FROM plume_detection_timeline ORDER BY observation_date` |
+| `hotspot_trend` | The **full temporal** S5P hotspot surface (every overpass, per H3 cell + center lon/lat), vs. `hotspot_latest`/`hotspot_persistence` which are latest-only / chronic-ratio | `SELECT observation_date, count(*) cells, max(ch4_max) peak FROM hotspot_trend GROUP BY observation_date ORDER BY observation_date` |
 
 ---
 
 ## Dashboard
 
-`dashboards/vapor_eyes_lf.lvdash.json` — three pages, each backed by the gold MVs above, using AI/BI's native-geometry map widgets (H3 hexagon choropleths for the regional screen, a point map for Carbon Mapper detections).
+`dashboards/vapor_eyes_lf.lvdash.json` — four pages, each backed by the gold MVs above, using AI/BI's native-geometry map widgets (H3 hexagon choropleths for the regional screen, region choropleths for the play/county rollups, and a point map for Carbon Mapper detections).
 
 ### Current Status & Leakiest Operators
 
 KPI tiles from `cm_monitoring_status` (plumes in the last 90 days, active operators, days since last detection, all-time plume count), the `operator_emissions_leaderboard` table and bar chart, and a Carbon Mapper point map (`cm_plume_attributed`, colored by emission rate) with the required attribution note.
 
-![Current Status & Leakiest Operators](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-current-status.png)
+![Current Status & Leakiest Operators](../../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-current-status.png)
 
 ### Activity Over Time
 
 `cm_activity_monthly` bar/line combo (plume count + emission rate by month) and the `regional_ch4_trend_daily` regional CH4 trend line, scoped by a shared date-range filter.
 
-![Activity Over Time](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-activity.png)
+![Activity Over Time](../../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-activity.png)
 
 ### Regional Screen (Sentinel-5P)
 
 `aoi_kpis_latest` KPI tiles plus the `hotspot_latest` and `hotspot_persistence` H3 hexagon choropleths — the wide-area CH4 screen and chronic-vs-transient emitter view. No Carbon Mapper data on this page, so no attribution widget here (attribution is shown only where Carbon Mapper data appears).
 
-![Regional Screen (Sentinel-5P)](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-screen.png)
+![Regional Screen (Sentinel-5P)](../../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-screen.png)
 
 ### Regional Context
 
@@ -84,7 +112,19 @@ Two public-good context geometries feed these views, both read straight from sou
 - **Shale plays** — [EIA Tight Oil & Shale Gas Plays](https://atlas.eia.gov/datasets/tight-oil-and-shale-gas-plays) (U.S. Energy Information Administration; public use), filtered to the seven Permian plays.
 - **Counties** — [US Census TIGER cartographic boundaries](https://www.census.gov/geographies/mapping-files/time-series/geo/cartographic-boundary.html) (public domain), TX + NM, clipped to the area of interest.
 
-![Regional Context](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-context.png)
+![Regional Context](../../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-context.png)
+
+---
+
+## Map tiles for a custom app (MVT → PMTiles)
+
+Alongside the dashboard, the pipeline prepares a **self-contained vector-tile product** you can drop into your own web map — no tile server, just static [PMTiles](https://protomaps.com/docs/pmtiles) archives served over HTTP range requests (`transformations/portfolio_tiles.py`). Three transforms build it from the latest cascade state:
+
+- **`portfolio_mvt_tiles`** — a three-layer **MVT pyramid** (`hotspots` = S5P H3 hexagons, `plumes` = EMIT outlines, `wells` = current TX RRC surface holes). GeoBrix's `gbx_st_asmvt_pyramid` UDTF bins each geometry into the Web-Mercator tile grid and emits tile-local Mapbox Vector Tiles per zoom `min_z..max_z`. A `vector_layers` TileJSON block declares each layer's attribute fields so any viewer (MapLibre, Leaflet, `gbx.vizx.plot_pmtiles`) can resolve and style them.
+- **`pmtiles_shards`** — a **spatial catalog** of bounded per-shard PMTiles archives (fanout at `shard_zoom = min_z`): one row per shard with its `min_lon/min_lat/max_lon/max_lat` bbox, `archive_path` on the Volume, and per-layer tile counts. An app queries this table for the shards intersecting the current viewport and fetches only those archives — the scale-out serving pattern.
+- **`overview_manifest`** — one light `vapor_eyes_overview.pmtiles` archive (zoom ≤ `overview_max_z`, all three layers) — the low-zoom basin view an app loads first, before hydrating detail from the shards.
+
+Because the archives are ordinary files under `{volume}/vapor-eyes-lf/tiles/`, an app serves them straight from cloud object storage (or a signed URL); the shard catalog is just a Delta table your backend reads to route a viewport to the right archive.
 
 ---
 
@@ -143,7 +183,8 @@ Carbon Mapper's Tanager plume catalog is a public-good dataset, and this example
 | `transformations/_config.py` | Shared pipeline configuration (`cfg`, `paths`, `register_gbx`) read from `spark.conf`. |
 | `transformations/bronze_ingest.py` | Auto Loader bronze metadata tables (one per source). |
 | `transformations/silver_cascade.py` | The bi-temporal silver cascade (S5P, S2, EMIT, wells SCD2, Carbon Mapper). |
-| `transformations/gold_analytics.py` | Gold analytics MVs (leaderboard, monitoring status, activity, hotspots, trends). |
-| `transformations/portfolio_tiles.py`, `transformations/_shard.py` | MVT pyramid + sharded PMTiles portfolio output. |
-| `dashboards/vapor_eyes_lf.lvdash.json` | The AI/BI dashboard definition (three pages). |
+| `transformations/gold_analytics.py` | Gold analytics MVs (leaderboard, monitoring status, activity, hotspots, trends, play/county rollups). |
+| `transformations/context_reference.py` | Context reference tables — EIA shale plays + TIGER counties, read via the GeoBrix light vector reader. |
+| `transformations/portfolio_tiles.py`, `transformations/_shard.py` | MVT pyramid + sharded PMTiles portfolio output (see [Map tiles for a custom app](#map-tiles-for-a-custom-app-mvt--pmtiles)). |
+| `dashboards/vapor_eyes_lf.lvdash.json` | The AI/BI dashboard definition (four pages). |
 | `tests/` | Pytest unit tests for `land`/`_dates`/`_shard` pure-Python logic, plus `tests/validate/*.sql` post-deploy validation queries. |

@@ -75,6 +75,17 @@ KPI tiles from `cm_monitoring_status` (plumes in the last 90 days, active operat
 
 ![Regional Screen (Sentinel-5P)](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-screen.png)
 
+### Regional Context
+
+`emissions_by_play` and `detections_by_county` — Carbon Mapper plume detections rolled up (point-in-polygon) to the Permian's named shale plays and to its TX/NM counties, rendered as two choropleths that show where the detections concentrate geographically. Plays are ranked by detection count (Delaware and the Bone Spring / Wolfcamp section lead), and the county view is clipped to the basin so the leakiest counties stand out. Carbon Mapper attribution is shown on the page.
+
+Two public-good context geometries feed these views, both read straight from source with the GeoBrix light vector reader (`geojson_gbx` / `shapefile_gbx`, pyogrio-backed, no JAR):
+
+- **Shale plays** — [EIA Tight Oil & Shale Gas Plays](https://atlas.eia.gov/datasets/tight-oil-and-shale-gas-plays) (U.S. Energy Information Administration; public use), filtered to the seven Permian plays.
+- **Counties** — [US Census TIGER cartographic boundaries](https://www.census.gov/geographies/mapping-files/time-series/geo/cartographic-boundary.html) (public domain), TX + NM, clipped to the area of interest.
+
+![Regional Context](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-context.png)
+
 ---
 
 ## Deploy and run

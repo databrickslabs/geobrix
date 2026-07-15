@@ -246,8 +246,10 @@ def test_subtree_includes_context():
 
 def test_eia_plays_url_is_permian_geojson():
     from land.land import _EIA_PLAYS_URL
-    assert _EIA_PLAYS_URL.startswith("https://hub.arcgis.com/api/download/v1/items/")
-    assert "geojson" in _EIA_PLAYS_URL
+    # Synchronous FeatureServer query (f=geojson), pre-filtered to the Permian basin.
+    assert "FeatureServer/0/query" in _EIA_PLAYS_URL
+    assert "f=geojson" in _EIA_PLAYS_URL
+    assert "Permian" in _EIA_PLAYS_URL
 
 
 def test_tiger_counties_url():

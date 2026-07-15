@@ -528,14 +528,21 @@ def emissions_by_play():
         F.expr("st_setsrid(st_point(lon, lat), 4326)").alias("pt"),
     )
     plays = spark.read.table("ref_shale_plays")
-    joined = plays.join(
-        plumes, F.expr("st_contains(play_geom, pt)"), "left"
+    # NB: GEOMETRY is not an orderable type, so it cannot be a GROUP BY key. Roll up
+    # keyed by play_name, then join the polygon back from the reference table (one
+    # geometry per play) so each output row still carries its map-ready geometry.
+    agg = (
+        plays.join(plumes, F.expr("st_contains(play_geom, pt)"), "left")
+        .groupBy("play_name")
+        .agg(
+            F.count("plume_id").alias("plume_count"),
+            F.avg("emission_rate_kg_hr").alias("mean_emission_kg_hr"),
+            F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
+            F.countDistinct("lead_operator").alias("active_operators"),
+        )
     )
-    return joined.groupBy("play_name", "play_geom").agg(
-        F.count("plume_id").alias("plume_count"),
-        F.avg("emission_rate_kg_hr").alias("mean_emission_kg_hr"),
-        F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
-        F.countDistinct("lead_operator").alias("active_operators"),
+    return agg.join(
+        plays.select("play_name", "area_sq_km", "play_geom"), "play_name"
     )
 
 
@@ -551,11 +558,18 @@ def detections_by_county():
         F.expr("st_setsrid(st_point(lon, lat), 4326)").alias("pt"),
     )
     counties = spark.read.table("ref_counties")
-    joined = counties.join(
-        plumes, F.expr("st_contains(county_geom, pt)"), "left"
+    # GEOMETRY is not orderable, so roll up keyed by geoid (unique per county) and
+    # join the county polygon back from the reference table for the choropleth.
+    agg = (
+        counties.join(plumes, F.expr("st_contains(county_geom, pt)"), "left")
+        .groupBy("county_name", "state_fp", "geoid")
+        .agg(
+            F.count("plume_id").alias("plume_count"),
+            F.avg("emission_rate_kg_hr").alias("mean_emission_kg_hr"),
+            F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
+        )
     )
-    return joined.groupBy("county_name", "state_fp", "geoid", "county_geom").agg(
-        F.count("plume_id").alias("plume_count"),
-        F.avg("emission_rate_kg_hr").alias("mean_emission_kg_hr"),
-        F.max("emission_rate_kg_hr").alias("max_emission_kg_hr"),
+    return agg.join(
+        counties.select("county_name", "state_fp", "geoid", "county_geom"),
+        ["county_name", "state_fp", "geoid"],
     )

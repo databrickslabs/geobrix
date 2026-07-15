@@ -114,9 +114,16 @@ def run_land(spark, sources, *, catalog, schema, volume, date_window,
     return staged
 
 
+# EIA Tight Oil & Shale Gas Plays, filtered to the Permian basin (7 features).
+# Use the FeatureServer query endpoint with f=geojson — it returns the GeoJSON
+# FeatureCollection SYNCHRONOUSLY. (The hub.arcgis.com /api/download endpoint is
+# asynchronous: a plain GET returns a "download is being generated, check back
+# later" job stub, not the data — pyogrio then rejects the stub as an unknown
+# format.) The where clause pre-filters to Basin='Permian'.
 _EIA_PLAYS_URL = (
-    "https://hub.arcgis.com/api/download/v1/items/"
-    "3f001fba00dc4add8dbd00542d61e4da/geojson?redirect=true&layers=0"
+    "https://services7.arcgis.com/FGr1D95XCGALKXqM/arcgis/rest/services/"
+    "TightOil_ShaleGas_Plays_Lower48_EIA/FeatureServer/0/query"
+    "?where=Basin%3D%27Permian%27&outFields=*&returnGeometry=true&f=geojson"
 )
 _TIGER_COUNTIES_URL = (
     "https://www2.census.gov/geo/tiger/GENZ2024/shp/cb_2024_us_county_500k.zip"

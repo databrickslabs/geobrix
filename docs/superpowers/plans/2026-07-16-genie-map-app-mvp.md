@@ -1077,6 +1077,11 @@ Co-authored-by: Isaac"
 - Consumes: `common.sh` helpers (`print_banner`, `resolve_log_path`).
 - Produces: two runnable commands; a deployable bundle.
 
+> **Extraction note** (see `2026-07-16-geobrix-deploy-helpers-vision.md`): keep the bundle's
+> resource set (warehouse, genie-space, app name) **declarative** — a simple named list, not
+> imperative glue — so a future `scaffold_map_app(resources)` helper can be lifted from this
+> hand-built bundle mechanically. Don't build the helper now; just don't entangle the data.
+
 - [ ] **Step 1: Write the DAB bundle**
 
 `apps/genie_map/bundle/databricks.yml`:
@@ -1405,16 +1410,21 @@ Co-authored-by: Isaac"
 - Modify: none (workspace-side operation; record the space id in BUILD.md + bundle var)
 
 **Interfaces:**
-- Consumes: all gold tables incl. the two new MVs.
+- Consumes: all gold tables incl. the new `wells_enriched_latest` MV.
 - Produces: a Genie Space id (recorded for Task 12's `genie_space_id` var + `.env`).
 
-- [ ] **Step 1: Deploy + run the vapor-eyes SDP so the two new MVs materialize**
+> **Extraction note** (see `2026-07-16-geobrix-deploy-helpers-vision.md`): keep the space's
+> table list + curated instructions/example-SQL **declarative** (data, not one-off glue) so a
+> future `create_genie_space(tables, warehouse, …)` helper can be lifted from this manual
+> curation. Don't build the helper now.
 
-Run the existing vapor-eyes Lakeflow bundle (`-p oauth-fe`) to update the pipeline with Tasks 16/17. Verify both MVs exist and are non-empty via a warehouse query.
+- [ ] **Step 1: Deploy + run the vapor-eyes SDP so the new MV materializes**
+
+Run the existing vapor-eyes Lakeflow bundle (`-p oauth-fe`) to update the pipeline with Task 16 (`wells_enriched_latest`). Verify the MV exists and is non-empty via a warehouse query.
 
 - [ ] **Step 2: Create the Genie Space**
 
-Create a Genie Space (workspace UI or API) over `geospatial_docs.vapor_eyes_lf`, adding tables: `hotspot_latest`, `plume_leaderboard_latest`, `wells_enriched_latest`, `plume_candidate_wells`, `ref_shale_plays`, `ref_counties`, `operator_intensity_latest`, `detections_by_county`, `emissions_by_play`.
+Create a Genie Space (workspace UI or API) over `geospatial_docs.vapor_eyes_lf`, adding tables: `hotspot_latest`, `plume_leaderboard_latest`, `wells_enriched_latest`, `plume_candidate_wells`, `ref_shale_plays`, `ref_counties`, `operator_intensity_latest`, `detections_by_county`, `emissions_by_play`. (If a space already exists, reuse its id — the goal is wiring the app to *a* space, not necessarily creating one.)
 
 - [ ] **Step 3: Add instructions + example SQL that emit `*_geojson` geometry**
 

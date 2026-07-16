@@ -96,8 +96,8 @@ config/
     vapor-eyes.ts        # the one shipped dataset registry (see shape below)
     index.ts             # active-dataset selector (env/config driven)
   queries/               # SQL templates keyed by (dataset, layer)
-    hotspot_h3.sql
-    wells_h3_density.sql
+    hotspot_h3.sql       # cell-sourced dynamic H3 (coarsen-only)
+    wells_h3.sql         # point-sourced dynamic H3 (refine + coarsen)
     plume_points.sql
     wells_points.sql
 ```
@@ -111,10 +111,18 @@ interface LayerDef {
   label: string;
   sourceTable: string;        // fully-qualified vapor_eyes_lf table/MV
   queryTemplate: string;      // key into config/queries
-  h3?: {                      // when kind === "h3"
-    cellIdCol: string;        // e.g. "h3_cellid"
-    zoomResBreaks: number[];  // zoom→H3 res tiers (viewport-adaptive)
-    geomCol: string;          // "hex_geom" (native GEOMETRY, 4326)
+  h3?: {                      // when kind === "h3" — see "Dynamic H3 resolution" below
+    source: "cells" | "points";  // cells → coarsen-only via h3_toparent;
+                                  // points → refine+coarsen via h3_longlatash3
+    cellIdCol?: string;       // source==="cells": e.g. "h3_cellid" (native res)
+    nativeRes?: number;       // source==="cells": the stored resolution (hard ceiling)
+    lonCol?: string;          // source==="points": e.g. "well_lon"
+    latCol?: string;          // source==="points"
+    minRes: number;           // coarsest resolution ever rendered
+    maxRes: number;           // finest resolution allowed (points can zoom past cells)
+    zoomResBreaks: number[];  // 4 zoom thresholds → the per-zoom MAX resolution ceiling
+    resByBreak: number[];     // 5 resolutions (one per zoom band), each ≤ maxRes
+    aggExpr: string;          // how to aggregate children, e.g. "MAX(ch4_max)"
   };
   point?: { lonCol: string; latCol: string; idCol: string };
   metricCol: string;          // color/elevation driver (e.g. "ch4_max", "well_count")
@@ -135,34 +143,92 @@ interface DatasetConfig {
 The viewport path resolves `(activeLayer.queryTemplate, params)` through the existing
 AppKit `useAnalyticsQuery` machinery — **the analytics/kepler bridge is reused unchanged**;
 only the config it reads from is generalized. Layer visibility/zoom-swap logic
-(`useLayerVisibility`, `LAYER_RULES`) is driven from `zoomVisible`/`zoomResBreaks`
-instead of taxi constants.
+(`useLayerVisibility`, `LAYER_RULES`) is driven from `zoomVisible` instead of taxi
+constants.
+
+### Dynamic, density-aware H3 resolution (design decision)
+
+The prototype re-derived H3 resolution purely from zoom (`CASE WHEN zoom <= break …`),
+which suited dense taxi data. vapor-eyes gold is mostly **sparse** (dozens–hundreds of
+rows per layer), so a pure zoom rule mis-behaves: coarsening a few dozen res-6 cells to
+res-3 yields a handful of giant, useless hexes. The resolution decision must be
+**density-aware, not just zoom-aware**, and its *direction* depends on the source:
+
+- **Refinement (finer on zoom-in) requires point-level source.** `h3_toparent` only goes
+  coarser; you cannot split a stored cell into finer children you don't have data for.
+  So only **point-sourced** layers can get finer as you zoom in.
+- **Coarsening (`h3_toparent`) works on any cell-sourced layer**, but should fire *only
+  when the data is genuinely dense* — otherwise leave the fine resolution alone.
+
+**The one heuristic (target on-screen cell count ≈ 300, band 150–500):** at the working
+resolution the query counts in-view cells; if that exceeds the target it coarsens by
+`levels = floor(log₇(count / target))` H3 parent steps (each step ≈ ÷7). Sparse data →
+`levels = 0` → no pointless coarsening. Zoom sets the *maximum* allowed resolution
+(`zoomResBreaks`/`resByBreak`); density only ever coarsens *below* that ceiling.
+
+Per-layer application:
+
+| Layer | `h3.source` | Native/finest | Behavior |
+|---|---|---|---|
+| `ch4_hotspots` | `cells` (`hotspot_latest.h3_cellid`) | res 6 = S5P's real footprint (hard ceiling; finer would be fake precision) | Coarsen-only, density-gated. Sparse → stays res 6. Honest to the science. |
+| `well_density` | `points` (`wells_enriched_latest.well_lon/lat`) | up to res ~9 | Fully dynamic: `h3_longlatash3(lon,lat,target_res)` on the fly — **finer as you zoom in**, coarser only when wells are genuinely dense (TX RRC in-basin can be 1000s). |
+
+Because the wells H3 layer aggregates from the *points* in `wells_enriched_latest`, the
+originally-planned fixed `wells_h3_density_latest` MV is **dropped** — one wells source
+(`wells_enriched_latest`) feeds both the wells point layer and the wells H3 layer.
 
 ### Shipped vapor-eyes layers (MVP)
 
-1. `ch4_hotspots` — H3, from `hotspot_latest`, colored by `ch4_max`.
-2. `well_density` — H3, from **new** `wells_h3_density_latest`, colored by `well_count`.
-3. `wells` — point, from **new** `wells_enriched_latest`, shown at high zoom.
+1. `ch4_hotspots` — H3 (cell-sourced, coarsen-only), from `hotspot_latest`, colored by `ch4_max`.
+2. `well_density` — H3 (point-sourced, refine+coarsen), from `wells_enriched_latest`, colored by `well_count`.
+3. `wells` — point, from `wells_enriched_latest`, shown at high zoom.
 4. `plumes` — point, from `plume_leaderboard_latest`, colored by `max_conc_ppmm`.
 
-(1)+(2) satisfy "wells as H3 for the initial query"; (2)/(3)/(4) share the same registry
-machinery.
+(1)+(2) satisfy "wells as H3 for the initial query"; all four share the same registry
+machinery. Layers 2 + 3 share one source table.
 
-## 5. New gold MVs (added to the Lakeflow SDP `gold_analytics.py`)
+### Layer-visibility choreography (H3 ↔ points with zoom)
 
-Both are first-class pipeline outputs (materialized once, queried cheaply). Follow the
-file's existing conventions: `@dp.materialized_view`, no-driver-collect windowing,
+Two different relationships, two different rules — driven by per-layer `zoomVisible`
+bands (and, in the overlap, an opacity fade):
+
+- **Within a feature (wells H3 ↔ well points): swap with a ~1-level overlap band.** Hexes
+  own low/mid zoom, points own high zoom, and for ~1 zoom level at the crossover *both*
+  render (hexes fading out as points fade in) so the transition never blinks. Improves on
+  the prototype's single-threshold binary swap (`POINT_ZOOM_THRESHOLD`).
+- **Across datasets (CH4 hotspot hexes ↔ EMIT plume points): coexist; plumes appear on
+  zoom-in.** These are not two views of one thing — the CH4 hexes are the wide-area S5P
+  screen, the plume points are EMIT's pinpointed detections. The CH4 hex layer stays
+  visible as context; plume points layer *on top* once zoomed in far enough to resolve
+  individual sources. This is the "wide-area screen → pinpoint the source" narrative.
+
+Concrete bands (zoom, tunable in Phase 1), expressed as `zoomVisible: {min, max}` with an
+optional `fadeBand` for the overlap:
+
+| Layer | `zoomVisible` | Notes |
+|---|---|---|
+| `ch4_hotspots` (H3) | `{min: 0, max: 24}` | Always-on wide-area context (density heuristic keeps it readable). |
+| `plumes` (point) | `{min: 9, max: 24}` | Layers on top of CH4 hexes once zoomed in. Coexists. |
+| `well_density` (H3) | `{min: 0, max: 12}` | Owns low/mid zoom; fades out over `[11, 12]`. |
+| `wells` (point) | `{min: 11, max: 24}` | Fades in over `[11, 12]`; ~1-level overlap with well_density. |
+
+`useLayerVisibility`/`LayerRule` already toggles per-layer visibility on zoom; the overlap
+fade is a small extension (opacity ramp across the shared band) — layers that don't
+declare a `fadeBand` keep the existing hard toggle.
+
+## 5. New gold MV (added to the Lakeflow SDP `gold_analytics.py`)
+
+One first-class pipeline output (materialized once, queried cheaply). Follow the file's
+existing conventions: `@dp.materialized_view`, no-driver-collect windowing,
 `st_setsrid(..., 4326)` on every map-facing geometry, current-inventory filter
 `wells_shl` where `__END_AT IS NULL`.
 
-**(a) `wells_h3_density_latest`** — current well inventory aggregated to H3 cells.
-- Per cell: `h3_cellid`, `well_count`, `operator_count` (distinct operators),
-  `center_lon/lat`, `hex_geom = st_geomfromwkb(h3_boundaryaswkb(h3_cellid), 4326)`.
-- H3 cell derived from `well_geom` via `h3_coverash3` / native `h3_*` at a demo-fixed
-  resolution (registry can request a tier); mirrors how `hotspot_latest` produces
-  `hex_geom`.
+> The originally-planned `wells_h3_density_latest` MV is **dropped** (see §4 "Dynamic H3"):
+> the wells H3 layer aggregates the points of `wells_enriched_latest` on the fly at a
+> zoom+density-driven resolution, so a fixed-resolution density MV would defeat the
+> dynamic behavior. `wells_enriched_latest` is the single wells source.
 
-**(b) `wells_enriched_latest`** — current well inventory spatially tagged with
+**`wells_enriched_latest`** — current well inventory spatially tagged with
 basin/play + authoritative county/state.
 - Basin/play: `st_contains(play_geom, well_pt)` against `ref_shale_plays` → `play_name`.
 - County/state: `st_contains(county_geom, well_pt)` against `ref_counties` →
@@ -174,8 +240,8 @@ basin/play + authoritative county/state.
   with the *first* containing play (deterministic tie-break by `play_name`) and NULL when
   outside all plays. County is expected to be unique per point.
 
-These MVs are additive to the pipeline; Phase-1 execution reruns the SDP to materialize
-them. (No GeoBrix SQL needed — pure Databricks-native `st_*`/`h3_*`, matching the rest of
+This MV is additive to the pipeline; Phase-1 execution reruns the SDP to materialize it.
+(No GeoBrix SQL needed — pure Databricks-native `st_*`/`h3_*`, matching the rest of
 `gold_analytics.py`.)
 
 ## 6. Genie Space (curated, new)
@@ -183,8 +249,8 @@ them. (No GeoBrix SQL needed — pure Databricks-native `st_*`/`h3_*`, matching 
 No curated space exists yet. As part of Phase 1, create a Genie Space over
 `geospatial_docs.vapor_eyes_lf` with:
 
-- **Tables:** `hotspot_latest`, `plume_leaderboard_latest`, `wells_h3_density_latest`,
-  `wells_enriched_latest`, `plume_candidate_wells`, `ref_shale_plays`, `ref_counties`
+- **Tables:** `hotspot_latest`, `plume_leaderboard_latest`, `wells_enriched_latest`,
+  `plume_candidate_wells`, `ref_shale_plays`, `ref_counties`
   (+ `operator_intensity_latest`, `detections_by_county`, `emissions_by_play` for
   aggregate NL questions).
 - **Instructions/metadata:** column descriptions; join hints (wells↔plumes via

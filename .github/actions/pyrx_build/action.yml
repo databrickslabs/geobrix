@@ -66,4 +66,4 @@ runs:
         # pmtiles_agg), stac (light STAC client, [stac] extra),
         # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra).
         # See test/conftest.py for the maintained condition.
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/vizx test/sample -m "not integration" -v
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample -m "not integration" -v

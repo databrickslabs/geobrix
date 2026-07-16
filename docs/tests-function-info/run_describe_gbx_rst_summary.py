@@ -17,7 +17,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 DOCS_DIR = SCRIPT_DIR.parent
 PROJECT_ROOT = DOCS_DIR.parent
-GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.4.0-jar-with-dependencies.jar"
+GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.4.1-jar-with-dependencies.jar"
 
 
 def main():

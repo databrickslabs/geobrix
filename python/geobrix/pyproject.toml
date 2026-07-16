@@ -113,6 +113,14 @@ light = [
     "mapbox-vector-tile>=2.1,<2.2",
     "scikit-image>=0.22,<1",
     "xarray-spatial>=0.4,<1",
+    # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
+    # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
+    # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
+    # Folded into [light] (not a separate [netcdf] extra) so geobrix[light]
+    # reads NetCDF out of the box. Floor pinned; add a ceiling if a future
+    # release floats/breaks on Serverless env v5 (Py 3.12), same discipline as
+    # the rio-tiler / mapbox-vector-tile pins above.
+    "netcdf4>=1.6,<2",
 ]
 # For sample-data bundle uploads to Unity Catalog Volumes and gbx:test:bundle-databricks
 databricks = [
@@ -131,6 +139,17 @@ stac = [
     "planetary-computer>=1.0,<2",
     "tenacity>=8,<10",
     "requests>=2.25",
+    # NASA EMIT (CH4) fetch for the sample EmitDownloader — Earthdata-Login
+    # authenticated (earthaccess), used by the vapor-eyes series. Lives here with
+    # the other remote-data-acquisition clients (not base [light]).
+    "earthaccess>=0.11,<1",
+    # Constrain the transitive botocore (earthaccess -> s3fs -> aiobotocore ->
+    # botocore) to the Databricks Serverless base image's boto3 range, so
+    # installing [stac] doesn't upgrade botocore past what the base boto3 allows
+    # (boto3 1.40.x requires botocore <1.41,>=1.40.45). Keeps aiobotocore on 2.x;
+    # s3fs/fsspec/earthaccess are unaffected. We don't use boto3/S3 at runtime
+    # (earthaccess fetches over HTTPS) — this just silences the pip resolver clash.
+    "botocore>=1.40.45,<1.41.0",
 ]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based

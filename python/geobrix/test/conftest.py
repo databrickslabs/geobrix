@@ -45,6 +45,7 @@ _LIGHT_TEST_DIRS = [
     "pygx",
     "pmtiles_light",
     "stac",
+    "earthdata",
     "vizx",
     "sample",
 ]

@@ -107,3 +107,70 @@ def test_pyramid_rejects_inverted_range():
         list(
             _mvt.pyramid_tiles(to_wkb(Point(0.0, 0.0)), {"id": 1}, 3, 1, "layer", 4096)
         )
+
+
+def test_pyramid_buffers_tiles_across_seams():
+    """A polygon straddling a tile boundary must be encoded with a buffer: each covered
+    tile's geometry overhangs the [0, extent] core (coords < 0 or > extent) so MapLibre
+    renders the seam without a hard clip line (the "tiles moving/disappearing on zoom" bug).
+    """
+    from shapely.geometry import box as _box
+
+    extent = 4096
+    # A polygon spanning the z1 antimeridian-free split at lon=0 -> crosses the x=0|x=1
+    # tile boundary at z1, so both tiles must carry buffered overhang.
+    poly = _box(-10.0, -10.0, 10.0, 10.0)  # straddles lon=0 (z1 x-tile seam)
+    tiles = list(_mvt.pyramid_tiles(to_wkb(poly), {"id": 1}, 1, 1, "layer", extent))
+    assert tiles, "expected tiles at z1"
+    coords = []
+    for _z, _x, _y, blob in tiles:
+        for f in _decode(blob):
+
+            def _walk(c):
+                if c and isinstance(c[0], (int, float)):
+                    yield c
+                else:
+                    for e in c:
+                        yield from _walk(e)
+
+            coords.extend(_walk(f["geometry"]["coordinates"]))
+    xs = [c[0] for c in coords]
+    ys = [c[1] for c in coords]
+    # buffer overhang: at least one coordinate must fall outside the [0, extent] core.
+    assert min(xs) < 0 or max(xs) > extent or min(ys) < 0 or max(ys) > extent, (
+        f"no buffer overhang: x[{min(xs)},{max(xs)}] y[{min(ys)},{max(ys)}] "
+        f"all within [0,{extent}] -> hard-clipped at seams"
+    )
+
+
+def test_pyramid_uses_web_mercator_latitude():
+    """Tile-local Y must use Web Mercator (latitude is nonlinear), not a linear
+    lat mapping. A point tiled at a low and a high zoom must decode back to the
+    SAME latitude; a linear mapping drifts by degrees at low zoom (data appears
+    to move north as you zoom in) and only converges at high zoom.
+    """
+    import math
+
+    from shapely.geometry import Point
+
+    def _merc_inv(z, x, y, px, py, ext):  # inverse of the XYZ/WebMercator tile pixel
+        n = 2**z
+        lon = (x + px / ext) / n * 360.0 - 180.0
+        g = (y + py / ext) / n
+        lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * g))))
+        return lon, lat
+
+    lon0, lat0 = -103.121, 31.55
+    got = {}
+    for z in (6, 13):
+        zz, xx, yy, blob = list(
+            _mvt.pyramid_tiles(to_wkb(Point(lon0, lat0)), {"id": 1}, z, z, "l", 4096)
+        )[0]
+        # Decode with the SAME y orientation the encoder wrote (y_coord_down=True, MVT
+        # spec: origin top-left, y increases south) -- matching how MapLibre reads tiles.
+        feat = mvt.decode(blob, default_options={"y_coord_down": True})["l"]["features"]
+        px, py = feat[0]["geometry"]["coordinates"]
+        got[z] = _merc_inv(zz, xx, yy, px, py, 4096)
+    for z in (6, 13):
+        assert abs(got[z][0] - lon0) < 1e-3, f"z{z} lon {got[z][0]} != {lon0}"
+        assert abs(got[z][1] - lat0) < 1e-3, f"z{z} lat {got[z][1]} != {lat0}"

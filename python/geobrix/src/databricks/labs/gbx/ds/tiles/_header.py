@@ -69,14 +69,25 @@ def build_header_info(
     tile_compression: Compression,
     metadata: Dict[str, object],
 ) -> HeaderInfo:
-    """Compute min/max zoom + union bbox over a set of (z,x,y) tiles."""
+    """Compute min/max zoom + bbox over a set of (z,x,y) tiles.
+
+    The bbox is framed by the FINEST-zoom (max-zoom) tiles only, not the union
+    across all zooms. A coarse tile is large (a z6 web-mercator tile spans
+    ~5.6 deg), so unioning it with its fine descendants balloons the extent well
+    beyond the data -- which then makes an interactive viewer's fitBounds open
+    far off the data (data appears offset and drifts as you zoom). The
+    highest-zoom tiles bound the same data most tightly.
+    """
     tiles = list(tiles)
     if not tiles:
         raise ValueError("build_header_info requires at least one tile")
     zs = [z for z, _, _ in tiles]
+    zmax = max(zs)
     minlon = minlat = float("inf")
     maxlon = maxlat = float("-inf")
     for z, x, y in tiles:
+        if z != zmax:
+            continue
         bb = grid.tile_bbox(z, x, y)
         minlon, minlat = min(minlon, bb[0]), min(minlat, bb[1])
         maxlon, maxlat = max(maxlon, bb[2]), max(maxlat, bb[3])

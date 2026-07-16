@@ -77,14 +77,6 @@ jobs:
     # Heavy: full Scala test + Python test+coverage + GDAL native install (mvn -T 1C, ~10–15 min). Standard runner is too small.
     # Gated on the lightweight pyrx job so a pyrx failure fails the run fast,
     # before spending ~10–15 min on the Scala/native build.
-    #
-    # TEMPORARY (pyrx-0.4.0 lightweight dev): skip this heavyweight build on
-    # direct pushes to the pyrx-0.4.0 branch so iterating on the lightweight API
-    # doesn't trigger the ~10–15 min Scala/native build every push. The
-    # lightweight 'pyrx' job above still runs. PRs (including the eventual PR to
-    # main) and every other branch are unaffected, so the merge gate is intact.
-    # Remove this `if:` before merging pyrx-0.4.0.
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/pyrx-0.4.0') }}
     needs: pyrx
     runs-on:
       group: larger-runners

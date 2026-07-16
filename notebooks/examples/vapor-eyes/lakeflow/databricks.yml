@@ -1,0 +1,128 @@
+bundle:
+  name: vapor_eyes_lf
+
+# Layer in a git-ignored databricks.override.yml (workspace profile, warehouse id,
+# any local variable overrides) when present. The glob tolerates its absence, so a
+# fresh clone validates/deploys with the committed defaults below.
+# See databricks.override.yml.example.
+include:
+  - "*.override.yml"
+
+variables:
+  catalog: {default: geospatial_docs}
+  schema: {default: vapor_eyes_lf}
+  volume: {default: data}
+  full_aoi: {default: "true"}
+  # Single-window fallbacks (kept for back-compat + S2, which windows to the latest
+  # top hotspot over date_window). The multi-year record is driven by the
+  # semicolon-separated *_windows vars below, which override these for S5P/EMIT.
+  date_window: {default: "2023-06-01/2023-08-31"}
+  s5p_temporal: {default: "2023-06-01/2023-08-31"}
+  # Multi-year, multi-window ingest over the wider Permian. EMIT plume-complex
+  # products exist for 2023-2025 only (none in 2026 anywhere), so EMIT covers the
+  # historic active seasons. S5P covers the current 2026 quarter PLUS a ~2-week
+  # cluster around each known EMIT plume date so historic activity has
+  # contemporaneous screening (~150 S5P days total; NOT continuous multi-year).
+  # NOTE: this re-downloads a large volume of granules on a full run.
+  emit_windows: {default: "2023-06-01/2023-09-01;2024-08-01/2024-12-15;2025-09-01/2025-10-01"}
+  s5p_windows: {default: "2026-04-01/2026-06-30;2023-06-05/2023-06-12;2023-07-26/2023-08-04;2024-08-10/2024-08-26;2024-10-01/2024-10-07;2024-11-26/2024-12-02;2025-09-18/2025-09-25"}
+  h3_res: {default: "6"}
+  qa_min: {default: "0.5"}
+  cloud_max: {default: "20"}
+  s2_h3_res: {default: "10"}
+  cm_h3_res: {default: "9"}
+  # EMIT CH4 enhancement retrieval-QC floor (ppm-m); pixels at/below become NoData
+  # before rst_summary (drops negative/sub-noise enhancement). 0.0 = positive-only.
+  emit_enh_floor: {default: "0.0"}
+  # Carbon Mapper fetch window (full history by default). Runtime fetch only; the
+  # collected plume JSONL lands on the Volume and is NEVER committed to git.
+  cm_window: {default: "2024-01-01/2026-07-14"}
+  cm_secret: {default: "geospatial_docs.vapor_eyes.carbon_mapper_token"}
+  k_candidates: {default: "5"}
+  min_z: {default: "6"}
+  max_z: {default: "13"}
+  overview_max_z: {default: "12"}
+  earthdata_secret: {default: "geospatial_docs.vapor_eyes.earthdata_token"}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.1-py3-none-any.whl"}
+  # SQL warehouse for validation queries + the AI/BI dashboard. No portable default —
+  # set it in databricks.override.yml (see databricks.override.yml.example).
+  warehouse_id: {default: ""}
+
+resources:
+  dashboards:
+    vapor_eyes_lf_dashboard:
+      display_name: "Vapor-Eyes — Permian Methane Monitoring (Lakeflow)"
+      file_path: ./dashboards/vapor_eyes_lf.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+
+  pipelines:
+    vapor_eyes_lf_pipeline:
+      name: vapor_eyes_lf_pipeline
+      serverless: true
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      root_path: ./transformations
+      libraries:
+        - glob:
+            include: transformations/**
+      environment:
+        dependencies:
+          # Install the geobrix wheel WITH its light/stac/vizx extras in ONE pip
+          # resolution (mirrors the notebook's `%pip install geobrix[light,stac,vizx]
+          # @ wheel`). Lakeflow runs one `%pip install` per dependency entry, so
+          # enumerating the extras separately defeats pip's resolver — installing
+          # rio-tiler after rasterio was already pinned forces a source rebuild
+          # (ENVIRONMENT_PIP_INSTALL_ERROR). pip's `wheel[extras]` path form keeps it
+          # a single pass and passes DAB path-normalization (no file:// colon).
+          - ${var.gbx_wheel}[light,stac,vizx]
+      configuration:
+        vapor_eyes.catalog: ${var.catalog}
+        vapor_eyes.schema: ${var.schema}
+        vapor_eyes.volume: ${var.volume}
+        vapor_eyes.full_aoi: ${var.full_aoi}
+        vapor_eyes.date_window: ${var.date_window}
+        vapor_eyes.s5p_temporal: ${var.s5p_temporal}
+        vapor_eyes.h3_res: ${var.h3_res}
+        vapor_eyes.qa_min: ${var.qa_min}
+        vapor_eyes.cloud_max: ${var.cloud_max}
+        vapor_eyes.s2_h3_res: ${var.s2_h3_res}
+        vapor_eyes.cm_h3_res: ${var.cm_h3_res}
+        vapor_eyes.emit_enh_floor: ${var.emit_enh_floor}
+        vapor_eyes.k_candidates: ${var.k_candidates}
+        vapor_eyes.min_z: ${var.min_z}
+        vapor_eyes.max_z: ${var.max_z}
+        vapor_eyes.overview_max_z: ${var.overview_max_z}
+
+  jobs:
+    vapor_eyes_lf_job:
+      name: vapor_eyes_lf_job
+      tasks:
+        - task_key: land
+          spark_python_task:
+            python_file: ./land/land.py
+            parameters:
+              ["--sources", "s5p,emit,wells,s2,cm,context", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}", "--cm-window", "${var.cm_window}", "--cm-secret", "${var.cm_secret}", "--earthdata-secret", "${var.earthdata_secret}"]
+          environment_key: land_env
+        - task_key: pipeline
+          depends_on: [{task_key: land}]
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.vapor_eyes_lf_pipeline.id}
+      environments:
+        - environment_key: land_env
+          spec:
+            environment_version: "5"
+            dependencies:
+              # Single-pass wheel+extras install, same rationale as the pipeline
+              # environment above (avoids per-dep %pip resolver churn).
+              - ${var.gbx_wheel}[light,stac,vizx]
+      schedule:
+        quartz_cron_expression: "0 0 7 * * ?"
+        timezone_id: "America/Chicago"
+        pause_status: PAUSED
+
+targets:
+  # No `mode: development` on purpose: dev mode force-prefixes every resource with
+  # "[dev <user>]" and ignores an empty name_prefix override, which we don't want for
+  # a demo/showcase. Omitting mode deploys with clean, unprefixed resource names.
+  dev:
+    default: true

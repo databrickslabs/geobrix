@@ -31,3 +31,18 @@ def test_build_header_info_zoom_and_bbox():
     assert isinstance(hd["min_lon_e7"], int)
     # directories must be declared gzipped (version-independent reader compat)
     assert hd["internal_compression"] == Compression.GZIP
+
+
+def test_build_header_info_bbox_frames_finest_zoom():
+    # A coarse z6 tile plus one of its z7 children (same data area, finer grid).
+    # The header bbox must be framed by the FINEST-zoom tiles (tight envelope),
+    # not the union across all zooms -- a z6 tile spans ~5.6 deg, so unioning it
+    # balloons the extent and an interactive viewer's fitBounds opens far off the
+    # data (the "data appears to the north / disappears on zoom" bug).
+    g = SlippyGrid()
+    coarse = (6, 32, 21)
+    fine = (7, 64, 42)  # top-left child of the z6 tile
+    info = build_header_info([coarse, fine], g, TileType.MVT, Compression.GZIP, {})
+    assert info.bbox == g.tile_bbox(*fine)
+    c = g.tile_bbox(*coarse)
+    assert (info.bbox[2] - info.bbox[0]) < (c[2] - c[0])  # strictly tighter

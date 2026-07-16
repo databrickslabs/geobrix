@@ -1,0 +1,251 @@
+---
+sidebar_position: 9
+title: EMIT Methane Downloader
+---
+
+## EMIT Methane Downloader
+
+`EmitDownloader` fetches **NASA EMIT (Earth Surface Mineral Dust Source Investigation)** Level-2B methane products for any bounding-box AOI from **NASA's LP DAAC** and stages them into a Unity Catalog Volume.
+
+EMIT is an imaging spectrometer on the International Space Station that resolves methane plumes at 60 m. Two EMIT L2B products are fetched together: **`EMITL2BCH4ENH`** (per-scene CH4 enhancement COGs) and **`EMITL2BCH4PLM`** (per-plume complex products — a COG plus a GeoJSON outline with JPL's emission-rate estimate).
+
+:::caution Requires an Earthdata Login token
+Unlike the Planetary-Computer-backed downloaders (`NaipDownloader`, `DemDownloader`, `TropomiDownloader`), EMIT is served from NASA's LP DAAC via [`earthaccess`](https://earthaccess.readthedocs.io/) and requires authentication. `EmitDownloader` reads the token from the **`EARTHDATA_TOKEN`** environment variable (`earthaccess.login(strategy="environment")`, via the internal `databricks.labs.gbx.earthdata.EarthdataClient`). Populate it from a Unity Catalog secret before calling `download()`:
+
+```python
+import os
+
+token = dbutils.secrets.get("<catalog>", "<schema>", "earthdata_token")
+os.environ["EARTHDATA_TOKEN"] = token
+```
+
+Create an [Earthdata Login](https://urs.earthdata.nasa.gov/) account and token first if you don't have one.
+:::
+
+:::note Prerequisites
+- GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- `earthaccess` installed: `%pip install earthaccess`
+- `EARTHDATA_TOKEN` set in the environment (see above) before calling `download()`
+:::
+
+---
+
+## How It Works
+
+`EmitDownloader` is a thin wrapper over the generic `EarthdataClient` — the Earthdata analog of `StacClient` — supplying only the EMIT-specific CMR short names, an asset classifier, and a validation function:
+
+1. **`discover(bbox, temporal=None)`** — CMR search (`earthaccess.search_data`) for both `EMITL2BCH4ENH` and `EMITL2BCH4PLM` over the AOI. Each granule's data links are classified into an asset label (`ch4enh`, `plm_cog`, or `plm_geojson`) or skipped. Returns a metadata-only DataFrame: `item_id`, `asset_name`, `href`.
+
+2. **`download(bbox, out_dir, temporal=None, force=False, ...)`** — logs in (`EARTHDATA_TOKEN`), runs `discover()` internally, then fetches each asset driver-side (EMIT/LP DAAC auth mints short-lived per-request credentials that don't fan out like anonymous hrefs, so download is not Spark-distributed). Each asset is validated: the enhancement/plume COGs need a rasterio window read to succeed above a size floor; the plume GeoJSON needs to parse and carry at least one feature. Returns the shared result DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+3. **Two readers**, because EMIT ships two different product shapes:
+   - **`read_enh(out_dir)`** — loads the CH4 enhancement COGs as `raster_gbx` tiles (`(source, tile)` schema).
+   - **`read_plumes(out_dir)`** — loads the plume-complex GeoJSON metadata (`geojson_gbx`) into a typed, per-plume frame with the outline as WKB.
+
+Serverless-safe: no `spark.conf.set`, `_jvm`-bridge access, or runtime Spark-config mutation.
+
+---
+
+## API Reference
+
+### `EmitDownloader`
+
+```python
+from databricks.labs.gbx.sample.emit import EmitDownloader
+
+downloader = EmitDownloader()
+# Defaults: EMITL2BCH4ENH + EMITL2BCH4PLM short names, version "002"
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `enh_short` | `str` | CMR short name for the enhancement product. Default `"EMITL2BCH4ENH"`. |
+| `plm_short` | `str` | CMR short name for the plume-complex product. Default `"EMITL2BCH4PLM"`. |
+| `version` | `str` | CMR product version. Default `"002"`. |
+| `_earthaccess` | injectable | Mock `earthaccess`-like module for offline unit tests. |
+| `_client` | injectable | Mock `EarthdataClient` for offline unit tests. |
+
+#### `discover(bbox, temporal=None, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 (WGS84 longitude/latitude) |
+| `temporal` | `str \| (str, str) \| None` | CMR temporal window. Accepts a STAC-style `"start/end"` string (normalized internally) or a 2-tuple. `None` searches all available EMIT coverage. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns a DataFrame with columns: `item_id` (str), `asset_name` (str — `"ch4enh"`, `"plm_cog"`, or `"plm_geojson"`), `href` (str) — one row per classified data link.
+
+#### `download(bbox, out_dir, temporal=None, force=False, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 |
+| `out_dir` | `str` | Output directory — a UC Volume path (e.g. `/Volumes/...`) or local path |
+| `temporal` | `str \| (str, str) \| None` | CMR temporal window, same as `discover()`. |
+| `force` | `bool` | Re-download even if a valid file already exists at the destination. Default `False`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Calls `EarthdataClient.login()` (reads `EARTHDATA_TOKEN`) before searching and downloading. Returns a metadata DataFrame with columns: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `repair(target, where="is_out_file_valid = false", spark=None, out_dir=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `target` | `str \| DataFrame` | A Delta table name (repairs are `MERGE`d back in place) or a DataFrame (returns the repaired rows without persisting). |
+| `where` | `str` | Filter selecting rows to re-fetch. Default `"is_out_file_valid = false"`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+| `out_dir` | `str \| None` | Destination directory for re-fetched files. `None` infers it from an existing valid row's `out_file_path`. |
+
+Re-downloads invalid/missing assets (`force=True` internally) and, when `target` is a table name, `MERGE`s the repaired rows into it by `(item_id, asset_name)`. Requires `item_id`, `asset_name`, and `href` columns on the target.
+
+#### `read_enh(out_dir, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Root directory written by `download()` |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Loads the CH4 enhancement COGs (`filterRegex=r".*CH4ENH.*\.tif$"`) via `raster_gbx`, repartitioned 64-way by `source`. Returns a DataFrame with `source` and `tile` columns — one row per EMIT overpass segment.
+
+#### `read_plumes(out_dir, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Root directory written by `download()` |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Reads each `*CH4PLMMETA*.json` plume-metadata file individually via `geojson_gbx` (per-file schema divergence rules out a single multi-file read), normalizes JPL's raw property names to typed columns, and unions the results. Raises `FileNotFoundError` if no matching files exist under `out_dir`. Output columns:
+
+| Column | Type | Source property |
+|--------|------|------------------|
+| `plume_id` | string | `Plume ID` |
+| `utc_observed` | string | `UTC Time Observed` |
+| `orbit` | string | `Orbit` |
+| `dcid` | string | `DCID` |
+| `max_conc_ppmm` | double | `Max Plume Concentration (ppm m)` |
+| `lat_max` | double | `Latitude of max concentration` |
+| `lon_max` | double | `Longitude of max concentration` |
+| `wind_speed_ms` | double | `Wind Speed (m/s)` |
+| `wind_speed_std_ms` | double | `Wind Speed Std (m/s)` |
+| `wind_speed_source` | string | `Wind Speed Source` |
+| `emission_rate_kg_hr` | double | `Emissions Rate Estimate (kg/hr)` |
+| `emission_rate_uncert_kg_hr` | double | `Emissions Rate Estimate Uncertainty (kg/hr)` |
+| `fetch_length_m` | double | `Fetch Length (m)` |
+| `plume_geom` | binary (WKB) | plume outline geometry |
+
+Numeric columns are `try_cast` to `double` — plumes with no wind match store those fields as the string `"NA"` in the source GeoJSON, which becomes `null`.
+
+---
+
+### `download_emit_aoi` (convenience function)
+
+Constructs a default `EmitDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample.emit import download_emit_aoi
+
+download_emit_aoi(
+    spark,
+    bbox,
+    out_dir,
+    temporal="2023-07-15/2023-08-20",
+    # **kw forwarded to EmitDownloader.download() — e.g. force=
+)
+```
+
+---
+
+## Copy-Paste Example
+
+The example below fetches EMIT CH4 enhancement scenes and plume-complex metadata for a Delaware Basin (Permian, TX) AOI, then quantifies each plume against the enhancement raster.
+
+```python
+# Install dependencies if not already present
+# %pip install earthaccess
+
+import os
+
+from pyspark.sql import functions as F
+
+from databricks.labs.gbx.rasterx import functions as rx
+from databricks.labs.gbx.sample.emit import EmitDownloader
+
+# EMIT needs the Earthdata token — populate it from a UC secret first.
+os.environ["EARTHDATA_TOKEN"] = dbutils.secrets.get(
+    "<catalog>", "<schema>", "earthdata_token"
+)
+
+# Delaware Basin AOI, TX (lon/lat, EPSG:4326)
+AOI_BBOX = (-103.25, 31.30, -102.85, 31.62)
+DATE_WINDOW = "2023-07-15/2023-08-20"  # anchored on a known EMIT overpass
+
+VOLUME = "/Volumes/main/default/geobrix_samples/emit"
+
+downloader = EmitDownloader()
+
+# Step 1 — discover: see which EMIT assets cover this AOI + window
+items = downloader.discover(AOI_BBOX, temporal=DATE_WINDOW)
+items.groupBy("asset_name").count().show()
+# +----------+-----+
+# |asset_name|count|
+# +----------+-----+
+# |    ch4enh|    2|
+# |   plm_cog|    3|
+# |plm_geojson|    3|
+# +----------+-----+
+
+# Step 2 — download: fetch enhancement COGs + plume COGs + plume GeoJSON
+meta = downloader.download(AOI_BBOX, VOLUME, temporal=DATE_WINDOW)
+meta.select("item_id", "asset_name", "out_file_path", "is_out_file_valid").show(truncate=False)
+
+# Step 3a — read the plume metadata (outline + JPL's emission-rate estimate)
+plumes = downloader.read_plumes(VOLUME)
+plumes.drop("plume_geom").orderBy(F.col("max_conc_ppmm").desc()).show()
+
+# Step 3b — read the enhancement scenes (source, tile)
+enh = downloader.read_enh(VOLUME)
+enh.printSchema()
+```
+
+### One-shot convenience
+
+```python
+from databricks.labs.gbx.sample.emit import download_emit_aoi
+
+meta = download_emit_aoi(
+    spark,
+    bbox=AOI_BBOX,
+    out_dir=VOLUME,
+    temporal=DATE_WINDOW,
+)
+meta.show()
+```
+
+### Quantify each plume against the enhancement raster
+
+Clip each plume's outline against the enhancement raster and summarize it with RasterX, cross-checking GeoBrix's measured enhancement against JPL's reported values:
+
+```python
+clipped = (
+    plumes.crossJoin(enh.select(F.col("tile").alias("scene")))
+    .withColumn("clip", rx.rst_clip("scene", "plume_geom", F.lit(True)))
+    .withColumn("summary", rx.rst_summary("clip"))
+    .withColumn(
+        "gbx_max_ppmm", F.get_json_object("summary", "$.bands[0].max").cast("double")
+    )
+)
+clipped.select(
+    "plume_id", "emission_rate_kg_hr", "max_conc_ppmm", "gbx_max_ppmm"
+).show()
+```
+
+:::info Two products, two readers
+`EMITL2BCH4ENH` (raster) and `EMITL2BCH4PLM` (COG + GeoJSON) are different shapes of data — `read_enh` and `read_plumes` load them separately rather than forcing one schema on both.
+:::
+
+---
+
+## Notebook Reference
+
+`EmitDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 03) to confirm and quantify a candidate methane plume at 60 m resolution — cross-checking GeoBrix's clipped-raster enhancement against JPL's reported emission rate — after Sentinel-5P screening and Sentinel-2 detection narrow the search area.

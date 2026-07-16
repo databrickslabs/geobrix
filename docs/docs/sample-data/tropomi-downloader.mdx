@@ -1,0 +1,198 @@
+---
+sidebar_position: 8
+title: Sentinel-5P TROPOMI Downloader
+---
+
+## Sentinel-5P TROPOMI Downloader
+
+`TropomiDownloader` fetches **Sentinel-5P TROPOMI Level-2 methane (CH₄)** granules for any bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API and stages the netCDF-4 granules into a Unity Catalog Volume.
+
+Sentinel-5P TROPOMI images atmospheric methane globally on a near-daily basis. Its L2 CH4 product is **swath** data — a 2-D array of ground pixels each carrying its own lon/lat, not a regular grid — so it pairs naturally with the [NetCDF reader](../readers/netcdf)'s **vector mode**, which emits one point per ground pixel with no regridding or resampling.
+
+:::note Prerequisites
+- GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- `pystac-client` and `planetary-computer` packages installed: `%pip install pystac-client planetary-computer`
+- No authentication required — Sentinel-5P L2 is public on Planetary Computer
+:::
+
+---
+
+## How It Works
+
+`TropomiDownloader` follows the same **discover → download → read** pattern as `NaipDownloader` and `DemDownloader`, but the underlying asset is a netCDF-4 swath granule, not a raster tile:
+
+1. **`discover(bbox, temporal=None)`** — driver-side STAC search against the `sentinel-5p-l2-netcdf` collection. Returns one row per distinct CH4 granule intersecting the AOI: `item_id`, `asset_name`, `item_bbox`, `href`. Defaults to a wide `2018-01-01/2030-01-01` window (S5P mission-to-date); pass a `temporal` STAC-style `"start/end"` string to narrow it.
+
+2. **`download(bbox, out_dir, temporal=None, ...)`** — re-runs the same STAC search, then fans out the granule fetch as parallel Spark tasks via `StacClient.download()`, saving each file as `{item_id}.nc`. Unlike the raster downloaders, S5P granules are **not** rasterio-windowed or bbox-clipped on download (a `.nc` isn't a GDAL-readable raster) — each granule is fetched and existence/size-validated whole; the AOI clip happens downstream when you filter the points `read()` emits. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+3. **`read(out_dir, variables=..., group="/PRODUCT")`** — loads the staged `.nc` granules through the `netcdf_gbx` reader in **vector mode**: one point per ground pixel, with the requested variables (default: the bias-corrected CH4 mixing ratio plus the `qa_value` quality flag) passed through as columns, alongside `geom_0` (WKB point) and `geom_0_srid`. No quality filtering is applied for you — apply your own `qa_value` cut downstream.
+
+Serverless-safe: no `spark.conf.set`, `_jvm`, `.rdd`, `cache`, or `persist` — parallelism comes from `StacClient.download()`'s Spark fan-out.
+
+---
+
+## API Reference
+
+### `TropomiDownloader`
+
+```python
+from databricks.labs.gbx.sample.tropomi import TropomiDownloader
+
+downloader = TropomiDownloader()
+# Defaults: Planetary Computer catalog, planetary_computer signing,
+#           sentinel-5p-l2-netcdf collection, "ch4" asset
+```
+
+#### `discover(bbox, temporal=None, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 (WGS84 longitude/latitude) |
+| `temporal` | `str \| None` | STAC-style `"start/end"` datetime window. `None` defaults to `"2018-01-01/2030-01-01"` (full S5P mission-to-date). |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Returns a DataFrame with columns: `item_id` (str), `asset_name` (str, always `"ch4"`), `item_bbox` (array\<double\>), `href` (str) — one distinct row per granule.
+
+#### `download(bbox, out_dir, temporal=None, bbox_crs="EPSG:4326", partitions=None, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 |
+| `out_dir` | `str` | Output directory — a UC Volume path (e.g. `/Volumes/...`) or local path |
+| `temporal` | `str \| None` | STAC-style `"start/end"` window, same as `discover()`. Scope this to a day or two — an AOI over the full mission window can match many daily overpasses. |
+| `bbox_crs` | `str` | CRS of the `bbox` parameter (default `"EPSG:4326"`). Accepted for signature parity with the other downloaders; S5P granules aren't bbox-windowed on download (see How It Works above), so it has no effect on the result. |
+| `partitions` | `int \| None` | Target partition count for the `spark.range` fan-out. `None` → one task per granule. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Granules are saved as `{item_id}.nc`. Returns a metadata DataFrame with columns: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+#### `read(out_dir, variables="methane_mixing_ratio_bias_corrected,qa_value", group="/PRODUCT", spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Root directory written by `download()` |
+| `variables` | `str` | Comma-separated NetCDF variable names to pass through as columns. Default is the CH4 mixing ratio (bias-corrected) plus the `qa_value` quality flag. |
+| `group` | `str` | HDF5 group path for the grouped NetCDF-4 file. Default `"/PRODUCT"`, where Sentinel-5P L2 stores its fields. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Loads staged `.nc` files (`filterRegex=r".*\.nc$"`) via `netcdf_gbx` in `vector` mode and repartitions the result 64-way by `geom_0_srid`. Returns a Spark DataFrame with the requested variable columns plus `geom_0` (WKB point) and `geom_0_srid` / `geom_0_srid_proj` — one row per ground pixel. No quality filtering is applied; filter on `qa_value` yourself downstream.
+
+---
+
+### `download_tropomi_aoi` (convenience function)
+
+Constructs a default `TropomiDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample.tropomi import download_tropomi_aoi
+
+download_tropomi_aoi(
+    spark,
+    bbox,
+    out_dir,
+    temporal="2024-08-23/2024-08-24",
+    # **kw forwarded to TropomiDownloader.download() — e.g. partitions=, bbox_crs=
+)
+```
+
+---
+
+## Copy-Paste Example
+
+The example below downloads a single day of Sentinel-5P CH4 coverage for a Delaware Basin (Permian, TX) AOI into a UC Volume, then reads the swath as per-pixel points for a quality-filtered look at the data.
+
+```python
+# Install dependencies if not already present
+# %pip install pystac-client planetary-computer
+
+from pyspark.sql import functions as F
+
+from databricks.labs.gbx.sample.tropomi import TropomiDownloader
+
+# Delaware Basin AOI, TX (lon/lat, EPSG:4326)
+AOI_BBOX = (-103.25, 31.30, -102.85, 31.62)
+
+# Scope to a single daily overpass — an AOI over the full mission window can
+# match many granules.
+S5P_TEMPORAL = "2024-08-23/2024-08-24"
+
+VOLUME = "/Volumes/main/default/geobrix_samples/s5p"
+
+downloader = TropomiDownloader()
+
+# Step 1 — discover: see which granules cover this AOI + window
+items = downloader.discover(AOI_BBOX, temporal=S5P_TEMPORAL)
+items.show(truncate=False)
+# +--------------------------------------+----------+-------------------------+------------+
+# |item_id                               |asset_name|item_bbox                |href        |
+# +--------------------------------------+----------+-------------------------+------------+
+# |S5P_OFFL_L2__CH4____20240823T173...   |ch4       |[-107.9, 24.4, -95.9, ...]|https://... |
+# +--------------------------------------+----------+-------------------------+------------+
+
+# Step 2 — download: fetch the granule(s) as .nc
+meta = downloader.download(AOI_BBOX, VOLUME, temporal=S5P_TEMPORAL)
+meta.select("item_id", "out_file_path", "out_file_sz", "is_out_file_valid").show(truncate=False)
+
+# Step 3 — read: swath -> per-pixel points, then apply the S5P quality cut ourselves
+pts = downloader.read(VOLUME)
+pts = pts.filter(
+    (F.col("qa_value") >= 0.5)
+    & F.col("methane_mixing_ratio_bias_corrected").isNotNull()
+)
+pts.printSchema()
+# root
+#  |-- methane_mixing_ratio_bias_corrected: float (nullable = true)
+#  |-- qa_value: float (nullable = true)
+#  |-- geom_0: binary (nullable = true)
+#  |-- geom_0_srid: string (nullable = true)
+#  |-- geom_0_srid_proj: string (nullable = true)
+
+pts.count()  # quality-filtered ground pixels over the AOI
+```
+
+### One-shot convenience
+
+```python
+from databricks.labs.gbx.sample.tropomi import download_tropomi_aoi
+
+meta = download_tropomi_aoi(
+    spark,
+    bbox=AOI_BBOX,
+    out_dir=VOLUME,
+    temporal=S5P_TEMPORAL,
+)
+meta.show()
+```
+
+### Bin into H3 cells
+
+Once the points are quality-filtered, native Databricks `h3_longlatash3` bins them into a regional methane hotspot map:
+
+```python
+hotspots = (
+    pts.withColumn("lon", F.expr("st_x(st_geomfromwkb(geom_0))"))
+    .withColumn("lat", F.expr("st_y(st_geomfromwkb(geom_0))"))
+    .withColumn("h3", F.expr("h3_longlatash3(lon, lat, 6)"))
+    .groupBy("h3")
+    .agg(
+        F.avg("methane_mixing_ratio_bias_corrected").alias("ch4_mean"),
+        F.max("methane_mixing_ratio_bias_corrected").alias("ch4_max"),
+        F.count("*").alias("obs_count"),
+    )
+)
+```
+
+:::tip Scoping the temporal window
+S5P revisits daily. Leaving `temporal=None` searches the full mission-to-date window (`"2018-01-01/2030-01-01"`) and can match many overpasses for a wide AOI — scope `temporal` to a day or two unless you actually want the full time series.
+:::
+
+:::info Swath, not a grid
+S5P L2 CH4 has no regular lat/lon grid — each ground pixel carries its own coordinates. `read()` uses the NetCDF reader's **vector mode** for exactly this reason; see [NetCDF Reader](../readers/netcdf) for how vector mode differs from raster mode.
+:::
+
+---
+
+## Notebook Reference
+
+`TropomiDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 01) to screen a Delaware Basin AOI for candidate methane super-emitter cells from a single day of Sentinel-5P coverage, before zooming in with Sentinel-2 and EMIT in later notebooks.

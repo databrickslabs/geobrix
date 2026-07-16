@@ -88,6 +88,13 @@ Replace the hardwired canonical schema with a **layer registry**: a single typed
 plus SQL templates that declare, per dataset, everything the viewport and Genie paths
 need. Ship **exactly one config (vapor-eyes)** now; the seam makes helios a later drop-in.
 
+> **North-star:** the MVP `LayerDef` is a deliberate, forward-compatible **subset** of a
+> future declarative **layer DSL** (render kinds `geom|h3|raster|cog|mvt|pmtiles` × zoom
+> staging with cutovers × per-`h3` resolution policy). See the vision doc
+> `2026-07-16-genie-map-layer-dsl-vision.md`. The MVP implements the `h3` and `geom`
+> kinds + the H3 policy as a flat single-stage config; the DSL's `stages[]` model and the
+> other kinds arrive in Phase 2/3 additively (migration deferred until PMTiles lands).
+
 **New layout (under `apps/genie_map/`, client side):**
 
 ```
@@ -116,7 +123,7 @@ interface LayerDef {
                                   // points → refine+coarsen via h3_longlatash3
     cellIdCol?: string;       // source==="cells": e.g. "h3_cellid" (native res)
     nativeRes?: number;       // source==="cells": the stored resolution (hard ceiling)
-    lonCol?: string;          // source==="points": e.g. "well_lon"
+    lonCol?: string;          // source==="points": e.g. "longitude"
     latCol?: string;          // source==="points"
     minRes: number;           // coarsest resolution ever rendered
     maxRes: number;           // finest resolution allowed (points can zoom past cells)
@@ -171,7 +178,7 @@ Per-layer application:
 | Layer | `h3.source` | Native/finest | Behavior |
 |---|---|---|---|
 | `ch4_hotspots` | `cells` (`hotspot_latest.h3_cellid`) | res 6 = S5P's real footprint (hard ceiling; finer would be fake precision) | Coarsen-only, density-gated. Sparse → stays res 6. Honest to the science. |
-| `well_density` | `points` (`wells_enriched_latest.well_lon/lat`) | up to res ~9 | Fully dynamic: `h3_longlatash3(lon,lat,target_res)` on the fly — **finer as you zoom in**, coarser only when wells are genuinely dense (TX RRC in-basin can be 1000s). |
+| `well_density` | `points` (`wells_enriched_latest.longitude/latitude`) | up to res ~9 | Fully dynamic: `h3_longlatash3(lon,lat,target_res)` on the fly — **finer as you zoom in**, coarser only when wells are genuinely dense (TX RRC in-basin can be 1000s). |
 
 Because the wells H3 layer aggregates from the *points* in `wells_enriched_latest`, the
 originally-planned fixed `wells_h3_density_latest` MV is **dropped** — one wells source
@@ -234,7 +241,7 @@ basin/play + authoritative county/state.
 - County/state: `st_contains(county_geom, well_pt)` against `ref_counties` →
   `county_name`, `state_fp`, `geoid` (polygon-derived, authoritative — distinct from the
   RRC-supplied `wells_shl.county` string, which is carried through as `county_rrc`).
-- Carries `api`, `operator`, `lease`, `field`, `well_url`, `well_lon/lat`, and
+- Carries `api`, `operator`, `lease`, `field`, `well_url`, `longitude/latitude`, and
   `well_geom_native = st_setsrid(st_geomfromwkb(well_geom), 4326)`.
 - **Ambiguity resolved:** a well may fall in multiple/zero plays; keep one row per `api`
   with the *first* containing play (deterministic tie-break by `play_name`) and NULL when
@@ -286,7 +293,8 @@ No curated space exists yet. As part of Phase 1, create a Genie Space over
 
 - **Phase 0 — Copy & clean.** Stand up `apps/genie_map/` from the prototype; strip taxi
   data/SQL/notebooks; build green locally (`pnpm i && pnpm build`).
-- **Phase 1 — MVP (this week).** Layer registry + vapor-eyes config; two new gold MVs in
+- **Phase 1 — MVP (this week).** Layer registry (with density-aware dynamic H3) +
+  vapor-eyes config; the new `wells_enriched_latest` gold MV in
   the SDP; curated Genie Space; DAB deploy via `gbx:app:*`; H3 viewport (CH4 + well
   density) + wells/plume points + NLP paths working end-to-end. **Storytelling artifacts
   (§9) are produced within this phase** — `BUILD.md` narrative accrues as steps land,
@@ -310,8 +318,9 @@ A reproducible, honest account of the end-to-end build so another SA/engineer ca
 it. Lives under `apps/genie_map/docs/` (and surfaces on the docs site page):
 
 - **`BUILD.md` — annotated build narrative.** The path from prototype → vapor-eyes app:
-  what was reused vs. rewritten, the layer-registry contract, the two new gold MVs and
-  *why* (the wells-as-H3 requirement, basin/county joins), the Genie Space curation
+  what was reused vs. rewritten, the layer-registry contract, the density-aware dynamic
+  H3 design, the new `wells_enriched_latest` MV and
+  *why* (single wells source for H3 + points, basin/county joins), the Genie Space curation
   decisions, and the DAB/`gbx:app:*` deploy wiring. Includes the real gotchas as they
   surface (SRID-0 round-trip re-tagging, geometry-column detection widening, build-time
   `__LLM_MODEL__` bake, `oauth-fe` profile), cross-linked to the relevant memory entries.

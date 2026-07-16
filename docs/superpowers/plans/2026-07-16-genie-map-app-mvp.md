@@ -4,7 +4,7 @@
 
 **Goal:** Adapt the `isaac_work/genie_map` kepler.gl + `@databricks/appkit` prototype into a deployable Databricks App (`apps/genie_map/`) that renders the vapor-eyes methane gold data — H3 hexagon layers (CH4 hotspots + wells density), wells/plume point layers, and a curated Genie NLP path — with implementer + slide-ware storytelling artifacts.
 
-**Architecture:** Copy the prototype into `apps/genie_map/`, replace its build-time `VITE_*` taxi canonical-schema with a static **layer registry** (`config/datasets/vapor-eyes.ts` + per-layer SQL templates), point every layer at Lakeflow gold `geospatial_docs.vapor_eyes_lf`, add two new gold MVs (`wells_h3_density_latest`, `wells_enriched_latest`) to the vapor-eyes SDP, curate a Genie Space, and deploy via a DAB bundle wired to `gbx:app:*` commands.
+**Architecture:** Copy the prototype into `apps/genie_map/`, replace its build-time `VITE_*` taxi canonical-schema with a static **layer registry** (`config/datasets/vapor-eyes.ts` + per-layer SQL templates) featuring **density-aware dynamic H3 resolution**, point every layer at Lakeflow gold `geospatial_docs.vapor_eyes_lf`, add one new gold MV (`wells_enriched_latest`) to the vapor-eyes SDP, curate a Genie Space, and deploy via a DAB bundle wired to `gbx:app:*` commands.
 
 **Tech Stack:** React 18 + TypeScript + kepler.gl 3.2.5; `@databricks/appkit` 0.41.6 (Node/Express); Vite 6; pnpm@10, node>=20; Databricks Asset Bundles (DAB); Lakeflow Declarative Pipeline (`pyspark.pipelines`); Databricks-native `st_*`/`h3_*` SQL.
 
@@ -32,8 +32,8 @@ apps/genie_map/
 ├── .env.example                           # renamed from taxi.env.example, vapor-eyes values (Task 3)
 ├── shared/types.ts                        # + registry types (Task 4)
 ├── config/queries/
-│   ├── hotspot_h3.sql                     # Task 6 (net-new, replaces h3_aggregation.sql)
-│   ├── wells_h3_density.sql               # Task 8
+│   ├── hotspot_h3.sql                     # Task 6 (cell-sourced dynamic H3, coarsen-only)
+│   ├── wells_h3.sql                       # Task 8 (point-sourced dynamic H3, refine+coarsen)
 │   ├── plume_points.sql                   # Task 7 (replaces point_data.sql)
 │   └── wells_points.sql                   # Task 9
 ├── client/src/
@@ -55,8 +55,8 @@ apps/genie_map/
 
 **SDP (existing pipeline, gold layer):**
 ```
-notebooks/examples/vapor-eyes/lakeflow/transformations/gold_analytics.py   # + 2 MVs (Task 16, 17)
-notebooks/examples/vapor-eyes/lakeflow/tests/validate/                     # + MV validators
+notebooks/examples/vapor-eyes/lakeflow/transformations/gold_analytics.py   # + 1 MV (Task 16)
+notebooks/examples/vapor-eyes/lakeflow/tests/validate/                     # + MV validator
 ```
 
 **`gbx:*` commands:**
@@ -69,7 +69,9 @@ scripts/commands/gbx-app-deploy.{md,sh}    # Task 12
 
 ## Task ordering rationale
 
-Tasks 1–15 are the **app + deploy + docs** track. Tasks 16–18 are the **SDP gold MV** track. The SDP track (16–18) is independent of the app track and can run in parallel; the app's wells layers (Tasks 8, 9) *consume* the MVs from Tasks 16–17, so **run 16–17 before verifying 8–9 against live data** — but the app code (SQL templates + hooks) can be written against the documented MV schema first (TDD-style) and verified once the MVs materialize. The Genie Space (Task 18) depends on all gold tables existing.
+Tasks 1–15 are the **app + deploy + docs** track. Tasks 16 + 18 are the **SDP gold MV / Genie Space** track (Task 17 was merged into 16 — see below). The SDP track is independent of the app track and can run in parallel; the app's wells layers (Tasks 8, 9) *consume* the `wells_enriched_latest` MV from Task 16, so **run 16 before verifying 8–9 against live data** — but the app code (SQL templates + hooks) can be written against the documented MV schema first (TDD-style) and verified once the MV materializes. The Genie Space (Task 18) depends on all gold tables existing.
+
+**Dynamic H3 (density-aware) — cross-cutting note.** Per spec §4 "Dynamic H3", H3 resolution is chosen at query time from **zoom (a max-resolution ceiling) AND density (a target of ~300 on-screen cells)**, not zoom alone. Two source modes: `ch4_hotspots` is **cell-sourced** (coarsen-only from `hotspot_latest.h3_cellid` via `h3_toparent`; never finer than native res 6); `well_density` is **point-sourced** (refine *and* coarsen from `wells_enriched_latest` points via `h3_longlatash3`). The originally-planned fixed `wells_h3_density_latest` MV is **dropped** (old Task 17 removed); `wells_enriched_latest` (Task 16) is the single wells source for both the wells H3 layer and the wells point layer.
 
 ---
 
@@ -280,6 +282,24 @@ Append:
 
 ```ts
 export type LayerKind = 'h3' | 'point';
+export type H3Source = 'cells' | 'points';
+
+// Dynamic, density-aware H3 config (spec §4). Resolution is picked at query time
+// from BOTH zoom (a max-res ceiling) AND density (target on-screen cell count).
+export interface H3ResConfig {
+  source: H3Source;         // 'cells' → coarsen-only via h3_toparent (from a stored cell col);
+                            // 'points' → refine+coarsen via h3_longlatash3 (from lon/lat)
+  cellIdCol?: string;       // source==='cells': the stored H3 cell column, e.g. 'h3_cellid'
+  nativeRes?: number;       // source==='cells': stored resolution = hard finest ceiling
+  lonCol?: string;          // source==='points'
+  latCol?: string;          // source==='points'
+  minRes: number;           // coarsest resolution ever rendered
+  maxRes: number;           // finest resolution allowed (points may exceed a cell's nativeRes)
+  zoomResBreaks: number[];  // exactly 4 ascending zoom thresholds
+  resByBreak: number[];     // exactly 5 resolutions (per zoom band); each <= maxRes
+  aggExpr: string;          // child aggregation, e.g. 'MAX(ch4_max)' or 'COUNT(*)'
+  targetCells?: number;     // density target (default 300); coarsen when in-view count exceeds it
+}
 
 export interface LayerDef {
   id: string;                     // kepler dataId + layer key, e.g. 'ch4_hotspots'
@@ -287,13 +307,15 @@ export interface LayerDef {
   label: string;
   queryName: string;              // key into config/queries (file name without .sql)
   hexField?: string;              // kind==='h3': the string hex column returned by SQL
+  h3?: H3ResConfig;               // kind==='h3': dynamic-resolution config (required for h3)
   valueField: string;            // color/size metric column
   lngField?: string;              // kind==='point'
   latField?: string;             // kind==='point'
   tooltipFields: string[];
   palette?: string;               // kepler named colorRange, default 'Global Warming'
   enable3d?: boolean;
-  zoomVisible: { min: number; max: number };  // activeWhen: min <= z < max
+  zoomVisible: { min: number; max: number };   // hard visibility band: min <= z < max
+  fadeBand?: [number, number];    // optional opacity ramp across [start,end] for smooth swap
 }
 
 export interface DatasetConfig {
@@ -398,11 +420,36 @@ describe('vapor-eyes registry', () => {
     const ids = vaporEyes.layers.map((l) => l.id);
     expect(ids).toEqual(['ch4_hotspots', 'well_density', 'wells', 'plumes']);
   });
-  it('ch4_hotspots is an H3 layer keyed on hex/ch4_max', () => {
+  it('ch4_hotspots is a cell-sourced H3 layer capped at native res 6', () => {
     const l = vaporEyes.layers.find((x) => x.id === 'ch4_hotspots')!;
     expect(l.kind).toBe('h3');
     expect(l.queryName).toBe('hotspot_h3');
     expect(l.valueField).toBe('ch4_max');
+    expect(l.h3!.source).toBe('cells');
+    expect(l.h3!.nativeRes).toBe(6);
+    expect(l.h3!.maxRes).toBe(6);          // never finer than S5P native footprint
+    expect(l.h3!.zoomResBreaks).toHaveLength(4);
+    expect(l.h3!.resByBreak).toHaveLength(5);
+  });
+  it('well_density is a point-sourced H3 layer that can refine past res 6', () => {
+    const l = vaporEyes.layers.find((x) => x.id === 'well_density')!;
+    expect(l.h3!.source).toBe('points');
+    expect(l.h3!.lonCol).toBe('longitude');
+    expect(l.h3!.maxRes).toBeGreaterThan(6);
+    expect(l.queryName).toBe('wells_h3');
+  });
+  it('wells H3 and wells points share the wells_enriched source + overlap-swap', () => {
+    const density = vaporEyes.layers.find((x) => x.id === 'well_density')!;
+    const wells = vaporEyes.layers.find((x) => x.id === 'wells')!;
+    // ~1-level overlap band: density fades out where wells fades in.
+    expect(density.zoomVisible.max).toBeGreaterThan(wells.zoomVisible.min);
+    expect(density.fadeBand).toBeDefined();
+  });
+  it('ch4 hexes and plumes coexist (plumes appear on zoom-in, hexes stay)', () => {
+    const ch4 = vaporEyes.layers.find((x) => x.id === 'ch4_hotspots')!;
+    const plumes = vaporEyes.layers.find((x) => x.id === 'plumes')!;
+    expect(ch4.zoomVisible.max).toBe(24);   // ch4 stays visible at all zooms
+    expect(plumes.zoomVisible.min).toBeGreaterThan(0); // plumes only on zoom-in
   });
   it('getActiveDataset defaults to vapor-eyes', () => {
     expect(getActiveDataset().id).toBe('vapor-eyes');
@@ -430,33 +477,44 @@ export const vaporEyes: DatasetConfig = {
   // Delaware Basin (full AOI center, from SDP _config bbox -104.5,30.8,-101.0,33.0)
   defaultViewport: { longitude: -102.75, latitude: 31.9, zoom: 8 },
   layers: [
+    // CH4 hexes: cell-sourced, coarsen-ONLY (never finer than S5P native res 6).
+    // Always-on wide-area context; density heuristic keeps it readable at low zoom.
     { id: 'ch4_hotspots', kind: 'h3', label: 'CH₄ Hotspots (latest)',
       queryName: 'hotspot_h3', hexField: 'hex', valueField: 'ch4_max',
       tooltipFields: ['hex', 'ch4_max', 'ch4_mean', 'n_obs'],
       palette: 'Global Warming', enable3d: true,
-      zoomVisible: { min: 0, max: 12 } },
+      h3: { source: 'cells', cellIdCol: 'h3_cellid', nativeRes: 6,
+            minRes: 2, maxRes: 6, zoomResBreaks: [5, 7, 9, 11],
+            resByBreak: [3, 4, 5, 6, 6], aggExpr: 'MAX(ch4_max)', targetCells: 300 },
+      zoomVisible: { min: 0, max: 24 } },
+    // Well density: point-sourced, refine (finer on zoom-in) AND coarsen (only if dense).
+    // Owns low/mid zoom; fades out over [11,12] as the wells point layer fades in.
     { id: 'well_density', kind: 'h3', label: 'Well Density (H3)',
-      queryName: 'wells_h3_density', hexField: 'hex', valueField: 'well_count',
+      queryName: 'wells_h3', hexField: 'hex', valueField: 'well_count',
       tooltipFields: ['hex', 'well_count', 'operator_count'],
       palette: 'Uber Viz Sequential', enable3d: true,
-      zoomVisible: { min: 0, max: 12 } },
+      h3: { source: 'points', lonCol: 'longitude', latCol: 'latitude',
+            minRes: 3, maxRes: 9, zoomResBreaks: [5, 7, 9, 11],
+            resByBreak: [4, 5, 6, 7, 9], aggExpr: 'COUNT(*)', targetCells: 300 },
+      zoomVisible: { min: 0, max: 12 }, fadeBand: [11, 12] },
+    // Wells points: fade in over [11,12] — ~1-level overlap with well_density.
     { id: 'wells', kind: 'point', label: 'Wells',
       queryName: 'wells_points', valueField: 'well_count',
       lngField: 'longitude', latField: 'latitude',
       tooltipFields: ['record_id', 'operator', 'field', 'county', 'play_name'],
-      zoomVisible: { min: 12, max: 24 } },
+      zoomVisible: { min: 11, max: 24 }, fadeBand: [11, 12] },
+    // EMIT plumes: coexist with the CH4 hex screen; appear once zoomed in to resolve sources.
     { id: 'plumes', kind: 'point', label: 'EMIT Plumes',
       queryName: 'plume_points', valueField: 'max_conc_ppmm',
       lngField: 'longitude', latField: 'latitude',
       tooltipFields: ['record_id', 'max_conc_ppmm', 'lead_operator', 'lead_county'],
-      zoomVisible: { min: 12, max: 24 } },
+      zoomVisible: { min: 9, max: 24 } },
   ],
 };
 
 export const VAPOR_EYES_TABLES = {
   hotspot: T('hotspot_latest'),
-  wellDensity: T('wells_h3_density_latest'),
-  wellsEnriched: T('wells_enriched_latest'),
+  wellsEnriched: T('wells_enriched_latest'),  // feeds BOTH well_density (H3) and wells (points)
   plumes: T('plume_leaderboard_latest'),
 };
 ```
@@ -480,7 +538,7 @@ export function getActiveDataset(): DatasetConfig {
 - [ ] **Step 5: Run tests to verify pass**
 
 Run: `cd apps/genie_map && pnpm vitest run client/src/config/datasets/__tests__/registry.test.ts`
-Expected: PASS (3 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 6: Commit**
 
@@ -488,8 +546,10 @@ Expected: PASS (3 tests).
 git add apps/genie_map/client/src/config/datasets
 git commit -m "feat(genie-map): vapor-eyes layer registry + active-dataset selector
 
-Four MVP layers (ch4_hotspots, well_density H3; wells, plumes points)
-over vapor_eyes_lf gold. getActiveDataset() is the seam for helios later.
+Four MVP layers with density-aware dynamic H3: cell-sourced ch4_hotspots
+(coarsen-only, capped at native res 6) + point-sourced well_density
+(refine+coarsen). Visibility choreography: wells H3<->points overlap-swap,
+CH4 hexes + plumes coexist. getActiveDataset() is the seam for helios.
 
 Co-authored-by: Isaac"
 ```
@@ -508,22 +568,53 @@ Co-authored-by: Isaac"
 - Consumes: `useKeplerDataset<TRow>` (useKeplerDataset.ts:74), `sql` from `@databricks/appkit-ui/js`, `LayerDef`, `createH3LayerConfig`/`createPointLayerConfig`, `ViewportBounds`.
 - Produces: `useLayerData(layer: LayerDef, bounds: ViewportBounds | null): { data: unknown[]; isLoading: boolean; error: Error | null }` — resolves the SQL params + kepler layerConfig from the `LayerDef.kind` and delegates to `useKeplerDataset`.
 
-- [ ] **Step 1: Write `hotspot_h3.sql`**
+- [ ] **Step 1: Write `hotspot_h3.sql` (cell-sourced, density-aware coarsen-only)**
 
-Reads `hotspot_latest` directly (already H3-aggregated in gold). The hex column is derived from the stored `h3_cellid` via `h3_h3tostring`; viewport filter uses the stored `center_lon/lat` (cheap point-in-bbox, no polygon build needed since gold is pre-aggregated):
+Reads `hotspot_latest` (native res-6 cells). A CTE picks the zoom-ceiling resolution
+(clamped to `native_res` — never finer), then coarsens further by
+`floor(log₇(in_view_count / target_cells))` `h3_toparent` steps when the data is dense.
+Sparse data → 0 coarsening steps → stays at res 6. Children are re-aggregated:
 
 ```sql
--- Params: x_min,x_max,y_min,y_max DOUBLE ; table_name STRING via IDENTIFIER()
+-- Params: x_min,x_max,y_min,y_max DOUBLE ; zoom_level INT ;
+--         zoom_break_1..4 INT ; res_1..5 INT ; min_res INT ; native_res INT ;
+--         target_cells INT ; table_name STRING via IDENTIFIER()
+WITH in_view AS (
+  SELECT h3_cellid, ch4_max, ch4_mean, n_obs
+  FROM IDENTIFIER(:table_name)
+  WHERE center_lon BETWEEN :x_min AND :x_max
+    AND center_lat BETWEEN :y_min AND :y_max
+    AND ch4_max IS NOT NULL
+),
+zoom_ceiling AS (
+  SELECT CASE
+    WHEN :zoom_level <= :zoom_break_1 THEN :res_1
+    WHEN :zoom_level <= :zoom_break_2 THEN :res_2
+    WHEN :zoom_level <= :zoom_break_3 THEN :res_3
+    WHEN :zoom_level <= :zoom_break_4 THEN :res_4
+    ELSE :res_5 END AS zc
+),
+counted AS (SELECT COUNT(*) AS n FROM in_view),
+target_res AS (
+  -- ceiling capped at native_res; density subtracts coarsening levels (each ≈ ÷7);
+  -- floored at min_res. Sparse (n <= target) → levels = 0 → stays at ceiling.
+  SELECT GREATEST(:min_res,
+           LEAST(zc.zc, :native_res)
+           - GREATEST(0, CAST(FLOOR(LOG(7.0, GREATEST(c.n, 1) / CAST(:target_cells AS DOUBLE))) AS INT))
+         ) AS res
+  FROM zoom_ceiling zc CROSS JOIN counted c
+)
 SELECT
-  h3_h3tostring(h3_cellid) AS hex,
-  CAST(ch4_max  AS DOUBLE) AS ch4_max,
-  CAST(ch4_mean AS DOUBLE) AS ch4_mean,
-  CAST(n_obs    AS DOUBLE) AS n_obs
-FROM IDENTIFIER(:table_name)
-WHERE center_lon BETWEEN :x_min AND :x_max
-  AND center_lat BETWEEN :y_min AND :y_max
-  AND ch4_max IS NOT NULL
+  h3_h3tostring(h3_toparent(v.h3_cellid, t.res)) AS hex,
+  CAST(MAX(v.ch4_max)  AS DOUBLE) AS ch4_max,
+  CAST(AVG(v.ch4_mean) AS DOUBLE) AS ch4_mean,
+  CAST(SUM(v.n_obs)    AS DOUBLE) AS n_obs
+FROM in_view v CROSS JOIN target_res t
+GROUP BY h3_toparent(v.h3_cellid, t.res)
 ```
+
+(kepler's `hexagonId` layer draws the hexagon from the H3 string id itself, so returning a
+coarser *parent* id renders a correctly-sized hex — no `hex_geom` needed on this path.)
 
 - [ ] **Step 2: Delete the taxi template**
 
@@ -533,7 +624,9 @@ git -C /Users/mjohns/IdeaProjects/geobrix rm apps/genie_map/config/queries/h3_ag
 
 - [ ] **Step 3: Write the failing test for `useLayerData` param resolution**
 
-The hook's pure param-building logic is unit-testable by extracting it. Create `useLayerData.ts` exporting a pure helper `buildLayerParams(layer, bounds, tableName)` and test it:
+The pure param-building logic is unit-testable. Create `useLayerData.ts` exporting
+`buildLayerParams(layer, bounds, tableName)` and test that H3 layers get the dynamic-res
+params and point layers get only bbox+table:
 
 ```ts
 import { describe, it, expect } from 'vitest';
@@ -542,18 +635,35 @@ import type { LayerDef } from '@shared/types';
 
 const bounds = { x_min: -103, x_max: -102, y_min: 31, y_max: 32, zoom_level: 8 };
 const h3Layer: LayerDef = { id: 'ch4_hotspots', kind: 'h3', label: 'x',
-  queryName: 'hotspot_h3', hexField: 'hex', valueField: 'ch4_max',
-  tooltipFields: [], zoomVisible: { min: 0, max: 12 } };
+  queryName: 'hotspot_h3', hexField: 'hex', valueField: 'ch4_max', tooltipFields: [],
+  h3: { source: 'cells', cellIdCol: 'h3_cellid', nativeRes: 6, minRes: 2, maxRes: 6,
+        zoomResBreaks: [5, 7, 9, 11], resByBreak: [3, 4, 5, 6, 6],
+        aggExpr: 'MAX(ch4_max)', targetCells: 300 },
+  zoomVisible: { min: 0, max: 24 } };
+const pointLayer: LayerDef = { id: 'plumes', kind: 'point', label: 'x',
+  queryName: 'plume_points', valueField: 'max_conc_ppmm', lngField: 'longitude',
+  latField: 'latitude', tooltipFields: ['record_id'], zoomVisible: { min: 9, max: 24 } };
 
 describe('buildLayerParams', () => {
   it('returns null when bounds are null', () => {
     expect(buildLayerParams(h3Layer, null, 't')).toBeNull();
   });
-  it('builds bbox + table params for an H3 layer', () => {
-    const p = buildLayerParams(h3Layer, bounds, 'geospatial_docs.vapor_eyes_lf.hotspot_latest') as any;
-    expect(p).not.toBeNull();
+  it('emits the dynamic-H3 params for an H3 layer', () => {
+    const p = buildLayerParams(h3Layer, bounds, 'db.sch.hotspot_latest') as any;
     expect(p.x_min).toBeDefined();
     expect(p.table_name).toBeDefined();
+    expect(p.zoom_level).toBeDefined();
+    expect(p.zoom_break_1).toBeDefined();
+    expect(p.res_1).toBeDefined();
+    expect(p.res_5).toBeDefined();
+    expect(p.native_res).toBeDefined();   // cells source carries native_res
+    expect(p.target_cells).toBeDefined();
+  });
+  it('emits only bbox+table for a point layer', () => {
+    const p = buildLayerParams(pointLayer, bounds, 'db.sch.plume_leaderboard_latest') as any;
+    expect(p.x_min).toBeDefined();
+    expect(p.table_name).toBeDefined();
+    expect(p.zoom_break_1).toBeUndefined();
   });
 });
 ```
@@ -577,11 +687,28 @@ export function buildLayerParams(
   layer: LayerDef, bounds: ViewportBounds | null, tableName: string,
 ): Record<string, unknown> | null {
   if (!bounds || !tableName) return null;
-  return {
+  const base: Record<string, unknown> = {
     x_min: sql.double(bounds.x_min), x_max: sql.double(bounds.x_max),
     y_min: sql.double(bounds.y_min), y_max: sql.double(bounds.y_max),
     table_name: sql.string(tableName),
   };
+  if (layer.kind !== 'h3' || !layer.h3) return base;
+
+  const h = layer.h3;
+  const p: Record<string, unknown> = {
+    ...base,
+    zoom_level: sql.number(bounds.zoom_level),
+    zoom_break_1: sql.number(h.zoomResBreaks[0]), zoom_break_2: sql.number(h.zoomResBreaks[1]),
+    zoom_break_3: sql.number(h.zoomResBreaks[2]), zoom_break_4: sql.number(h.zoomResBreaks[3]),
+    res_1: sql.number(h.resByBreak[0]), res_2: sql.number(h.resByBreak[1]),
+    res_3: sql.number(h.resByBreak[2]), res_4: sql.number(h.resByBreak[3]),
+    res_5: sql.number(h.resByBreak[4]),
+    min_res: sql.number(h.minRes),
+    target_cells: sql.number(h.targetCells ?? 300),
+  };
+  if (h.source === 'cells') p.native_res = sql.number(h.nativeRes ?? h.maxRes);
+  else p.max_res = sql.number(h.maxRes);   // points source: finer allowed than any stored cell
+  return p;
 }
 
 export function useLayerData(layer: LayerDef, bounds: ViewportBounds | null, tableName: string) {
@@ -615,16 +742,18 @@ export function useLayerData(layer: LayerDef, bounds: ViewportBounds | null, tab
 - [ ] **Step 6: Run tests to verify pass**
 
 Run: `cd apps/genie_map && pnpm vitest run client/src/hooks/__tests__/useLayerData.test.ts`
-Expected: PASS (2 tests).
+Expected: PASS (3 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add apps/genie_map/config/queries apps/genie_map/client/src/hooks/useLayerData.ts apps/genie_map/client/src/hooks/__tests__
-git commit -m "feat(genie-map): hotspot_h3 SQL + generic registry-driven useLayerData hook
+git commit -m "feat(genie-map): density-aware dynamic hotspot_h3 SQL + useLayerData hook
 
-Replaces taxi h3_aggregation.sql (viewport-adaptive re-aggregation)
-with a direct read of the pre-aggregated hotspot_latest gold MV.
+Cell-sourced coarsen-only H3: zoom sets a res ceiling (capped at native
+res 6), density coarsens further via h3_toparent only when the in-view
+cell count exceeds ~300. buildLayerParams emits the dynamic-res params for
+H3 layers, bbox-only for points.
 
 Co-authored-by: Isaac"
 ```
@@ -681,39 +810,76 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 8: `wells_h3_density.sql` template
+### Task 8: `wells_h3.sql` template (point-sourced, refine + coarsen)
 
 **Files:**
-- Create: `apps/genie_map/config/queries/wells_h3_density.sql`
+- Create: `apps/genie_map/config/queries/wells_h3.sql`
 
 **Interfaces:**
-- Consumes: `wells_h3_density_latest` MV (Task 16). `useLayerData` via `well_density` LayerDef.
+- Consumes: `wells_enriched_latest` MV (Task 16) — the **points** source. `useLayerData` via `well_density` LayerDef (`h3.source==='points'`).
 - Produces: SQL returning `hex, well_count, operator_count`.
 
-- [ ] **Step 1: Write `wells_h3_density.sql`**
+- [ ] **Step 1: Write `wells_h3.sql`**
+
+Unlike the cell-sourced hotspot query, this aggregates the **well points on the fly** via
+`h3_longlatash3(lon, lat, res)` — so it can go *finer as you zoom in* (up to `max_res`),
+not just coarser. Same density heuristic: zoom sets the ceiling, density lowers it toward
+`min_res` only when the in-view well count is dense. Two-pass: bin at the zoom ceiling to
+estimate density, then re-bin at the density-adjusted resolution.
 
 ```sql
--- Params: x_min,x_max,y_min,y_max DOUBLE ; table_name STRING via IDENTIFIER()
+-- Params: x_min,x_max,y_min,y_max DOUBLE ; zoom_level INT ; zoom_break_1..4 INT ;
+--         res_1..5 INT ; min_res INT ; max_res INT ; target_cells INT ;
+--         table_name STRING via IDENTIFIER()
+WITH in_view AS (
+  SELECT longitude, latitude, operator
+  FROM IDENTIFIER(:table_name)
+  WHERE longitude BETWEEN :x_min AND :x_max
+    AND latitude  BETWEEN :y_min AND :y_max
+    AND longitude IS NOT NULL AND latitude IS NOT NULL
+),
+zoom_ceiling AS (
+  SELECT LEAST(:max_res, CASE
+    WHEN :zoom_level <= :zoom_break_1 THEN :res_1
+    WHEN :zoom_level <= :zoom_break_2 THEN :res_2
+    WHEN :zoom_level <= :zoom_break_3 THEN :res_3
+    WHEN :zoom_level <= :zoom_break_4 THEN :res_4
+    ELSE :res_5 END) AS zc
+),
+-- Estimate density at the ceiling resolution (distinct cells occupied in view).
+ceiling_cells AS (
+  SELECT COUNT(DISTINCT h3_longlatash3(longitude, latitude, (SELECT zc FROM zoom_ceiling))) AS n
+  FROM in_view
+),
+target_res AS (
+  SELECT GREATEST(:min_res,
+           (SELECT zc FROM zoom_ceiling)
+           - GREATEST(0, CAST(FLOOR(LOG(7.0, GREATEST(c.n, 1) / CAST(:target_cells AS DOUBLE))) AS INT))
+         ) AS res
+  FROM ceiling_cells c
+)
 SELECT
-  h3_h3tostring(h3_cellid) AS hex,
-  CAST(well_count     AS DOUBLE) AS well_count,
-  CAST(operator_count AS DOUBLE) AS operator_count
-FROM IDENTIFIER(:table_name)
-WHERE center_lon BETWEEN :x_min AND :x_max
-  AND center_lat BETWEEN :y_min AND :y_max
-  AND well_count IS NOT NULL
+  h3_h3tostring(h3_longlatash3(v.longitude, v.latitude, t.res)) AS hex,
+  CAST(COUNT(*)                    AS DOUBLE) AS well_count,
+  CAST(COUNT(DISTINCT v.operator)  AS DOUBLE) AS operator_count
+FROM in_view v CROSS JOIN target_res t
+GROUP BY h3_longlatash3(v.longitude, v.latitude, t.res)
 ```
 
 - [ ] **Step 2: Verify**
 
-Run: `grep -c 'h3_h3tostring' apps/genie_map/config/queries/wells_h3_density.sql`
-Expected: `1`.
+Run: `grep -c 'h3_longlatash3' apps/genie_map/config/queries/wells_h3.sql`
+Expected: `3`.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add apps/genie_map/config/queries/wells_h3_density.sql
-git commit -m "feat(genie-map): wells_h3_density SQL over wells_h3_density_latest MV
+git add apps/genie_map/config/queries/wells_h3.sql
+git commit -m "feat(genie-map): point-sourced dynamic wells_h3 SQL over wells_enriched_latest
+
+Aggregates well points via h3_longlatash3 at a zoom+density-driven
+resolution — refines finer on zoom-in (up to max_res 9), coarsens only
+when wells are genuinely dense. Single wells source, no fixed density MV.
 
 Co-authored-by: Isaac"
 ```
@@ -726,7 +892,7 @@ Co-authored-by: Isaac"
 - Create: `apps/genie_map/config/queries/wells_points.sql`
 
 **Interfaces:**
-- Consumes: `wells_enriched_latest` MV (Task 17). `useLayerData` via `wells` LayerDef.
+- Consumes: `wells_enriched_latest` MV (Task 16). `useLayerData` via `wells` LayerDef.
 - Produces: SQL returning `longitude, latitude, record_id, operator, field, county, play_name`.
 
 - [ ] **Step 1: Write `wells_points.sql`**
@@ -734,19 +900,19 @@ Co-authored-by: Isaac"
 ```sql
 -- Params: x_min,x_max,y_min,y_max DOUBLE ; table_name STRING via IDENTIFIER()
 SELECT
-  well_lon AS longitude,
-  well_lat AS latitude,
+  longitude,
+  latitude,
   CAST(api AS STRING) AS record_id,
   operator, field, county_name AS county, play_name
 FROM IDENTIFIER(:table_name)
-WHERE well_lon BETWEEN :x_min AND :x_max
-  AND well_lat BETWEEN :y_min AND :y_max
+WHERE longitude BETWEEN :x_min AND :x_max
+  AND latitude  BETWEEN :y_min AND :y_max
 LIMIT 10000
 ```
 
 - [ ] **Step 2: Verify**
 
-Run: `grep -c 'well_lon' apps/genie_map/config/queries/wells_points.sql`
+Run: `grep -c 'longitude' apps/genie_map/config/queries/wells_points.sql`
 Expected: `2`.
 
 - [ ] **Step 3: Commit**
@@ -790,8 +956,8 @@ import type { LayerRule } from './hooks/useLayerVisibility';
 const DATASET = getActiveDataset();
 const TABLE_BY_LAYER: Record<string, string> = {
   ch4_hotspots: VAPOR_EYES_TABLES.hotspot,
-  well_density: VAPOR_EYES_TABLES.wellDensity,
-  wells:        VAPOR_EYES_TABLES.wellsEnriched,
+  well_density: VAPOR_EYES_TABLES.wellsEnriched,  // well_density H3 aggregates well points
+  wells:        VAPOR_EYES_TABLES.wellsEnriched,  // ...same source as the wells point layer
   plumes:       VAPOR_EYES_TABLES.plumes,
 };
 const LAYER_RULES: LayerRule[] = DATASET.layers.map((l) => ({
@@ -1044,7 +1210,7 @@ Read `resources/images/generators/vapor-eyes.py` (THEMES dict, render helper) so
 
 - [ ] **Step 2: Author `genie-map.py` with four diagram specs**
 
-`genie-map-architecture` (User → client/server → {warehouse←gold, Genie Space}); `genie-map-two-paths` (viewport vs NLP); `genie-map-lineage` (GeoBrix/vapor-eyes gold → the 2 new wells MVs → map layers); `genie-map-registry` (one config → many layers, helios as future plug-in). Reuse the vapor-eyes accent progression.
+`genie-map-architecture` (User → client/server → {warehouse←gold, Genie Space}); `genie-map-two-paths` (viewport vs NLP); `genie-map-lineage` (GeoBrix/vapor-eyes gold → the new `wells_enriched_latest` MV → map layers); `genie-map-registry` (one config → many layers, helios as future plug-in). Consider a fifth `genie-map-dynamic-h3` explainer (zoom+density → resolution; cell-coarsen vs point-refine) — it's a strong slide. Reuse the vapor-eyes accent progression.
 
 - [ ] **Step 3: Batch-render (online)**
 
@@ -1072,7 +1238,7 @@ Co-authored-by: Isaac"
 
 - [ ] **Step 1: Write the narrative sections**
 
-Sections: (1) What we adapted (prototype → vapor-eyes); (2) The layer-registry contract (`LayerDef`/`DatasetConfig`, how to add a layer, how helios plugs in later); (3) The two new gold MVs and *why* (wells-as-H3 requirement, basin/county joins); (4) Genie Space curation decisions; (5) Deploy wiring (`gbx:app:*`, DAB); (6) Gotchas with fixes (SRID-0 re-tag, `*_geojson` detection, `__LLM_MODEL__` build-time bake, `oauth-fe` profile). No internal planning vocabulary.
+Sections: (1) What we adapted (prototype → vapor-eyes); (2) The layer-registry contract (`LayerDef`/`DatasetConfig`/`H3ResConfig`, how to add a layer, how helios plugs in later); (3) The **density-aware dynamic H3** design (why zoom-only regressed on sparse data; cell-coarsen via `h3_toparent` vs point-refine via `h3_longlatash3`; the target-cell-count heuristic) and the new `wells_enriched_latest` MV and *why* (single wells source for both H3 + points, basin/county joins); (4) Genie Space curation decisions; (5) Deploy wiring (`gbx:app:*`, DAB); (6) Gotchas with fixes (SRID-0 re-tag, `*_geojson` detection, `__LLM_MODEL__` build-time bake, `oauth-fe` profile). No internal planning vocabulary.
 
 - [ ] **Step 2: Write the reproduce-it runbook**
 
@@ -1126,28 +1292,37 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 16: New gold MV `wells_h3_density_latest`
+### Task 16: New gold MV `wells_enriched_latest` (basin/play + county/state)
+
+> This is the **single** new wells MV. The originally-planned fixed
+> `wells_h3_density_latest` MV was dropped (see the Dynamic-H3 note in "Task ordering
+> rationale"): the wells H3 layer aggregates *these points* on the fly at a
+> zoom+density-driven resolution (Task 8's `wells_h3.sql`), so `wells_enriched_latest`
+> feeds both the wells point layer AND the wells H3 layer.
 
 **Files:**
 - Modify: `notebooks/examples/vapor-eyes/lakeflow/transformations/gold_analytics.py` (append MV)
 - Test: `notebooks/examples/vapor-eyes/lakeflow/tests/validate/test_wells_gold.py` (new)
 
 **Interfaces:**
-- Consumes: `wells_shl` (SCD2), `cfg(spark)` from `_config` (has `h3_res`).
-- Produces: MV `wells_h3_density_latest` with columns `h3_cellid (bigint), well_count, operator_count, center_lon, center_lat, hex_geom (GEOMETRY 4326)`.
+- Consumes: `wells_shl` (SCD2), `ref_shale_plays` (`play_name`, `play_geom`), `ref_counties` (`county_name`, `state_fp`, `geoid`, `county_geom`).
+- Produces: MV `wells_enriched_latest` with `api, operator, lease, field, well_url, longitude, latitude, well_geom_native (GEOMETRY 4326), play_name, county_name, state_fp, geoid, county_rrc`. (Point columns are aliased `longitude`/`latitude` so the app's `wells_points.sql` and the point-sourced `wells_h3.sql` read them directly.)
 
 - [ ] **Step 1: Write the failing validator test**
 
-Add to `tests/validate/test_wells_gold.py` a test asserting the MV exists with the expected columns and non-null `hex_geom` at SRID 4326 (validators in this repo run against a materialized dev pipeline; follow the pattern in the sibling `tests/validate/` files):
+Add `tests/validate/test_wells_gold.py` (validators in this repo run against a
+materialized dev pipeline; follow the sibling `tests/validate/` pattern):
 
 ```python
-def test_wells_h3_density_latest_schema(spark):
-    df = spark.read.table("geospatial_docs.vapor_eyes_lf.wells_h3_density_latest")
+def test_wells_enriched_latest_schema(spark):
+    df = spark.read.table("geospatial_docs.vapor_eyes_lf.wells_enriched_latest")
     cols = set(df.columns)
-    assert {"h3_cellid", "well_count", "operator_count",
-            "center_lon", "center_lat", "hex_geom"} <= cols
-    assert df.filter("hex_geom IS NULL").count() == 0
-    srid = df.selectExpr("st_srid(hex_geom) AS s").first()["s"]
+    assert {"api", "operator", "longitude", "latitude",
+            "play_name", "county_name", "state_fp", "geoid"} <= cols
+    # one row per api (multi-play containment deduped to a single deterministic play)
+    assert df.count() == df.select("api").distinct().count()
+    # map-facing geometry re-tagged 4326 (SRID-0 silently unrendered)
+    srid = df.selectExpr("st_srid(well_geom_native) AS s").first()["s"]
     assert srid == 4326
 ```
 
@@ -1155,86 +1330,6 @@ def test_wells_h3_density_latest_schema(spark):
 
 Run (once the dev pipeline is materialized): the repo's validate command against this test.
 Expected: FAIL — table does not exist yet.
-
-- [ ] **Step 3: Append the MV to `gold_analytics.py`**
-
-```python
-@dp.materialized_view(
-    name="wells_h3_density_latest",
-    comment="Current TX RRC well inventory aggregated to H3 cells (map-ready hexagons)",
-)
-def wells_h3_density_latest():
-    from pyspark.sql import SparkSession
-    spark = SparkSession.getActiveSession()
-
-    c = cfg(spark)
-    res = c["h3_res"]
-    # Current SCD2 version of the well inventory.
-    wells = spark.read.table("wells_shl").filter(F.col("__END_AT").isNull())
-
-    celled = wells.withColumn(
-        "h3_cellid",
-        F.expr(f"h3_longlatash3(st_x(st_geomfromwkb(well_geom)), "
-               f"st_y(st_geomfromwkb(well_geom)), {res})"),
-    )
-    agg = celled.groupBy("h3_cellid").agg(
-        F.count("api").alias("well_count"),
-        F.countDistinct("operator").alias("operator_count"),
-    )
-    return agg.select(
-        "h3_cellid", "well_count", "operator_count",
-        F.expr("st_x(st_geomfromwkb(h3_boundaryaswkb(h3_cellid)))").alias("center_lon"),
-        F.expr("st_y(st_geomfromwkb(h3_boundaryaswkb(h3_cellid)))").alias("center_lat"),
-        F.expr("st_geomfromwkb(h3_boundaryaswkb(h3_cellid), 4326)").alias("hex_geom"),
-    )
-```
-
-(Uses native `h3_longlatash3` / `h3_boundaryaswkb`, matching `hotspot_latest`'s pattern at `gold_analytics.py:167`. `h3_res` default is 6 per `_config.py`.)
-
-- [ ] **Step 4: Verify (materialize the pipeline update, then run the test)**
-
-Deploy + run the vapor-eyes SDP dev target (existing bundle) and run the validator.
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add notebooks/examples/vapor-eyes/lakeflow/transformations/gold_analytics.py notebooks/examples/vapor-eyes/lakeflow/tests/validate/test_wells_gold.py
-git commit -m "feat(vapor-eyes): wells_h3_density_latest gold MV for Genie Map well layer
-
-Aggregates the current SCD2 well inventory to H3 cells (well_count,
-operator_count, map-ready hex_geom at SRID 4326).
-
-Co-authored-by: Isaac"
-```
-
----
-
-### Task 17: New gold MV `wells_enriched_latest` (basin/play + county/state)
-
-**Files:**
-- Modify: `notebooks/examples/vapor-eyes/lakeflow/transformations/gold_analytics.py` (append MV)
-- Test: `notebooks/examples/vapor-eyes/lakeflow/tests/validate/test_wells_gold.py` (extend)
-
-**Interfaces:**
-- Consumes: `wells_shl` (SCD2), `ref_shale_plays` (`play_name`, `play_geom`), `ref_counties` (`county_name`, `state_fp`, `geoid`, `county_geom`).
-- Produces: MV `wells_enriched_latest` with `api, operator, lease, field, well_url, well_lon, well_lat, well_geom_native (GEOMETRY 4326), play_name, county_name, state_fp, geoid, county_rrc`.
-
-- [ ] **Step 1: Extend the validator test**
-
-```python
-def test_wells_enriched_latest_schema(spark):
-    df = spark.read.table("geospatial_docs.vapor_eyes_lf.wells_enriched_latest")
-    cols = set(df.columns)
-    assert {"api", "operator", "well_lon", "well_lat",
-            "play_name", "county_name", "state_fp", "geoid"} <= cols
-    # one row per api (dedup on multi-play containment held)
-    assert df.count() == df.select("api").distinct().count()
-```
-
-- [ ] **Step 2: Run to verify it fails**
-
-Expected: FAIL — table missing.
 
 - [ ] **Step 3: Append the MV**
 
@@ -1253,8 +1348,8 @@ def wells_enriched_latest():
         .select(
             "api", "operator", "lease", "field", "well_url",
             F.col("county").alias("county_rrc"),
-            F.expr("st_x(st_geomfromwkb(well_geom))").alias("well_lon"),
-            F.expr("st_y(st_geomfromwkb(well_geom))").alias("well_lat"),
+            F.expr("st_x(st_geomfromwkb(well_geom))").alias("longitude"),
+            F.expr("st_y(st_geomfromwkb(well_geom))").alias("latitude"),
             F.expr("st_setsrid(st_geomfromwkb(well_geom), 4326)").alias("well_geom_native"),
         )
     )
@@ -1280,14 +1375,15 @@ def wells_enriched_latest():
     )
     return with_county.select(
         "api", "operator", "lease", "field", "well_url", "county_rrc",
-        "well_lon", "well_lat", "well_geom_native",
+        "longitude", "latitude", "well_geom_native",
         "play_name", "county_name", "state_fp", "geoid",
     )
 ```
 
-- [ ] **Step 4: Verify (materialize + run tests)**
+- [ ] **Step 4: Verify (materialize + run test)**
 
-Expected: PASS (both wells tests).
+Deploy + run the vapor-eyes SDP dev target (existing bundle) and run the validator.
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -1318,7 +1414,7 @@ Run the existing vapor-eyes Lakeflow bundle (`-p oauth-fe`) to update the pipeli
 
 - [ ] **Step 2: Create the Genie Space**
 
-Create a Genie Space (workspace UI or API) over `geospatial_docs.vapor_eyes_lf`, adding tables: `hotspot_latest`, `plume_leaderboard_latest`, `wells_h3_density_latest`, `wells_enriched_latest`, `plume_candidate_wells`, `ref_shale_plays`, `ref_counties`, `operator_intensity_latest`, `detections_by_county`, `emissions_by_play`.
+Create a Genie Space (workspace UI or API) over `geospatial_docs.vapor_eyes_lf`, adding tables: `hotspot_latest`, `plume_leaderboard_latest`, `wells_enriched_latest`, `plume_candidate_wells`, `ref_shale_plays`, `ref_counties`, `operator_intensity_latest`, `detections_by_county`, `emissions_by_play`.
 
 - [ ] **Step 3: Add instructions + example SQL that emit `*_geojson` geometry**
 
@@ -1354,7 +1450,7 @@ Co-authored-by: Isaac"
 
 - [ ] **Step 1: Run each SQL template on the warehouse**
 
-For each of `hotspot_h3.sql`, `wells_h3_density.sql`, `plume_points.sql`, `wells_points.sql`: substitute a Delaware Basin bbox + the fully-qualified table name, run on warehouse `82e587bd93c6cbcf` (`-p oauth-fe`, or the databricks-query skill). Verify each returns rows and the columns the hooks expect (`hex`+metric, or `longitude/latitude`+tooltips).
+For each of `hotspot_h3.sql`, `wells_h3.sql`, `plume_points.sql`, `wells_points.sql`: substitute a Delaware Basin bbox + the fully-qualified table name (and, for the two H3 queries, the dynamic-res params — pick a low-zoom and a high-zoom case), run on warehouse `82e587bd93c6cbcf` (`-p oauth-fe`, or the databricks-query skill). Verify each returns rows and the columns the hooks expect (`hex`+metric, or `longitude/latitude`+tooltips), and that the H3 queries return **coarser hexes at low zoom / finer at high zoom** (dynamic resolution working).
 
 - [ ] **Step 2: Capture results into BUILD.md**
 
@@ -1414,7 +1510,7 @@ Co-authored-by: Isaac"
 
 ## Self-Review notes
 
-- **Spec coverage:** §1 goals → Tasks 1–20; §3 data spine → registry (5) + SQL (6–9); §4 registry → Tasks 4–5; §5 gold MVs → Tasks 16–17; §6 Genie Space → Task 18; §7 packaging/deploy → Tasks 1,3,12; §8 phasing → this plan = P0+P1, follow-on noted; §9 storytelling → Tasks 13 (slide-ware), 14 (BUILD.md), 15 (README/site), with provenance capture in 19–20; §9 constraint (render batched online) honored in Task 13. All spec sections mapped.
-- **Type consistency:** `LayerDef`/`DatasetConfig` defined in Task 4, consumed in 5/6/10; `createPointLayerConfig`/`createH3LayerConfig` signatures consistent across 4/6; `buildLayerParams`/`useLayerData` signatures consistent 6/10; MV column names in 16/17 match the SQL templates in 8/9 (`h3_cellid`→`h3_h3tostring`→`hex`; `well_lon/well_lat`→`longitude/latitude`; `county_name`→`county`).
+- **Spec coverage:** §1 goals → Tasks 1–20; §3 data spine → registry (5) + SQL (6–9); §4 registry + dynamic H3 → Tasks 4–6, 8; §5 gold MV → Task 16; §6 Genie Space → Task 18; §7 packaging/deploy → Tasks 1,3,12; §8 phasing → this plan = P0+P1, follow-on noted; §9 storytelling → Tasks 13 (slide-ware), 14 (BUILD.md), 15 (README/site), with provenance capture in 19–20; §9 constraint (render batched online) honored in Task 13. All spec sections mapped.
+- **Type consistency:** `LayerDef`/`DatasetConfig` (+ `H3ResConfig`) defined in Task 4, consumed in 5/6/10; `createPointLayerConfig`/`createH3LayerConfig` signatures consistent across 4/6; `buildLayerParams`/`useLayerData` signatures consistent 6/10; the dynamic-H3 SQL params emitted by `buildLayerParams` (Task 6: `zoom_level`, `zoom_break_1..4`, `res_1..5`, `min_res`, `native_res`/`max_res`, `target_cells`) match the `:param` names consumed in `hotspot_h3.sql` (Task 6) and `wells_h3.sql` (Task 8); `wells_enriched_latest` columns (Task 16: `longitude`, `latitude`, `operator`, `county_name`, `play_name`, `api`) match the reads in `wells_h3.sql` (Task 8) and `wells_points.sql` (Task 9). Registry query names (`hotspot_h3`, `wells_h3`, `plume_points`, `wells_points`) match the SQL file names in Tasks 6–9.
 - **Placeholder scan:** no TBD/TODO; every code step shows code; SQL/bundle/command bodies are complete. One documented fallback (DAB `genie_space` resource type) is a real contingency with a stated alternative, not a placeholder.
 - **Known live-verify dependency:** Tasks 8/9 SQL and Task 10 wiring are written against the documented MV schema (16/17); their live correctness is verified in Task 19 after Task 18 materializes gold — ordering noted at top.

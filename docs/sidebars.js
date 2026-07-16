@@ -45,6 +45,9 @@ const sidebars = {
         'sample-data/overture-downloader',
         'sample-data/naip-downloader',
         'sample-data/dem-downloader',
+        'sample-data/tropomi-downloader',
+        'sample-data/emit-downloader',
+        'sample-data/wells-downloader',
       ],
     },
     {

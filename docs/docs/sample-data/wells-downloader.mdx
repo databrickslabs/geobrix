@@ -1,0 +1,192 @@
+---
+sidebar_position: 10
+title: TX RRC Wells Downloader
+---
+
+## TX RRC Wells Downloader
+
+`WellsDownloader` fetches **Texas Railroad Commission (TX RRC) well surface-hole locations** (the `WellSHL` layer) for any bounding-box AOI from an **open ArcGIS REST FeatureServer** and stages them as a single merged GeoJSON in a Unity Catalog Volume.
+
+WellSHL carries each well's surface location plus operator, lease, field, and county attributes — useful for attributing a detected methane plume to nearby oil & gas infrastructure. The service is **public — no authentication required**.
+
+:::note Prerequisites
+- GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- `requests` installed (standard with most Python environments)
+- No authentication required — TX RRC WellSHL is a public ArcGIS FeatureServer
+:::
+
+---
+
+## How It Works
+
+`WellsDownloader` talks directly to the ArcGIS REST API rather than a STAC or CMR catalog:
+
+1. **`discover(bbox, page_size=1000)`** — pages the FeatureServer (`resultOffset` / `resultRecordCount`, honoring `exceededTransferLimit`) for wells intersecting the AOI and returns the **count** of matching features. This is a driver-side count only — no file is written.
+
+2. **`download(bbox, out_dir, page_size=1000)`** — pages the same query (requesting `f=geojson`, so ArcGIS reprojects the service's native EPSG:2277 to WGS84 lon/lat automatically), merges every page into a single `wells.geojson` under `out_dir`, and validates it (non-empty and above a size floor). Returns a one-row metadata DataFrame: `out_file_path`, `feature_count`, `is_out_file_valid`, `last_update`.
+
+3. **`repair(bbox, out_dir, page_size=1000)`** — re-downloads only if `wells.geojson` is missing or below the size floor; otherwise returns the existing file's metadata unchanged.
+
+4. **`read(out_dir)`** — loads the merged `wells.geojson` via the `geojson_gbx` reader. Returns a DataFrame with the raw TX RRC attributes (e.g. `API`, `CompanyName`, `LeaseName`, `FieldName`) plus `geom_0` (WKB point), `geom_0_srid`, `geom_0_srid_proj`.
+
+Serverless-safe: a single driver-side fetch of one merged file, with no runtime Spark-config mutation or JVM-bridge access.
+
+---
+
+## API Reference
+
+### `WellsDownloader`
+
+```python
+from databricks.labs.gbx.sample.wells import WellsDownloader
+
+downloader = WellsDownloader()
+# Default service_url: TX RRC WellSHL FeatureServer (services3.arcgis.com/8jYUORGmDUL39WkJ/...)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `service_url` | `str` | ArcGIS REST FeatureServer query endpoint. Default is the public TX RRC `WellSHL` layer. Override to point at a different ArcGIS FeatureServer with a compatible schema. |
+| `_get` | injectable | Mock `requests.get`-like callable `(url, params) -> dict` for offline unit tests. |
+
+#### `discover(bbox, page_size=1000, spark=None) → int`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 (WGS84 longitude/latitude) |
+| `page_size` | `int` | `resultRecordCount` per ArcGIS page request. Default `1000`. |
+| `spark` | `SparkSession \| None` | Accepted for signature parity; unused (no Spark I/O happens here). |
+
+Returns the **count** of wells intersecting the AOI as a plain `int` — not a DataFrame. Nothing is written to disk.
+
+#### `download(bbox, out_dir, page_size=1000, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 |
+| `out_dir` | `str` | Output directory — a UC Volume path (e.g. `/Volumes/...`) or local path. Created if it doesn't exist. |
+| `page_size` | `int` | `resultRecordCount` per ArcGIS page request. Default `1000`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. Defaults to `SparkSession.getActiveSession()`. |
+
+Merges all pages into `{out_dir}/wells.geojson`. Returns a one-row DataFrame with columns: `out_file_path` (string), `feature_count` (long), `is_out_file_valid` (boolean — non-empty and above a 1024-byte floor), `last_update` (timestamp).
+
+#### `repair(bbox, out_dir, page_size=1000, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `bbox` | `(minx, miny, maxx, maxy)` | AOI in EPSG:4326 |
+| `out_dir` | `str` | Directory containing (or to receive) `wells.geojson` |
+| `page_size` | `int` | `resultRecordCount` per ArcGIS page request. Default `1000`. |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+If `wells.geojson` already exists and is above the size floor, returns its metadata unchanged (`feature_count=None`) without re-fetching. Otherwise, calls `download()`.
+
+#### `read(out_dir, spark=None) → DataFrame`
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `out_dir` | `str` | Directory written by `download()` |
+| `spark` | `SparkSession \| None` | Active SparkSession. |
+
+Loads `wells.geojson` (`filterRegex=r".*wells\.geojson$"`) via `geojson_gbx`. Returns a DataFrame with the raw TX RRC attributes (`API`, `CompanyName`, `LeaseName`, `WellNbr`, `FieldName`, `County`, `WellURL`, ...) plus `geom_0` (WKB point of the surface hole), `geom_0_srid`, `geom_0_srid_proj`.
+
+---
+
+### `download_wells_aoi` (convenience function)
+
+Constructs a default `WellsDownloader` and downloads in a single call:
+
+```python
+from databricks.labs.gbx.sample.wells import download_wells_aoi
+
+download_wells_aoi(
+    spark,
+    bbox,
+    out_dir,
+    # **kw forwarded to WellsDownloader.download() — e.g. page_size=
+)
+```
+
+---
+
+## Copy-Paste Example
+
+The example below fetches TX RRC well surface-hole locations for a Delaware Basin (Permian, TX) AOI, then ranks the nearest wells to a point of interest — the pattern used to attribute a detected methane plume to candidate operator wells.
+
+```python
+from pyspark.sql import functions as F
+from pyspark.sql.window import Window
+
+from databricks.labs.gbx.sample.wells import WellsDownloader
+
+# Delaware Basin AOI, TX (lon/lat, EPSG:4326)
+AOI_BBOX = (-103.25, 31.30, -102.85, 31.62)
+
+VOLUME = "/Volumes/main/default/geobrix_samples/wells"
+
+downloader = WellsDownloader()
+
+# Step 1 — discover: count matching wells (no file written)
+count = downloader.discover(AOI_BBOX)
+print(f"... {count:,} wells intersect the AOI")
+
+# Step 2 — download: page + merge into one wells.geojson
+meta = downloader.download(AOI_BBOX, VOLUME)
+meta.show(truncate=False)
+# +----------------------------------------------+-------------+-----------------+-------------------+
+# |out_file_path                                  |feature_count|is_out_file_valid|last_update        |
+# +----------------------------------------------+-------------+-----------------+-------------------+
+# |/Volumes/main/default/geobrix_samples/wells/...|          842|             true|2026-07-15 ...     |
+# +----------------------------------------------+-------------+-----------------+-------------------+
+
+# Step 3 — read: typed columns + WKB surface-hole point
+wells = downloader.read(VOLUME).select(
+    F.col("API").cast("string").alias("api"),
+    F.col("CompanyName").alias("operator"),
+    F.col("LeaseName").alias("lease"),
+    F.col("FieldName").alias("field"),
+    F.expr("st_geomfromwkb(geom_0)").alias("well_pt"),
+)
+wells.show(5)
+```
+
+### One-shot convenience
+
+```python
+from databricks.labs.gbx.sample.wells import download_wells_aoi
+
+meta = download_wells_aoi(spark, bbox=AOI_BBOX, out_dir=VOLUME)
+meta.show()
+```
+
+### Rank the nearest wells to a point of interest
+
+Attribution isn't a single closest pin — shortlist the nearest few candidates with native Databricks `st_distancesphere`:
+
+```python
+PLUME_ORIGIN_LON, PLUME_ORIGIN_LAT = -103.02, 31.48  # e.g. an EMIT plume max-concentration point
+K_CANDIDATES = 5
+
+candidates = (
+    wells.withColumn(
+        "dist_m",
+        F.expr(
+            f"st_distancesphere(well_pt, st_point({PLUME_ORIGIN_LON}, {PLUME_ORIGIN_LAT}))"
+        ),
+    )
+    .orderBy("dist_m")
+    .limit(K_CANDIDATES)
+)
+candidates.select("operator", "lease", "field", "dist_m").show()
+```
+
+:::tip Reuse for other ArcGIS FeatureServers
+`WellsDownloader(service_url=...)` accepts any ArcGIS REST FeatureServer query endpoint that supports `f=geojson` paging — pass a different `service_url` to reuse the same discover/download/read pattern against another state's well registry or a different feature layer entirely.
+:::
+
+---
+
+## Notebook Reference
+
+`WellsDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 04) to shortlist candidate operator well pads near a quantified EMIT plume's origin, ranked by distance with native Databricks `st_distancesphere`.

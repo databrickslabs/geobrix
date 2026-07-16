@@ -222,14 +222,68 @@ No curated space exists yet. As part of Phase 1, create a Genie Space over
   data/SQL/notebooks; build green locally (`pnpm i && pnpm build`).
 - **Phase 1 — MVP (this week).** Layer registry + vapor-eyes config; two new gold MVs in
   the SDP; curated Genie Space; DAB deploy via `gbx:app:*`; H3 viewport (CH4 + well
-  density) + wells/plume points + NLP paths working end-to-end.
+  density) + wells/plume points + NLP paths working end-to-end. **Storytelling artifacts
+  (§9) are produced within this phase** — `BUILD.md` narrative accrues as steps land,
+  provenance/screenshots captured at each working path, diagram sources authored (batch
+  render when online).
 - **Phase 2 — PMTiles.** Consume the vapor-eyes SDP's PMTiles fanout shards + light
   overview as a MapLibre/deck.gl vector layer (GeoBrix tile-perf showcase). No new tile
   generation. See [[pmtiles-spatial-sharding-model]], [[tilejoin-segfaults-on-serverless]].
 - **Phase 3+.** Raster/EMIT overlay; helios as a selectable Genie Space + dataset config
   (proves the registry seam); multi-layer selection UI.
 
-## 9. Testing & docs
+## 9. Storytelling artifacts — two audiences (first-class deliverable)
+
+This is a halo/demo example, so "how the sausage was made" is a shipped deliverable, not
+an afterthought. Two distinct audiences, two distinct artifact sets, produced alongside
+the code (not retrofitted):
+
+### 9a. For technical implementers — the build log / narrative
+
+A reproducible, honest account of the end-to-end build so another SA/engineer can rebuild
+it. Lives under `apps/genie_map/docs/` (and surfaces on the docs site page):
+
+- **`BUILD.md` — annotated build narrative.** The path from prototype → vapor-eyes app:
+  what was reused vs. rewritten, the layer-registry contract, the two new gold MVs and
+  *why* (the wells-as-H3 requirement, basin/county joins), the Genie Space curation
+  decisions, and the DAB/`gbx:app:*` deploy wiring. Includes the real gotchas as they
+  surface (SRID-0 round-trip re-tagging, geometry-column detection widening, build-time
+  `__LLM_MODEL__` bake, `oauth-fe` profile), cross-linked to the relevant memory entries.
+- **Architecture reference** — the layer-registry `LayerDef`/`DatasetConfig` contract
+  documented as the extension point (this is what makes helios a later drop-in).
+- **Reproduce-it runbook** — the exact ordered steps: rerun SDP for the 2 new MVs →
+  create/curate Genie Space → set app resources → `gbx:app:deploy`. Each step verifiable.
+- **Provenance capture** — during Phase-1 execution, capture the actual commands, SQL
+  templates, and screenshots of the working paths (viewport H3, wells layers, an NL
+  query rendering) as evidence embedded in `BUILD.md`. This is the "how it was made"
+  record.
+
+### 9b. For slide-ware — diagrams & explainers
+
+Presentation-grade visuals for the conference + Exxon talk, following the repo's existing
+example-diagram pipeline (`resources/images/generators/`, Chrome-render SVG→PNG→PIL-crop;
+the vapor-eyes palette from [[vapor-eyes-methane-example]]). Target set:
+
+- **System architecture diagram** — User → Genie Map (kepler.gl client / appkit server) →
+  {SQL warehouse ← vapor_eyes_lf gold, Genie Space}, with the two data paths (viewport vs.
+  NLP) visually distinguished. The headline "how it fits together" slide.
+- **Two-paths explainer** — side-by-side of the deterministic viewport path vs. the Genie
+  NLP path (what each is good at); frames the demo narrative.
+- **Data-lineage explainer** — GeoBrix/vapor-eyes upstream → gold MVs (incl. the new
+  wells MVs + basin/county joins) → map layers; shows where GeoBrix adds value.
+- **Layer-registry / extensibility diagram** — one config → many layers; helios as a
+  future plug-in (the reusability story).
+- These reuse the vapor-eyes accent progression and generator conventions so they sit
+  visually alongside the existing NB01–NB05 diagrams. Diagram sources committed under
+  `resources/images/generators/` (or `apps/genie_map/docs/diagrams/`), rendered PNGs
+  referenced from `BUILD.md` and the docs-site page.
+
+Both artifact sets are produced *incrementally during Phase 1* (capture as you build),
+not as a separate documentation phase — the plan sequences capture points into each
+implementation step. **Constraint:** diagram *rendering* uses Chrome/PIL tooling that can
+be slow; author diagram sources during design/build, render in a batch when online.
+
+## 10. Testing & docs
 
 - **This session:** design + spec + plan only. **No long-running builds/deploys** (user
   is at an airport with intermittent comms). All `pnpm`/deploy/pipeline runs happen when
@@ -238,10 +292,11 @@ No curated space exists yet. As part of Phase 1, create a Genie Space over
   registry layer's SQL template runs against `vapor_eyes_lf` on the warehouse and returns
   a geometry column at SRID 4326; a Genie Space smoke query returns an `ST_ASGEOJSON`
   column that renders.
-- **Docs:** `apps/genie_map/README.md` (architecture, the layer-registry contract, deploy
-  steps) + a short `docs/docs/examples/` page tying it into the vapor-eyes story.
+- **Docs:** `apps/genie_map/README.md` (quickstart), `apps/genie_map/docs/BUILD.md`
+  (§9a implementer narrative), and a `docs/docs/examples/` page embedding the §9b
+  diagrams and tying Genie Map into the vapor-eyes story.
 
-## 10. Open risks
+## 11. Open risks
 
 - **SDP rerun cost/time** to materialize the two new MVs — must run when online; keep the
   MVs cheap (current-inventory only).
@@ -253,3 +308,6 @@ No curated space exists yet. As part of Phase 1, create a Genie Space over
   Delaware Basin default viewport (tune during Phase 1).
 - **Serving model** is build-time baked (`__LLM_MODEL__`); changing it needs a rebuild,
   not just runtime config — document this.
+- **Storytelling capture is easy to defer and lose** — screenshots/commands must be
+  captured *as the working paths come up* in Phase 1, or the "how it was made" record
+  becomes a lossy reconstruction. The plan bakes capture into each step (§9).

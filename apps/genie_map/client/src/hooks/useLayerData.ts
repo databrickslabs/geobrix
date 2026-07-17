@@ -14,8 +14,10 @@ export function buildLayerParams(
 ): Record<string, unknown> | null {
   if (!bounds || !tableName) return null;
   const base: Record<string, unknown> = {
-    x_min: sql.double(bounds.x_min), x_max: sql.double(bounds.x_max),
-    y_min: sql.double(bounds.y_min), y_max: sql.double(bounds.y_max),
+    // NOTE: appkit's sql helper has no `double` — sql.number binds JS numbers
+    // as DOUBLE. Using a non-existent sql.double left these params unbound.
+    x_min: sql.number(bounds.x_min), x_max: sql.number(bounds.x_max),
+    y_min: sql.number(bounds.y_min), y_max: sql.number(bounds.y_max),
     table_name: sql.string(tableName),
   };
   if (layer.kind !== 'h3' || !layer.h3) return base;

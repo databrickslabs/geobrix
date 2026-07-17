@@ -3,8 +3,12 @@ import keplerGlReducer, { uiStateUpdaters, enhanceReduxMiddleware } from '@keple
 import { aiAssistantReducer } from '@kepler.gl/ai-assistant';
 import type { KeplerGlState } from '@kepler.gl/reducers';
 import type { AiAssistantState } from '@kepler.gl/ai-assistant';
+import { getActiveDataset } from './config/datasets';
 
 const { DEFAULT_MAP_CONTROLS } = uiStateUpdaters;
+
+// Initial map viewport comes from the active dataset registry (Task 5).
+const { longitude, latitude, zoom } = getActiveDataset().defaultViewport;
 
 // Default map controls with AI Assistant and BI Tools
 const CUSTOM_MAP_CONTROLS = {
@@ -42,9 +46,9 @@ const customizedKeplerGlReducer = keplerGlReducer.initialState({
     styleType: 'dark-matter',
   },
   mapState: {
-    latitude: 39.8,
-    longitude: -98.5,
-    zoom: 3.5,
+    latitude,
+    longitude,
+    zoom,
   },
 });
 

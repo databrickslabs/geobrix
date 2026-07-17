@@ -12,17 +12,13 @@ import { SqlPanel } from '@kepler.gl/duckdb/components';
 
 import { keplerGlGetState } from './store';
 import { replaceMapControl } from './factories/map-control';
-import { AnalyticsDashboard } from './components/panels/AnalyticsDashboard';
 import { CustomAiAssistantPanel as AiAssistantPanel } from './components/ai-assistant';
-import { useH3AggregationData } from './hooks/useH3AggregationData';
-import { usePointData } from './hooks/usePointData';
 import { useViewportBounds } from './hooks/useViewportBounds';
 import { useLayerVisibility } from './hooks/useLayerVisibility';
+import type { LayerRule } from './hooks/useLayerVisibility';
 import { usePanelState } from './hooks/usePanelState';
-import { useFilterState } from './hooks/useFilterState';
-import { H3_LAYER_ID } from './config/h3-layer-config';
-import { POINT_LAYER_ID } from './config/point-layer-config';
-import { POINT_ZOOM_THRESHOLD } from './config/dataset-config';
+import { useLayerData } from './hooks/useLayerData';
+import { getActiveDataset, VAPOR_EYES_TABLES } from './config/datasets';
 
 // Implements the default prop-forwarding behaviour from styled-components v5
 function shouldForwardProp(propName: string, target: unknown) {
@@ -78,72 +74,49 @@ const StyledVerticalResizeHandle = styled(PanelResizeHandle)`
   &:hover { background-color: #555; }
 `;
 
-const BiToolsPanelContainer = styled.div`
-  height: 100%;
-  background: #242730;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-`;
-
-const BiToolsPanelHeader = styled.div`
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px;
-  border-bottom: 1px solid #3a3f4b;
-  background: #1a1c23;
-`;
-
-const BiToolsPanelTitle = styled.h2`
-  font-size: 14px;
-  font-weight: 600;
-  color: #ffffff;
-  margin: 0;
-`;
-
-const BiToolsPanelContent = styled.div`
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-`;
-
 // ---------------------------------------------------------------------------
-// Layer visibility rules — add new layer types here without touching hook logic
+// Registry-driven layer wiring
+//
+// The active dataset (Task 5 registry) is the single source of truth for which
+// map layers exist, which source table feeds each, and their zoom-visibility
+// bands. Adding/removing a layer is a registry edit — no changes here.
 // ---------------------------------------------------------------------------
 
-const LAYER_RULES = [
-  { layerId: H3_LAYER_ID,    activeWhen: (z: number) => z < POINT_ZOOM_THRESHOLD },
-  { layerId: POINT_LAYER_ID, activeWhen: (z: number) => z >= POINT_ZOOM_THRESHOLD },
-];
+const DATASET = getActiveDataset();
+
+// Each registry layer id → the source table its query reads. well_density (H3)
+// and wells (points) intentionally share the enriched-wells source.
+const TABLE_BY_LAYER: Record<string, string> = {
+  ch4_hotspots: VAPOR_EYES_TABLES.hotspot,
+  well_density: VAPOR_EYES_TABLES.wellsEnriched, // well_density H3 aggregates well points
+  wells:        VAPOR_EYES_TABLES.wellsEnriched, // ...same source as the wells point layer
+  plumes:       VAPOR_EYES_TABLES.plumes,
+};
+
+// Layer ids MUST be derived exactly as the layer factories produce them
+// (`h3-layer-${id}` / `point-layer-${id}`), not the stale singular constants.
+const LAYER_RULES: LayerRule[] = DATASET.layers.map((l) => ({
+  layerId: l.kind === 'h3' ? `h3-layer-${l.id}` : `point-layer-${l.id}`,
+  activeWhen: (z: number) => z >= l.zoomVisible.min && z < l.zoomVisible.max,
+}));
 
 // ---------------------------------------------------------------------------
 
 function App() {
   const dispatch = useDispatch();
 
-  const { isAiAssistantPanelOpen, isBiToolsPanelOpen, isSqlPanelOpen, hasSidePanelOpen, startScreenCapture } = usePanelState();
+  const { isAiAssistantPanelOpen, isSqlPanelOpen, hasSidePanelOpen, startScreenCapture } = usePanelState();
   const { bounds, onViewStateChange } = useViewportBounds();
 
-  // Filter/aggregation state — shared between data hooks (always running) and
-  // the analytics panel UI (only mounted when the BI panel is open).
-  const filterState = useFilterState();
-  const { aggregation, categoryFilter, groupFilter } = filterState;
-
-  // Data hooks always run regardless of panel visibility so kepler.gl receives
-  // data from the first map interaction, not only after opening the panel.
-  const { h3Data, isLoading: h3Loading } = useH3AggregationData({
-    bounds,
-    aggregation,
-    categoryFilter,
-    groupFilter,
-  });
-
-  const { pointData, isLoading: pointsLoading } = usePointData({
-    bounds,
-    categoryFilter,
-    groupFilter,
-  });
+  // Registry-driven data loading. The registry is a fixed-length (4-layer)
+  // compile-time constant, so the per-layer hook calls below are unrolled to
+  // keep React's rules-of-hooks contract (stable call order every render).
+  // Each hook loads its layer's viewport-scoped rows into kepler.gl regardless
+  // of which side panel is open.
+  useLayerData(DATASET.layers[0], bounds, TABLE_BY_LAYER[DATASET.layers[0].id]);
+  useLayerData(DATASET.layers[1], bounds, TABLE_BY_LAYER[DATASET.layers[1].id]);
+  useLayerData(DATASET.layers[2], bounds, TABLE_BY_LAYER[DATASET.layers[2].id]);
+  useLayerData(DATASET.layers[3], bounds, TABLE_BY_LAYER[DATASET.layers[3].id]);
 
   useLayerVisibility(bounds?.zoom_level ?? null, LAYER_RULES);
 
@@ -188,29 +161,6 @@ function App() {
                     <StyledVerticalResizeHandle />
                     <Panel defaultSize={30} minSize={20}>
                       <AiAssistantPanel />
-                    </Panel>
-                  </>
-                )}
-
-                {isBiToolsPanelOpen && !isAiAssistantPanelOpen && !isSqlPanelOpen && (
-                  <>
-                    <StyledVerticalResizeHandle />
-                    <Panel defaultSize={30} minSize={20}>
-                      <BiToolsPanelContainer>
-                        <BiToolsPanelHeader>
-                          <BiToolsPanelTitle>Analytics Dashboard</BiToolsPanelTitle>
-                        </BiToolsPanelHeader>
-                        <BiToolsPanelContent>
-                          <AnalyticsDashboard
-                            bounds={bounds}
-                            h3Data={h3Data}
-                            h3Loading={h3Loading}
-                            pointData={pointData}
-                            pointsLoading={pointsLoading}
-                            filterState={filterState}
-                          />
-                        </BiToolsPanelContent>
-                      </BiToolsPanelContainer>
                     </Panel>
                   </>
                 )}

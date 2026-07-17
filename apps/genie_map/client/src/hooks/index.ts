@@ -1,5 +1,3 @@
-export { useH3AggregationData } from './useH3AggregationData';
-export { usePointData } from './usePointData';
 export { useKeplerDataset } from './useKeplerDataset';
 export type { KeplerDatasetConfig, KeplerDatasetResult } from './useKeplerDataset';
 export { useViewportBounds } from './useViewportBounds';

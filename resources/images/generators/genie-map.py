@@ -220,7 +220,10 @@ def g_coarse_hex(cx, cy, color, tint):
 
 
 def g_fine_hex(cx, cy, color, tint):
-    return eo.g_dense_hex_grid(cx, cy, color, tint)
+    # Sized to fit the card's glyph_h (~96px): R=13, 4 rows ≈ 84px tall, so it
+    # stays inside the card and clear of the title. (eo.g_dense_hex_grid is R=14
+    # x 7 rows ≈ 154px — it overflows this card, so we don't use it here.)
+    return eo.g_hex_grid(cx, cy, color, tint, R=13, rows=4, cols=6)
 
 
 def g_points(cx, cy, color, tint):

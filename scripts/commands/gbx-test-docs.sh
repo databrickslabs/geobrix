@@ -21,6 +21,7 @@ show_help() {
     echo -e "  ${GREEN}--test <nodeid>${NC}         Python: single test node id"
     echo ""
     echo -e "${CYAN}Common options:${NC}"
+    echo -e "  ${GREEN}--host${NC}                 Run on the host (arca), not Docker. Requires ${YELLOW}source ~/.local/geobrix-gdal-env.sh${NC} first."
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (filename → test-logs/<name>)"
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers for Python (e.g. \"not slow\")"
     echo -e "  ${GREEN}--include-integration${NC}  Include Python integration tests (excluded by default)"
@@ -47,6 +48,7 @@ SCALA_SUITE="tests.docs.scala.*"
 PYTHON_ONLY=false
 SCALA_ONLY=false
 SET_SAMPLE_DATA_ROOT=true
+USE_HOST=false
 # Pass-through for Python phase (only one of these set)
 SUITE_VAL=""
 PATH_VAL=""
@@ -54,6 +56,14 @@ TEST_VAL=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --host)
+            USE_HOST=true
+            shift
+            ;;
+        --rebuild-venv)
+            export GBX_REBUILD_VENV=1
+            shift
+            ;;
         --suite)
             case "$2" in
                 quickstart|api|readers|rasterx|advanced|setup)
@@ -128,13 +138,18 @@ done
 cd "$PROJECT_ROOT"
 
 show_banner "📚 GeoBrix: All Documentation Tests"
-check_docker
 setup_log_file "$LOG_PATH"
 
-mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
-    echo -e "${RED}❌ /Volumes not found. Start with: ./scripts/docker/start_docker_with_volumes.sh${NC}"
-    exit 1
+if [ "$USE_HOST" = true ]; then
+    require_host_gdal_env || exit 1
+    echo -e "${CYAN}🖥️  Host mode (arca) — passing --host to child suites${NC}"
+else
+    check_docker
+    mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
+    if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+        echo -e "${RED}❌ /Volumes not found. Start with: ./scripts/docker/start_docker_with_volumes.sh${NC}"
+        exit 1
+    fi
 fi
 
 [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build (--skip-build)${NC}"
@@ -146,6 +161,7 @@ TOTAL_EXIT=0
 PYTHON_ARR=()
 SQL_ARR=()
 SCALA_ARR=()
+[ "$USE_HOST" = true ] && { PYTHON_ARR+=(--host); SQL_ARR+=(--host); SCALA_ARR+=(--host); }
 [ "$SKIP_BUILD" = true ] && { PYTHON_ARR+=(--skip-build); SQL_ARR+=(--skip-build); SCALA_ARR+=(--skip-build); }
 [ "$SET_SAMPLE_DATA_ROOT" = false ] && { PYTHON_ARR+=(--no-sample-data-root); SQL_ARR+=(--no-sample-data-root); SCALA_ARR+=(--no-sample-data-root); }
 [ -n "$MARKERS_VAL" ] && [ "$INCLUDE_INTEGRATION" = false ] && { PYTHON_ARR+=(--markers "$MARKERS_VAL"); SQL_ARR+=(--markers "$MARKERS_VAL"); }

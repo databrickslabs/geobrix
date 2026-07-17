@@ -1,4 +1,6 @@
 /.idea/
+/.metals/
+/.bloop/
 /scripts/docker/m2/
 /python/geobrix/.venv/
 /python/geobrix/dist/
@@ -48,6 +50,8 @@ __pycache__/
 !/.claude/qc-judge/
 /input/
 .venv-pyrx/
+.venv-host-ci/
+.venv-host-pyrx/
 test-logs/bench/
 
 # Lakeflow DAB local override files (real per-workspace values; template committed as *.override.yml.example)

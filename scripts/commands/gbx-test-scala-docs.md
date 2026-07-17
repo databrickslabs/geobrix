@@ -10,11 +10,16 @@ bash scripts/commands/gbx-test-scala-docs.sh [OPTIONS]
 
 ## Options
 
+- `--host` – Run `mvn` on the host (arca), not the Docker container. Requires `source ~/.local/geobrix-gdal-env.sh` first (provisioned by the `geobrix-arca` plugin). See "Host mode" below.
 - `--suite <pattern>` – Maven suite pattern (default: `tests.docs.scala.*`). Example: `docs.tests.scala.api.*`
 - `--log <path>` – Log file (filename → `test-logs/<name>`, absolute path as-is)
 - `--skip-build` – Skip Maven compile before test (optional; `mvn test` still compiles)
 - `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use env or full-bundle default in Scala)
 - `--help` – Display help message
+
+## Host mode (arca, no Docker)
+
+With `--host` the command runs `mvn test` directly on the host instead of `docker exec geobrix-dev`. Scala doc-tests are a pure JVM + native GDAL path, so this only needs `source ~/.local/geobrix-gdal-env.sh` (native GDAL + Java 17 + PYTHONPATH) first — no Python test venv, so `--rebuild-venv` does not apply. Sample data reads from the on-disk `sample-data/…/test-data` mirror via `GBX_SAMPLE_DATA_ROOT`. See the `geobrix-arca` plugin for the full setup.
 
 **Sample data (default):** The command sets `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container so doc tests use the minimal bundle (required for remote/CI). Use `--no-sample-data-root` to leave it unset so Scala uses the full-bundle default path.
 
@@ -23,6 +28,10 @@ bash scripts/commands/gbx-test-scala-docs.sh [OPTIONS]
 ```bash
 # Run all Scala documentation tests
 bash scripts/commands/gbx-test-scala-docs.sh
+
+# On the arca host (no Docker) — source the GDAL env first
+source ~/.local/geobrix-gdal-env.sh
+bash scripts/commands/gbx-test-scala-docs.sh --host
 
 # Run specific docs test suite
 bash scripts/commands/gbx-test-scala-docs.sh --suite tests.docs.scala.packages.*

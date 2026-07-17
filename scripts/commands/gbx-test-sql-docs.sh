@@ -20,6 +20,9 @@ show_help() {
     echo -e "  ${GREEN}--path <path>${NC}          File or dir relative to docs/tests/python/ (default: api/)"
     echo ""
     echo -e "${CYAN}Common options:${NC}"
+    echo -e "  ${GREEN}--host${NC}                 Run on the host (arca), not Docker. Requires ${YELLOW}source ~/.local/geobrix-gdal-env.sh${NC}"
+    echo -e "                         first; builds/uses ${YELLOW}.venv-host${NC} from the pinned lock."
+    echo -e "  ${GREEN}--rebuild-venv${NC}         (with --host) force-rebuild the host test venv"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (filename → test-logs/<name>)"
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers (e.g. \"not slow\")"
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
@@ -29,29 +32,39 @@ show_help() {
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:test:sql-docs --skip-build${NC}"
+    echo -e "  ${YELLOW}gbx:test:sql-docs --host${NC}                            ${CYAN}# on the arca host (no Docker)${NC}"
     echo -e "  ${YELLOW}gbx:test:sql-docs --test api/test_sql_api.py --skip-build${NC}"
     echo -e "  ${YELLOW}gbx:test:sql-docs --log sql-docs.log${NC}"
     echo ""
 }
 
-BASE="/root/geobrix/docs/tests/python"
-TEST_PATH="${BASE}/api/"
+# REL_PATH is relative to docs/tests/python; each mode prefixes it (container BASE vs host).
+REL_PATH="api/"
 LOG_PATH=""
 MARKERS="-m 'not integration'"
 INCLUDE_INTEGRATION=false
 SKIP_BUILD=false
+USE_HOST=false
 # Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
 SET_SAMPLE_DATA_ROOT=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --test)
-            TEST_PATH="${BASE}/$2"
+            REL_PATH="$2"
             shift 2
             ;;
         --path)
-            TEST_PATH="${BASE}/$2"
+            REL_PATH="$2"
             shift 2
+            ;;
+        --host)
+            USE_HOST=true
+            shift
+            ;;
+        --rebuild-venv)
+            export GBX_REBUILD_VENV=1
+            shift
             ;;
         --log)
             LOG_PATH=$(resolve_log_path "$2")
@@ -89,24 +102,59 @@ done
 cd "$PROJECT_ROOT"
 
 show_banner "📚 GeoBrix: SQL Documentation Tests"
-check_docker
 setup_log_file "$LOG_PATH"
 
-mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
-    echo -e "${RED}❌ /Volumes not found in container. Start with: ./scripts/docker/start_docker_with_volumes.sh${NC}"
-    exit 1
-fi
+if [ "$USE_HOST" = true ]; then
+    # --- Host (arca) path: no Docker; build JAR on host, run pytest from .venv-host ---
+    require_host_gdal_env || exit 1
+    echo -e "${CYAN}🎯 Test path: ${YELLOW}$PROJECT_ROOT/docs/tests/python/$REL_PATH${NC}  ${CYAN}(host)${NC}"
+    [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build (--skip-build)${NC}"
+    echo ""
 
-echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
-[ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build (--skip-build)${NC}"
-echo ""
+    # On host, sample data reads from the on-disk mirror via GBX_SAMPLE_DATA_ROOT (path_config honors it);
+    # no /Volumes symlink needed.
+    SAMPLE_DATA_ROOT="$PROJECT_ROOT/sample-data/Volumes/main/default/test-data"
 
-# Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
-SAMPLE_DATA_ROOT_EXPORT=""
-[ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data"
+    VENV_BIN=$(ensure_host_test_venv pyrx) || exit 1
+    # Wire Spark workers to the venv python and unset PROJ_DATA/PROJ_LIB (see common.sh).
+    activate_host_python_env "$VENV_BIN"
 
-RUN_CMD="set -e
+    if [ "$SKIP_BUILD" != true ]; then
+        show_separator
+        echo -e "${CYAN}Building JAR (mvn package -DskipTests -PskipScoverage)...${NC}"
+        show_separator
+        (cd "$PROJECT_ROOT" && mvn package -DskipTests -q -PskipScoverage) || exit $?
+        echo ""
+    fi
+
+    unset JAVA_TOOL_OPTIONS
+    export JUPYTER_PLATFORM_DIRS=1
+    [ "$SET_SAMPLE_DATA_ROOT" = true ] && export GBX_SAMPLE_DATA_ROOT="$SAMPLE_DATA_ROOT"
+    show_separator
+    echo -e "${CYAN}Running SQL/API documentation tests (host)...${NC}"
+    show_separator
+    marker_args=(); [ -n "$MARKERS" ] && eval "marker_args=($MARKERS)"
+    "$VENV_BIN/python" -m pytest "$PROJECT_ROOT/docs/tests/python/$REL_PATH" -v --tb=short --color=yes "${marker_args[@]}"
+    EXIT_CODE=$?
+else
+    # --- Docker path (unchanged) ---
+    check_docker
+
+    mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
+    if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+        echo -e "${RED}❌ /Volumes not found in container. Start with: ./scripts/docker/start_docker_with_volumes.sh${NC}"
+        exit 1
+    fi
+
+    echo -e "${CYAN}🎯 Test path: ${YELLOW}/root/geobrix/docs/tests/python/$REL_PATH${NC}"
+    [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build (--skip-build)${NC}"
+    echo ""
+
+    # Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
+    SAMPLE_DATA_ROOT_EXPORT=""
+    [ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data"
+
+    RUN_CMD="set -e
 unset JAVA_TOOL_OPTIONS
 export JUPYTER_PLATFORM_DIRS=1
 $SAMPLE_DATA_ROOT_EXPORT
@@ -124,11 +172,12 @@ fi
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 echo 'Running SQL/API documentation tests...'
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
-python3 -m pytest $TEST_PATH -v $MARKERS --tb=short --color=yes
+python3 -m pytest /root/geobrix/docs/tests/python/$REL_PATH -v $MARKERS --tb=short --color=yes
 "
 
-docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
-EXIT_CODE=$?
+    docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
+    EXIT_CODE=$?
+fi
 
 echo ""
 # Short test summary when logging (pytest-style: FAILED/SKIPPED + totals)

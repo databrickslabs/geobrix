@@ -12,6 +12,9 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:notebooks${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
+    echo -e "  ${GREEN}--host${NC}                   Run on the host (arca), not Docker. Requires ${YELLOW}source ~/.local/geobrix-gdal-env.sh${NC}"
+    echo -e "                            first; builds/uses ${YELLOW}.venv-host${NC}."
+    echo -e "  ${GREEN}--rebuild-venv${NC}           (with --host) force-rebuild the host test venv"
     echo -e "  ${GREEN}--allow-absolute-reads${NC}   Do not remap absolute read paths under workdir (default: remap so reads go under temp workdir)"
     echo -e "  ${GREEN}--allow-absolute-writes${NC}  Do not remap absolute write paths under workdir (default: remap so writes go under temp workdir)"
     echo -e "  ${GREEN}--include-integration${NC}    Include full-notebook execution tests (pytest only; default: exclude)"
@@ -39,11 +42,19 @@ LOG_PATH=""
 INCLUDE_INTEGRATION=false
 ALLOW_ABSOLUTE_READS=false
 ALLOW_ABSOLUTE_WRITES=false
-TEST_PATH="/root/geobrix/notebooks/tests"
+USE_HOST=false
 PATH_ARG=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --host)
+            USE_HOST=true
+            shift
+            ;;
+        --rebuild-venv)
+            export GBX_REBUILD_VENV=1
+            shift
+            ;;
         --allow-absolute-reads)
             ALLOW_ABSOLUTE_READS=true
             shift
@@ -65,7 +76,6 @@ while [[ $# -gt 0 ]]; do
             # If user passes notebooks/tests/..., strip that prefix.
             PATH_ARG="$2"
             [[ "$PATH_ARG" == notebooks/tests/* ]] && PATH_ARG="${PATH_ARG#notebooks/tests/}"
-            TEST_PATH="/root/geobrix/notebooks/tests/$PATH_ARG"
             shift 2
             ;;
         --help|-h)
@@ -87,12 +97,9 @@ cd "$PROJECT_ROOT"
 if [[ -n "${PATH_ARG:-}" && "$PATH_ARG" == *.py && "$PATH_ARG" != */* ]]; then
     NBTEST="$PROJECT_ROOT/notebooks/tests"
     if [[ ! -f "$NBTEST/$PATH_ARG" ]]; then
-        FOUND=
         for sub in sample-data fixtures; do
             if [[ -f "$NBTEST/$sub/$PATH_ARG" ]]; then
                 PATH_ARG="$sub/$PATH_ARG"
-                TEST_PATH="/root/geobrix/notebooks/tests/$PATH_ARG"
-                FOUND=1
                 break
             fi
         done
@@ -100,29 +107,13 @@ if [[ -n "${PATH_ARG:-}" && "$PATH_ARG" == *.py && "$PATH_ARG" != */* ]]; then
 fi
 
 show_banner "📓 GeoBrix: Notebook Tests"
-check_docker
 setup_log_file "$LOG_PATH"
-
-# Ensure sample-data Volumes structure exists on host (mount target for start_docker_with_volumes.sh)
-mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
-
-# Notebook tests need /Volumes so the notebook can use get_volumes_path() and run_*_bundle()
-if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
-    echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
-    echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
-    echo ""
-    echo "Then run this command again so notebook tests can use sample-data paths."
-    exit 1
-fi
 
 # Single entry point: always use isolation (venv + GBX_NOTEBOOK_ISOLATED=1). Path can be a test file (.py) or notebook scope.
 PATH_ARG="${PATH_ARG:-}"
-# Single-quote the path for safe embedding in the docker exec bash -c string (handles parens, spaces, etc.)
-# Produces: 'some/path with (parens).ipynb' — single-quote-safe by escaping any embedded single quotes
+# Single-quote the path for safe embedding in the exec bash -c string (handles parens, spaces, etc.)
 PATH_ARG_ESCAPED="${PATH_ARG//\'/\'\\\'\'}"
 NOTEBOOK_VERBOSITY="${GBX_NOTEBOOK_VERBOSITY:-}"
-PYTEST_EXTRA="-s"
-[[ "$NOTEBOOK_VERBOSITY" = "quiet" ]] && PYTEST_EXTRA=""
 
 if [[ -n "$PATH_ARG" ]]; then
     echo -e "${CYAN}🎯 Path: ${YELLOW}$PATH_ARG${NC}"
@@ -138,7 +129,49 @@ if [[ "$PATH_ARG" == *.py ]]; then
 fi
 echo ""
 
-RUN_CMD="set -e
+if [ "$USE_HOST" = true ]; then
+    # --- Host (arca) path: no Docker; run the notebook runner from .venv-host ---
+    require_host_gdal_env || exit 1
+    VENV_BIN=$(ensure_host_test_venv pyrx) || exit 1
+    # The notebook runner needs nbformat/nbconvert (not in the pyrx lock — the runner normally installs
+    # them into its own nested venv). We run directly in .venv-host-pyrx (see below), so ensure they're
+    # present here. Idempotent; uv no-ops when already installed.
+    if ! "$VENV_BIN/python" -c "import nbformat, nbconvert" >/dev/null 2>&1; then
+        echo -e "${CYAN}Installing nbformat/nbconvert into the host venv...${NC}"
+        uv pip install --python "$VENV_BIN/python" -q nbformat nbconvert \
+            || { echo -e "${RED}❌ failed to install nbformat/nbconvert${NC}"; exit 1; }
+    fi
+    # Wire Spark workers to the venv python and unset PROJ_DATA/PROJ_LIB (see common.sh).
+    activate_host_python_env "$VENV_BIN"
+    unset JAVA_TOOL_OPTIONS
+    export JUPYTER_PLATFORM_DIRS=1
+    # Do NOT force the runner's nested-venv isolation on host: .venv-host-pyrx (plus nbformat/nbconvert
+    # installed just above) is already the isolated env, and the runner's `python -m venv` nested-venv
+    # path fails on arca (no ensurepip / python3-venv). Running directly in .venv-host-pyrx is the isolation.
+    export GBX_NOTEBOOK_ISOLATED_ENV=0
+    [ -n "$NOTEBOOK_VERBOSITY" ] && export GBX_NOTEBOOK_VERBOSITY="$NOTEBOOK_VERBOSITY"
+    [ "$INCLUDE_INTEGRATION" = true ] && export GBX_NOTEBOOK_INCLUDE_INTEGRATION=1
+    [ "$ALLOW_ABSOLUTE_READS" = true ] && export GBX_NOTEBOOK_ALLOW_ABSOLUTE_READS=1
+    [ "$ALLOW_ABSOLUTE_WRITES" = true ] && export GBX_NOTEBOOK_ALLOW_ABSOLUTE_WRITES=1
+    eval "\"$VENV_BIN/python\" \"$PROJECT_ROOT/notebooks/tests/run_notebooks_cell_by_cell.py\" ${PATH_ARG:+'$PATH_ARG_ESCAPED'}"
+    EXIT_CODE=$?
+else
+    # --- Docker path (unchanged) ---
+    check_docker
+
+    # Ensure sample-data Volumes structure exists on host (mount target for start_docker_with_volumes.sh)
+    mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
+
+    # Notebook tests need /Volumes so the notebook can use get_volumes_path() and run_*_bundle()
+    if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then
+        echo -e "${RED}❌ /Volumes not found in container. Start the container with the Volumes mount:${NC}"
+        echo -e "   ${YELLOW}./scripts/docker/start_docker_with_volumes.sh${NC}"
+        echo ""
+        echo "Then run this command again so notebook tests can use sample-data paths."
+        exit 1
+    fi
+
+    RUN_CMD="set -e
 unset JAVA_TOOL_OPTIONS
 export JUPYTER_PLATFORM_DIRS=1
 export GBX_NOTEBOOK_TESTS_DOCKER=1
@@ -156,9 +189,10 @@ pip install --no-deps -e /root/geobrix/python/geobrix --break-system-packages -q
 python3 /root/geobrix/notebooks/tests/run_notebooks_cell_by_cell.py ${PATH_ARG:+'$PATH_ARG_ESCAPED'}
 "
 
-# -t allocates a pseudo-TTY so testbook's Jupyter kernel doesn't hang (common in Docker)
-docker exec -t geobrix-dev /bin/bash -c "$RUN_CMD"
-EXIT_CODE=$?
+    # -t allocates a pseudo-TTY so testbook's Jupyter kernel doesn't hang (common in Docker)
+    docker exec -t geobrix-dev /bin/bash -c "$RUN_CMD"
+    EXIT_CODE=$?
+fi
 
 echo ""
 show_separator

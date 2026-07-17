@@ -12,6 +12,7 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:scala-docs${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
+    echo -e "  ${GREEN}--host${NC}                 Run mvn on the host (arca), not Docker. Requires ${YELLOW}source ~/.local/geobrix-gdal-env.sh${NC} first."
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (filename → test-logs/<name>)"
     echo -e "  ${GREEN}--suite <pattern>${NC}      Maven suite pattern (default: tests.docs.scala.*)"
     echo -e "  ${GREEN}--skip-build${NC}           Skip Maven compile before test (mvn test still compiles)"
@@ -32,11 +33,16 @@ show_help() {
 LOG_PATH=""
 SUITE_PATTERN="tests.docs.scala.*"
 SKIP_BUILD=false
+USE_HOST=false
 # Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
 SET_SAMPLE_DATA_ROOT=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
+        --host)
+            USE_HOST=true
+            shift
+            ;;
         --log)
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
@@ -69,7 +75,6 @@ done
 cd "$PROJECT_ROOT"
 
 show_banner "📚 GeoBrix: Scala Documentation Tests"
-check_docker
 setup_log_file "$LOG_PATH"
 
 echo -e "${CYAN}🎯 Suite: ${YELLOW}$SUITE_PATTERN${NC}"
@@ -80,14 +85,27 @@ echo -e "${CYAN}Running Scala doc tests...${NC}"
 show_separator
 echo ""
 
-# Use minimal bundle path in container unless --no-sample-data-root (then Scala uses full-bundle default)
-SAMPLE_DATA_ROOT_MAVEN=""
-[ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_MAVEN="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data && "
+if [ "$USE_HOST" = true ]; then
+    # --- Host (arca) path: run mvn directly (no Docker). Scala doc-tests are pure JVM + native GDAL. ---
+    require_host_gdal_env || exit 1
+    unset JAVA_TOOL_OPTIONS
+    export JUPYTER_PLATFORM_DIRS=1
+    [ "$SET_SAMPLE_DATA_ROOT" = true ] && export GBX_SAMPLE_DATA_ROOT="$PROJECT_ROOT/sample-data/Volumes/main/default/test-data"
+    (cd "$PROJECT_ROOT" && mvn test -PskipScoverage -Dsuites="$SUITE_PATTERN")
+    EXIT_CODE=$?
+else
+    # --- Docker path (unchanged) ---
+    check_docker
 
-MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
+    # Use minimal bundle path in container unless --no-sample-data-root (then Scala uses full-bundle default)
+    SAMPLE_DATA_ROOT_MAVEN=""
+    [ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_MAVEN="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data && "
 
-docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
-EXIT_CODE=$?
+    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
+
+    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    EXIT_CODE=$?
+fi
 
 echo ""
 # pytest-style short summary when logging (dedupe by test name, explain minimal bundle)

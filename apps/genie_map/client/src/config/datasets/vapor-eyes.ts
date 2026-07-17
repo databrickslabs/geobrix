@@ -1,6 +1,11 @@
 import type { DatasetConfig } from '@shared/types';
 
-const T = (name: string) => `geospatial_docs.vapor_eyes_lf.${name}`;
+// Fully-qualified gold table name. Catalog + schema are build-time configurable
+// (VITE_GOLD_CATALOG / VITE_GOLD_SCHEMA) so the same app can point at a different
+// workspace's vapor-eyes gold; defaults match the reference deployment.
+const CATALOG = import.meta.env.VITE_GOLD_CATALOG ?? 'geospatial_docs';
+const SCHEMA = import.meta.env.VITE_GOLD_SCHEMA ?? 'vapor_eyes_lf';
+const T = (name: string) => `${CATALOG}.${SCHEMA}.${name}`;
 
 export const vaporEyes: DatasetConfig = {
   id: 'vapor-eyes',

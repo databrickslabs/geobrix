@@ -31,8 +31,11 @@ include:
   - "*.override.yml"
 
 targets:
+  # No `mode: development`: dev mode force-prefixes managed resources with
+  # "[dev <user>]" (e.g. the Genie Space title) and ignores an empty name_prefix,
+  # which we don't want for a demo/showcase. Omitting mode deploys clean,
+  # unprefixed names — same rationale as the vapor-eyes SDP bundle.
   dev:
-    mode: development
     default: true
     workspace:
       # Host is a literal (DAB resolves auth before variables). Override it in
@@ -88,6 +91,10 @@ resources:
       title: "Vapor-Eyes — Permian Methane (Genie Map)"
       warehouse_id: ${var.warehouse_id}
       file_path: ./genie_space.geniespace.json
+      # Pin the workspace folder to one that already exists so DAB doesn't try to
+      # relocate the space into a (non-existent) .bundle/.../resources tree — that
+      # PATCH 404s. The deploying user's root workspace dir is a safe home.
+      parent_path: /Workspace/Users/${workspace.current_user.userName}
       description: >-
         All tables are already scoped to the Permian Basin — do NOT filter by a
         'Permian' play (no such value exists; plays are Delaware, Wolfcamp,

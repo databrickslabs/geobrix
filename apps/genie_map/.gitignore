@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 .env.local
+databricks.env
 *.log
 .DS_Store
 .vscode/

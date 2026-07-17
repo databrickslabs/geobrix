@@ -55,6 +55,13 @@ resources:
             name: genie-space-id
             space_id: ${var.genie_space_id}
             permission: CAN_RUN
+        # The AI Assistant proxies chat completions through the AI Gateway to this
+        # serving endpoint; declaring it as an app resource grants the app's service
+        # principal CAN_QUERY so the LLM calls aren't rejected.
+        - name: serving-endpoint
+          serving_endpoint:
+            name: ${var.serving_endpoint_name}
+            permission: CAN_QUERY
 
 variables:
   warehouse_id:
@@ -63,3 +70,6 @@ variables:
   genie_space_id:
     description: "Curated vapor-eyes Genie Space id (Vapor-Eyes — Permian Methane / Genie Map)"
     default: "01f18180a9a4192ea9669e77da489e62"
+  serving_endpoint_name:
+    description: "Foundation-model serving endpoint the AI Assistant queries"
+    default: "databricks-gpt-5-2"

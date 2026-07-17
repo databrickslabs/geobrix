@@ -11,14 +11,17 @@
 bundle:
   name: genie-map
 
-# The built server/client output lives in dist/, which is git-ignored (we don't
-# want build artifacts in git history). The app is launched with
-# `node dist/server/index.js`, so the bundle upload MUST carry dist/ or the
-# deployed app fails at startup with MODULE_NOT_FOUND. Force-include it here —
-# sync.include overrides .gitignore for the bundle upload specifically.
+# Databricks Apps builds on-compute: with pnpm-lock.yaml present the platform
+# runs `pnpm install` then the app.yaml command (`pnpm build-and-start`), so we
+# upload SOURCE ONLY. node_modules must NOT be uploaded (tens of thousands of
+# files — the upload never finishes), and dist/ must NOT be uploaded (the client
+# bundle exceeds the 10 MB per-file limit, and the platform rebuilds it anyway).
+# Both are git-ignored so DAB already skips them; these excludes are belt-and-suspenders.
 sync:
-  include:
-    - dist/**
+  exclude:
+    - node_modules
+    - dist
+    - client/src/**/__tests__/**
 
 # Workspace-specific values (host, warehouse id, genie space id) come from a
 # gitignored databricks.override.yml (see databricks.override.yml.example),

@@ -66,7 +66,10 @@ resources:
         - name: genie-space-id
           genie_space:
             name: genie-space-id
-            space_id: ${var.genie_space_id}
+            # References the bundle-managed Genie Space declared under
+            # resources.genie_spaces below, so `bundle deploy` creates the space
+            # and wires the app to it — no manual space id to paste.
+            space_id: ${resources.genie_spaces.vapor_eyes_genie.id}
             permission: CAN_RUN
         # The AI Assistant proxies chat completions through the AI Gateway to this
         # serving endpoint; declaring it as an app resource grants the app's service
@@ -76,13 +79,28 @@ resources:
             name: ${var.serving_endpoint_name}
             permission: CAN_QUERY
 
+  # The curated Genie Space the AI Assistant queries — created/managed by the
+  # bundle from a committed definition (genie_space.geniespace.json = the sorted
+  # table set). Rich instructions + example SQL are added in the Genie UI
+  # (see docs/GENIE-SPACE.md) — that curation is not expressible in the bundle.
+  genie_spaces:
+    vapor_eyes_genie:
+      title: "Vapor-Eyes — Permian Methane (Genie Map)"
+      warehouse_id: ${var.warehouse_id}
+      file_path: ./genie_space.geniespace.json
+      description: >-
+        All tables are already scoped to the Permian Basin — do NOT filter by a
+        'Permian' play (no such value exists; plays are Delaware, Wolfcamp,
+        Wolfcamp - Midland, Spraberry, Bone Spring, Abo-Yeso, Glorieta-Yeso).
+        Rank plumes by max_conc_ppmm (emission_rate_kg_hr is often NULL). For map
+        results, return geometry as an ST_ASGEOJSON(...) column aliased *_geojson.
+        Join plumes to operators via plume_candidate_wells (rank=1 = nearest well).
+        See docs/GENIE-SPACE.md for full instructions + example SQL.
+
 variables:
   warehouse_id:
     description: "SQL warehouse id the app queries (also injected as the sql-warehouse-id app resource)"
     default: "82e587bd93c6cbcf"
-  genie_space_id:
-    description: "Curated vapor-eyes Genie Space id (Vapor-Eyes — Permian Methane / Genie Map)"
-    default: "01f18180a9a4192ea9669e77da489e62"
   serving_endpoint_name:
     description: "Foundation-model serving endpoint the AI Assistant queries"
     default: "databricks-gpt-5-2"

@@ -55,12 +55,105 @@ and, unprompted beyond the description, alias the geometry as `county_geom_geojs
 The gold geometry columns are native `GEOMETRY` at SRID 4326, so `ST_ASGEOJSON` on them
 yields WGS84 GeoJSON that kepler renders directly.
 
-## Curation status & follow-ups
+## How the space is created / curated (what's automated vs manual)
 
-- **Fed via API:** the table set + the description above (this is what the
-  `create-space` call carried).
-- **UI-side follow-up (not yet done):** richer per-table/column instructions, explicit
-  join hints, and saved example NL→SQL pairs are best authored in the Genie Space editor
-  UI. The concentration-led framing (rank by `max_conc_ppmm`, never sum emission rates)
-  and the "always alias geometry as `*_geojson`" rule should be added there as standing
-  instructions. Any context added in the UI must be reflected back into this document.
+- **Automated by the DAB bundle** (`resources.genie_spaces.vapor_eyes_genie` in
+  `apps/genie_map/databricks.yml`): the space itself, its warehouse, the **table set**
+  (from `genie_space.geniespace.json`), and a short **description** carrying the key
+  guardrails. `databricks bundle deploy` creates/updates it — no manual space id.
+- **Manual, in the Genie Space UI** (the rich curation below): the Databricks Genie API
+  does not reliably accept detailed instructions + saved example SQL in the serialized
+  body, so paste the two blocks below into the space editor. This is the one manual step
+  in the setup runbook (`docs/SETUP.md`); `gbx:app:setup` prints a reminder.
+
+> Keep this document as the single source of truth. If you change the space's instructions
+> or examples in the UI, update the blocks below to match.
+
+---
+
+### Paste block A — General instructions (Genie Space → Instructions tab)
+
+```
+This Space answers questions about methane monitoring over the Permian Basin (West
+Texas / SE New Mexico). ALL tables are already spatially scoped to the Permian Basin —
+there is no "Permian" filter to apply and no "Permian" value anywhere.
+
+IMPORTANT — do NOT filter by a "Permian" play. ref_shale_plays.play_name contains only
+sub-basin plays/formations: Delaware, Wolfcamp, Wolfcamp - Midland, Spraberry, Bone
+Spring, Abo-Yeso, Glorieta-Yeso. For "Permian Basin" questions, query the whole table
+(it is already Permian). Only filter by play_name for a specific named play, and match
+those exact names. Counties (ref_counties.county_name, e.g. Loving, Reeves, Eddy, Lea,
+Midland, Ector) are the other geographic filter.
+
+Ranking: rank plumes by max_conc_ppmm (peak methane concentration, ppm·m), highest first.
+emission_rate_kg_hr is frequently NULL (no wind at overpass) — never rank or filter by it;
+report it only as an optional secondary column.
+
+Attribution: to link a plume to its operator/well, join plume_candidate_wells on plume_id
+and keep rank = 1 (the nearest well). operator lives on the well tables.
+
+MAP RESULTS — when a question asks to show/map/plot something, return the geometry as a
+column aliased with the suffix _geojson using ST_ASGEOJSON(<geometry column>). The app
+renders any *_geojson column as a map layer. The map-ready geometry columns (all SRID
+4326) are:
+- hotspot_latest.hex_geom            (H3 hotspot hexagons; also center_lon/center_lat)
+- plume_leaderboard_latest.plume_geom_native  (EMIT plumes; also lon_max/lat_max)
+- wells_enriched_latest.well_geom_native      (wells; also longitude/latitude)
+- ref_shale_plays.play_geom          (play polygons)
+- ref_counties.county_geom           (county polygons)
+
+Table roles:
+- hotspot_latest — latest-overpass S5P CH4 hotspot H3 cells (ch4_max, ch4_mean, n_obs).
+- plume_leaderboard_latest — one row per EMIT plume, peak concentration + leading operator.
+- wells_enriched_latest — current well inventory, tagged with operator, lease, field,
+  play_name, county_name/state_fp.
+- plume_candidate_wells — nearest-K wells per plume (rank=1 = closest); operator attribution.
+- operator_intensity_latest — per-operator plume counts + peak concentration + well_count.
+- detections_by_county / emissions_by_play — plume rollups to county / shale play (map-ready).
+```
+
+### Paste block B — Example SQL queries (Genie Space → Example SQL queries)
+
+Add each as a named example. All were run against the gold schema and return rows
+(counts noted). Replace the catalog/schema prefix if you deployed to a different one.
+
+**Latest EMIT plumes as a map layer** — *"Show the latest methane plumes on the map, strongest first"* (72 rows)
+```sql
+SELECT plume_id, max_conc_ppmm, lead_operator, lead_county,
+       ST_ASGEOJSON(plume_geom_native) AS plume_geojson
+FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest
+ORDER BY max_conc_ppmm DESC
+```
+
+**CH4 hotspot hexagons as a map layer** — *"Map the CH4 hotspots"* (48 rows)
+```sql
+SELECT h3_h3tostring(h3_cellid) AS hex, ch4_max, ch4_mean, n_obs,
+       ST_ASGEOJSON(hex_geom) AS hex_geojson
+FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.hotspot_latest
+ORDER BY ch4_max DESC
+```
+
+**Operators nearest the strongest plumes** — *"Which operators have wells nearest the strongest plumes?"* (72 rows)
+```sql
+SELECT p.plume_id, p.max_conc_ppmm, w.operator, w.county, w.dist_m
+FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_candidate_wells w
+JOIN serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest p
+  ON w.plume_id = p.plume_id
+WHERE w.rank = 1
+ORDER BY p.max_conc_ppmm DESC
+```
+
+**Wells in a specific county, as a map layer** — *"Show the wells in Loving County"* (15 rows)
+```sql
+SELECT api, operator, field, play_name,
+       ST_ASGEOJSON(well_geom_native) AS well_geojson
+FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.wells_enriched_latest
+WHERE county_name = 'Loving'
+```
+
+**Plumes by shale play** — *"How many plumes are in each shale play?"* (7 rows)
+```sql
+SELECT play_name, plume_count, max_emission_kg_hr
+FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.emissions_by_play
+ORDER BY plume_count DESC
+```

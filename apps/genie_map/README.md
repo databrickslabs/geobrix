@@ -80,6 +80,11 @@ each layer is visible — is derived from it. Select the active dataset with
 
 ## Learn more
 
+- [`docs/SETUP.md`](docs/SETUP.md) — the end-to-end setup runbook: what the DAB bundle
+  automates (app, scopes, resource grants, the Genie Space) versus the few manual steps
+  (UC secret values, Genie-UI curation, first-user re-consent), each one command or copy/paste.
+- [`docs/GENIE-SPACE.md`](docs/GENIE-SPACE.md) — the canonical Genie Space definition:
+  the tables, and copy/paste-ready instruction + example-SQL blocks for the Genie UI.
 - [`docs/BUILD.md`](docs/BUILD.md) — the full build narrative: what was adapted, the
   layer-registry contract, the density-aware dynamic H3 design, the wells gold view, the
   Genie Space curation, and a step-by-step reproduce-it runbook.

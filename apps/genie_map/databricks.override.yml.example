@@ -7,8 +7,11 @@
 targets:
   dev:
     workspace:
+      host: https://YOUR-WORKSPACE.cloud.databricks.com
       profile: YOUR_CLI_PROFILE
     variables:
-      workspace_host: https://YOUR-WORKSPACE.cloud.databricks.com
       warehouse_id: YOUR_SQL_WAREHOUSE_ID
-      genie_space_id: YOUR_CURATED_GENIE_SPACE_ID
+      # The Genie Space is created/managed by the bundle (resources.genie_spaces),
+      # so there is no genie_space_id to set here. Retarget the gold catalog/schema
+      # for a different workspace via the app build env (VITE_GOLD_CATALOG /
+      # VITE_GOLD_SCHEMA in app.yaml) and the space file (genie_space.geniespace.json).

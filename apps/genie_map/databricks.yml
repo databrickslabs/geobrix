@@ -1,0 +1,41 @@
+# Databricks Asset Bundle for the Genie Map app.
+#
+# Declarative resource set (warehouse, genie-space, app name) — kept as a simple
+# named list so a future scaffold_map_app(resources) helper can be lifted from it.
+#
+# Deploy via: gbx:app:deploy  (pnpm build → databricks bundle deploy → run).
+# This file lives at the app root (not a bundle/ subdir) so the app source is
+# inside the bundle sync root — a nested bundle with source_code_path: ../ points
+# outside the sync root and fails validation.
+
+bundle:
+  name: genie-map
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://e2-demo-field-eng.cloud.databricks.com
+
+resources:
+  apps:
+    genie_map:
+      name: genie-map
+      description: "Genie Map — vapor-eyes methane on GeoBrix"
+      source_code_path: .
+      resources:
+        - name: sql-warehouse-id
+          sql_warehouse:
+            id: 82e587bd93c6cbcf
+            permission: CAN_USE
+        - name: genie-space-id
+          genie_space:
+            name: genie-space-id
+            space_id: ${var.genie_space_id}
+            permission: CAN_RUN
+
+variables:
+  genie_space_id:
+    description: "Curated vapor-eyes Genie Space id (Vapor-Eyes — Permian Methane / Genie Map)"
+    default: "01f18180a9a4192ea9669e77da489e62"

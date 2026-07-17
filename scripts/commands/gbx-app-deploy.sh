@@ -34,7 +34,7 @@ NOTES:
     - Requires apps/genie_map/databricks.env (copy from databricks.env.example
       and fill it in). It is sourced into the shell so the build picks up the vars.
     - Runs 'pnpm install' automatically if node_modules is missing.
-    - Deploys the bundle in apps/genie_map/bundle, then runs the app.
+    - Deploys the bundle at apps/genie_map (databricks.yml), then runs the app.
 
 EXAMPLES:
     bash scripts/commands/gbx-app-deploy.sh
@@ -81,7 +81,7 @@ set -a; source "$ENV_FILE"; set +a
 # Build (fail → abort before deploy)
 pnpm build || exit 1
 
-# Deploy + run the bundle
-cd "$APP_DIR/bundle" || exit 1
+# Deploy + run the bundle (databricks.yml lives at the app root)
+cd "$APP_DIR" || exit 1
 databricks bundle deploy --profile "$PROFILE" || exit 1
 databricks bundle run genie_map --profile "$PROFILE"

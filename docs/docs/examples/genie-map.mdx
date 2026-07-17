@@ -1,0 +1,87 @@
+---
+sidebar_position: 2
+title: Genie Map — Explore Methane Gold by Map or by Question
+---
+
+# Genie Map
+
+Genie Map is a Databricks App that turns the GeoBrix-processed Permian methane gold data
+into an interactive map. It sits on top of the
+[Vapor-Eyes](../notebooks/vapor-eyes) methane pipeline: where that pipeline detects and
+attributes methane over the Permian Basin, Genie Map is where you go to *look* at the
+result and interrogate it. The client is React + [kepler.gl](https://kepler.gl); the
+server is Databricks [AppKit](https://github.com/databricks-solutions/databricks-appkit);
+the data is the `geospatial_docs.vapor_eyes_lf` gold schema.
+
+![Genie Map architecture — a React + kepler.gl client and an AppKit server reading the vapor-eyes gold schema through a SQL warehouse and a curated Genie Space](../../../resources/images/diagrams/genie-map/genie-map-architecture.png)
+
+## Two ways to explore
+
+Genie Map answers the same data two ways, side by side.
+
+![Two paths through Genie Map — moving the map runs parameterized viewport SQL, while asking a question runs a Genie query that renders its geometry answer as a layer](../../../resources/images/diagrams/genie-map/genie-map-two-paths.png)
+
+**Move the map.** Every pan and zoom runs parameterized Spark SQL for the current
+viewport and redraws the layers. This path is deterministic: the same view always yields
+the same query and the same hexagons and points. Four layers ship:
+
+| Layer | Shape | What it shows |
+|---|---|---|
+| CH₄ hotspots | H3 hexagons | Peak methane concentration per cell |
+| Well density | H3 hexagons | How many wells fall in each cell |
+| Wells | Points | Individual wells, with operator and play |
+| EMIT plumes | Points | Detected plumes, by peak concentration |
+
+**Ask a question.** Type a natural-language question in the AI Assistant panel — for
+example, *"which operators have wells near the strongest plumes?"* When the answer carries
+a geometry, Genie Map draws it as a map layer next to the others, so a spoken question and
+a drawn map answer share one canvas.
+
+## Density-aware dynamic H3
+
+The map's standout behavior is how its hexagon layers pick their resolution. Keying
+resolution to zoom alone misbehaves on real data — a handful of hexagons blown up to a
+continental scale tells you nothing. So Genie Map chooses resolution from **both** zoom and
+data density.
+
+![Dynamic H3 resolution — zoom sets a ceiling, then cell count in view lowers the resolution only when the view is crowded; cell-sourced layers coarsen while point-sourced layers can also refine](../../../resources/images/diagrams/genie-map/genie-map-dynamic-h3.png)
+
+- **Zoom sets a ceiling** — the maximum resolution allowed at the current zoom.
+- **Density lowers it only when crowded** — when a view holds far more cells than the map
+  can usefully show, the hexagons coarsen a step at a time. Sparse views stay at the
+  ceiling, with no pointless coarsening.
+
+The two hexagon layers differ in how far they can go. The CH₄ hotspots come from cells
+stored at the satellite's native resolution, so they coarsen when dense but never go finer
+than the instrument measured. The well-density layer bins raw well coordinates on the fly,
+so it can both coarsen when crowded and **refine as you zoom in**. The result reads
+naturally end to end: a basin-wide screen of coarse hexagons that resolves into fine cells
+and individual well pads as you close in.
+
+## One map-ready wells view
+
+Both the well-density hexagons and the individual well points read one gold view,
+`wells_enriched_latest`. It takes the current well inventory and spatially tags each well
+with its shale play and its county and state, carrying the operator, lease, field, and a
+map-ready point — one row per well.
+
+![Data lineage — the vapor-eyes methane gold tables feed the wells_enriched_latest view, which feeds the well-density and well layers on the map](../../../resources/images/diagrams/genie-map/genie-map-lineage.png)
+
+## Built to be re-pointed
+
+Genie Map is config-driven. One dataset configuration declares the list of layers, and
+everything downstream — the SQL each layer runs, the kepler layer it draws, when it is
+visible — is derived from that one declaration. Pointing the map at a different scenario is
+a matter of adding a configuration, not editing app code.
+
+![Layer registry — one dataset configuration declares many layers, each with its query, shape, styling, and zoom-visibility band](../../../resources/images/diagrams/genie-map/genie-map-registry.png)
+
+## Run it
+
+The app lives in the GeoBrix repository under `apps/genie_map/`. Its `README.md` has the
+quickstart — prerequisites, environment setup, and the local-dev and deploy commands — and
+`docs/BUILD.md` is the full build narrative for anyone who wants to rebuild it or adapt it
+to another dataset.
+
+To see the data pipeline behind the map, read the
+[Vapor-Eyes example](../notebooks/vapor-eyes).

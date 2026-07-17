@@ -45,6 +45,10 @@ resources:
       name: genie-map
       description: "Genie Map — vapor-eyes methane on GeoBrix"
       source_code_path: .
+      # The kepler.gl client bundle is large; the on-compute `vite build` OOMs on
+      # MEDIUM (default). LARGE gives the build enough heap (paired with
+      # --max-old-space-size=8192 in build:client).
+      compute_size: LARGE
       resources:
         - name: sql-warehouse-id
           sql_warehouse:

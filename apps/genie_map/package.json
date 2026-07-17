@@ -11,7 +11,7 @@
     "dev:server": "NODE_ENV=development tsx watch server/index.ts",
     "dev:client": "vite",
     "build": "npm run build:server && npm run build:client",
-    "build:client": "NODE_OPTIONS='--max-old-space-size=4096' vite build",
+    "build:client": "NODE_OPTIONS='--max-old-space-size=8192' vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "typegen": "appkit typegen",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",

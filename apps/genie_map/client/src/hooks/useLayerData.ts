@@ -33,6 +33,36 @@ export function buildLayerParams(
   return p;
 }
 
+/**
+ * Derive the kepler dataset field list (name + type) for a layer.
+ *
+ * The returned list is the single source of truth for BOTH the column set
+ * fetched into the dataset AND the row order (`toKeplerRow` maps over it), so
+ * hex/coords are kept first for readability. Names are de-duped: for h3, the
+ * hex column and valueField may also appear in `tooltipFields`, and every
+ * tooltip column must be registered or its tooltip renders empty.
+ */
+export function buildFields(layer: LayerDef): { name: string; type: string }[] {
+  const out: { name: string; type: string }[] = [];
+  const seen = new Set<string>();
+  const push = (name: string, type: string) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    out.push({ name, type });
+  };
+  if (layer.kind === 'h3') {
+    push(layer.hexField ?? 'hex', 'string');
+    push(layer.valueField, 'real');
+    // Remaining tooltip columns are metrics (ch4_mean, n_obs, operator_count, …).
+    layer.tooltipFields.forEach((f) => push(f, 'real'));
+  } else {
+    push(layer.lngField!, 'real');
+    push(layer.latField!, 'real');
+    layer.tooltipFields.forEach((f) => push(f, 'string'));
+  }
+  return out;
+}
+
 export function useLayerData(layer: LayerDef, bounds: ViewportBounds | null, tableName: string) {
   const params = useMemo(() => buildLayerParams(layer, bounds, tableName), [layer, bounds, tableName]);
 
@@ -45,12 +75,7 @@ export function useLayerData(layer: LayerDef, bounds: ViewportBounds | null, tab
           latField: layer.latField!, lngField: layer.lngField!, tooltipFields: layer.tooltipFields })
   ), [layer]);
 
-  const fields = useMemo(() => (
-    layer.kind === 'h3'
-      ? [{ name: layer.hexField ?? 'hex', type: 'string' }, { name: layer.valueField, type: 'real' }]
-      : [{ name: 'longitude', type: 'real' }, { name: 'latitude', type: 'real' },
-         ...layer.tooltipFields.map((f) => ({ name: f, type: 'string' }))]
-  ), [layer]);
+  const fields = useMemo(() => buildFields(layer), [layer]);
 
   return useKeplerDataset<Record<string, unknown>>({
     queryName: layer.queryName, params,

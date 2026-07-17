@@ -110,10 +110,10 @@ function summarizeGenieEvents(events: GenieStreamEvent[]): GenieSummary {
 }
 
 /** Find the first column likely to contain a GeoJSON geometry value. */
-function findGeometryColumn(columns: string[]): string | undefined {
+export function findGeometryColumn(columns: string[]): string | undefined {
   return columns.find((col) => {
     const lower = col.toLowerCase();
-    return lower.includes('geojson') || lower === 'geometry';
+    return lower.includes('geojson') || lower === 'geometry' || lower === 'geom';
   });
 }
 

@@ -14,6 +14,14 @@ describe('layer config factories', () => {
     expect(layer.config.columns.hex_id).toBe('hex');
   });
 
+  it('H3 factory resolves a registered non-default palette to a distinct colorRange', () => {
+    const dflt = createH3LayerConfig({ datasetId: 'a', palette: 'Global Warming' }) as any;
+    const cfg = createH3LayerConfig({ datasetId: 'b', palette: 'Uber Viz Sequential' }) as any;
+    const dfltColors = dflt.config.visState.layers[0].config.visConfig.colorRange.colors;
+    const colors = cfg.config.visState.layers[0].config.visConfig.colorRange.colors;
+    expect(colors).not.toEqual(dfltColors);
+  });
+
   it('point factory returns a point layer bound to the given dataset id + coords', () => {
     const cfg = createPointLayerConfig({
       datasetId: 'wells', label: 'Wells',

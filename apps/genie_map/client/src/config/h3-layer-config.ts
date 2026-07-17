@@ -16,8 +16,19 @@ const GLOBAL_WARMING = {
   colors: ['#5A1846', '#900C3F', '#C70039', '#E3611C', '#F1920E', '#FFC300'],
 };
 
+// kepler.gl's built-in "Uber Viz Sequential" 6-color sequential range.
+const UBER_VIZ_SEQUENTIAL = {
+  name: 'Uber Viz Sequential',
+  type: 'sequential',
+  category: 'Uber',
+  colors: ['#E6FAFA', '#C1E5E6', '#9DD0D4', '#75BBC1', '#4BA7AF', '#00939C'],
+};
+
+// Every palette named by a registry LayerDef.palette must be registered here,
+// otherwise resolveColorRange silently falls back to Global Warming.
 const COLOR_RANGES: Record<string, typeof GLOBAL_WARMING> = {
   'Global Warming': GLOBAL_WARMING,
+  'Uber Viz Sequential': UBER_VIZ_SEQUENTIAL,
 };
 
 function resolveColorRange(palette: string) {

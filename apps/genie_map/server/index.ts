@@ -1,5 +1,8 @@
 import { createApp, server, analytics, genie, serving } from '@databricks/appkit';
-import { customRoutes } from './routes/custom-plugin';
+// Explicit .js extension: the compiled output is ESM ("type":"module") and Node's
+// ESM loader requires extensions on relative imports at runtime. tsc (module:
+// ESNext) emits this path verbatim, so it must already carry .js.
+import { customRoutes } from './routes/custom-plugin.js';
 
 // DATABRICKS_APP_PORT is injected by the Databricks Apps runtime in production.
 // Fall back to PORT (set to 3000 in .env) for local development.

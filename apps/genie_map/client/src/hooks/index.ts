@@ -4,5 +4,3 @@ export { useViewportBounds } from './useViewportBounds';
 export { useLayerVisibility } from './useLayerVisibility';
 export type { LayerRule } from './useLayerVisibility';
 export { usePanelState } from './usePanelState';
-export { useFilterState } from './useFilterState';
-export type { FilterState } from './useFilterState';

@@ -29,4 +29,4 @@ bash scripts/commands/gbx-app-deploy.sh --profile oauth-fe --log deploy.log
 - Requires `apps/genie_map/databricks.env` (copy from `databricks.env.example` and fill it in).
 - The env file is sourced into the shell so the build picks up the vars.
 - Runs `pnpm install` automatically if `node_modules` is missing.
-- Deploys the bundle in `apps/genie_map/bundle`, then runs the app.
+- Deploys the bundle at `apps/genie_map/databricks.yml` (app root), then runs the app.

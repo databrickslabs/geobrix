@@ -1,9 +1,13 @@
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { sql } from '@databricks/appkit-ui/js';
 import { useKeplerDataset } from './useKeplerDataset';
 import { createH3LayerConfig } from '../config/h3-layer-config';
 import { createPointLayerConfig } from '../config/point-layer-config';
 import type { LayerDef, ViewportBounds } from '@shared/types';
+
+// Module-level identity transform — stable reference so it never re-triggers
+// the kepler-update memo in useKeplerDataset (see its transformRows contract).
+const identityRows = (raw: unknown[]) => raw as Record<string, unknown>[];
 
 export function buildLayerParams(
   layer: LayerDef, bounds: ViewportBounds | null, tableName: string,
@@ -77,10 +81,18 @@ export function useLayerData(layer: LayerDef, bounds: ViewportBounds | null, tab
 
   const fields = useMemo(() => buildFields(layer), [layer]);
 
+  // Stable reference keyed on `fields` — identity only changes when the field
+  // list does, so the kepler-update effect does not re-fire every render.
+  const toKeplerRow = useCallback(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (row: Record<string, unknown>) => fields.map((f) => (row as any)[f.name]),
+    [fields],
+  );
+
   return useKeplerDataset<Record<string, unknown>>({
     queryName: layer.queryName, params,
-    transformRows: (raw) => raw as Record<string, unknown>[],
-    toKeplerRow: (row) => fields.map((f) => (row as any)[f.name]),
+    transformRows: identityRows,
+    toKeplerRow,
     fields, datasetId: layer.id, datasetLabel: layer.label, layerConfig,
   });
 }

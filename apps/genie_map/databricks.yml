@@ -11,6 +11,15 @@
 bundle:
   name: genie-map
 
+# The built server/client output lives in dist/, which is git-ignored (we don't
+# want build artifacts in git history). The app is launched with
+# `node dist/server/index.js`, so the bundle upload MUST carry dist/ or the
+# deployed app fails at startup with MODULE_NOT_FOUND. Force-include it here —
+# sync.include overrides .gitignore for the bundle upload specifically.
+sync:
+  include:
+    - dist/**
+
 targets:
   dev:
     mode: development

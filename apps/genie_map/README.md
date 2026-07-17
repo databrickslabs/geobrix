@@ -68,7 +68,7 @@ bash scripts/commands/gbx-app-deploy.sh --profile oauth-fe
 ```
 
 This builds the client and server and deploys the app through its asset bundle
-(`bundle/databricks.yml`) to your workspace.
+(`databricks.yml`, at the app root) to your workspace.
 
 ## Adding another dataset
 

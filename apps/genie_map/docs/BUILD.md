@@ -160,7 +160,7 @@ hints so a question can cross wells ↔ plumes ↔ basin ↔ county.
 ### 7. Deploy wiring
 
 The app deploys as a Databricks App via an asset bundle
-(`bundle/databricks.yml`) and two palette commands:
+(`databricks.yml`, at the app root) and two palette commands:
 
 - `gbx:app:dev` — run locally with hot reload.
 - `gbx:app:deploy` — build and deploy through the bundle.

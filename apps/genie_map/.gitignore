@@ -7,3 +7,4 @@ databricks.env
 .DS_Store
 .vscode/
 coverage/
+databricks.override.yml

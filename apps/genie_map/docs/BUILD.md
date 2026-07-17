@@ -198,3 +198,37 @@ Ordered, each step independently checkable:
    CH₄ hexagons, the well-density hexagons, and the well/plume points across zoom, and that
    a natural-language question renders a layer.
 5. **Deploy.** `bash scripts/commands/gbx-app-deploy.sh` and confirm the deployed app renders.
+
+## Data provenance — what the pipeline downloaded
+
+Counts landed by the pipeline in the full-stack demo environment
+(`serverless_stable_genie_map_catalog.vapor_eyes_lf`), by source. These are recorded
+from the bronze inventory tables after a successful land→pipeline run; they vary with
+the configured date windows and live source availability.
+
+| Source | What it is | Files / records landed |
+|---|---|---|
+| Sentinel-5P (TROPOMI) | Regional CH₄ screen | 320 granules across 139 observation dates |
+| EMIT | Plume-scale CH₄ validation scenes | 495 scenes |
+| Sentinel-2 SWIR | High-resolution methane proxy | **0 this window** — see note |
+| TX RRC wells | Well-inventory attribution master | 1 snapshot → 996 well records |
+| Carbon Mapper | Authoritative rated plume detections | 3,724 detections across 143 dates |
+
+**Sentinel-2 note.** S2 lands conditionally: the pipeline windows S2 acquisition to the
+top S5P hotspot cell and requires a low-cloud scene within the date window. When no scene
+qualifies, S2 lands nothing and the pipeline's S2 branch returns an empty result cleanly
+(the run still succeeds). In the recorded run no qualifying low-cloud S2 scene was
+available, so `s2_swir_assets` and `s2_plume_cells` are empty. S2 is not on the Genie Map
+app's critical path (the app renders CH₄ hotspots, wells, and plumes); populating an S2
+layer is a planned follow-up (widen the window / cloud threshold, verify STAC availability
+for the AOI, then add an S2 layer to the registry).
+
+To re-check these counts against a live deployment:
+
+```sql
+SELECT count(*) FROM <catalog>.vapor_eyes_lf.s5p_granules;      -- S5P granules
+SELECT count(*) FROM <catalog>.vapor_eyes_lf.emit_scenes;       -- EMIT scenes
+SELECT count(*) FROM <catalog>.vapor_eyes_lf.s2_swir_assets;    -- S2 assets
+SELECT count(*) FROM <catalog>.vapor_eyes_lf.wells_shl;         -- well records
+SELECT count(*) FROM <catalog>.vapor_eyes_lf.cm_detections;     -- Carbon Mapper detections
+```

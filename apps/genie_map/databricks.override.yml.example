@@ -1,0 +1,14 @@
+# --- databricks.override.yml.example -------------------------------------
+# Copy to `databricks.override.yml` (git-ignored) to point the Genie Map app
+# bundle at YOUR workspace. Layered in automatically via include: ["*.override.yml"].
+# A fresh clone with no override still validates/deploys using the committed
+# defaults (the reference deployment).
+# -------------------------------------------------------------------------
+targets:
+  dev:
+    workspace:
+      profile: YOUR_CLI_PROFILE
+    variables:
+      workspace_host: https://YOUR-WORKSPACE.cloud.databricks.com
+      warehouse_id: YOUR_SQL_WAREHOUSE_ID
+      genie_space_id: YOUR_CURATED_GENIE_SPACE_ID

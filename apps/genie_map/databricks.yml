@@ -20,11 +20,20 @@ sync:
   include:
     - dist/**
 
+# Workspace-specific values (host, warehouse id, genie space id) come from a
+# gitignored databricks.override.yml (see databricks.override.yml.example),
+# layered in via the include glob below — same pattern as the vapor-eyes SDP
+# bundle. The committed defaults point at the reference deployment.
+include:
+  - "*.override.yml"
+
 targets:
   dev:
     mode: development
     default: true
     workspace:
+      # Host is a literal (DAB resolves auth before variables). Override it in
+      # databricks.override.yml for a different workspace.
       host: https://e2-demo-field-eng.cloud.databricks.com
 
 resources:
@@ -36,7 +45,7 @@ resources:
       resources:
         - name: sql-warehouse-id
           sql_warehouse:
-            id: 82e587bd93c6cbcf
+            id: ${var.warehouse_id}
             permission: CAN_USE
         - name: genie-space-id
           genie_space:
@@ -45,6 +54,9 @@ resources:
             permission: CAN_RUN
 
 variables:
+  warehouse_id:
+    description: "SQL warehouse id the app queries (also injected as the sql-warehouse-id app resource)"
+    default: "82e587bd93c6cbcf"
   genie_space_id:
     description: "Curated vapor-eyes Genie Space id (Vapor-Eyes — Permian Methane / Genie Map)"
     default: "01f18180a9a4192ea9669e77da489e62"

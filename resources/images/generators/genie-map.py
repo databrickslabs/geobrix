@@ -429,7 +429,11 @@ def body_registry():
                     "One typed config declares a list of LayerDefs and the active dataset",
                     accent=ORANGE["accent"], tint=ORANGE["tint"],
                     chip_text="vapor-eyes · active", title_size=17))
-    out.append(node(dcx, 430, dcw, 120, "DatasetConfig",
+    # Vertically centered on the plumes LayerDef row (center y=517) so the dashed
+    # arrow into it is perpendicular (horizontal), not angled.
+    helios_h = 120
+    helios_y = 517 - helios_h / 2  # = 457
+    out.append(node(dcx, helios_y, dcw, helios_h, "DatasetConfig",
                     "A second dataset plugs into the same seam — no app code changes",
                     accent=C_MUTED_2, tint="#EEF1F4",
                     chip_text="helios · future plug-in", title_size=17,
@@ -465,8 +469,9 @@ def body_registry():
     for i, yc in enumerate(ld_y):
         out.append(parrow(ldx + ldw, yc, rlx, [196, 290, 384, 478][i] + 39,
                           ORANGE["accent"]))
-    # helios (future) dashed arrows toward the same LayerDef column
-    out.append(parrow(dcx + dcw, 430 + 60, ldx - 6, 500, C_MUTED_2, dash="6 5"))
+    # helios (future) dashed arrow into the plumes LayerDef — horizontal (both
+    # endpoints at the plumes row center y=517).
+    out.append(parrow(dcx + dcw, 517, ldx - 6, 517, C_MUTED_2, dash="6 5"))
     out.append(text(ldx + ldw / 2, 574, "…its own LayerDefs, same downstream machinery",
                     size=11, weight=600, fill=C_MUTED_2, anchor="middle"))
     return "".join(out)

@@ -3,6 +3,8 @@ command:
   - dist/server/index.js
 
 env:
+  # Runtime injected vars: sql-warehouse-id and genie-space-id from Databricks Apps resources.
+  # VITE_ACTIVE_DATASET is baked at build time via .env.example, not injected here.
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse-id
   - name: DATABRICKS_GENIE_SPACE_ID

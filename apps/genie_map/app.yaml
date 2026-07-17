@@ -1,11 +1,11 @@
-# Databricks Apps runs on-compute: with a pnpm-lock.yaml present it runs
-# `pnpm install` (production — devDependencies are skipped, so the build tools
-# vite/tsc live in dependencies), then this command. pnpm apps have no default
-# start, so we build on compute and then launch the server in one command.
+# Databricks Apps runs on-compute: with pnpm-lock.yaml present it runs
+# `pnpm install` (production — devDependencies skipped, so build tools vite/tsc
+# live in dependencies) AND automatically runs the package.json `build` script,
+# producing dist/. This command only STARTS the server — `pnpm` is not on PATH
+# in the runtime stage, but `node` is, so launch dist/server/index.js directly.
 command:
-  - pnpm
-  - run
-  - build-and-start
+  - node
+  - dist/server/index.js
 
 env:
   # Runtime: warehouse + genie space injected from the app resources.

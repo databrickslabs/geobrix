@@ -67,15 +67,23 @@ def test_stats_multiband():
         assert accessors.pixelcount(ds) == [12, 12]
 
 
-def test_stats_all_invalid_band_is_nan_zero():
+def test_stats_all_invalid_band_is_none_zero():
+    # All-nodata band: reducers must return None (not NaN), pixelcount 0.
     data = np.full((2, 2), -9999.0, dtype="float32")
     raster = _custom_raster(data)
     with _serde.open_tile(raster) as ds:
-        assert math.isnan(accessors.avg(ds)[0])
-        assert math.isnan(accessors.minimum(ds)[0])
-        assert math.isnan(accessors.maximum(ds)[0])
-        assert math.isnan(accessors.median(ds)[0])
+        assert accessors.avg(ds) == [None]
+        assert accessors.minimum(ds) == [None]
+        assert accessors.maximum(ds) == [None]
+        assert accessors.median(ds) == [None]
         assert accessors.pixelcount(ds) == [0]
+        # explicit: the old NaN footgun is gone
+        assert accessors.maximum(ds)[0] is None
+        assert not any(
+            isinstance(v[0], float) and math.isnan(v[0])
+            for v in (accessors.avg(ds), accessors.minimum(ds),
+                      accessors.maximum(ds), accessors.median(ds))
+        )
 
 
 # --- geotransform-derived accessors -----------------------------------------

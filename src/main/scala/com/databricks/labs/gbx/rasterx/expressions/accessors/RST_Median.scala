@@ -3,11 +3,12 @@ package com.databricks.labs.gbx.rasterx.expressions.accessors
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operator.GDALWarp
+import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.util.ArrayData
+import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, gdal}
@@ -43,7 +44,7 @@ object RST_Median extends WithExpressionInfo {
                 val ds = RasterSerializationUtil.rowToDS(row, rdt)
                 val res = execute(ds, Map.empty)
                 RasterDriver.releaseDataset(ds)
-                ArrayData.toArrayData(res)
+                new GenericArrayData(res.asInstanceOf[Array[Any]])
             },
             row,
             rdt,
@@ -51,17 +52,29 @@ object RST_Median extends WithExpressionInfo {
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
 
-    def execute(ds: Dataset, options: Map[String, String]): Array[Double] = {
+    def execute(ds: Dataset, options: Map[String, String]): Array[java.lang.Double] = {
         val outShortName = ds.GetDriver().getShortName
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val extension = GDAL.getExtension(outShortName)
         val resultPath = s"/vsimem/rst_median_$uuid.$extension"
         val cmd = s"gdalwarp -r med -ts 1 1"
         val (resDs, _) = GDALWarp.executeWarp(resultPath, Array(ds), options, cmd)
-        val maxValues = (1 to resDs.GetRasterCount()).map(i => resDs.GetRasterBand(i).AsMDArray().GetStatistics().getMax)
+        val bandCount = ds.GetRasterCount()
+        val maxValues = (1 to bandCount).map { i =>
+            val srcBand = ds.GetRasterBand(i)
+            if (srcBand == null) null
+            else if (BandAccessors.isEmpty(srcBand)) { srcBand.delete(); null }
+            else {
+                srcBand.delete()
+                val resBand = resDs.GetRasterBand(i)
+                val stats = resBand.AsMDArray().GetStatistics()
+                resBand.delete()
+                if (stats == null) null else java.lang.Double.valueOf(stats.getMax)
+            }
+        }.toArray
         resDs.delete()
         gdal.Unlink(resultPath)
-        maxValues.toArray
+        maxValues
     }
 
     override def name: String = "gbx_rst_median"

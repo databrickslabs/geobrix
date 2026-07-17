@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions
 import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_BandMetaData, RST_BoundingBox, RST_Format, RST_GeoReference, RST_GetNoData, RST_GetSubdataset, RST_Height, RST_Max, RST_Median, RST_MemSize, RST_MetaData, RST_Min, RST_NumBands, RST_PixelCount, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_Subdatasets, RST_Summary, RST_Type, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
+import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
@@ -242,5 +243,70 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         width shouldBe ds.GetRasterXSize()
     }
 
+    // ---------------------------------------------------------------------------
+    // Helpers
+    // ---------------------------------------------------------------------------
+
+    /** Creates a 2×2 Float32 in-memory GTiff where all pixels equal the nodata value (-9999). */
+    private def allNodataDataset(): Dataset = {
+        val path = "/vsimem/all_nodata_test.tif"
+        val driver = gdal.GetDriverByName("GTiff")
+        val outDs = driver.Create(path, 2, 2, 1, gdalconstConstants.GDT_Float32)
+        val band = outDs.GetRasterBand(1)
+        band.SetNoDataValue(-9999.0)
+        val pixels = Array(-9999.0f, -9999.0f, -9999.0f, -9999.0f)
+        band.WriteRaster(0, 0, 2, 2, pixels)
+        outDs.FlushCache()
+        band.delete()
+        // Re-open so the mask band is initialised properly
+        outDs.delete()
+        gdal.Open(path)
+    }
+
+    // ---------------------------------------------------------------------------
+    // Empty-band (all-nodata) contract
+    // ---------------------------------------------------------------------------
+
+    test("RST_Max returns null element for an all-nodata band") {
+        val nodataDs = allNodataDataset()
+        try {
+            val max = RST_Max.execute(nodataDs)
+            max(0) shouldBe null
+        } finally {
+            nodataDs.delete()
+            gdal.Unlink("/vsimem/all_nodata_test.tif")
+        }
+    }
+
+    test("RST_Min returns null element for an all-nodata band") {
+        val nodataDs = allNodataDataset()
+        try {
+            val min = RST_Min.execute(nodataDs)
+            min(0) shouldBe null
+        } finally {
+            nodataDs.delete()
+            gdal.Unlink("/vsimem/all_nodata_test.tif")
+        }
+    }
+
+    test("RST_Avg returns null element for an all-nodata band") {
+        val nodataDs = allNodataDataset()
+        try {
+            RST_Avg.execute(nodataDs)(0) shouldBe null
+        } finally {
+            nodataDs.delete()
+            gdal.Unlink("/vsimem/all_nodata_test.tif")
+        }
+    }
+
+    test("RST_Median returns null element for an all-nodata band") {
+        val nodataDs = allNodataDataset()
+        try {
+            RST_Median.execute(nodataDs, Map.empty)(0) shouldBe null
+        } finally {
+            nodataDs.delete()
+            gdal.Unlink("/vsimem/all_nodata_test.tif")
+        }
+    }
 
 }

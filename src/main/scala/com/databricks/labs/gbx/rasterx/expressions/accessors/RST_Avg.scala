@@ -2,11 +2,12 @@ package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions._
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.util.ArrayData
+import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
@@ -43,7 +44,7 @@ object RST_Avg extends WithExpressionInfo {
                 val ds = RasterSerializationUtil.rowToDS(row, dt)
                 val res = execute(ds)
                 RasterDriver.releaseDataset(ds)
-                ArrayData.toArrayData(res)
+                new GenericArrayData(res.asInstanceOf[Array[Any]])
             },
             row,
             dt,
@@ -51,14 +52,15 @@ object RST_Avg extends WithExpressionInfo {
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
 
-    def execute(ds: Dataset): Array[Double] = {
+    def execute(ds: Dataset): Array[java.lang.Double] = {
         (1 to ds.GetRasterCount()).map { bandIndex =>
             val band = ds.GetRasterBand(bandIndex)
-            if (band == null) Double.NaN
+            if (band == null) null
+            else if (BandAccessors.isEmpty(band)) { band.delete(); null }
             else {
                 val stats = band.AsMDArray().GetStatistics()
-                if (stats == null) Double.NaN
-                else stats.getMean
+                band.delete()
+                if (stats == null) null else java.lang.Double.valueOf(stats.getMean)
             }
         }.toArray
     }

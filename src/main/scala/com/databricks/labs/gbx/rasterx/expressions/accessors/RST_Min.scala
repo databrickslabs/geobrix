@@ -7,7 +7,7 @@ import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUti
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.util.ArrayData
+import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
@@ -43,7 +43,7 @@ object RST_Min extends WithExpressionInfo {
                 val ds = RasterSerializationUtil.rowToDS(row, rdt)
                 val res = execute(ds)
                 RasterDriver.releaseDataset(ds)
-                ArrayData.toArrayData(res)
+                new GenericArrayData(res.asInstanceOf[Array[Any]])
             },
             row,
             rdt,
@@ -51,14 +51,15 @@ object RST_Min extends WithExpressionInfo {
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
 
-    def execute(ds: Dataset): Array[Double] = {
+    def execute(ds: Dataset): Array[java.lang.Double] = {
         (1 to ds.GetRasterCount()).map { bandIndex =>
             val band = ds.GetRasterBand(bandIndex)
-            if (band == null) Double.NaN
+            if (band == null) null
+            else if (BandAccessors.isEmpty(band)) { band.delete(); null }
             else {
                 val (min, _) = BandAccessors.getMinMax(band)
                 band.delete()
-                min
+                java.lang.Double.valueOf(min)
             }
         }.toArray
     }

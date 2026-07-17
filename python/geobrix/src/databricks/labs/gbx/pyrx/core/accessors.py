@@ -117,39 +117,39 @@ def _valid_values(ds, band_index: int) -> np.ndarray:
     return arr[mask != 0].ravel()
 
 
-def avg(ds) -> List[float]:
-    """Per-band mean of valid pixels; NaN for empty/all-invalid bands."""
+def avg(ds) -> List[Optional[float]]:
+    """Per-band mean of valid pixels; None for empty/all-invalid bands."""
     out = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.mean(vals)) if vals.size else float("nan"))
+        out.append(float(np.mean(vals)) if vals.size else None)
     return out
 
 
-def minimum(ds) -> List[float]:
-    """Per-band min of valid pixels; NaN for empty/all-invalid bands."""
+def minimum(ds) -> List[Optional[float]]:
+    """Per-band min of valid pixels; None for empty/all-invalid bands."""
     out = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.min(vals)) if vals.size else float("nan"))
+        out.append(float(np.min(vals)) if vals.size else None)
     return out
 
 
-def maximum(ds) -> List[float]:
-    """Per-band max of valid pixels; NaN for empty/all-invalid bands."""
+def maximum(ds) -> List[Optional[float]]:
+    """Per-band max of valid pixels; None for empty/all-invalid bands."""
     out = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.max(vals)) if vals.size else float("nan"))
+        out.append(float(np.max(vals)) if vals.size else None)
     return out
 
 
-def median(ds) -> List[float]:
-    """Per-band median of valid pixels; NaN for empty/all-invalid bands."""
+def median(ds) -> List[Optional[float]]:
+    """Per-band median of valid pixels; None for empty/all-invalid bands."""
     out = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.median(vals)) if vals.size else float("nan"))
+        out.append(float(np.median(vals)) if vals.size else None)
     return out
 
 

@@ -101,7 +101,7 @@ resources:
           spark_python_task:
             python_file: ./land/land.py
             parameters:
-              ["--sources", "s5p,emit,wells,s2,cm,context", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}", "--cm-window", "${var.cm_window}", "--cm-secret", "${var.cm_secret}", "--earthdata-secret", "${var.earthdata_secret}"]
+              ["--sources", "s5p,emit,wells,s2,cm,context", "--catalog", "${var.catalog}", "--schema", "${var.schema}", "--window", "${var.date_window}", "--s5p-temporal", "${var.s5p_temporal}", "--s5p-windows", "${var.s5p_windows}", "--emit-windows", "${var.emit_windows}", "--cloud-max", "${var.cloud_max}", "--cm-window", "${var.cm_window}", "--cm-secret", "${var.cm_secret}", "--earthdata-secret", "${var.earthdata_secret}"]
           environment_key: land_env
         - task_key: pipeline
           depends_on: [{task_key: land}]

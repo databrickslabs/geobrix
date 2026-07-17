@@ -24,3 +24,5 @@ env:
     value: serverless_stable_genie_map_catalog
   - name: VITE_GOLD_SCHEMA
     value: vapor_eyes_lf
+  - name: VITE_GENIE_SPACE_NAME
+    value: "Vapor-Eyes — Permian Methane (Genie Map)"

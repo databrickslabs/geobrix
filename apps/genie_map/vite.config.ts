@@ -20,6 +20,9 @@ export default defineConfig(({ mode }) => {
       // Inject DATABRICKS_SERVING_ENDPOINT_NAME as a compile-time constant so
       // client code can use the same model name without a separate VITE_ var.
       '__LLM_MODEL__': JSON.stringify(env.DATABRICKS_SERVING_ENDPOINT_NAME ?? ''),
+      // Human-readable Genie Space name, shown in the assistant panel so users
+      // can see which space it is configured to query.
+      '__GENIE_SPACE_NAME__': JSON.stringify(env.VITE_GENIE_SPACE_NAME ?? ''),
     },
     resolve: {
       alias: {

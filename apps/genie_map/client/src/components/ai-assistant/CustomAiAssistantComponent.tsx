@@ -37,7 +37,13 @@ import { getKeplerTools, getQueryTool, getGeoTools, getEchartsTools, getDatasetC
 const ASSISTANT_NAME = 'Kepler.gl AI Assistant';
 const ASSISTANT_DESCRIPTION = 'AI-powered geospatial analysis assistant with Databricks SQL';
 const ASSISTANT_VERSION = '1.0.0';
+// __GENIE_SPACE_NAME__ is injected at build time (vite define) from
+// VITE_GENIE_SPACE_NAME; fall back to a generic phrase if it wasn't set.
+const GENIE_SPACE_LABEL = __GENIE_SPACE_NAME__ || 'the configured Databricks Genie Space';
+
 const WELCOME_MESSAGE = `Hello! I'm your geospatial AI assistant powered by Databricks. I can help you analyze spatial data.
+
+Natural-language questions are answered by **${GENIE_SPACE_LABEL}**.
 
 **Capabilities:**
 - **Natural Language Queries**: Ask questions about your data via Databricks Genie

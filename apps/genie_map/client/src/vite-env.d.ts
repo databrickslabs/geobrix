@@ -3,6 +3,10 @@
 // Compile-time constant injected by vite.config.ts from DATABRICKS_SERVING_ENDPOINT_NAME.
 declare const __LLM_MODEL__: string;
 
+// Compile-time constant injected by vite.config.ts from VITE_GENIE_SPACE_NAME —
+// the human-readable Genie Space name shown in the assistant panel.
+declare const __GENIE_SPACE_NAME__: string;
+
 // Dataset configuration env vars (VITE_* are baked into the client bundle at build time).
 interface ImportMetaEnv {
   readonly VITE_MAPBOX_TOKEN: string;

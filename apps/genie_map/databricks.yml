@@ -49,6 +49,15 @@ resources:
       # MEDIUM (default). LARGE gives the build enough heap (paired with
       # --max-old-space-size=8192 in build:client).
       compute_size: LARGE
+      # OAuth scopes the app requests on the user's behalf. dashboards.genie is
+      # required for the AI Assistant's Genie calls (without it the Genie API
+      # returns 403 'Invalid scope, required scopes: genie'); sql for the
+      # viewport warehouse queries; serving.serving-endpoints for the LLM proxy.
+      # (iam.* defaults are granted automatically and must NOT be listed here.)
+      user_api_scopes:
+        - dashboards.genie
+        - sql
+        - serving.serving-endpoints
       resources:
         - name: sql-warehouse-id
           sql_warehouse:

@@ -7,6 +7,23 @@
 
 import { H3_HEIGHT_MULTIPLIER } from './dataset-config';
 
+// Kepler.gl colorRange definitions keyed by their named palette. Additional
+// kepler named ranges can be added here; unknown names fall back to Global Warming.
+const GLOBAL_WARMING = {
+  name: 'Global Warming',
+  type: 'sequential',
+  category: 'Uber',
+  colors: ['#5A1846', '#900C3F', '#C70039', '#E3611C', '#F1920E', '#FFC300'],
+};
+
+const COLOR_RANGES: Record<string, typeof GLOBAL_WARMING> = {
+  'Global Warming': GLOBAL_WARMING,
+};
+
+function resolveColorRange(palette: string) {
+  return COLOR_RANGES[palette] ?? GLOBAL_WARMING;
+}
+
 // Dataset ID used by useViewportData and kepler layer config.
 export const H3_DATASET_ID = 'h3_dataset';
 
@@ -23,6 +40,10 @@ export interface H3LayerConfigOptions {
   opacity?: number;
   /** kepler.gl elevationScale ("Height Multiplier" in UI). Default 130. */
   elevationScale?: number;
+  /** kepler.gl named colorRange. Default 'Global Warming'. */
+  palette?: string;
+  /** Columns shown in the hover tooltip. Defaults to [hexField, valueField]. */
+  tooltipFields?: string[];
 }
 
 /**
@@ -41,6 +62,8 @@ export function createH3LayerConfig(options: H3LayerConfigOptions) {
     enable3d = true,
     opacity = 0.8,
     elevationScale = 130,
+    palette = 'Global Warming',
+    tooltipFields,
   } = options;
 
   // Generate a unique layer ID based on dataset
@@ -65,13 +88,9 @@ export function createH3LayerConfig(options: H3LayerConfigOptions) {
               isVisible: true,
               visConfig: {
                 opacity,
-                // "Global Warming" color palette - warm gradient matching deck.gl demo
-                colorRange: {
-                  name: 'Global Warming',
-                  type: 'sequential',
-                  category: 'Uber',
-                  colors: ['#5A1846', '#900C3F', '#C70039', '#E3611C', '#F1920E', '#FFC300'],
-                },
+                // Palette resolved from the requested named colorRange
+                // (defaults to the "Global Warming" warm gradient).
+                colorRange: resolveColorRange(palette),
                 coverage: 1,
                 sizeRange: [0, 500],
                 coverageRange: [0, 1],
@@ -110,7 +129,7 @@ export function createH3LayerConfig(options: H3LayerConfigOptions) {
         interactionConfig: {
           tooltip: {
             fieldsToShow: {
-              [datasetId]: [hexField, valueField],
+              [datasetId]: tooltipFields ?? [hexField, valueField],
             },
             enabled: true,
           },

@@ -23,9 +23,11 @@ export interface LayerRule {
  *   No changes to this hook or to App.tsx logic beyond the new rule.
  *
  * @example
+ * // Layer ids are derived from each registry LayerDef (`h3-layer-${l.id}` /
+ * // `point-layer-${l.id}`), matching the ids the layer factories emit.
  * useLayerVisibility(bounds?.zoom_level ?? null, [
- *   { layerId: H3_LAYER_ID,    activeWhen: z => z < POINT_ZOOM_THRESHOLD },
- *   { layerId: POINT_LAYER_ID, activeWhen: z => z >= POINT_ZOOM_THRESHOLD },
+ *   { layerId: `h3-layer-${l.id}`,    activeWhen: z => z < POINT_ZOOM_THRESHOLD },
+ *   { layerId: `point-layer-${l.id}`, activeWhen: z => z >= POINT_ZOOM_THRESHOLD },
  * ]);
  */
 export function useLayerVisibility(zoom: number | null, rules: LayerRule[]): void {

@@ -10,16 +10,10 @@ const { DEFAULT_MAP_CONTROLS } = uiStateUpdaters;
 // Initial map viewport comes from the active dataset registry (Task 5).
 const { longitude, latitude, zoom } = getActiveDataset().defaultViewport;
 
-// Default map controls with AI Assistant and BI Tools
+// Default map controls with AI Assistant and SQL Panel
 const CUSTOM_MAP_CONTROLS = {
   ...DEFAULT_MAP_CONTROLS,
   aiAssistant: {
-    active: false,
-    activeMapIndex: 0,
-    disableClose: false,
-    show: true
-  },
-  biTools: {
     active: false,
     activeMapIndex: 0,
     disableClose: false,

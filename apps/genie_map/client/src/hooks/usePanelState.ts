@@ -3,7 +3,6 @@ import type { RootState } from '../store';
 
 interface PanelState {
   isAiAssistantPanelOpen: boolean;
-  isBiToolsPanelOpen: boolean;
   isSqlPanelOpen: boolean;
   /** True when any side panel is open — drives the kepler map panel size. */
   hasSidePanelOpen: boolean;
@@ -20,11 +19,6 @@ export function usePanelState(): PanelState {
     (state: RootState) =>
       state.demo?.keplerGl?.map?.uiState?.mapControls?.aiAssistant?.active ?? false,
   );
-  const isBiToolsPanelOpen = useSelector(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (state: RootState) =>
-      (state.demo?.keplerGl?.map?.uiState?.mapControls as any)?.biTools?.active ?? false,
-  );
   const isSqlPanelOpen = useSelector(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (state: RootState) =>
@@ -37,9 +31,8 @@ export function usePanelState(): PanelState {
 
   return {
     isAiAssistantPanelOpen,
-    isBiToolsPanelOpen,
     isSqlPanelOpen,
-    hasSidePanelOpen: isAiAssistantPanelOpen || isBiToolsPanelOpen || isSqlPanelOpen,
+    hasSidePanelOpen: isAiAssistantPanelOpen || isSqlPanelOpen,
     startScreenCapture,
   };
 }

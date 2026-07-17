@@ -1,4 +1,4 @@
-// Map control factory - injects AI Assistant, BI Tools and SQL Panel controls into kepler.gl
+// Map control factory - injects AI Assistant and SQL Panel controls into kepler.gl
 
 import React, { useCallback } from 'react';
 import styled from 'styled-components';
@@ -22,6 +22,21 @@ const StyledMapControlOverlay = styled.div<{ $top: number }>`
   }
 `;
 
+// Extended map-controls type for our custom sqlPanel control.
+interface CustomMapControl {
+  show?: boolean;
+  active?: boolean;
+}
+
+interface ExtendedMapControls extends MapControls {
+  sqlPanel?: CustomMapControl;
+}
+
+interface PanelControlProps {
+  mapControls: ExtendedMapControls;
+  onToggleMapControl: (control: string) => void;
+}
+
 // SQL Panel icon (database symbol)
 const SqlPanelIcon: React.FC<{ height?: string }> = ({ height = '16px' }) => (
   <svg viewBox="0 0 24 24" fill="currentColor" style={{ height, width: height }}>
@@ -29,12 +44,12 @@ const SqlPanelIcon: React.FC<{ height?: string }> = ({ height = '16px' }) => (
   </svg>
 );
 
-// SqlPanelControlFactory - same pattern as BiToolsControlFactory
+// SqlPanelControlFactory - follows the kepler.gl map-control pattern.
 SqlPanelControlFactory.deps = [MapControlTooltipFactory];
 function SqlPanelControlFactory(
   MapControlTooltip: ReturnType<typeof MapControlTooltipFactory>
-): React.FC<BiToolsControlProps> {
-  const SqlPanelControl: React.FC<BiToolsControlProps> = ({
+): React.FC<PanelControlProps> {
+  const SqlPanelControl: React.FC<PanelControlProps> = ({
     mapControls,
     onToggleMapControl
   }) => {
@@ -46,10 +61,10 @@ function SqlPanelControlFactory(
       [onToggleMapControl]
     );
 
-    const showControl = (mapControls as ExtendedMapControls)?.sqlPanel?.show;
+    const showControl = mapControls?.sqlPanel?.show;
     if (!showControl) return null;
 
-    const active = (mapControls as ExtendedMapControls)?.sqlPanel?.active;
+    const active = mapControls?.sqlPanel?.active;
     return (
       <MapControlTooltip
         id="show-sql-panel"
@@ -70,84 +85,14 @@ function SqlPanelControlFactory(
   return React.memo(SqlPanelControl);
 }
 
-// BI Tools icon component
-const BiToolsIcon: React.FC<{ height?: string }> = ({ height = '22px' }) => (
-  <svg viewBox="0 0 24 24" fill="currentColor" style={{ height, width: height }}>
-    <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zM9 17H7v-7h2v7zm4 0h-2V7h2v10zm4 0h-2v-4h2v4z" />
-  </svg>
-);
-
-// BI Tools Control Props - same pattern as AiAssistantControl
-// Using extended type since biTools is our custom control
-interface BiToolsMapControl {
-  show?: boolean;
-  active?: boolean;
-}
-
-interface ExtendedMapControls extends MapControls {
-  biTools?: BiToolsMapControl;
-  sqlPanel?: BiToolsMapControl;
-}
-
-interface BiToolsControlProps {
-  mapControls: ExtendedMapControls;
-  onToggleMapControl: (control: string) => void;
-}
-
-// Factory for BI Tools Control - follows kepler.gl pattern
-BiToolsControlFactory.deps = [MapControlTooltipFactory];
-function BiToolsControlFactory(
-  MapControlTooltip: ReturnType<typeof MapControlTooltipFactory>
-): React.FC<BiToolsControlProps> {
-  const BiToolsControl: React.FC<BiToolsControlProps> = ({
-    mapControls,
-    onToggleMapControl
-  }) => {
-    const onClick = useCallback(
-      (event: React.MouseEvent) => {
-        event.preventDefault();
-        onToggleMapControl('biTools');
-      },
-      [onToggleMapControl]
-    );
-
-    // Check if control should be shown
-    const showControl = mapControls?.biTools?.show;
-    if (!showControl) {
-      return null;
-    }
-
-    const active = mapControls?.biTools?.active;
-    return (
-      <MapControlTooltip
-        id="show-bi-tools"
-        message={active ? 'Hide Analytics Dashboard' : 'Show Analytics Dashboard'}
-      >
-        <MapControlButton
-          className="map-control-button toggle-bi-tools"
-          onClick={onClick}
-          active={active}
-        >
-          <BiToolsIcon height="22px" />
-        </MapControlButton>
-      </MapControlTooltip>
-    );
-  };
-
-  BiToolsControl.displayName = 'BiToolsControl';
-  return React.memo(BiToolsControl);
-}
-
 CustomMapControlFactory.deps = [
   AiAssistantControlFactory,
-  BiToolsControlFactory,
   SqlPanelControlFactory,
   ...MapControlFactory.deps
 ];
 
 function CustomMapControlFactory(
   AiAssistantControl: ReturnType<typeof AiAssistantControlFactory>,
-  BiToolsControlComponent: ReturnType<typeof BiToolsControlFactory>,
   SqlPanelControlComponent: ReturnType<typeof SqlPanelControlFactory>,
   ...deps: Parameters<typeof MapControlFactory>
 ) {
@@ -156,7 +101,6 @@ function CustomMapControlFactory(
   const actionComponents = [
     ...(MapControl.defaultActionComponents ?? []),
     SqlPanelControlComponent,
-    BiToolsControlComponent,
     AiAssistantControl
   ];
 
@@ -165,7 +109,7 @@ function CustomMapControlFactory(
     // These panels are mutually exclusive: only one can be active at a time.
     // kepler.gl's built-in toggleMapControlUpdater only knows about its own
     // pairs (effect<->aiAssistant), so we handle our custom panels here.
-    const MUTUALLY_EXCLUSIVE_PANELS = ['aiAssistant', 'biTools', 'sqlPanel'] as const;
+    const MUTUALLY_EXCLUSIVE_PANELS = ['aiAssistant', 'sqlPanel'] as const;
 
     // Blur the currently focused element before toggling any map control.
     // MapControlButton CSS has &:focus { background: highlighted } which keeps

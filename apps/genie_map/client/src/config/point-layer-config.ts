@@ -6,7 +6,6 @@
  */
 
 export const POINT_DATASET_ID = 'point_dataset';
-export const POINT_LAYER_ID = 'point-layer';
 
 export const POINT_FIELDS = [
   { name: 'longitude',       type: 'real'   },

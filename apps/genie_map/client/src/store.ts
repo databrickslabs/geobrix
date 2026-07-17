@@ -14,7 +14,9 @@ const { longitude, latitude, zoom } = getActiveDataset().defaultViewport;
 const CUSTOM_MAP_CONTROLS = {
   ...DEFAULT_MAP_CONTROLS,
   aiAssistant: {
-    active: false,
+    // Open by default so the natural-language / data-interaction panel is
+    // visible on load (it's a headline feature); users can still close it.
+    active: true,
     activeMapIndex: 0,
     disableClose: false,
     show: true

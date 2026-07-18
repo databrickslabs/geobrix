@@ -21,8 +21,8 @@
     "build-and-start": "pnpm build && node dist/server/index.js"
   },
   "dependencies": {
-    "@databricks/appkit": "^0.41.6",
-    "@databricks/appkit-ui": "^0.41.6",
+    "@databricks/appkit": "^0.45.0",
+    "@databricks/appkit-ui": "^0.45.0",
     "@emotion/is-prop-valid": "^1.4.0",
     "@heroui/react": "^2.7.8",
     "@kepler.gl/actions": "3.2.5",

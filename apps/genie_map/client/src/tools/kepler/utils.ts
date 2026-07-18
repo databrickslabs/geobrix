@@ -192,7 +192,10 @@ export function highlightRows(
     .map(i => dataset.getValue(measure, i))
     .filter(isNumeric);
   if (values.length === 0) {
-    dispatch(removeFilter(filterId));
+    // Nothing numeric to range on → clear the cross-filter. removeFilter is INDEX-based
+    // (see note above), so resolve the index; never pass the string id.
+    const idx = filters.findIndex(f => f?.id === filterId);
+    if (idx >= 0) dispatch(removeFilter(idx));
     return;
   }
   const min = Math.min(...values);

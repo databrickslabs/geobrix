@@ -157,8 +157,19 @@ names yourself, and you do NOT need to — Genie resolves them.
 3. Explain what you're doing in one brief sentence — don't narrate every tool call.
 4. Use visualizations to help users understand patterns in their data.`;
 
-const PROMPT_IDEAS = `Based on the currently loaded datasets, suggest 3 interesting analysis ideas in JSON format:
-[{"title": "short title", "description": "one sentence description"}]`;
+const PROMPT_IDEAS = `Based on the currently loaded datasets, suggest 3 analysis ideas that
+produce an INTERACTIVE COMPONENT on this map — not a plain text answer. Each idea's
+"description" must be a ready-to-run natural-language prompt the user can click to send
+as-is. Bias toward the two component types this app renders:
+  1. A NEW MAP LAYER — phrased "Show/Map ..." over the methane gold data (plumes, wells,
+     CH4 hotspots, operators, counties, shale plays), which draws a geometry layer.
+  2. A CHART THAT CROSS-FILTERS THE MAP — phrased "Chart ... and let me filter the map",
+     which returns one row per feature (geometry + attributes) so the chart's selection
+     cross-filters the map layer.
+Make each prompt specific to the loaded data (name real attributes like max_conc_ppmm,
+well_count, operator, county, play). Prefer at least one cross-filter idea. Return
+JSON only:
+[{"title": "short title", "description": "the full clickable prompt"}]`;
 
 // Fixed Databricks configuration - uses our local LLM proxy
 const DATABRICKS_CONFIG = {

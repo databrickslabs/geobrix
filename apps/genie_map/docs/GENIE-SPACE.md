@@ -121,7 +121,7 @@ renders any *_geojson column as a map layer. The map-ready geometry columns (all
 - ref_shale_plays.play_geom          (play polygons)
 - ref_counties.county_geom           (county polygons)
 
-CHART + MAP CROSS-FILTER (the "halo") — the app can render an interactive chart
+CHART + MAP CROSS-FILTER — the app can render an interactive chart
 (histogram/scatter/bar/boxplot) whose selection filters the map to the matching features.
 For this to work the result must be ONE ROW PER MAP FEATURE and carry BOTH:
   (a) an ST_ASGEOJSON(...) *_geojson geometry column, AND
@@ -133,7 +133,7 @@ filter (e.g. for "chart plume concentration and let me filter the map", return o
 plume with plume_geojson + max_conc_ppmm + lead_operator, NOT a GROUP BY operator rollup).
 Keep a stable per-feature id column too (plume_id, api, geoid). A pure aggregate/rollup
 result (one row per group, no per-feature geometry) can be charted but will NOT cross-filter
-the map — only per-feature-with-geometry results produce the halo.
+the map — only per-feature-with-geometry results produce the cross-filter.
 
 Table roles:
 - hotspot_latest — latest-overpass S5P CH4 hotspot H3 cells (ch4_max, ch4_mean, n_obs).
@@ -227,7 +227,7 @@ GROUP BY p.cell, w.well_count, w.operator_count
 ORDER BY w.well_count DESC
 ```
 
-**Plumes for a chart that filters the map (halo)** — *"Chart plume concentration by operator and let me filter the map"* (72 rows) — one row per plume with geometry AND chartable attributes, so a bar/histogram of the result cross-filters the plume layer on the map. Do NOT roll up to one row per operator here (that breaks the map cross-filter).
+**Plumes for a chart that filters the map** — *"Chart plume concentration by operator and let me filter the map"* (72 rows) — one row per plume with geometry AND chartable attributes, so a bar/histogram of the result cross-filters the plume layer on the map. Do NOT roll up to one row per operator here (that breaks the map cross-filter).
 ```sql
 SELECT plume_id, max_conc_ppmm, lead_operator, lead_county,
        ST_ASGEOJSON(plume_geom_native) AS plume_geojson
@@ -236,7 +236,7 @@ WHERE plume_geom_native IS NOT NULL
 ORDER BY max_conc_ppmm DESC
 ```
 
-**Wells for a chart that filters the map (halo)** — *"Show wells by operator and let me click a bar to filter the map"* (996 rows) — one row per well with geometry AND categorical attributes (operator, play_name, county_name) for an interactive bar/histogram that cross-filters the wells layer.
+**Wells for a chart that filters the map** — *"Show wells by operator and let me click a bar to filter the map"* (996 rows) — one row per well with geometry AND categorical attributes (operator, play_name, county_name) for an interactive bar/histogram that cross-filters the wells layer.
 ```sql
 SELECT api, operator, play_name, county_name,
        ST_ASGEOJSON(well_geom_native) AS well_geojson

@@ -122,12 +122,15 @@ renders any *_geojson column as a map layer. The map-ready geometry columns (all
 - ref_counties.county_geom           (county polygons)
 
 CHART + MAP CROSS-FILTER — the app can render an interactive chart
-(histogram/scatter/bar/boxplot) whose selection filters the map to the matching features.
-For this to work the result must be ONE ROW PER MAP FEATURE and carry BOTH:
+(histogram/box plot of a NUMERIC measure) whose selection filters the map to the matching
+features. For this to work the result must be ONE ROW PER MAP FEATURE and carry BOTH:
   (a) an ST_ASGEOJSON(...) *_geojson geometry column, AND
   (b) the chartable attributes on the SAME rows — at least one numeric column
       (e.g. max_conc_ppmm, ch4_max, well_count) and useful categoricals
       (e.g. lead_operator, lead_county, play_name).
+The charts plot NUMERIC values only — chart a number (max_conc_ppmm, ch4_max), never a
+category on a chart axis (a string like lead_operator produces NaN). To slice by a
+category, keep it as a column and filter on it in the map, not as a chart axis.
 So DO NOT pre-aggregate away the individual features when the user wants to explore or
 filter (e.g. for "chart plume concentration and let me filter the map", return one row per
 plume with plume_geojson + max_conc_ppmm + lead_operator, NOT a GROUP BY operator rollup).
@@ -227,7 +230,7 @@ GROUP BY p.cell, w.well_count, w.operator_count
 ORDER BY w.well_count DESC
 ```
 
-**Plumes for a chart that filters the map** — *"Chart plume concentration by operator and let me filter the map"* (72 rows) — one row per plume with geometry AND chartable attributes, so a bar/histogram of the result cross-filters the plume layer on the map. Do NOT roll up to one row per operator here (that breaks the map cross-filter).
+**Plumes for a chart that filters the map** — *"Chart plume concentration and let me filter the map"* (72 rows) — one row per plume with geometry AND chartable attributes, so a HISTOGRAM/box plot of the numeric max_conc_ppmm cross-filters the plume layer on the map. Chart the numeric column (not lead_operator — a category on a chart axis yields NaN); to slice by operator, add a kepler filter on lead_operator. Do NOT roll up to one row per operator (that breaks the map cross-filter).
 ```sql
 SELECT plume_id, max_conc_ppmm, lead_operator, lead_county,
        ST_ASGEOJSON(plume_geom_native) AS plume_geojson
@@ -236,7 +239,7 @@ WHERE plume_geom_native IS NOT NULL
 ORDER BY max_conc_ppmm DESC
 ```
 
-**Wells for a chart that filters the map** — *"Show wells by operator and let me click a bar to filter the map"* (996 rows) — one row per well with geometry AND categorical attributes (operator, play_name, county_name) for an interactive bar/histogram that cross-filters the wells layer.
+**Wells for a chart that filters the map** — *"Show wells and let me filter the map by operator"* (996 rows) — one row per well with geometry AND categorical attributes (operator, play_name, county_name). Render the wells layer, then slice with a kepler filter on operator/play_name/county_name (these are categorical, so use a filter, not a chart axis).
 ```sql
 SELECT api, operator, play_name, county_name,
        ST_ASGEOJSON(well_geom_native) AS well_geojson

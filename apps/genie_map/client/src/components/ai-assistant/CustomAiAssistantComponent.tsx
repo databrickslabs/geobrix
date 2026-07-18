@@ -100,6 +100,20 @@ const INSTRUCTIONS = `You are a geospatial data analysis assistant integrated wi
 7. **Retry transient Genie errors once.** A Genie call can occasionally fail with a
    transient error ("Authentication is temporarily unavailable", or a generic failure
    right after the app starts). Silently retry once before surfacing any error to the user.
+8. **Pick the chart tool by column type — NEVER put a categorical column on a numeric
+   axis.** The chart tools plot NUMERIC values only; none takes a category/group-by axis:
+   - \`histogramTool\` — one numeric column (distribution). Default choice for "chart <numeric>".
+   - \`boxplotTool\` — one or more numeric columns (spread/outliers).
+   - \`scatterplotTool\` — TWO numeric columns (x and y); it fits a regression line, so a
+     string x (e.g. \`lead_operator\`) yields \`Slope: NaN\` and an unusable chart. Only use
+     it when both axes are genuinely numeric.
+   - \`bubbleChartTool\` — three numeric columns (x, y, size), optional color column.
+   For a "<numeric> BY <category>" request (e.g. "plume concentration by operator"): chart
+   the NUMERIC column with a histogram/boxplot, and handle the category with a **kepler map
+   filter** on that column — do NOT pass the category as a chart axis. Build the chart on
+   the SAME per-feature dataset that is on the map so its selection cross-filters the map.
+   If a chart comes back all-null or shows \`NaN\`, you chose the wrong column type — switch
+   to a numeric column and/or a different tool; never present a NaN/empty chart.
 
 ## Available Tool Categories
 

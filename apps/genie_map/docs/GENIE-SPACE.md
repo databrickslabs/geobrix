@@ -61,13 +61,20 @@ yields WGS84 GeoJSON that kepler renders directly.
   `apps/genie_map/databricks.yml`): the space itself, its warehouse, the **table set**
   (from `genie_space.geniespace.json`), and a short **description** carrying the key
   guardrails. `databricks bundle deploy` creates/updates it — no manual space id.
-- **Manual, in the Genie Space UI** (the rich curation below): the Databricks Genie API
-  does not reliably accept detailed instructions + saved example SQL in the serialized
-  body, so paste the two blocks below into the space editor. This is the one manual step
-  in the setup runbook (`docs/SETUP.md`); `gbx:app:setup` prints a reminder.
+- **Automated by `gbx:app:seed-genie`** (the rich curation below): the instructions
+  (block A) and example SQL queries (block B) are written to the space via the Genie
+  spaces update API (`serialized_space.instructions.text_instructions` +
+  `.example_question_sqls`), parsed straight from this file. **No manual UI pasting.**
+  The DAB `genie_space` resource re-applies only the table set on every deploy and wipes
+  these, so `gbx:app:deploy` runs the seed automatically at the end (for the
+  `genie-map-env` profile); you can also run `gbx:app:seed-genie` any time after editing
+  the blocks below.
 
-> Keep this document as the single source of truth. If you change the space's instructions
-> or examples in the UI, update the blocks below to match.
+> Keep this document as the single source of truth: `gbx:app:seed-genie` reads blocks A
+> and B directly from here, so editing them here and re-running the command is the whole
+> workflow. (Undocumented API constraints the seeder handles: each instruction/example
+> needs a 32-hex-lowercase `id`, and `example_question_sqls` must be sorted by id — the
+> seeder derives ids from a content hash, so both are automatic.)
 
 ---
 
@@ -89,8 +96,20 @@ Ranking: rank plumes by max_conc_ppmm (peak methane concentration, ppm·m), high
 emission_rate_kg_hr is frequently NULL (no wind at overpass) — never rank or filter by it;
 report it only as an optional secondary column.
 
-Attribution: to link a plume to its operator/well, join plume_candidate_wells on plume_id
-and keep rank = 1 (the nearest well). operator lives on the well tables.
+Attribution / proximity: to link a plume to its operator/well — or to answer any
+"near", "nearest", "within N km", "co-located", "attributed to" question — ALWAYS use the
+precomputed plume_candidate_wells table (join on plume_id; rank = 1 is the nearest well,
+and it carries the distance). operator lives on the well tables. Do NOT compute proximity
+yourself with ST_Distance/ST_Point/buffers: the geometry columns are lon/lat degrees
+(SRID 4326), so ST_Distance returns DEGREES not metres and a "<= 1000" metre threshold is
+wrong; a cross-join distance is also needlessly slow. plume_candidate_wells already
+encodes the nearest-well relationship correctly.
+
+Query robustness: prefer a single aggregation with LEFT JOINs over UNION-ing multiple
+CTEs. Never UNION/UNION ALL subqueries that have different column counts (that is a hard
+error). Default to PERMISSIVE thresholds so results aren't empty: do not gate an answer
+behind a large minimum (e.g. "operators with >= 50 wells") unless the user asked for it —
+if a strict filter would return no rows, drop or lower it and note that you did.
 
 MAP RESULTS — when a question asks to show/map/plot something, return the geometry as a
 column aliased with the suffix _geojson using ST_ASGEOJSON(<geometry column>). The app
@@ -102,6 +121,20 @@ renders any *_geojson column as a map layer. The map-ready geometry columns (all
 - ref_shale_plays.play_geom          (play polygons)
 - ref_counties.county_geom           (county polygons)
 
+CHART + MAP CROSS-FILTER (the "halo") — the app can render an interactive chart
+(histogram/scatter/bar/boxplot) whose selection filters the map to the matching features.
+For this to work the result must be ONE ROW PER MAP FEATURE and carry BOTH:
+  (a) an ST_ASGEOJSON(...) *_geojson geometry column, AND
+  (b) the chartable attributes on the SAME rows — at least one numeric column
+      (e.g. max_conc_ppmm, ch4_max, well_count) and useful categoricals
+      (e.g. lead_operator, lead_county, play_name).
+So DO NOT pre-aggregate away the individual features when the user wants to explore or
+filter (e.g. for "chart plume concentration and let me filter the map", return one row per
+plume with plume_geojson + max_conc_ppmm + lead_operator, NOT a GROUP BY operator rollup).
+Keep a stable per-feature id column too (plume_id, api, geoid). A pure aggregate/rollup
+result (one row per group, no per-feature geometry) can be charted but will NOT cross-filter
+the map — only per-feature-with-geometry results produce the halo.
+
 Table roles:
 - hotspot_latest — latest-overpass S5P CH4 hotspot H3 cells (ch4_max, ch4_mean, n_obs).
 - plume_leaderboard_latest — one row per EMIT plume, peak concentration + leading operator.
@@ -110,6 +143,21 @@ Table roles:
 - plume_candidate_wells — nearest-K wells per plume (rank=1 = closest); operator attribution.
 - operator_intensity_latest — per-operator plume counts + peak concentration + well_count.
 - detections_by_county / emissions_by_play — plume rollups to county / shale play (map-ready).
+
+H3 GRID ANALYSIS — the map's "Well Density (H3)" layer bins wells into H3 cells at a
+resolution that changes with zoom/density (it is a rendering aid, NOT a fixed grid), so
+never treat it as a single resolution or ask the user which resolution it is. For any
+question that grids, joins, or compares by H3 cell (e.g. "join plumes to the well-density
+hex they fall in", "is concentration higher where well density is higher"), compute cells
+yourself in SQL at ONE fixed resolution. Default to res 7 for this dataset: plumes and
+wells rarely co-locate finely, so a plume→well cell join yields only ~1 overlapping cell
+at res 8, ~5 at res 7, ~10 at res 6. Use res 6 when you need more overlapping cells for a
+statistical comparison, res 8 only for the densest areas. Use the native function
+h3_longlatash3(lon, lat, res) to derive a cell from
+coordinates and h3_h3tostring(...) for a readable hex id — do NOT rely on any client-side
+or DuckDB H3 helper. Plume coordinates are plume_leaderboard_latest.lon_max/lat_max; well
+coordinates are wells_enriched_latest.longitude/latitude. To join plumes to wells by cell,
+grid both to the same resolution on h3_longlatash3(...) and join on the cell id.
 ```
 
 ### Paste block B — Example SQL queries (Genie Space → Example SQL queries)
@@ -156,4 +204,42 @@ WHERE county_name = 'Loving'
 SELECT play_name, plume_count, max_emission_kg_hr
 FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.emissions_by_play
 ORDER BY plume_count DESC
+```
+
+**Plumes vs well density by H3 cell** — *"Is methane concentration higher where well density is higher?"* (~8 overlapping cells at res 6) — grids plumes and wells to the SAME fixed H3 resolution and joins on the cell id (never uses the map's dynamic Well Density layer resolution).
+```sql
+WITH plume_cells AS (
+  SELECT h3_longlatash3(lon_max, lat_max, 6) AS cell, max_conc_ppmm
+  FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest
+  WHERE lon_max IS NOT NULL AND lat_max IS NOT NULL
+),
+well_cells AS (
+  SELECT h3_longlatash3(longitude, latitude, 6) AS cell,
+         COUNT(*) AS well_count, COUNT(DISTINCT operator) AS operator_count
+  FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.wells_enriched_latest
+  WHERE longitude IS NOT NULL AND latitude IS NOT NULL
+  GROUP BY 1
+)
+SELECT h3_h3tostring(p.cell) AS hex, w.well_count, w.operator_count,
+       COUNT(*) AS plume_count, ROUND(AVG(p.max_conc_ppmm), 1) AS avg_conc_ppmm
+FROM plume_cells p JOIN well_cells w ON p.cell = w.cell
+GROUP BY p.cell, w.well_count, w.operator_count
+ORDER BY w.well_count DESC
+```
+
+**Plumes for a chart that filters the map (halo)** — *"Chart plume concentration by operator and let me filter the map"* (72 rows) — one row per plume with geometry AND chartable attributes, so a bar/histogram of the result cross-filters the plume layer on the map. Do NOT roll up to one row per operator here (that breaks the map cross-filter).
+```sql
+SELECT plume_id, max_conc_ppmm, lead_operator, lead_county,
+       ST_ASGEOJSON(plume_geom_native) AS plume_geojson
+FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest
+WHERE plume_geom_native IS NOT NULL
+ORDER BY max_conc_ppmm DESC
+```
+
+**Wells for a chart that filters the map (halo)** — *"Show wells by operator and let me click a bar to filter the map"* (996 rows) — one row per well with geometry AND categorical attributes (operator, play_name, county_name) for an interactive bar/histogram that cross-filters the wells layer.
+```sql
+SELECT api, operator, play_name, county_name,
+       ST_ASGEOJSON(well_geom_native) AS well_geojson
+FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.wells_enriched_latest
+WHERE well_geom_native IS NOT NULL
 ```

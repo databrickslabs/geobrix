@@ -33,9 +33,25 @@ the same query and the same hexagons and points. Four layers ship:
 | EMIT plumes | Points | Detected plumes, by peak concentration |
 
 **Ask a question.** Type a natural-language question in the AI Assistant panel — for
-example, *"which operators have wells near the strongest plumes?"* When the answer carries
-a geometry, Genie Map draws it as a map layer next to the others, so a spoken question and
-a drawn map answer share one canvas.
+example, *"which operators have wells near the strongest plumes?"* The panel routes the
+question to a curated Genie Space, and the shape of the answer decides how it lands on the
+canvas. There are two kinds of result, and it helps to ask with the one you want in mind.
+
+### Two kinds of question result
+
+| You want… | Ask for… | What the result must contain | What you get |
+|---|---|---|---|
+| **A new map layer** | *"Show / map / plot …"* — e.g. *"Show the latest plumes, strongest first"* | one `ST_ASGEOJSON(...)` geometry column (aliased `*_geojson`) | Genie's answer is drawn as a new layer beside the others |
+| **An interactive chart that filters the map (the "halo")** | *"Chart … and let me filter the map"* — e.g. *"Chart plume concentration by operator and let me filter the map"* | **one row per feature**, carrying **both** a `*_geojson` geometry **and** chartable attributes (a number like `max_conc_ppmm`, plus categoricals like `lead_operator`) | a chart whose selection highlights the matching features on the map, and vice-versa |
+
+The distinction is the row grain. A **map-layer** answer just needs geometry. The **halo**
+needs geometry *and* per-feature attributes on the same rows — because the chart and the
+map layer are the same dataset, and selecting chart elements cross-filters the layer by
+row. A pre-aggregated rollup (one row per operator, per county, per H3 cell) still charts
+fine, but with no per-feature geometry it can't light up the map — so when you want the
+cross-filter, ask for the individual features, not the summary.
+
+Either way, a spoken question and a drawn map answer share one canvas.
 
 ## Density-aware dynamic H3
 

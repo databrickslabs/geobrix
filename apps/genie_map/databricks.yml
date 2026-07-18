@@ -22,6 +22,15 @@ sync:
     - node_modules
     - dist
     - client/src/**/__tests__/**
+    # The Genie-space definition is consumed only by the genie_spaces resource
+    # below (read locally at `bundle deploy` time via file_path) — the app's node
+    # server never reads it. It must NOT reach the app source snapshot: newer
+    # workspace/CLI (v1.7.0) infer a node type from the .geniespace.json
+    # extension and the app-source importer rejects it with
+    # `INVALID_PARAMETER_VALUE: Requested node type [UNKNOWN] is not supported`,
+    # failing the deploy. Excluding it from sync keeps it out of the snapshot
+    # while file_path still resolves against the local bundle copy.
+    - genie_space.geniespace.json
 
 # Workspace-specific values (host, warehouse id, genie space id) come from a
 # gitignored databricks.override.yml (see databricks.override.yml.example),
@@ -52,13 +61,16 @@ resources:
       # MEDIUM (default). LARGE gives the build enough heap (paired with
       # --max-old-space-size=8192 in build:client).
       compute_size: LARGE
-      # OAuth scopes the app requests on the user's behalf. dashboards.genie is
-      # required for the AI Assistant's Genie calls (without it the Genie API
-      # returns 403 'Invalid scope, required scopes: genie'); sql for the
+      # OAuth scopes the app requests on the user's behalf. The scope name is
+      # `genie` (per the Databricks Apps auth docs — the valid values include
+      # `sql`, `genie`, `files`); it is what satisfies the Genie API, which
+      # otherwise returns 403 'Invalid scope, required scopes: genie'. NOTE:
+      # `dashboards.genie` is NOT a valid app scope — it is rejected/unavailable
+      # in the app scope picker and does not grant Genie access. sql is for the
       # viewport warehouse queries; serving.serving-endpoints for the LLM proxy.
       # (iam.* defaults are granted automatically and must NOT be listed here.)
       user_api_scopes:
-        - dashboards.genie
+        - genie
         - sql
         - serving.serving-endpoints
       resources:

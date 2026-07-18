@@ -91,7 +91,17 @@ export function useKeplerDataset<TRow>(
   // Once added we switch to replaceDataInMap so kepler preserves layer settings.
   const datasetAddedRef = useRef(false);
 
-  const { data: rawData, loading, error } = useAnalyticsQuery(queryName, params);
+  // Gate execution on params: useAnalyticsQuery fires on mount whenever
+  // autoStart is true (its default) and does NOT skip when params is null —
+  // it POSTs {parameters: null}, which the server turns into an empty
+  // parameters array, so the warehouse runs the statement with :table_name /
+  // :res_N present but unbound → UNBOUND_SQL_PARAMETER. Passing null params is
+  // our documented "suppress this query" signal (see KeplerDatasetConfig.params
+  // and buildLayerParams returning null before the first viewport), so honor it
+  // by gating autoStart on params being present.
+  const { data: rawData, loading, error } = useAnalyticsQuery(queryName, params, {
+    autoStart: params != null,
+  });
 
   const data = useMemo((): TRow[] => {
     if (!rawData || !Array.isArray(rawData)) return [];

@@ -11,8 +11,9 @@ source "$SCRIPT_DIR/common.sh"
 APP_DIR="$PROJECT_ROOT/apps/genie_map"
 ENV_FILE="$APP_DIR/databricks.env"
 
-# Defaults
-PROFILE="oauth-fe"
+# Defaults. genie-map-env is the standing full-stack demo workspace; the shared
+# oauth-fe workspace is perpetually at app capacity, so Apps deploys go here.
+PROFILE="genie-map-env"
 LOG_ARG=""
 
 # Help message
@@ -26,7 +27,7 @@ USAGE:
     bash scripts/commands/gbx-app-deploy.sh [OPTIONS]
 
 OPTIONS:
-    --profile <p>    Databricks CLI profile (default: oauth-fe)
+    --profile <p>    Databricks CLI profile (default: genie-map-env)
     --log <path>     Tee output to a log file (filename → test-logs/<name>)
     --help, -h       Display this help message
 
@@ -38,7 +39,7 @@ NOTES:
 
 EXAMPLES:
     bash scripts/commands/gbx-app-deploy.sh
-    bash scripts/commands/gbx-app-deploy.sh --profile oauth-fe --log deploy.log
+    bash scripts/commands/gbx-app-deploy.sh --profile genie-map-env --log deploy.log
 EOF
     exit 0
 }
@@ -85,3 +86,13 @@ pnpm build || exit 1
 cd "$APP_DIR" || exit 1
 databricks bundle deploy --profile "$PROFILE" || exit 1
 databricks bundle run genie_map --profile "$PROFILE"
+
+# Re-seed the Genie Space instructions + example SQLs. The DAB genie_space
+# resource re-applies only the table set on deploy, wiping any curated
+# instructions/examples — gbx:app:seed-genie restores them from GENIE-SPACE.md.
+# It resolves the space id + warehouse from 'bundle summary' for THIS profile,
+# so it targets whatever workspace we just deployed to (no profile assumptions).
+echo ""
+echo "Re-seeding Genie Space instructions + examples (DAB wipes these on deploy)..."
+bash "$SCRIPT_DIR/gbx-app-seed-genie.sh" --profile "$PROFILE" \
+    || echo "⚠️  Genie-space seed failed — run 'gbx:app:seed-genie --profile $PROFILE' manually (see docs/GENIE-SPACE.md)."

@@ -40,7 +40,7 @@ databricks bundle deploy -p <profile>          # from apps/genie_map/
 ```
 
 This creates/updates: the **Databricks App**, its **OAuth scopes**
-(`dashboards.genie`, `sql`, `serving.serving-endpoints`), its **resource grants**
+(`genie`, `sql`, `serving.serving-endpoints`), its **resource grants**
 (warehouse `CAN_USE`, serving endpoint `CAN_QUERY`, the Genie space `CAN_RUN`), and
 the **Genie Space** itself (table set from `genie_space.geniespace.json` + the guardrail
 description). The app is wired to the space it just created — no space id to paste.
@@ -76,18 +76,25 @@ databricks secrets-uc create-secret carbon_mapper_token <catalog> <schema> "<TOK
 
 (Needed by the pipeline downloads, not the app itself.)
 
-### 5. ✋ Curate the Genie Space in the UI
+### 5. 🤖 Seed the Genie Space instructions + examples
 
 The bundle set the table list + a short description; the **rich instructions and example
-SQL** are pasted in the Genie editor (the API doesn't reliably take them). Open the
-**"Vapor-Eyes — Permian Methane (Genie Map)"** space and paste the two blocks from
-[`GENIE-SPACE.md`](./GENIE-SPACE.md): **block A** into the *Instructions* tab, **block B**
-as *Example SQL queries*. This is what makes natural-language answers reliable (e.g. it
-stops Genie from filtering by a non-existent "Permian" play).
+SQL** are written to the space by `gbx:app:seed-genie`, which parses blocks A and B from
+[`GENIE-SPACE.md`](./GENIE-SPACE.md) and PATCHes them via the Genie spaces update API — no
+manual UI pasting. `gbx:app:deploy` runs this automatically at the end (for the
+`genie-map-env` profile), and the DAB wipes these on every deploy, so re-seeding is part
+of the deploy. Run it standalone any time after editing the blocks:
+
+```bash
+bash scripts/commands/gbx-app-seed-genie.sh
+```
+
+This is what makes natural-language answers reliable (e.g. it stops Genie from filtering
+by a non-existent "Permian" play).
 
 ### 6. ✋ Re-authorize (first user only)
 
-Because step 1 may have added the `dashboards.genie` OAuth scope, the **first** user opens
+Because step 1 may have added the `genie` OAuth scope, the **first** user opens
 the app in a fresh session and accepts the consent prompt so their token carries the new
 scope. (A cached pre-scope token yields `Invalid scope, required scopes: genie`.)
 
@@ -108,5 +115,5 @@ scope. (A cached pre-scope token yields `Invalid scope, required scopes: genie`.
 | Client build config (catalog/model baked in) | `app.yaml` | 🤖 |
 | App SP catalog/schema grants | `gbx:app:setup` | 🤖 (script) |
 | UC secret **values** | operator | ✋ |
-| Genie instructions + example SQL | `GENIE-SPACE.md` → UI | ✋ (copy/paste) |
+| Genie instructions + example SQL | `GENIE-SPACE.md` → `gbx:app:seed-genie` (API) | 🤖 (script) |
 | First-user OAuth re-consent | operator | ✋ |

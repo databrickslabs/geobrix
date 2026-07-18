@@ -44,7 +44,7 @@
     "@monaco-editor/react": "^4.6.0",
     "@openassistant/core": "^0.5.17",
     "@openassistant/duckdb": "^0.5.17",
-    "@openassistant/echarts": "1.0.0-alpha.0",
+    "@openassistant/echarts": "^0.5.17",
     "@openassistant/geoda": "^0.5.17",
     "@openassistant/osm": "^0.5.17",
     "@openassistant/plots": "^0.5.17",

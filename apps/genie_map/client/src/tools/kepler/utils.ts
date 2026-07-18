@@ -102,29 +102,47 @@ export function getValuesFromVectorTileLayer(datasetId: string, layers: Layer[],
   return values;
 }
 
-// Preference order for a stable, per-feature identifier column to filter on. The chart
-// selection is translated into a kepler filter on one of these; the first that exists in
-// the dataset wins. Falls back to a synthesized row-index column (see crossFilterByRows).
-const STABLE_ID_COLUMNS = ['plume_id', 'record_id', 'api', 'geoid', 'hex', 'id'];
+// Preference order for the NUMERIC measure to range-filter on when a chart selection
+// comes in. A histogram/box-plot brush is a numeric range, and kepler applies a range
+// filter on a numeric column reliably (a multi-select on a high-cardinality id column does
+// not move the map). The first of these that exists in the selected dataset wins — these
+// are the measures the app's charts are built on (see the layer configs' valueField).
+const CHART_MEASURE_COLUMNS = [
+  'max_conc_ppmm', 'ch4_max', 'ch4_mean', 'well_count', 'operator_count',
+  'plume_count', 'n_obs', 'well_density', 'dist_m',
+];
 
 // Deterministic per-dataset filter id so repeated selections UPDATE the same cross-filter
 // (via createOrUpdateFilter) rather than stacking new filters.
 const crossFilterId = (datasetId: string) => `ai-crossfilter-${datasetId}`;
 
-function findStableIdColumn(dataset: KeplerTable): string | null {
+function isNumeric(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
+// Pick the numeric column to range-filter: first known measure present, else the first
+// field whose values are numeric.
+function findMeasureColumn(dataset: KeplerTable): string | null {
   const names = new Set(dataset.fields.map(f => f.name));
-  return STABLE_ID_COLUMNS.find(c => names.has(c)) ?? null;
+  const known = CHART_MEASURE_COLUMNS.find(c => names.has(c));
+  if (known) return known;
+  for (const f of dataset.fields) {
+    if (dataset.length > 0 && isNumeric(dataset.getValue(f.name, 0))) return f.name;
+  }
+  return null;
 }
 
 /**
  * Cross-filter a map layer from a chart selection, PERSISTENTLY.
  *
- * A chart's brush selection arrives as row indices. We translate those to the values of a
- * stable id column and push them into kepler's Redux filter state via
- * `createOrUpdateFilter` (a multi-select filter). This is the critical difference from a
- * direct `dataset.filteredIndex = ...` mutation: kepler recomputes `filteredIndex` from
+ * A chart's brush selection arrives as row indices. We compute the min/max of a numeric
+ * measure column over the selected rows and push a RANGE filter into kepler's Redux state
+ * via `createOrUpdateFilter`. This is the critical difference from a direct
+ * `dataset.filteredIndex = ...` mutation: kepler recomputes `filteredIndex` from
  * `visState.filters` on every render (KeplerTable.filterTable), so a manual mutation is
- * reverted on the next pointer event, whereas a dispatched filter persists.
+ * reverted on the next pointer event, whereas a dispatched range filter persists AND
+ * actually moves the map (a range on a numeric field is what kepler applies — a
+ * multi-select on a high-cardinality id column does not).
  *
  * An empty selection removes the cross-filter, returning the map to all rows.
  */
@@ -149,10 +167,10 @@ export function highlightRows(
     return;
   }
 
-  const idColumn = findStableIdColumn(dataset);
-  if (!idColumn) {
-    // No natural id column — fall back to the previous best-effort behavior so charts on
-    // id-less datasets still visibly respond (non-persistent, but better than nothing).
+  const measure = findMeasureColumn(dataset);
+  if (!measure) {
+    // No numeric column to range-filter — fall back to a best-effort direct mutation so
+    // charts on measure-less datasets still respond (non-persistent, but better than nothing).
     dataset.filteredIndex = selectedRowIndices;
     layers
       .filter(layer => layer.config.dataId === dataset.id)
@@ -160,14 +178,20 @@ export function highlightRows(
     return;
   }
 
-  // Map selected row indices → the id values on those rows, de-duped.
-  const selectedIds = Array.from(
-    new Set(selectedRowIndices.map(i => dataset.getValue(idColumn, i))),
-  );
+  // Range of the measure over the selected rows.
+  const values = selectedRowIndices
+    .map(i => dataset.getValue(measure, i))
+    .filter(isNumeric);
+  if (values.length === 0) {
+    dispatch(removeFilter(filterId));
+    return;
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
 
-  // createOrUpdateFilter(id, dataId, field, value) — a multi-select filter on the id
-  // column; reusing filterId means repeated brushes update this one filter in place.
-  dispatch(createOrUpdateFilter(filterId, dataset.id, idColumn, selectedIds));
+  // createOrUpdateFilter(id, dataId, field, value) — a [min,max] range filter on the
+  // measure; reusing filterId means repeated brushes update this one filter in place.
+  dispatch(createOrUpdateFilter(filterId, dataset.id, measure, [min, max]));
 }
 
 /**

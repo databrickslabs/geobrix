@@ -202,6 +202,18 @@ const StyledAiAssistantComponent = styled.div`
   * {
     font-size: 11px;
   }
+
+  /* The panel is mounted inside kepler map-control overlays that set
+   * 'pointer-events: none !important' and only re-enable it for DIRECT children
+   * ('& > *'). Deeply-nested interactive surfaces — notably the ECharts brush
+   * overlay used to cross-filter the map — can therefore end up non-interactive,
+   * so a drag-to-brush never registers and onSelected never fires. Force the
+   * entire assistant subtree (including the chart canvas + brush layer) to accept
+   * pointer events. */
+  &,
+  & * {
+    pointer-events: auto;
+  }
 `;
 
 // State type matching kepler.gl's expected structure

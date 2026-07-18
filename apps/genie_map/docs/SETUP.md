@@ -92,11 +92,32 @@ bash scripts/commands/gbx-app-seed-genie.sh
 This is what makes natural-language answers reliable (e.g. it stops Genie from filtering
 by a non-existent "Permian" play).
 
-### 6. ✋ Re-authorize (first user only)
+### 6. ✋ If Genie says "Invalid scope" — clear the stale token
 
-Because step 1 may have added the `genie` OAuth scope, the **first** user opens
-the app in a fresh session and accepts the consent prompt so their token carries the new
-scope. (A cached pre-scope token yields `Invalid scope, required scopes: genie`.)
+Databricks Apps **on-behalf-of-user authorization is in Public Preview**, and while it is,
+your browser can keep presenting an OAuth token that was issued *before* the app's `genie`
+scope became effective. When that happens the AI panel's Genie calls fail with
+`Invalid scope, required scopes: genie` even though the app is configured correctly.
+
+This is a stale-token symptom, **not** a missing scope or a consent you need to re-grant.
+Confirm the app side is fine — `genie` should appear in **both** `user_api_scopes` and
+`effective_user_api_scopes`:
+
+```bash
+databricks apps get genie-map -p <profile> -o json | grep -i scope
+```
+
+To mitigate, force the app to mint a fresh token by signing out of its OAuth session, then
+reopen the app:
+
+```
+https://<app-host>/.auth/sign_out
+```
+
+(For this deployment: `https://genie-map-7474653752879908.aws.databricksapps.com/.auth/sign_out`.)
+No new consent prompt is expected — signing out is enough. Caches can take up to ~5 minutes
+after a scope change, so if it still errors immediately, wait a few minutes and retry. The
+same step clears the error if it reappears after a redeploy.
 
 ## Verify
 
@@ -116,4 +137,4 @@ scope. (A cached pre-scope token yields `Invalid scope, required scopes: genie`.
 | App SP catalog/schema grants | `gbx:app:setup` | 🤖 (script) |
 | UC secret **values** | operator | ✋ |
 | Genie instructions + example SQL | `GENIE-SPACE.md` → `gbx:app:seed-genie` (API) | 🤖 (script) |
-| First-user OAuth re-consent | operator | ✋ |
+| Clear stale OAuth token if Genie 403s (`/.auth/sign_out`) | operator | ✋ (preview workaround) |

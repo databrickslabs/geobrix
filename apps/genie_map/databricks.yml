@@ -35,7 +35,7 @@ sync:
 # Workspace-specific values (host, warehouse id, genie space id) come from a
 # gitignored databricks.override.yml (see databricks.override.yml.example),
 # layered in via the include glob below — same pattern as the vapor-eyes SDP
-# bundle. The committed defaults point at the reference deployment.
+# bundle. The committed defaults point at the FEVM full-stack demo workspace.
 include:
   - "*.override.yml"
 
@@ -47,9 +47,12 @@ targets:
   dev:
     default: true
     workspace:
-      # Host is a literal (DAB resolves auth before variables). Override it in
-      # databricks.override.yml for a different workspace.
-      host: https://e2-demo-field-eng.cloud.databricks.com
+      # Host is a literal (DAB resolves auth before variables). This committed
+      # default is the FEVM full-stack demo workspace (the shared oauth-fe /
+      # e2-demo-field-eng workspace is deprecated and perpetually at app
+      # capacity — do NOT target it). Override in databricks.override.yml for a
+      # different workspace.
+      host: https://fevm-serverless-stable-genie-map.cloud.databricks.com
 
 resources:
   apps:

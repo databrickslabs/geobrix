@@ -54,6 +54,13 @@ resources:
       display_name: "Vapor-Eyes — Permian Methane Monitoring (Lakeflow)"
       file_path: ./dashboards/vapor_eyes_lf.lvdash.json
       warehouse_id: ${var.warehouse_id}
+      # The dashboard's dataset queries use UNqualified table names; these supply
+      # the default catalog/schema so the dashboard follows var.catalog/var.schema
+      # like the pipeline does. DAB uploads the .lvdash.json verbatim (no ${var}
+      # substitution inside it), so without these an override that repoints the
+      # catalog would leave the dashboard querying a non-existent catalog.
+      dataset_catalog: ${var.catalog}
+      dataset_schema: ${var.schema}
 
   pipelines:
     vapor_eyes_lf_pipeline:

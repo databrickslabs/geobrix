@@ -4,84 +4,84 @@
       "name": "ds_monitoring_status",
       "displayName": "Monitoring Status (current)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.cm_monitoring_status"
+        "SELECT * FROM cm_monitoring_status"
       ]
     },
     {
       "name": "ds_leaderboard",
       "displayName": "Operator Emissions Leaderboard",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.operator_emissions_leaderboard ORDER BY detection_rank "
+        "SELECT * FROM operator_emissions_leaderboard ORDER BY detection_rank "
       ]
     },
     {
       "name": "ds_leaderboard_top15",
       "displayName": "Operator Emissions Leaderboard (Top 15)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.operator_emissions_leaderboard ORDER BY detection_rank LIMIT 15 "
+        "SELECT * FROM operator_emissions_leaderboard ORDER BY detection_rank LIMIT 15 "
       ]
     },
     {
       "name": "ds_cm_plumes",
       "displayName": "Carbon Mapper Plumes (attributed)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.cm_plume_attributed"
+        "SELECT * FROM cm_plume_attributed"
       ]
     },
     {
       "name": "ds_activity_monthly",
       "displayName": "Carbon Mapper Activity (monthly)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.cm_activity_monthly ORDER BY month "
+        "SELECT * FROM cm_activity_monthly ORDER BY month "
       ]
     },
     {
       "name": "ds_regional_trend",
       "displayName": "Regional CH4 Trend (daily)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.regional_ch4_trend_daily ORDER BY observation_date "
+        "SELECT * FROM regional_ch4_trend_daily ORDER BY observation_date "
       ]
     },
     {
       "name": "ds_hotspot_latest",
       "displayName": "Hotspot Cells (latest overpass)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.hotspot_latest"
+        "SELECT * FROM hotspot_latest"
       ]
     },
     {
       "name": "ds_hotspot_persistence",
       "displayName": "Hotspot Persistence",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.hotspot_persistence"
+        "SELECT * FROM hotspot_persistence"
       ]
     },
     {
       "name": "ds_aoi_kpis",
       "displayName": "AOI KPIs (latest)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.aoi_kpis_latest"
+        "SELECT * FROM aoi_kpis_latest"
       ]
     },
     {
       "name": "ds_plume_quant",
       "displayName": "Plume Quant (EMIT / GeoBrix cross-check)",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.plume_quant ORDER BY observation_date DESC "
+        "SELECT * FROM plume_quant ORDER BY observation_date DESC "
       ]
     },
     {
       "name": "ds_emissions_by_play",
       "displayName": "Detections by Shale Play",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.emissions_by_play"
+        "SELECT * FROM emissions_by_play"
       ]
     },
     {
       "name": "ds_detections_by_county",
       "displayName": "Detections by County",
       "queryLines": [
-        "SELECT * FROM geospatial_docs.vapor_eyes_lf.detections_by_county"
+        "SELECT * FROM detections_by_county"
       ]
     }
   ],

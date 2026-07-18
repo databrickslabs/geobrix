@@ -153,6 +153,10 @@ export function highlightRows(
   selectedRowIndices: number[],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispatch: (action: any) => void,
+  // Current visState.filters — needed to resolve a filter's index for removeFilter (which
+  // is index-based, not id-based). Defaults to empty (clear becomes a no-op if unknown).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  filters: Array<{ id?: string }> = [],
 ) {
   const datasetId = Object.keys(datasets).find(dataId => datasets[dataId].label === datasetName);
   if (!datasetId) return;
@@ -161,9 +165,14 @@ export function highlightRows(
 
   const filterId = crossFilterId(dataset.id);
 
-  // Empty selection → clear the cross-filter (show everything again).
+  // Empty selection → clear the cross-filter (show everything again). NOTE: kepler's
+  // removeFilter takes a numeric INDEX into visState.filters, not a filter id — passing an
+  // id crashes removeFilterUpdater ("Cannot read properties of undefined (reading
+  // 'dataId')"). Resolve the index from the filters list we were handed; if the filter
+  // isn't present there's nothing to remove.
   if (selectedRowIndices.length === 0) {
-    dispatch(removeFilter(filterId));
+    const idx = filters.findIndex(f => f?.id === filterId);
+    if (idx >= 0) dispatch(removeFilter(idx));
     return;
   }
 
@@ -372,6 +381,7 @@ export function highlightRowsByColumnValues(
   selectedValues: unknown[],
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   dispatch: (action: any) => void,
+  filters: Array<{ id?: string }> = [],
 ) {
   const datasetId = Object.keys(datasets).find(dataId => datasets[dataId].label === datasetName);
   if (!datasetId) return;
@@ -383,7 +393,7 @@ export function highlightRowsByColumnValues(
       return acc;
     }, {} as Record<string | number, number>);
     const selectedIndices = selectedValues.map(value => valueDict[value as string | number]);
-    highlightRows(datasets, layers, datasetName, selectedIndices, dispatch);
+    highlightRows(datasets, layers, datasetName, selectedIndices, dispatch, filters);
   }
 }
 

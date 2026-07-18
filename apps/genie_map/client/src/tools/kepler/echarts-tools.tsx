@@ -27,7 +27,12 @@ import {Dispatch} from 'redux';
 
 import {getValuesFromDataset, highlightRows} from './utils';
 
-export function getEchartsTools(datasets: Datasets, layers: Layer[], dispatch: Dispatch) {
+export function getEchartsTools(
+  datasets: Datasets,
+  layers: Layer[],
+  dispatch: Dispatch,
+  filters: Array<{ id?: string }> = [],
+) {
   // context for tools
   const getValues = async (datasetName: string, variableName: string) => {
     const values = getValuesFromDataset(datasets, layers, datasetName, variableName);
@@ -37,7 +42,8 @@ export function getEchartsTools(datasets: Datasets, layers: Layer[], dispatch: D
   const onSelected = (datasetName: string, selectedIndices: number[]) => {
     // Persist the selection as a kepler filter (via highlightRows -> createOrUpdateFilter)
     // so it survives re-renders, instead of a transient dataset.filteredIndex mutation.
-    highlightRows(datasets, layers, datasetName, selectedIndices, dispatch);
+    // filters is passed so an empty selection can resolve the filter INDEX for removeFilter.
+    highlightRows(datasets, layers, datasetName, selectedIndices, dispatch, filters);
   };
 
   // Create the boxplot tool with the getValues implementation

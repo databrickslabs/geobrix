@@ -232,6 +232,9 @@ export function CustomAiAssistantComponent() {
   const datasets = visState?.datasets || {};
   const layers = visState?.layers || [];
   const layerData = visState?.layerData || [];
+  // Current filters — passed to the echarts tools so a cleared chart selection can resolve
+  // the cross-filter's INDEX for kepler's index-based removeFilter.
+  const filters = visState?.filters || [];
 
   // Get Databricks tools with dispatch bound
   const databricksTools = useMemo(
@@ -269,8 +272,8 @@ export function CustomAiAssistantComponent() {
 
   // Get echarts tools
   const echartsTools = useMemo(
-    () => getEchartsTools(datasets, layers, dispatch),
-    [datasets, layers, dispatch]
+    () => getEchartsTools(datasets, layers, dispatch, filters),
+    [datasets, layers, dispatch, filters]
   );
 
   // Combine all tools - hybrid approach

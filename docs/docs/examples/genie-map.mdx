@@ -53,6 +53,13 @@ cross-filter, ask for the individual features, not the summary.
 
 Either way, a spoken question and a drawn map answer share one canvas.
 
+![The AI Assistant panel building an EMIT-plumes-by-county choropleth on the map — county polygons joined to plume aggregates by lead_county and added as a new geojson layer colored by plume count, with a tooltip showing per-county plume_count and concentration stats, alongside the density-aware 3D hex layers](../../../resources/images/screenshots/genie-map/ai-emit-plumes-by-county.png)
+
+Above: the "new map layer" path in action. The user asked the assistant to map EMIT plumes
+by county; it joined the county polygons to plume aggregates by `lead_county`, added the
+result as a geojson layer colored by `plume_count`, and left the CH₄ hotspot and well
+layers in place — a natural-language question and its drawn answer on one canvas.
+
 ## Density-aware dynamic H3
 
 The map's standout behavior is how its hexagon layers pick their resolution. Keying

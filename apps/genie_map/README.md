@@ -8,6 +8,8 @@ an interactive map you can explore two ways:
 - **Ask a question** — type a natural-language question in the AI Assistant panel and,
   when the answer carries a geometry, it renders as a map layer alongside the others.
 
+![The AI Assistant building an EMIT-plumes-by-county choropleth — county polygons joined to plume aggregates by lead_county, added as a geojson layer colored by plume count, with a per-county tooltip, over the density-aware 3D hex layers](../../resources/images/screenshots/genie-map/ai-emit-plumes-by-county.png)
+
 Four layers ship out of the box: CH₄ hotspots (H3), well density (H3), individual
 wells (points), and EMIT plumes (points). The H3 layers are **density-aware**: they
 coarsen their hexagons where cells are crowded and refine them as you zoom in, so the

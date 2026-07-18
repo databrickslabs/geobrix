@@ -21,7 +21,6 @@ import {
   ScatterplotComponent
 } from '@openassistant/echarts';
 
-import {layerSetIsValid} from '@kepler.gl/actions';
 import {Datasets} from '@kepler.gl/table';
 import {Layer} from '@kepler.gl/layers';
 import {Dispatch} from 'redux';
@@ -36,10 +35,9 @@ export function getEchartsTools(datasets: Datasets, layers: Layer[], dispatch: D
   };
 
   const onSelected = (datasetName: string, selectedIndices: number[]) => {
-    const triggerLayerReRender = (layer: Layer, isValid: boolean) => {
-      dispatch(layerSetIsValid(layer, isValid));
-    };
-    highlightRows(datasets, layers, datasetName, selectedIndices, triggerLayerReRender);
+    // Persist the selection as a kepler filter (via highlightRows -> createOrUpdateFilter)
+    // so it survives re-renders, instead of a transient dataset.filteredIndex mutation.
+    highlightRows(datasets, layers, datasetName, selectedIndices, dispatch);
   };
 
   // Create the boxplot tool with the getValues implementation

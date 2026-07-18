@@ -12,6 +12,7 @@ import { SpatialJoinGeometries } from '@openassistant/geoda';
 import { ALL_FIELD_TYPES, LAYER_TYPES } from '@kepler.gl/constants';
 import { Field, ProtoDataset, ProtoDatasetField } from '@kepler.gl/types';
 import { processFileData } from '@kepler.gl/processors';
+import { createOrUpdateFilter, removeFilter } from '@kepler.gl/actions';
 
 /**
  * Interpolate colors from the original colors with the given number of colors
@@ -101,28 +102,72 @@ export function getValuesFromVectorTileLayer(datasetId: string, layers: Layer[],
   return values;
 }
 
+// Preference order for a stable, per-feature identifier column to filter on. The chart
+// selection is translated into a kepler filter on one of these; the first that exists in
+// the dataset wins. Falls back to a synthesized row-index column (see crossFilterByRows).
+const STABLE_ID_COLUMNS = ['plume_id', 'record_id', 'api', 'geoid', 'hex', 'id'];
+
+// Deterministic per-dataset filter id so repeated selections UPDATE the same cross-filter
+// (via createOrUpdateFilter) rather than stacking new filters.
+const crossFilterId = (datasetId: string) => `ai-crossfilter-${datasetId}`;
+
+function findStableIdColumn(dataset: KeplerTable): string | null {
+  const names = new Set(dataset.fields.map(f => f.name));
+  return STABLE_ID_COLUMNS.find(c => names.has(c)) ?? null;
+}
+
 /**
- * Highlight rows in a dataset
+ * Cross-filter a map layer from a chart selection, PERSISTENTLY.
+ *
+ * A chart's brush selection arrives as row indices. We translate those to the values of a
+ * stable id column and push them into kepler's Redux filter state via
+ * `createOrUpdateFilter` (a multi-select filter). This is the critical difference from a
+ * direct `dataset.filteredIndex = ...` mutation: kepler recomputes `filteredIndex` from
+ * `visState.filters` on every render (KeplerTable.filterTable), so a manual mutation is
+ * reverted on the next pointer event, whereas a dispatched filter persists.
+ *
+ * An empty selection removes the cross-filter, returning the map to all rows.
  */
 export function highlightRows(
   datasets: Datasets,
   layers: Layer[],
   datasetName: string,
   selectedRowIndices: number[],
-  layerSetIsValid: (layer: Layer, isValid: boolean) => void
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dispatch: (action: any) => void,
 ) {
   const datasetId = Object.keys(datasets).find(dataId => datasets[dataId].label === datasetName);
   if (!datasetId) return;
   const dataset = datasets[datasetId];
-  if (dataset) {
-    dataset.filteredIndex =
-      selectedRowIndices.length === 0 ? dataset.allIndexes : selectedRowIndices;
-    const selectLayers = layers.filter(layer => layer.config.dataId === dataset.id);
-    selectLayers.forEach(layer => {
-      layer.formatLayerData(datasets);
-      layerSetIsValid(layer, true);
-    });
+  if (!dataset) return;
+
+  const filterId = crossFilterId(dataset.id);
+
+  // Empty selection → clear the cross-filter (show everything again).
+  if (selectedRowIndices.length === 0) {
+    dispatch(removeFilter(filterId));
+    return;
   }
+
+  const idColumn = findStableIdColumn(dataset);
+  if (!idColumn) {
+    // No natural id column — fall back to the previous best-effort behavior so charts on
+    // id-less datasets still visibly respond (non-persistent, but better than nothing).
+    dataset.filteredIndex = selectedRowIndices;
+    layers
+      .filter(layer => layer.config.dataId === dataset.id)
+      .forEach(layer => layer.formatLayerData(datasets));
+    return;
+  }
+
+  // Map selected row indices → the id values on those rows, de-duped.
+  const selectedIds = Array.from(
+    new Set(selectedRowIndices.map(i => dataset.getValue(idColumn, i))),
+  );
+
+  // createOrUpdateFilter(id, dataId, field, value) — a multi-select filter on the id
+  // column; reusing filterId means repeated brushes update this one filter in place.
+  dispatch(createOrUpdateFilter(filterId, dataset.id, idColumn, selectedIds));
 }
 
 /**
@@ -301,7 +346,8 @@ export function highlightRowsByColumnValues(
   datasetName: string,
   columnName: string,
   selectedValues: unknown[],
-  layerSetIsValid: (layer: Layer, isValid: boolean) => void
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  dispatch: (action: any) => void,
 ) {
   const datasetId = Object.keys(datasets).find(dataId => datasets[dataId].label === datasetName);
   if (!datasetId) return;
@@ -313,7 +359,7 @@ export function highlightRowsByColumnValues(
       return acc;
     }, {} as Record<string | number, number>);
     const selectedIndices = selectedValues.map(value => valueDict[value as string | number]);
-    highlightRows(datasets, layers, datasetName, selectedIndices, layerSetIsValid);
+    highlightRows(datasets, layers, datasetName, selectedIndices, dispatch);
   }
 }
 

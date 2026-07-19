@@ -85,7 +85,9 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       proxy: {
         '/api': {
-          target: 'http://localhost:3000',
+          // Proxy to the local AppKit server. Reads PORT from env so local dev can avoid
+          // colliding with other :3000 servers (e.g. the docs dev server); defaults to 3000.
+          target: `http://localhost:${env.PORT || '3000'}`,
           changeOrigin: true,
         },
       },

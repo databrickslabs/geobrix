@@ -126,7 +126,11 @@ export function useKeplerDataset<TRow>(
             datasets: dataset,
             // keepExistingConfig: true is critical — without it addDataToMap calls
             // resetMapConfigUpdater which wipes all existing layers.
-            options: { autoCreateLayers: false, centerMap: false, keepExistingConfig: true },
+            // When a layerConfig is provided (H3 layers) apply it and don't auto-create.
+            // When it's absent (point layers) let kepler AUTO-CREATE the layer — a
+            // hand-rolled point config creates a layer that never binds lat/lng and renders
+            // nothing, whereas kepler's own auto-detection builds a working point layer.
+            options: { autoCreateLayers: !layerConfig, centerMap: false, keepExistingConfig: true },
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
             ...(layerConfig ? { config: layerConfig as any } : {}),
           }),

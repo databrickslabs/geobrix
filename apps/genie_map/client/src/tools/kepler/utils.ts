@@ -116,18 +116,26 @@ const CHART_MEASURE_COLUMNS = [
 // (via createOrUpdateFilter) rather than stacking new filters.
 const crossFilterId = (datasetId: string) => `ai-crossfilter-${datasetId}`;
 
-function isNumeric(v: unknown): v is number {
-  return typeof v === 'number' && Number.isFinite(v);
+// Kepler's getValue returns column values as STRINGS even for 'real'/'integer' fields
+// (e.g. "8238.0"), so a raw typeof-number check rejects everything. Coerce numeric-looking
+// strings to numbers; return null for anything that isn't a finite number.
+function toNumber(v: unknown): number | null {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null;
+  if (typeof v === 'string' && v.trim() !== '') {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 // Pick the numeric column to range-filter: first known measure present, else the first
 // field whose values are numeric.
-function findMeasureColumn(dataset: KeplerTable): string | null {
+export function findMeasureColumn(dataset: KeplerTable): string | null {
   const names = new Set(dataset.fields.map(f => f.name));
   const known = CHART_MEASURE_COLUMNS.find(c => names.has(c));
   if (known) return known;
   for (const f of dataset.fields) {
-    if (dataset.length > 0 && isNumeric(dataset.getValue(f.name, 0))) return f.name;
+    if (dataset.length > 0 && toNumber(dataset.getValue(f.name, 0)) !== null) return f.name;
   }
   return null;
 }
@@ -187,10 +195,11 @@ export function highlightRows(
     return;
   }
 
-  // Range of the measure over the selected rows.
+  // Range of the measure over the selected rows. getValue returns strings even for
+  // numeric fields, so coerce via toNumber (a raw typeof-number check drops everything).
   const values = selectedRowIndices
-    .map(i => dataset.getValue(measure, i))
-    .filter(isNumeric);
+    .map(i => toNumber(dataset.getValue(measure, i)))
+    .filter((v): v is number => v !== null);
   if (values.length === 0) {
     // Nothing numeric to range on → clear the cross-filter. removeFilter is INDEX-based
     // (see note above), so resolve the index; never pass the string id.

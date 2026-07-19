@@ -16,6 +16,8 @@ import { CustomAiAssistantPanel as AiAssistantPanel } from './components/ai-assi
 import { useViewportBounds } from './hooks/useViewportBounds';
 import { useLayerVisibility } from './hooks/useLayerVisibility';
 import type { LayerRule } from './hooks/useLayerVisibility';
+import { usePointLayerFinalize } from './hooks/usePointLayerFinalize';
+import type { PointLayerDef } from './hooks/usePointLayerFinalize';
 import { usePanelState } from './hooks/usePanelState';
 import { useLayerData } from './hooks/useLayerData';
 import { getActiveDataset, VAPOR_EYES_TABLES } from './config/datasets';
@@ -93,12 +95,32 @@ const TABLE_BY_LAYER: Record<string, string> = {
   plumes:       VAPOR_EYES_TABLES.plumes,
 };
 
-// Layer ids MUST be derived exactly as the layer factories produce them
-// (`h3-layer-${id}` / `point-layer-${id}`), not the stale singular constants.
-const LAYER_RULES: LayerRule[] = DATASET.layers.map((l) => ({
-  layerId: l.kind === 'h3' ? `h3-layer-${l.id}` : `point-layer-${l.id}`,
-  activeWhen: (z: number) => z >= l.zoomVisible.min && z < l.zoomVisible.max,
-}));
+// H3 layers use hand-built configs with known ids (`h3-layer-${id}`), so they keep the
+// id-based visibility rules. POINT layers are auto-created by kepler (generated ids), so
+// their rename + zoom-visibility are handled by usePointLayerFinalize, keyed by dataId.
+const LAYER_RULES: LayerRule[] = DATASET.layers
+  .filter((l) => l.kind === 'h3')
+  .map((l) => ({
+    layerId: `h3-layer-${l.id}`,
+    activeWhen: (z: number) => z >= l.zoomVisible.min && z < l.zoomVisible.max,
+  }));
+
+const POINT_DEFS: PointLayerDef[] = DATASET.layers
+  .filter((l) => l.kind === 'point')
+  .map((l) => ({
+    dataId: l.id,
+    label: l.label,
+    zoomMin: l.zoomVisible.min,
+    zoomMax: l.zoomVisible.max,
+    // Plumes: size the dot by methane concentration (max_conc_ppmm) so bigger = stronger —
+    // the eye-guiding markers double as an intensity encoding. radiusRange keeps small
+    // plumes visible while letting strong ones stand out.
+    ...(l.id === 'plumes'
+      ? { sizeField: 'max_conc_ppmm', radiusRange: [15, 60] as [number, number] }
+      : {}),
+    // Wells: color by county for at-a-glance geographic grouping.
+    ...(l.id === 'wells' ? { colorField: 'county' } : {}),
+  }));
 
 // ---------------------------------------------------------------------------
 
@@ -119,6 +141,9 @@ function App() {
   useLayerData(DATASET.layers[3], bounds, TABLE_BY_LAYER[DATASET.layers[3].id]);
 
   useLayerVisibility(bounds?.zoom_level ?? null, LAYER_RULES);
+  // Rename + zoom-gate the auto-created point layers (by dataId, since their ids are
+  // kepler-generated). Restores the "hide point layers when zoomed out" behavior.
+  usePointLayerFinalize(bounds?.zoom_level ?? null, POINT_DEFS);
 
   const _setStartScreenCapture = useCallback(
     (flag: boolean) => dispatch(setStartScreenCapture(flag)),

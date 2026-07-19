@@ -40,6 +40,10 @@ function createAddDataToMap(dispatch: Dispatch): DatabricksSqlContext['addDataTo
         options: {
           centerMap: options?.centerMap ?? false,
           keepExistingConfig: true,
+          // Honor autoCreateLayers from the caller (genie-tool passes true). Without it,
+          // kepler adds the dataset but creates NO layer, so the data shows in the data
+          // panel yet nothing draws on the map. Default true: a geometry result should draw.
+          autoCreateLayers: options?.autoCreateLayers ?? true,
         },
       }),
     );

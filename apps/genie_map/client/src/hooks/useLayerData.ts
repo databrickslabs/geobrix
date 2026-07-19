@@ -2,7 +2,6 @@ import { useCallback, useMemo } from 'react';
 import { sql } from '@databricks/appkit-ui/js';
 import { useKeplerDataset } from './useKeplerDataset';
 import { createH3LayerConfig } from '../config/h3-layer-config';
-import { createPointLayerConfig } from '../config/point-layer-config';
 import type { LayerDef, ViewportBounds } from '@shared/types';
 
 // Module-level identity transform — stable reference so it never re-triggers
@@ -72,22 +71,36 @@ export function buildFields(layer: LayerDef): { name: string; type: string }[] {
 export function useLayerData(layer: LayerDef, bounds: ViewportBounds | null, tableName: string) {
   const params = useMemo(() => buildLayerParams(layer, bounds, tableName), [layer, bounds, tableName]);
 
+  const fields = useMemo(() => buildFields(layer), [layer]);
+
+  // H3 layers supply a hand-built config (works). POINT layers pass NO config so kepler
+  // auto-creates the layer from the lat/lng fields — a hand-rolled point config produced a
+  // layer that never rendered. undefined config → useKeplerDataset uses autoCreateLayers.
   const layerConfig = useMemo(() => (
     layer.kind === 'h3'
       ? createH3LayerConfig({ datasetId: layer.id, hexField: layer.hexField ?? 'hex',
           valueField: layer.valueField, label: layer.label, enable3d: layer.enable3d ?? true,
           palette: layer.palette, tooltipFields: layer.tooltipFields })
-      : createPointLayerConfig({ datasetId: layer.id, label: layer.label,
-          latField: layer.latField!, lngField: layer.lngField!, tooltipFields: layer.tooltipFields })
+      : undefined
   ), [layer]);
-
-  const fields = useMemo(() => buildFields(layer), [layer]);
 
   // Stable reference keyed on `fields` — identity only changes when the field
   // list does, so the kepler-update effect does not re-fire every render.
+  // Numeric-typed fields (esp. point lat/lng) arrive from the analytics query as STRINGS
+  // (e.g. "-103.74"); kepler/deck.gl need real numbers to compute point positions, so a
+  // string coordinate yields NaN → the layer renders nothing. Coerce real/integer fields
+  // to numbers here. (H3 layers are unaffected — their key column is a string hex id.)
   const toKeplerRow = useCallback(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (row: Record<string, unknown>) => fields.map((f) => (row as any)[f.name]),
+    (row: Record<string, unknown>) => fields.map((f) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const v = (row as any)[f.name];
+      if ((f.type === 'real' || f.type === 'integer') && typeof v === 'string' && v.trim() !== '') {
+        const n = Number(v);
+        return Number.isFinite(n) ? n : v;
+      }
+      return v;
+    }),
     [fields],
   );
 

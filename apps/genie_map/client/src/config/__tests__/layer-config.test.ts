@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { createH3LayerConfig } from '../h3-layer-config';
-import { createPointLayerConfig } from '../point-layer-config';
 
 describe('layer config factories', () => {
   it('H3 factory honors a custom color field and dataset id', () => {
@@ -22,16 +21,8 @@ describe('layer config factories', () => {
     expect(colors).not.toEqual(dfltColors);
   });
 
-  it('point factory returns a point layer bound to the given dataset id + coords', () => {
-    const cfg = createPointLayerConfig({
-      datasetId: 'wells', label: 'Wells',
-      latField: 'latitude', lngField: 'longitude',
-      tooltipFields: ['record_id', 'operator'],
-    }) as any;
-    const layer = cfg.config.visState.layers[0];
-    expect(layer.type).toBe('point');
-    expect(layer.config.dataId).toBe('wells');
-    expect(layer.config.columns.lat).toBe('latitude');
-    expect(layer.config.columns.lng).toBe('longitude');
-  });
+  // NOTE: point layers are no longer built from a hand-rolled config — kepler
+  // auto-creates them from the lat/lng fields (a hand-rolled point config never bound
+  // coordinates and rendered nothing). Their label/size/color/visibility are applied
+  // post-create by usePointLayerFinalize. Hence no point-factory test here.
 });

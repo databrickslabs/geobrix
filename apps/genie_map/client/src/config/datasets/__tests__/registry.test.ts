@@ -25,18 +25,23 @@ describe('vapor-eyes registry', () => {
     expect(l.h3!.maxRes).toBeGreaterThan(6);
     expect(l.queryName).toBe('wells_h3');
   });
-  it('wells H3 and wells points share the wells_enriched source + overlap-swap', () => {
+  it('both H3 layers hand off to the wells point layer with a 1-level overlap', () => {
+    const ch4 = vaporEyes.layers.find((x) => x.id === 'ch4_hotspots')!;
     const density = vaporEyes.layers.find((x) => x.id === 'well_density')!;
     const wells = vaporEyes.layers.find((x) => x.id === 'wells')!;
-    // ~1-level overlap band: density fades out where wells fades in.
-    expect(density.zoomVisible.max).toBeGreaterThan(wells.zoomVisible.min);
-    expect(density.fadeBand).toBeDefined();
+    // Wells appear at zoom 8; both H3 layers stay visible through 8 and hide at 9 — a
+    // 1-level overlap (H3 max === wells min + 1) so the hex screen hands off to features.
+    expect(ch4.zoomVisible.max).toBe(9);
+    expect(density.zoomVisible.max).toBe(9);
+    expect(ch4.zoomVisible.max).toBe(wells.zoomVisible.min + 1);
+    expect(density.zoomVisible.max).toBe(wells.zoomVisible.min + 1);
   });
-  it('ch4 hexes and plumes coexist (plumes appear on zoom-in, hexes stay)', () => {
-    const ch4 = vaporEyes.layers.find((x) => x.id === 'ch4_hotspots')!;
+  it('plumes are always visible; wells are scale-gated', () => {
     const plumes = vaporEyes.layers.find((x) => x.id === 'plumes')!;
-    expect(ch4.zoomVisible.max).toBe(24);   // ch4 stays visible at all zooms
-    expect(plumes.zoomVisible.min).toBeGreaterThan(0); // plumes only on zoom-in
+    const wells = vaporEyes.layers.find((x) => x.id === 'wells')!;
+    expect(plumes.zoomVisible.min).toBe(0);   // plumes guide the eye at every zoom
+    expect(plumes.zoomVisible.max).toBe(24);
+    expect(wells.zoomVisible.min).toBe(8);    // wells gated to avoid basin-scale overload
   });
   it('getActiveDataset defaults to vapor-eyes', () => {
     expect(getActiveDataset().id).toBe('vapor-eyes');

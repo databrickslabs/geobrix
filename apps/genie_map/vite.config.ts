@@ -1,4 +1,6 @@
-import { defineConfig, loadEnv } from 'vite';
+import { loadEnv } from 'vite';
+// Use vitest's defineConfig (a superset of vite's) so the `test` block is typed.
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import path from 'path';
 
@@ -98,6 +100,19 @@ export default defineConfig(({ mode }) => {
       commonjsOptions: {
         transformMixedEsModules: true
       }
+    },
+    test: {
+      // @databricks/appkit-ui@0.45 imports 'echarts-for-react/esm/core' without the .js
+      // extension. Node's native ESM resolver (used by vitest by default for node_modules)
+      // rejects that, so any test transitively importing appkit-ui fails to load. Inlining
+      // appkit-ui forces vitest to run it through vite's transform pipeline (which adds the
+      // extension, exactly as the app build does), fixing the test env without touching the
+      // production build.
+      server: {
+        deps: {
+          inline: [/@databricks\/appkit-ui/, /echarts-for-react/],
+        },
+      },
     },
   };
 });

@@ -1,0 +1,128 @@
+# Databricks Asset Bundle for the Genie Map app.
+#
+# Declarative resource set (warehouse, genie-space, app name) — kept as a simple
+# named list so a future scaffold_map_app(resources) helper can be lifted from it.
+#
+# Deploy via: gbx:app:deploy  (pnpm build → databricks bundle deploy → run).
+# This file lives at the app root (not a bundle/ subdir) so the app source is
+# inside the bundle sync root — a nested bundle with source_code_path: ../ points
+# outside the sync root and fails validation.
+
+bundle:
+  name: genie-map
+
+# Databricks Apps builds on-compute: with pnpm-lock.yaml present the platform
+# runs `pnpm install` then the app.yaml command (`pnpm build-and-start`), so we
+# upload SOURCE ONLY. node_modules must NOT be uploaded (tens of thousands of
+# files — the upload never finishes), and dist/ must NOT be uploaded (the client
+# bundle exceeds the 10 MB per-file limit, and the platform rebuilds it anyway).
+# Both are git-ignored so DAB already skips them; these excludes are belt-and-suspenders.
+sync:
+  exclude:
+    - node_modules
+    - dist
+    - client/src/**/__tests__/**
+    # The Genie-space definition is consumed only by the genie_spaces resource
+    # below (read locally at `bundle deploy` time via file_path) — the app's node
+    # server never reads it. It must NOT reach the app source snapshot: newer
+    # workspace/CLI (v1.7.0) infer a node type from the .geniespace.json
+    # extension and the app-source importer rejects it with
+    # `INVALID_PARAMETER_VALUE: Requested node type [UNKNOWN] is not supported`,
+    # failing the deploy. Excluding it from sync keeps it out of the snapshot
+    # while file_path still resolves against the local bundle copy.
+    - genie_space.geniespace.json
+
+# Workspace-specific values (host, warehouse id, genie space id) come from a
+# gitignored databricks.override.yml (see databricks.override.yml.example),
+# layered in via the include glob below — same pattern as the vapor-eyes SDP
+# bundle. The committed defaults point at the FEVM full-stack demo workspace.
+include:
+  - "*.override.yml"
+
+targets:
+  # No `mode: development`: dev mode force-prefixes managed resources with
+  # "[dev <user>]" (e.g. the Genie Space title) and ignores an empty name_prefix,
+  # which we don't want for a demo/showcase. Omitting mode deploys clean,
+  # unprefixed names — same rationale as the vapor-eyes SDP bundle.
+  dev:
+    default: true
+    workspace:
+      # Host is a literal (DAB resolves auth before variables). This committed
+      # default is the FEVM full-stack demo workspace (the shared oauth-fe /
+      # e2-demo-field-eng workspace is deprecated and perpetually at app
+      # capacity — do NOT target it). Override in databricks.override.yml for a
+      # different workspace.
+      host: https://fevm-serverless-stable-genie-map.cloud.databricks.com
+
+resources:
+  apps:
+    genie_map:
+      name: genie-map
+      description: "Genie Map — vapor-eyes methane on GeoBrix"
+      source_code_path: .
+      # The kepler.gl client bundle is large; the on-compute `vite build` OOMs on
+      # MEDIUM (default). LARGE gives the build enough heap (paired with
+      # --max-old-space-size=8192 in build:client).
+      compute_size: LARGE
+      # OAuth scopes the app requests on the user's behalf. The scope name is
+      # `genie` (per the Databricks Apps auth docs — the valid values include
+      # `sql`, `genie`, `files`); it is what satisfies the Genie API, which
+      # otherwise returns 403 'Invalid scope, required scopes: genie'. NOTE:
+      # `dashboards.genie` is NOT a valid app scope — it is rejected/unavailable
+      # in the app scope picker and does not grant Genie access. sql is for the
+      # viewport warehouse queries; serving.serving-endpoints for the LLM proxy.
+      # (iam.* defaults are granted automatically and must NOT be listed here.)
+      user_api_scopes:
+        - genie
+        - sql
+        - serving.serving-endpoints
+      resources:
+        - name: sql-warehouse-id
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: genie-space-id
+          genie_space:
+            name: genie-space-id
+            # References the bundle-managed Genie Space declared under
+            # resources.genie_spaces below, so `bundle deploy` creates the space
+            # and wires the app to it — no manual space id to paste.
+            space_id: ${resources.genie_spaces.vapor_eyes_genie.id}
+            permission: CAN_RUN
+        # The AI Assistant proxies chat completions through the AI Gateway to this
+        # serving endpoint; declaring it as an app resource grants the app's service
+        # principal CAN_QUERY so the LLM calls aren't rejected.
+        - name: serving-endpoint
+          serving_endpoint:
+            name: ${var.serving_endpoint_name}
+            permission: CAN_QUERY
+
+  # The curated Genie Space the AI Assistant queries — created/managed by the
+  # bundle from a committed definition (genie_space.geniespace.json = the sorted
+  # table set). Rich instructions + example SQL are added in the Genie UI
+  # (see docs/GENIE-SPACE.md) — that curation is not expressible in the bundle.
+  genie_spaces:
+    vapor_eyes_genie:
+      title: "Vapor-Eyes — Permian Methane (Genie Map)"
+      warehouse_id: ${var.warehouse_id}
+      file_path: ./genie_space.geniespace.json
+      # Pin the workspace folder to one that already exists so DAB doesn't try to
+      # relocate the space into a (non-existent) .bundle/.../resources tree — that
+      # PATCH 404s. The deploying user's root workspace dir is a safe home.
+      parent_path: /Workspace/Users/${workspace.current_user.userName}
+      description: >-
+        All tables are already scoped to the Permian Basin — do NOT filter by a
+        'Permian' play (no such value exists; plays are Delaware, Wolfcamp,
+        Wolfcamp - Midland, Spraberry, Bone Spring, Abo-Yeso, Glorieta-Yeso).
+        Rank plumes by max_conc_ppmm (emission_rate_kg_hr is often NULL). For map
+        results, return geometry as an ST_ASGEOJSON(...) column aliased *_geojson.
+        Join plumes to operators via plume_candidate_wells (rank=1 = nearest well).
+        See docs/GENIE-SPACE.md for full instructions + example SQL.
+
+variables:
+  warehouse_id:
+    description: "SQL warehouse id the app queries (also injected as the sql-warehouse-id app resource)"
+    default: "82e587bd93c6cbcf"
+  serving_endpoint_name:
+    description: "Foundation-model serving endpoint the AI Assistant queries"
+    default: "databricks-gpt-5-2"

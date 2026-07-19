@@ -22,14 +22,29 @@ const sidebars = {
     'beta-release-notes',
     {
       type: 'category',
-      label: 'Notebooks',
+      label: 'Examples',
       collapsed: true,
       items: [
-        'notebooks/eo-series',
-        'notebooks/xview',
-        'notebooks/h3-rasterize',
-        'notebooks/helios',
-        'notebooks/vapor-eyes',
+        {
+          type: 'category',
+          label: 'Notebooks',
+          collapsed: true,
+          items: [
+            'notebooks/eo-series',
+            'notebooks/xview',
+            'notebooks/h3-rasterize',
+            'notebooks/helios',
+            'notebooks/vapor-eyes',
+          ],
+        },
+        {
+          type: 'category',
+          label: 'Apps',
+          collapsed: true,
+          items: [
+            'examples/genie-map',
+          ],
+        },
       ],
     },
     {
@@ -122,14 +137,6 @@ const sidebars = {
         },
       ],
     },
-    // Temporarily hidden until Examples section is ready to ship
-    // {
-    //   type: 'category',
-    //   label: 'Examples',
-    //   items: [
-    //     'examples/overview',
-    //   ],
-    // },
     {
       type: 'category',
       label: 'Advanced Usage',

@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "data_sources": {
+    "tables": [
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.detections_by_county"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.emissions_by_play"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.hotspot_latest"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.operator_intensity_latest"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_candidate_wells"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.ref_counties"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.ref_shale_plays"
+      },
+      {
+        "identifier": "serverless_stable_genie_map_catalog.vapor_eyes_lf.wells_enriched_latest"
+      }
+    ]
+  }
+}

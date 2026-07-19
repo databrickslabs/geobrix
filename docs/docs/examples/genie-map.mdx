@@ -60,6 +60,13 @@ operator**" as a scatter — doesn't produce a usable chart, since operator isn'
 
 Either way, a spoken question and a drawn map answer share one canvas.
 
+![Animated demo: asking the assistant to chart plume concentration, then brushing a range on the histogram to cross-filter the EMIT plumes on the map in real time](../../../resources/images/screenshots/genie-map/genie-map-cross-filter.gif)
+
+Above: the interactive-chart path. The user asks *"Chart plume concentration and let me
+filter the map"*; brushing a range on the resulting histogram filters the plume layer on
+the map to just that concentration band — the chart and map are the same dataset, so a
+selection in one cross-filters the other.
+
 ![The AI Assistant panel building an EMIT-plumes-by-county choropleth on the map — county polygons joined to plume aggregates by lead_county and added as a new geojson layer colored by plume count, with a tooltip showing per-county plume_count and concentration stats, alongside the density-aware 3D hex layers](../../../resources/images/screenshots/genie-map/ai-emit-plumes-by-county.png)
 
 Above: the "new map layer" path in action. The user asked the assistant to map EMIT plumes

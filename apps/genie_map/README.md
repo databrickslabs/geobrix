@@ -8,6 +8,11 @@ an interactive map you can explore two ways:
 - **Ask a question** — type a natural-language question in the AI Assistant panel and,
   when the answer carries a geometry, it renders as a map layer alongside the others.
 
+![Animated demo: charting plume concentration and brushing a range on the histogram to cross-filter the EMIT plumes on the map in real time](../../resources/images/screenshots/genie-map/genie-map-cross-filter.gif)
+
+*Ask "Chart plume concentration and let me filter the map", then brush the histogram — the
+selection cross-filters the plume layer on the map (chart and map are the same dataset).*
+
 ![The AI Assistant building an EMIT-plumes-by-county choropleth — county polygons joined to plume aggregates by lead_county, added as a geojson layer colored by plume count, with a per-county tooltip, over the density-aware 3D hex layers](../../resources/images/screenshots/genie-map/ai-emit-plumes-by-county.png)
 
 Four layers ship out of the box: CH₄ hotspots (H3), well density (H3), individual

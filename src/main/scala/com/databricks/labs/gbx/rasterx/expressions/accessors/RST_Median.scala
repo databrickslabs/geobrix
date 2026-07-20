@@ -12,7 +12,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, gdal}
 
-/** Returns the median value per band of the raster. */
+/** Returns the median value per band of the raster, or null for a band with zero valid pixels. */
 case class RST_Median(
     tileExpr: Expression
 ) extends InvokedExpression {
@@ -51,17 +51,28 @@ object RST_Median extends WithExpressionInfo {
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
 
-    def execute(ds: Dataset, options: Map[String, String]): Array[Double] = {
+    def execute(ds: Dataset, options: Map[String, String]): Array[java.lang.Double] = {
         val outShortName = ds.GetDriver().getShortName
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val extension = GDAL.getExtension(outShortName)
         val resultPath = s"/vsimem/rst_median_$uuid.$extension"
         val cmd = s"gdalwarp -r med -ts 1 1"
         val (resDs, _) = GDALWarp.executeWarp(resultPath, Array(ds), options, cmd)
-        val maxValues = (1 to resDs.GetRasterCount()).map(i => resDs.GetRasterBand(i).AsMDArray().GetStatistics().getMax)
+        val medians: Array[java.lang.Double] = (1 to resDs.GetRasterCount()).map { i =>
+            val band = resDs.GetRasterBand(i)
+            val md = band.AsMDArray()
+            val stats = md.GetStatistics()
+            val res: java.lang.Double =
+                if (stats == null || stats.getValid_count == 0) null
+                else stats.getMax
+            if (stats != null) stats.delete()
+            md.delete()
+            band.delete()
+            res
+        }.toArray
         resDs.delete()
         gdal.Unlink(resultPath)
-        maxValues.toArray
+        medians
     }
 
     override def name: String = "gbx_rst_median"

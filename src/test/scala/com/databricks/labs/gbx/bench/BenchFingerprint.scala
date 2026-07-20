@@ -39,6 +39,17 @@ object BenchFingerprint {
     mapper.writeValueAsString(n)
   }
 
+  // Boxed variant for reducers that return NULL for all-nodata bands (RST_Max/Min/Avg/Median).
+  // A null element is emitted as a JSON null — matching the python bench (None -> null), NOT NaN —
+  // so cross-tier fingerprints agree on all-nodata inputs.
+  def ofArray(values: Array[java.lang.Double]): String = {
+    val n = mapper.createObjectNode()
+    n.put("kind", "scalar_list")
+    val arr: ArrayNode = n.putArray("values")
+    values.foreach(v => if (v == null) arr.addNull() else arr.add(v.doubleValue()))
+    mapper.writeValueAsString(n)
+  }
+
   /** Fingerprint a COLLECTION of output tiles (bucket C, group C4 tiling fns).
     *
     * Mirrors python bench/fingerprint.py `fingerprint_collection`: records the tile

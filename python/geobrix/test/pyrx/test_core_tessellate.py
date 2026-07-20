@@ -84,6 +84,57 @@ def test_tessellate_drops_zero_coverage_fringe_cells():
     assert not zero, f"tessellate returned zero-coverage fringe cells: {zero}"
 
 
+def _raster_with_interior_hole(nodata=-9999.0):
+    """9x9 EPSG:4326 raster, all pixels = 42.0 except a 3x3 interior NoData block."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    data = np.full((9, 9), 42.0, dtype="float32")
+    data[3:6, 3:6] = nodata
+    profile = dict(
+        driver="GTiff",
+        width=9,
+        height=9,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.05, 0.05),
+        nodata=nodata,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data, 1)
+        return mf.read()
+
+
+def test_covering_emits_all_nodata_cells_that_reduce_to_null():
+    # Contract (issue #59, emit + NULL): covering mode emits a chip for every
+    # overlapping cell, INCLUDING cells that clip to entirely NoData; reducing
+    # such a chip yields None (SQL NULL), never NaN. Data-bearing cells keep a
+    # real value. A cell is dropped only on true geometric non-overlap.
+    from databricks.labs.gbx.pyrx.core import accessors
+
+    src = _raster_with_interior_hole()
+    empty_seen = data_seen = 0
+    with _serde.open_tile(src) as ds:
+        chips = tessellate.tessellate_h3(ds, 7)
+    assert chips, "covering must emit at least one chip"
+    for _cellid, raster in chips:
+        with _serde.open_tile(raster) as chip:
+            pc = accessors.pixelcount(chip)[0]
+            mx = accessors.maximum(chip)[0]
+        if pc == 0:
+            empty_seen += 1
+            assert mx is None, f"all-nodata chip must reduce to None, got {mx!r}"
+        else:
+            data_seen += 1
+            assert mx is not None and mx == 42.0
+    # The hole must actually produce >=1 all-nodata cell, else the test proves nothing.
+    assert empty_seen > 0, "interior hole should yield >=1 all-nodata covering cell"
+    assert data_seen > 0
+
+
 def test_tessellate_reprojects_cell_for_non_4326_raster():
     # a UTM raster (EPSG:32633) should still tessellate by reprojecting the
     # cell polygons from 4326 into the raster CRS.

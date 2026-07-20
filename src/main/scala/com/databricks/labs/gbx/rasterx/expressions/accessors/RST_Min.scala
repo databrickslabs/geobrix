@@ -12,7 +12,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Returns the min value per band of the raster. */
+/** Returns the min value per band of the raster. Returns null for bands with zero valid pixels. */
 case class RST_Min(
     tileExpr: Expression
 ) extends InvokedExpression {
@@ -51,15 +51,15 @@ object RST_Min extends WithExpressionInfo {
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
 
-    def execute(ds: Dataset): Array[Double] = {
+    def execute(ds: Dataset): Array[java.lang.Double] = {
         (1 to ds.GetRasterCount()).map { bandIndex =>
             val band = ds.GetRasterBand(bandIndex)
-            if (band == null) Double.NaN
-            else {
-                val (min, _) = BandAccessors.getMinMax(band)
-                band.delete()
-                min
-            }
+            val res: java.lang.Double =
+                if (band == null) null
+                else if (BandAccessors.isEmpty(band)) null
+                else java.lang.Double.valueOf(BandAccessors.getMinMax(band)._1)
+            if (band != null) band.delete()
+            res
         }.toArray
     }
 

@@ -171,6 +171,8 @@ Powered by **rasterio** + **NumPy**. Per-band mean over valid (non-NoData) pixel
 
 **Signature:** `rst_avg(tile: Column): Column` — Per-band average pixel values.
 
+Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
+
 **SQL:**
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_avg_sql_example" outputConstant="rst_avg_sql_example_output" code={rasterxSqlCode} />
@@ -296,6 +298,8 @@ Powered by **rasterio** + **NumPy**. Per-band maximum over valid (non-NoData) pi
 
 **Signature:** `rst_max(tile: Column): Column` — Maximum pixel values per band.
 
+Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
+
 **SQL:**
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_max_sql_example" outputConstant="rst_max_sql_example_output" code={rasterxSqlCode} />
@@ -309,6 +313,8 @@ Powered by **rasterio** + **NumPy**. Per-band median over valid (non-NoData) pix
 :::
 
 **Signature:** `rst_median(tile: Column): Column` — Median pixel values per band.
+
+Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
 **SQL:**
 
@@ -351,6 +357,8 @@ Powered by **rasterio** + **NumPy**. Per-band minimum over valid (non-NoData) pi
 :::
 
 **Signature:** `rst_min(tile: Column): Column` — Minimum pixel values per band.
+
+Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
 **SQL:**
 
@@ -1345,6 +1353,8 @@ Powered by **rasterio**.
 :::
 
 **Signature:** `rst_isempty(tile: Column): Column` — Check if raster is empty.
+
+Returns `true` when the raster has no size **or** every band is entirely NoData.
 
 **SQL:**
 

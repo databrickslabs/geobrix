@@ -12,7 +12,7 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Returns the max value per band of the raster. */
+/** Returns the max value per band of the raster. Returns null for bands with zero valid pixels. */
 case class RST_Max(
     tileExpr: Expression
 ) extends InvokedExpression {
@@ -51,14 +51,23 @@ object RST_Max extends WithExpressionInfo {
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
 
-    def execute(ds: Dataset): Array[Double] = {
+    def execute(ds: Dataset): Array[java.lang.Double] = {
         (1 to ds.GetRasterCount()).map { bandIndex =>
             val band = ds.GetRasterBand(bandIndex)
-            if (band == null) Double.NaN
+            if (band == null) null
             else {
-                val (_, max) = BandAccessors.getMinMax(band)
+                val md = band.AsMDArray()
+                val stats = md.GetStatistics()
+                val res: java.lang.Double =
+                    if (stats == null || stats.getValid_count == 0) null
+                    else {
+                        val (_, max) = BandAccessors.getMinMax(band)
+                        max
+                    }
+                if (stats != null) stats.delete()
+                md.delete()
                 band.delete()
-                max
+                res
             }
         }.toArray
     }

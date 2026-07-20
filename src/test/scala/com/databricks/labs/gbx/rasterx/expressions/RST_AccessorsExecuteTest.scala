@@ -284,4 +284,28 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         zeros.delete()
     }
 
+    test("RST_Max returns null for an all-nodata band (issue #59)") {
+        val empty = allNodataDs()
+        RST_Max.execute(empty).head shouldBe null
+        empty.delete()
+    }
+
+    test("RST_Max returns 0.0 (not null) for a genuine-zero band") {
+        val zeros = allZeroDs()
+        RST_Max.execute(zeros).head shouldBe (0.0: java.lang.Double)
+        zeros.delete()
+    }
+
+    test("RST_Min returns null for an all-nodata band (issue #59)") {
+        val empty = allNodataDs()
+        RST_Min.execute(empty).head shouldBe null
+        empty.delete()
+    }
+
+    test("RST_Min returns 0.0 (not null) for a genuine-zero band") {
+        val zeros = allZeroDs()
+        RST_Min.execute(zeros).head shouldBe (0.0: java.lang.Double)
+        zeros.delete()
+    }
+
 }

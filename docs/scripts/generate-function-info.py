@@ -17,7 +17,6 @@ Usage (from repo root):
 
 import json
 import os
-import re
 import sys
 from typing import List, Optional
 

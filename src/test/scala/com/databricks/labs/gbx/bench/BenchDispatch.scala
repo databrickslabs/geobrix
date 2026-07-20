@@ -310,7 +310,7 @@ object BenchDispatch {
     case "rst_width"      => BenchFingerprint.ofScalar(RST_Width.execute(ds))
     case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
-    case "rst_avg"        => BenchFingerprint.ofArray(RST_Avg.execute(ds))
+    case "rst_avg"        => BenchFingerprint.ofArray(RST_Avg.execute(ds).map(d => if (d == null) Double.NaN else d.doubleValue))
     case "rst_min"        => BenchFingerprint.ofArray(RST_Min.execute(ds))
     case "rst_max"        => BenchFingerprint.ofArray(RST_Max.execute(ds))
     case "rst_median"     => BenchFingerprint.ofArray(RST_Median.execute(ds, Map.empty))

@@ -313,7 +313,7 @@ object BenchDispatch {
     case "rst_avg"        => BenchFingerprint.ofArray(RST_Avg.execute(ds).map(d => if (d == null) Double.NaN else d.doubleValue))
     case "rst_min"        => BenchFingerprint.ofArray(RST_Min.execute(ds).map(d => if (d == null) Double.NaN else d.doubleValue))
     case "rst_max"        => BenchFingerprint.ofArray(RST_Max.execute(ds).map(d => if (d == null) Double.NaN else d.doubleValue))
-    case "rst_median"     => BenchFingerprint.ofArray(RST_Median.execute(ds, Map.empty))
+    case "rst_median"     => BenchFingerprint.ofArray(RST_Median.execute(ds, Map.empty).map(d => if (d == null) Double.NaN else d.doubleValue))
     case "rst_pixelcount" => BenchFingerprint.ofArray(RST_PixelCount.execute(ds).map(_.toDouble))
     case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "scale", Double.NaN)))
     case "rst_aspect"     => fpDerived(RST_Aspect.execute(ds, argB(a, "trigonometric", false), argB(a, "zero_for_flat", false)))

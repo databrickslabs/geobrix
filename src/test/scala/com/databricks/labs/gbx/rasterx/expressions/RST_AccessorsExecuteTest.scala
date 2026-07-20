@@ -102,7 +102,7 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val sorted = buf.filterNot(_ == noData.head).sortBy(identity)
         val expected = sorted(sorted.length / 2)
         val epsilon = expected / 100.0
-        median.head shouldBe expected +- epsilon
+        median.head.doubleValue shouldBe expected +- epsilon
     }
 
     test("RST_MemSize should return approximated memory storage size") {
@@ -305,6 +305,18 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
     test("RST_Min returns 0.0 (not null) for a genuine-zero band") {
         val zeros = allZeroDs()
         RST_Min.execute(zeros).head shouldBe (0.0: java.lang.Double)
+        zeros.delete()
+    }
+
+    test("RST_Median returns null for an all-nodata band (issue #59)") {
+        val empty = allNodataDs()
+        RST_Median.execute(empty, Map.empty).head shouldBe null
+        empty.delete()
+    }
+
+    test("RST_Median returns 0.0 (not null) for a genuine-zero band") {
+        val zeros = allZeroDs()
+        RST_Median.execute(zeros, Map.empty).head shouldBe (0.0: java.lang.Double)
         zeros.delete()
     }
 

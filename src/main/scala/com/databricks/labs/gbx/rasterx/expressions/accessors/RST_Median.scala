@@ -59,13 +59,15 @@ object RST_Median extends WithExpressionInfo {
         val cmd = s"gdalwarp -r med -ts 1 1"
         val (resDs, _) = GDALWarp.executeWarp(resultPath, Array(ds), options, cmd)
         val medians: Array[java.lang.Double] = (1 to resDs.GetRasterCount()).map { i =>
-            val md = resDs.GetRasterBand(i).AsMDArray()
+            val band = resDs.GetRasterBand(i)
+            val md = band.AsMDArray()
             val stats = md.GetStatistics()
             val res: java.lang.Double =
                 if (stats == null || stats.getValid_count == 0) null
                 else stats.getMax
             if (stats != null) stats.delete()
             md.delete()
+            band.delete()
             res
         }.toArray
         resDs.delete()

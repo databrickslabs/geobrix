@@ -4,9 +4,7 @@
 > AI-powered map-agent demo from the DAIS 2026 session
 > **[Scaling Geospatial Analytics at S&P Global Energy: From Billions of Points to AI-Powered Map Agents with Databricks](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)**,
 > presented by **[Hubert Boguski](https://www.linkedin.com/in/hubertboguski/)** (S&P Global)
-> and **[Michael Johns](https://www.linkedin.com/in/michaeljohns2/)** (Databricks). The S&P Global Energy work — billions of well/production
-> points on a unified Delta Lake with H3 indexing and Databricks Spatial SQL — is the
-> pedigree behind this example.
+> and **[Michael Johns](https://www.linkedin.com/in/michaeljohns2/)** (Databricks).
 >
 > [![Data + AI Summit 2026 session — "From Billions of Points to AI-Powered Map Agents with Databricks: Scaling Geospatial Analytics at S&P Global Energy," presented by Hubert Boguski (S&P Global) and Michael Johns (Databricks)](../../resources/images/screenshots/genie-map/dais-2026-sp-global-session.png)](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)
 >

@@ -1917,7 +1917,10 @@ def rst_h3_tessellate(
 
     For every H3 cell overlapping the raster's extent at *resolution*, the
     raster is clipped to that cell's hexagon and one tile is produced, carrying
-    the H3 cell id as its ``cellid``. Cells with an empty clip are skipped.
+    the H3 cell id as its ``cellid``. A cell is skipped only when its hexagon
+    does not geometrically overlap the raster; a cell that overlaps but clips to
+    entirely NoData is still emitted, and its value reducers
+    (``gbx_rst_max``/``min``/``avg``/``median``) return SQL ``NULL`` for it.
 
     Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
 

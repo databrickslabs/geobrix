@@ -166,7 +166,7 @@ FROM rasters;
 
 Both tiers compute the same cell sets and the same per-cell chip pixels for each mode:
 
-- **`covering` mode:** lightweight (`pyrx`) calls h3-py 4.x `polygon_to_cells_experimental(..., contain='overlap')`; heavyweight (`rasterx`) hand-rolls the equivalent covering set using JTS geometry intersection (H3-Java is pinned at 3.7.0, which predates the v4 covering primitive). The mechanisms differ, but the output is the same overlapping set. Both tiers emit the same covering set — including cells that clip to all-NoData — and both reduce an all-NoData chip to SQL `NULL`; this is verified by the per-mode parity tests and the all-nodata regression tests on each tier.
+- **`covering` mode:** lightweight (`pyrx`) calls h3-py 4.x `polygon_to_cells_experimental(..., contain='overlap')`; heavyweight (`rasterx`) hand-rolls the equivalent covering set using JTS geometry intersection (H3-Java is pinned at 3.7.0, which predates the v4 covering primitive). The mechanisms differ, but the output is the same overlapping set — verified by the cross-tier parity test. On top of that, each tier emits the cells that clip to all-NoData (rather than dropping them) and reduces such a chip to SQL `NULL` — verified by an all-NoData regression test on each tier.
 - **`centroid` mode:** both tiers assign each pixel via its centroid lat/lon to a single H3 cell using the same point-in-hexagon lookup; the chip pixels are identical by construction.
 
 Parity is test-enforced: for each mode, tests assert that light and heavy produce the same cell set and the same per-cell chip pixels on a border-containing tile.

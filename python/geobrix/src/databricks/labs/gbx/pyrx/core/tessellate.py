@@ -3,8 +3,10 @@
 
 For every H3 cell overlapping the raster's bounding box at the requested
 resolution, the raster is clipped to that cell's hexagon geometry and one tile
-is yielded per cell, carrying the H3 cell id as its ``cellid``. Cells whose
-clip is empty / all-nodata are skipped.
+is yielded per cell, carrying the H3 cell id as its ``cellid``. A cell is
+skipped only when its hexagon does not geometrically overlap the raster at all;
+a cell that overlaps but clips to entirely NoData is still emitted (its value
+reducers then return NULL), matching the heavyweight tier.
 """
 
 from collections import defaultdict
@@ -176,10 +178,13 @@ def iter_tessellate_h3(ds, resolution: int, mode: str = "covering"):
         except ValueError:
             # rasterio.mask raises ValueError when the shape does not overlap.
             continue
-        # A cell can overlap the raster BBOX yet clip to empty / all-nodata (common on
-        # Sentinel-2 swath edges where nodata=0); clip_to_geom returns None there. Skip
-        # it -- matches this function's contract ("empty / all-nodata cells are skipped")
-        # and avoids handing None to build_tile downstream.
+        # clip_to_geom returns None ONLY on true geometric non-overlap (the
+        # rasterio "Input shapes do not overlap raster" case, edit.py). A cell
+        # that overlaps the BBOX but clips to entirely NoData clips successfully
+        # to a nodata-filled chip and IS emitted -- its value reducers then
+        # return NULL. So this skip drops only non-overlapping cells; it does
+        # NOT skip all-nodata cells (matches the heavyweight tier's covering
+        # keep-test, which is purely geometric).
         if clipped is None:
             continue
         yield (_h3_str_to_signed_int64(cell), clipped)

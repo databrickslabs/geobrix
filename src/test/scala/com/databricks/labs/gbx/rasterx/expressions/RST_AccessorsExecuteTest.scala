@@ -247,6 +247,11 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val path = s"/vsimem/all_nodata_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
         val drv = gdal.GetDriverByName("GTiff")
         val d = drv.Create(path, 4, 4, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
+        d.SetGeoTransform(Array(0.0, 1.0, 0.0, 4.0, 0.0, -1.0))
+        val srs = new org.gdal.osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        d.SetProjection(srs.ExportToWkt())
+        srs.delete()
         val band = d.GetRasterBand(1)
         band.SetNoDataValue(nodata)
         val buf = Array.fill[Double](16)(nodata)
@@ -262,6 +267,11 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val path = s"/vsimem/all_zero_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
         val drv = gdal.GetDriverByName("GTiff")
         val d = drv.Create(path, 4, 4, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
+        d.SetGeoTransform(Array(0.0, 1.0, 0.0, 4.0, 0.0, -1.0))
+        val srs = new org.gdal.osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        d.SetProjection(srs.ExportToWkt())
+        srs.delete()
         val band = d.GetRasterBand(1)
         band.SetNoDataValue(nodata)
         val buf = Array.fill[Double](16)(0.0)

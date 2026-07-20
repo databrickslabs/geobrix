@@ -1,0 +1,184 @@
+/**
+ * H3 Layer Configuration for kepler.gl
+ * 
+ * This module provides reusable layer configuration for H3 hexagon layers.
+ * The configuration includes fill color and height based on a numeric field.
+ */
+
+import { H3_HEIGHT_MULTIPLIER } from './dataset-config';
+
+// Kepler.gl colorRange definitions keyed by their named palette. Additional
+// kepler named ranges can be added here; unknown names fall back to Global Warming.
+const GLOBAL_WARMING = {
+  name: 'Global Warming',
+  type: 'sequential',
+  category: 'Uber',
+  colors: ['#5A1846', '#900C3F', '#C70039', '#E3611C', '#F1920E', '#FFC300'],
+};
+
+// kepler.gl's built-in "Uber Viz Sequential" 6-color sequential range.
+const UBER_VIZ_SEQUENTIAL = {
+  name: 'Uber Viz Sequential',
+  type: 'sequential',
+  category: 'Uber',
+  colors: ['#E6FAFA', '#C1E5E6', '#9DD0D4', '#75BBC1', '#4BA7AF', '#00939C'],
+};
+
+// Every palette named by a registry LayerDef.palette must be registered here,
+// otherwise resolveColorRange silently falls back to Global Warming.
+const COLOR_RANGES: Record<string, typeof GLOBAL_WARMING> = {
+  'Global Warming': GLOBAL_WARMING,
+  'Uber Viz Sequential': UBER_VIZ_SEQUENTIAL,
+};
+
+function resolveColorRange(palette: string) {
+  return COLOR_RANGES[palette] ?? GLOBAL_WARMING;
+}
+
+// Dataset ID used by useViewportData and kepler layer config.
+export const H3_DATASET_ID = 'h3_dataset';
+
+export interface H3LayerConfigOptions {
+  datasetId: string;
+  hexField?: string;
+  valueField?: string;
+  label?: string;
+  enable3d?: boolean;
+  opacity?: number;
+  /** kepler.gl elevationScale ("Height Multiplier" in UI). Default 130. */
+  elevationScale?: number;
+  /** kepler.gl named colorRange. Default 'Global Warming'. */
+  palette?: string;
+  /** Columns shown in the hover tooltip. Defaults to [hexField, valueField]. */
+  tooltipFields?: string[];
+}
+
+/**
+ * Creates a kepler.gl config for an H3 hexagon layer
+ * with fill color and optional 3D height based on a value field.
+ * 
+ * @param options - Configuration options for the H3 layer
+ * @returns kepler.gl config object for use with addDataToMap
+ */
+export function createH3LayerConfig(options: H3LayerConfigOptions) {
+  const {
+    datasetId,
+    hexField = 'hex',
+    valueField = 'count',
+    label = 'H3 Hexagon Layer',
+    enable3d = true,
+    opacity = 0.8,
+    elevationScale = 130,
+    palette = 'Global Warming',
+    tooltipFields,
+  } = options;
+
+  // Generate a unique layer ID based on dataset
+  const layerId = `h3-layer-${datasetId}`;
+
+  return {
+    version: 'v1',
+    config: {
+      visState: {
+        filters: [],
+        layers: [
+          {
+            id: layerId,
+            type: 'hexagonId',
+            config: {
+              dataId: datasetId,
+              label,
+              color: [241, 92, 23] as [number, number, number], // Orange fallback color
+              columns: {
+                hex_id: hexField,
+              },
+              isVisible: true,
+              visConfig: {
+                opacity,
+                // Palette resolved from the requested named colorRange
+                // (defaults to the "Global Warming" warm gradient).
+                colorRange: resolveColorRange(palette),
+                coverage: 1,
+                sizeRange: [0, 500],
+                coverageRange: [0, 1],
+                elevationScale, // Height Multiplier in UI — driven by VITE_H3_HEIGHT_MULTIPLIER
+                enable3d,
+              },
+              textLabel: [
+                {
+                  field: null,
+                  color: [255, 255, 255] as [number, number, number],
+                  size: 18,
+                  offset: [0, 0] as [number, number],
+                  anchor: 'start',
+                  alignment: 'center',
+                },
+              ],
+            },
+            visualChannels: {
+              // Color based on value field
+              colorField: {
+                name: valueField,
+                type: 'real',
+              },
+              colorScale: 'quantile',
+              // Height/Size based on value field (for 3D mode)
+              sizeField: {
+                name: valueField,
+                type: 'real',
+              },
+              sizeScale: 'sqrt',
+              coverageField: null,
+              coverageScale: 'linear',
+            },
+          },
+        ],
+        interactionConfig: {
+          tooltip: {
+            fieldsToShow: {
+              [datasetId]: tooltipFields ?? [hexField, valueField],
+            },
+            enabled: true,
+          },
+          brush: {
+            size: 0.5,
+            enabled: false,
+          },
+          geocoder: {
+            enabled: false,
+          },
+        },
+        layerBlending: 'normal',
+        splitMaps: [],
+      },
+      mapStyle: {
+        styleType: 'dark',
+        topLayerGroups: {},
+        visibleLayerGroups: {
+          label: true,
+          road: true,
+          border: false,
+          building: true,
+          water: true,
+          land: true,
+          '3d building': false,
+        },
+        mapStyles: {},
+      },
+    },
+  };
+}
+
+/**
+ * Default H3 aggregation layer config.
+ * Used by useViewportData when adding/replacing the H3 dataset in kepler.gl.
+ */
+export const H3_LAYER_CONFIG = createH3LayerConfig({
+  datasetId: H3_DATASET_ID,
+  hexField: 'hex',
+  valueField: 'count',
+  label: 'H3 Aggregation Layer',
+  enable3d: true,
+  opacity: 0.8,
+  elevationScale: H3_HEIGHT_MULTIPLIER,
+});

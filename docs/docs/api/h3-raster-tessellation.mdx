@@ -49,7 +49,7 @@ Tile extent (─── = border)
          └───────────────────┘    one of A or B, never both
 ```
 
-**`covering`:** any H3 hexagon that geometrically overlaps the tile is included; the clip uses `all_touched=True` so boundary pixels go into every cell that touches them. When you later union chips across neighbouring tiles that share a border cell, the overlap is expected and correct — each tile contributed its own view of that cell.
+**`covering`:** any H3 hexagon that geometrically overlaps the tile is included; the clip uses `all_touched=True` so boundary pixels go into every cell that touches them. When you later union chips across neighbouring tiles that share a border cell, the overlap is expected and correct — each tile contributed its own view of that cell. A cell that overlaps the tile but clips to entirely NoData is still emitted as a chip (a cell is omitted only when its hexagon does not geometrically overlap the tile at all). Such an all-NoData chip has a valid-pixel count of `0`, and the value reducers (`gbx_rst_max`, `gbx_rst_min`, `gbx_rst_avg`, `gbx_rst_median`) return SQL `NULL` for it on both tiers — filter these with `WHERE measure IS NULL`. This lets a downstream query distinguish *missing data* (a chip is present but its measure is `NULL`) from *outside the coverage area* (no chip for that cell).
 
 **`centroid`:** each pixel's centroid coordinate is mapped to a single H3 cell. A pixel sitting exactly on a hexagon boundary goes to one cell and one cell only. The set of output cells emerges from the data (cells with at least one assigned pixel), without a separate covering-set step. This forms a **partition**: every valid pixel in the input appears in exactly one output chip, and the union of all chips reproduces the full valid-pixel set.
 
@@ -166,7 +166,7 @@ FROM rasters;
 
 Both tiers compute the same cell sets and the same per-cell chip pixels for each mode:
 
-- **`covering` mode:** lightweight (`pyrx`) calls h3-py 4.x `polygon_to_cells_experimental(..., contain='overlap')`; heavyweight (`rasterx`) hand-rolls the equivalent covering set using JTS geometry intersection (H3-Java is pinned at 3.7.0, which predates the v4 covering primitive). The mechanisms differ, but the output is the same overlapping set — verified by the per-mode parity tests.
+- **`covering` mode:** lightweight (`pyrx`) calls h3-py 4.x `polygon_to_cells_experimental(..., contain='overlap')`; heavyweight (`rasterx`) hand-rolls the equivalent covering set using JTS geometry intersection (H3-Java is pinned at 3.7.0, which predates the v4 covering primitive). The mechanisms differ, but the output is the same overlapping set — verified by the cross-tier parity test. On top of that, each tier emits the cells that clip to all-NoData (rather than dropping them) and reduces such a chip to SQL `NULL` — verified by an all-NoData regression test on each tier.
 - **`centroid` mode:** both tiers assign each pixel via its centroid lat/lon to a single H3 cell using the same point-in-hexagon lookup; the chip pixels are identical by construction.
 
 Parity is test-enforced: for each mode, tests assert that light and heavy produce the same cell set and the same per-cell chip pixels on a border-containing tile.

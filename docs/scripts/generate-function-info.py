@@ -17,7 +17,6 @@ Usage (from repo root):
 
 import json
 import os
-import re
 import sys
 from typing import List, Optional
 
@@ -47,10 +46,50 @@ REGISTERED_FUNCTIONS_TXT = os.path.join(
 )
 
 
+def _split_sql_statements(sql: str) -> List[str]:
+    """Split SQL on ';' outside single-quoted string literals and -- line comments."""
+    stmts: List[str] = []
+    buf: List[str] = []
+    in_str = False
+    in_line_comment = False
+    chars = list(sql)
+    i = 0
+    while i < len(chars):
+        ch = chars[i]
+        if in_line_comment:
+            buf.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+            i += 1
+        elif in_str:
+            if ch == "'":
+                in_str = False
+            buf.append(ch)
+            i += 1
+        elif ch == "-" and i + 1 < len(chars) and chars[i + 1] == "-":
+            in_line_comment = True
+            buf.append(ch)
+            i += 1
+        elif ch == "'":
+            in_str = True
+            buf.append(ch)
+            i += 1
+        elif ch == ";":
+            stmts.append("".join(buf))
+            buf = []
+            i += 1
+        else:
+            buf.append(ch)
+            i += 1
+    if "".join(buf).strip():
+        stmts.append("".join(buf))
+    return stmts
+
+
 def first_statement_containing(sql: str, func_name: str) -> str:
     """Extract first SQL statement that contains func_name (e.g. gbx_rst_width)."""
     sql = sql.strip()
-    statements = re.split(r";\s*", sql)
+    statements = _split_sql_statements(sql)
     for stmt in statements:
         stmt = stmt.strip()
         if not stmt:

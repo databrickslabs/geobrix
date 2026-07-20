@@ -1,0 +1,17 @@
+# --- databricks.override.yml.example -------------------------------------
+# Copy to `databricks.override.yml` (git-ignored) to point the Genie Map app
+# bundle at YOUR workspace. Layered in automatically via include: ["*.override.yml"].
+# A fresh clone with no override still validates/deploys using the committed
+# defaults (the reference deployment).
+# -------------------------------------------------------------------------
+targets:
+  dev:
+    workspace:
+      host: https://YOUR-WORKSPACE.cloud.databricks.com
+      profile: YOUR_CLI_PROFILE
+    variables:
+      warehouse_id: YOUR_SQL_WAREHOUSE_ID
+      # The Genie Space is created/managed by the bundle (resources.genie_spaces),
+      # so there is no genie_space_id to set here. Retarget the gold catalog/schema
+      # for a different workspace via the app build env (VITE_GOLD_CATALOG /
+      # VITE_GOLD_SCHEMA in app.yaml) and the space file (genie_space.geniespace.json).

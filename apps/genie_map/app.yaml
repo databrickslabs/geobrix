@@ -1,0 +1,28 @@
+# Databricks Apps runs on-compute: with pnpm-lock.yaml present it runs
+# `pnpm install` (production — devDependencies skipped, so build tools vite/tsc
+# live in dependencies) AND automatically runs the package.json `build` script,
+# producing dist/. This command only STARTS the server — `pnpm` is not on PATH
+# in the runtime stage, but `node` is, so launch dist/server/index.js directly.
+command:
+  - node
+  - dist/server/index.js
+
+env:
+  # Runtime: warehouse + genie space injected from the app resources.
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse-id
+  - name: DATABRICKS_GENIE_SPACE_ID
+    valueFrom: genie-space-id
+  - name: DATABRICKS_SERVING_ENDPOINT_NAME
+    value: databricks-gpt-5-2
+  # Build-time (Vite loadEnv reads process.env): the on-compute `pnpm build`
+  # bakes these into the client bundle, so they MUST be set here (databricks.env
+  # is local-only and not present on the app compute).
+  - name: VITE_ACTIVE_DATASET
+    value: vapor-eyes
+  - name: VITE_GOLD_CATALOG
+    value: serverless_stable_genie_map_catalog
+  - name: VITE_GOLD_SCHEMA
+    value: vapor_eyes_lf
+  - name: VITE_GENIE_SPACE_NAME
+    value: "Vapor-Eyes — Permian Methane (Genie Map)"

@@ -91,7 +91,15 @@ def scaley(ds) -> float:
 
 
 def isempty(ds) -> bool:
-    return int(ds.width) == 0 or int(ds.height) == 0 or int(ds.count) == 0
+    """True if the raster has no size, or every band has zero valid pixels.
+
+    Mirrors heavyweight RasterAccessors.isEmpty (null / no size / all bands
+    fully NoData). A dimensionally-valid raster whose every band is NoData is
+    still empty (issue #59).
+    """
+    if int(ds.width) == 0 or int(ds.height) == 0 or int(ds.count) == 0:
+        return True
+    return all(_valid_values(ds, bi).size == 0 for bi in range(1, ds.count + 1))
 
 
 def type(ds) -> List[str]:
@@ -117,39 +125,39 @@ def _valid_values(ds, band_index: int) -> np.ndarray:
     return arr[mask != 0].ravel()
 
 
-def avg(ds) -> List[float]:
-    """Per-band mean of valid pixels; NaN for empty/all-invalid bands."""
-    out = []
+def avg(ds) -> List[Optional[float]]:
+    """Per-band mean of valid pixels; None (SQL NULL) for empty/all-invalid bands."""
+    out: List[Optional[float]] = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.mean(vals)) if vals.size else float("nan"))
+        out.append(float(np.mean(vals)) if vals.size else None)
     return out
 
 
-def minimum(ds) -> List[float]:
-    """Per-band min of valid pixels; NaN for empty/all-invalid bands."""
-    out = []
+def minimum(ds) -> List[Optional[float]]:
+    """Per-band min of valid pixels; None (SQL NULL) for empty/all-invalid bands."""
+    out: List[Optional[float]] = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.min(vals)) if vals.size else float("nan"))
+        out.append(float(np.min(vals)) if vals.size else None)
     return out
 
 
-def maximum(ds) -> List[float]:
-    """Per-band max of valid pixels; NaN for empty/all-invalid bands."""
-    out = []
+def maximum(ds) -> List[Optional[float]]:
+    """Per-band max of valid pixels; None (SQL NULL) for empty/all-invalid bands."""
+    out: List[Optional[float]] = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.max(vals)) if vals.size else float("nan"))
+        out.append(float(np.max(vals)) if vals.size else None)
     return out
 
 
-def median(ds) -> List[float]:
-    """Per-band median of valid pixels; NaN for empty/all-invalid bands."""
-    out = []
+def median(ds) -> List[Optional[float]]:
+    """Per-band median of valid pixels; None (SQL NULL) for empty/all-invalid bands."""
+    out: List[Optional[float]] = []
     for bi in range(1, ds.count + 1):
         vals = _valid_values(ds, bi)
-        out.append(float(np.median(vals)) if vals.size else float("nan"))
+        out.append(float(np.median(vals)) if vals.size else None)
     return out
 
 

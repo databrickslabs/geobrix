@@ -383,7 +383,7 @@ def render():
         f'</text>'
     )
     # Version pill (top-right)
-    pill_text = "v0.4.1  *  Beta"
+    pill_text = "v0.4.2  *  Beta"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{CANVAS_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '
@@ -492,7 +492,7 @@ def render_landscape():
         f'</text>'
     )
     # Version pill (top-right)
-    pill_text = "v0.4.1  *  Beta"
+    pill_text = "v0.4.2  *  Beta"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{LANDSCAPE_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '

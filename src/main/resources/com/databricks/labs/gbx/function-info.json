@@ -236,7 +236,7 @@
       "examples": "Examples:\n      > SELECT gbx_rst_roughness(tile) AS roughness FROM rasters;"
     },
     "gbx_rst_sample": {
-      "examples": "Examples:\n      > SELECT gbx_rst_sample(tile, 'POINT(-0.13 51.5)') AS values FROM rasters;"
+      "examples": "Examples:\n      > SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS values FROM rasters;"
     },
     "gbx_rst_savi": {
       "examples": "Examples:\n      > SELECT gbx_rst_savi(tile, 1, 2, 0.5) AS savi FROM rasters;"

@@ -12,7 +12,7 @@ from pathlib import Path
 
 # Determine paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.4.1-jar-with-dependencies.jar"
+GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.4.2-jar-with-dependencies.jar"
 
 # Sample data root: from path_config (defaults to test-data minimal bundle at runtime)
 from path_config import SAMPLE_DATA_BASE  # noqa: E402

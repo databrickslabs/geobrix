@@ -573,3 +573,67 @@ def detections_by_county():
         counties.select("county_name", "state_fp", "geoid", "county_geom"),
         ["county_name", "state_fp", "geoid"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Genie Map app support (apps/genie_map): the current well inventory as map-ready
+# points, spatially tagged with shale play + authoritative county/state. Feeds
+# BOTH the Genie Map "wells" point layer AND its point-sourced "well_density" H3
+# layer (which aggregates these points on the fly via h3_longlatash3), so no
+# fixed-resolution density MV is needed. Point columns are aliased longitude/
+# latitude so the app's SQL templates read them directly.
+# ---------------------------------------------------------------------------
+
+
+@dp.materialized_view(
+    name="wells_enriched_latest",
+    comment=(
+        "Current TX RRC well inventory (SCD2 as-of-now) tagged with shale play + "
+        "county/state; map-ready points for the Genie Map app"
+    ),
+)
+def wells_enriched_latest():
+    from pyspark.sql import SparkSession
+    spark = SparkSession.getActiveSession()
+
+    # Current (as-of-now) SCD2 version of the well inventory.
+    wells = (
+        spark.read.table("wells_shl")
+        .filter(F.col("__END_AT").isNull())
+        .select(
+            "api", "operator", "lease", "field", "well_url",
+            F.col("county").alias("county_rrc"),
+            F.expr("st_x(st_geomfromwkb(well_geom))").alias("longitude"),
+            F.expr("st_y(st_geomfromwkb(well_geom))").alias("latitude"),
+            F.expr("st_setsrid(st_geomfromwkb(well_geom), 4326)").alias("well_geom_native"),
+        )
+    )
+    plays = spark.read.table("ref_shale_plays").select("play_name", "play_geom")
+    counties = spark.read.table("ref_counties").select(
+        "county_name", "state_fp", "geoid", "county_geom"
+    )
+
+    # A well may fall in multiple (stacked formations) or zero plays. Keep one row
+    # per api with the first containing play (deterministic by play_name); NULL when
+    # outside all plays. GEOMETRY isn't orderable so the tie-break is on play_name.
+    with_play = (
+        wells.join(plays, F.expr("st_contains(play_geom, well_geom_native)"), "left")
+        .withColumn(
+            "_pr",
+            F.row_number().over(
+                Window.partitionBy("api").orderBy(F.col("play_name").asc_nulls_last())
+            ),
+        )
+        .filter("_pr = 1")
+        .drop("_pr", "play_geom")
+    )
+    # County expected unique per point.
+    with_county = with_play.join(
+        counties, F.expr("st_contains(county_geom, well_geom_native)"), "left"
+    ).drop("county_geom")
+
+    return with_county.select(
+        "api", "operator", "lease", "field", "well_url", "county_rrc",
+        "longitude", "latitude", "well_geom_native",
+        "play_name", "county_name", "state_fp", "geoid",
+    )

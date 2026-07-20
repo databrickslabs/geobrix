@@ -102,7 +102,7 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val sorted = buf.filterNot(_ == noData.head).sortBy(identity)
         val expected = sorted(sorted.length / 2)
         val epsilon = expected / 100.0
-        median.head shouldBe expected +- epsilon
+        median.head.doubleValue shouldBe expected +- epsilon
     }
 
     test("RST_MemSize should return approximated memory storage size") {
@@ -242,5 +242,92 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         width shouldBe ds.GetRasterXSize()
     }
 
+    /** Build a 4x4 single-band Float32 /vsimem raster where every pixel == nodata. */
+    private def allNodataDs(nodata: Double = -9999.0): Dataset = {
+        val path = s"/vsimem/all_nodata_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+        val drv = gdal.GetDriverByName("GTiff")
+        val d = drv.Create(path, 4, 4, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
+        d.SetGeoTransform(Array(0.0, 1.0, 0.0, 4.0, 0.0, -1.0))
+        val srs = new org.gdal.osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        d.SetProjection(srs.ExportToWkt())
+        srs.delete()
+        val band = d.GetRasterBand(1)
+        band.SetNoDataValue(nodata)
+        val buf = Array.fill[Double](16)(nodata)
+        band.WriteRaster(0, 0, 4, 4, buf)
+        band.FlushCache()
+        d.FlushCache()
+        band.delete()
+        d
+    }
+
+    /** Build a 4x4 single-band Float32 /vsimem raster of genuine 0.0 pixels. */
+    private def allZeroDs(nodata: Double = -9999.0): Dataset = {
+        val path = s"/vsimem/all_zero_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+        val drv = gdal.GetDriverByName("GTiff")
+        val d = drv.Create(path, 4, 4, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
+        d.SetGeoTransform(Array(0.0, 1.0, 0.0, 4.0, 0.0, -1.0))
+        val srs = new org.gdal.osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        d.SetProjection(srs.ExportToWkt())
+        srs.delete()
+        val band = d.GetRasterBand(1)
+        band.SetNoDataValue(nodata)
+        val buf = Array.fill[Double](16)(0.0)
+        band.WriteRaster(0, 0, 4, 4, buf)
+        band.FlushCache()
+        d.FlushCache()
+        band.delete()
+        d
+    }
+
+    test("RST_Avg returns null for an all-nodata band (issue #59)") {
+        val empty = allNodataDs()
+        RST_Avg.execute(empty).head shouldBe null
+        empty.delete()
+    }
+
+    test("RST_Avg returns 0.0 (not null) for a genuine-zero band") {
+        val zeros = allZeroDs()
+        RST_Avg.execute(zeros).head shouldBe (0.0: java.lang.Double)
+        zeros.delete()
+    }
+
+    test("RST_Max returns null for an all-nodata band (issue #59)") {
+        val empty = allNodataDs()
+        RST_Max.execute(empty).head shouldBe null
+        empty.delete()
+    }
+
+    test("RST_Max returns 0.0 (not null) for a genuine-zero band") {
+        val zeros = allZeroDs()
+        RST_Max.execute(zeros).head shouldBe (0.0: java.lang.Double)
+        zeros.delete()
+    }
+
+    test("RST_Min returns null for an all-nodata band (issue #59)") {
+        val empty = allNodataDs()
+        RST_Min.execute(empty).head shouldBe null
+        empty.delete()
+    }
+
+    test("RST_Min returns 0.0 (not null) for a genuine-zero band") {
+        val zeros = allZeroDs()
+        RST_Min.execute(zeros).head shouldBe (0.0: java.lang.Double)
+        zeros.delete()
+    }
+
+    test("RST_Median returns null for an all-nodata band (issue #59)") {
+        val empty = allNodataDs()
+        RST_Median.execute(empty, Map.empty).head shouldBe null
+        empty.delete()
+    }
+
+    test("RST_Median returns 0.0 (not null) for a genuine-zero band") {
+        val zeros = allZeroDs()
+        RST_Median.execute(zeros, Map.empty).head shouldBe (0.0: java.lang.Double)
+        zeros.delete()
+    }
 
 }

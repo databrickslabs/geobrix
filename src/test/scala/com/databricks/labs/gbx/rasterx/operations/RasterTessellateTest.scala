@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.gridx.grid.H3
+import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Max
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
 import org.gdal.gdal.{Dataset, gdal}
 import org.locationtech.jts.geom.Geometry
@@ -141,6 +142,47 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         }
         // No cell emitted twice.
         emittedCells.length shouldBe emittedCells.distinct.length
+    }
+
+    /** 9x9 Float32 /vsimem raster (EPSG:4326, georeferenced) = 42.0 except a 3x3 interior NoData block. */
+    private def interiorHoleDs(): Dataset = {
+        val path = s"/vsimem/tess_hole_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+        val drv = gdal.GetDriverByName("GTiff")
+        val d = drv.Create(path, 9, 9, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
+        d.SetGeoTransform(Array(10.0, 0.05, 0.0, 50.0, 0.0, -0.05))
+        val srs = new org.gdal.osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        d.SetProjection(srs.ExportToWkt())
+        srs.delete()
+        val band = d.GetRasterBand(1)
+        band.SetNoDataValue(-9999.0)
+        val buf = Array.fill[Double](81)(42.0)
+        for (r <- 3 to 5; c <- 3 to 5) buf(r * 9 + c) = -9999.0  // interior 3x3 hole
+        band.WriteRaster(0, 0, 9, 9, buf)
+        band.FlushCache()
+        d.FlushCache()
+        band.delete()
+        d
+    }
+
+    test("covering emits all-nodata cells whose reducer is null (issue #59 emit+NULL)") {
+        val iter = RasterTessellate.tessellateH3Iter(interiorHoleDs(), Map.empty, 7, "covering")
+        var emptySeen = 0
+        var dataSeen = 0
+        try {
+            iter.foreach { case (_, chip, _) =>
+                val vc = validPixelCount(chip)
+                val mx = RST_Max.execute(chip).headOption.orNull
+                if (vc == 0L) { emptySeen += 1; mx shouldBe null }
+                else { dataSeen += 1; mx should not be null }
+                RasterDriver.releaseDataset(chip)
+            }
+        } finally iter match {
+            case ac: AutoCloseable => ac.close()
+            case _                 =>
+        }
+        emptySeen should be > 0  // the hole must yield >=1 all-nodata covering cell
+        dataSeen should be > 0
     }
 
 }

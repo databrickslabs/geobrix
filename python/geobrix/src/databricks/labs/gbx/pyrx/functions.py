@@ -2261,6 +2261,7 @@ def rst_scaley(tile: ColLike) -> Column:
 
 
 def rst_isempty(tile: ColLike) -> Column:
+    """True if the raster has no size or every band is entirely NoData; BOOLEAN."""
     return _u_isempty(_raster_field(_col(tile)))
 
 
@@ -2313,7 +2314,7 @@ def rst_worldtorastercoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
 def rst_avg(tile: ColLike) -> Column:
     """Per-band mean of valid (non-NoData) pixels; ARRAY<DOUBLE>.
 
-    Empty / all-invalid bands return NaN.
+    Empty / all-invalid bands return NULL.
     """
     return _u_avg(_raster_field(_col(tile)))
 
@@ -2321,7 +2322,7 @@ def rst_avg(tile: ColLike) -> Column:
 def rst_min(tile: ColLike) -> Column:
     """Per-band minimum of valid (non-NoData) pixels; ARRAY<DOUBLE>.
 
-    Empty / all-invalid bands return NaN.
+    Empty / all-invalid bands return NULL.
     """
     return _u_min(_raster_field(_col(tile)))
 
@@ -2329,7 +2330,7 @@ def rst_min(tile: ColLike) -> Column:
 def rst_max(tile: ColLike) -> Column:
     """Per-band maximum of valid (non-NoData) pixels; ARRAY<DOUBLE>.
 
-    Empty / all-invalid bands return NaN.
+    Empty / all-invalid bands return NULL.
     """
     return _u_max(_raster_field(_col(tile)))
 
@@ -2337,7 +2338,7 @@ def rst_max(tile: ColLike) -> Column:
 def rst_median(tile: ColLike) -> Column:
     """Per-band median of valid (non-NoData) pixels; ARRAY<DOUBLE>.
 
-    Empty / all-invalid bands return NaN.
+    Empty / all-invalid bands return NULL.
     """
     return _u_median(_raster_field(_col(tile)))
 

@@ -6,7 +6,6 @@ computed over VALID pixels only (nodata sentinel -9999 excluded).
 """
 
 import json
-import math
 
 import numpy as np
 import pytest
@@ -67,15 +66,30 @@ def test_stats_multiband():
         assert accessors.pixelcount(ds) == [12, 12]
 
 
-def test_stats_all_invalid_band_is_nan_zero():
+def test_stats_all_invalid_band_is_null_zero():
+    # A band that is entirely NoData has zero valid pixels: reducers must return
+    # None (SQL NULL), never NaN or 0.0 (issue #59). pixelcount stays 0.
     data = np.full((2, 2), -9999.0, dtype="float32")
     raster = _custom_raster(data)
     with _serde.open_tile(raster) as ds:
-        assert math.isnan(accessors.avg(ds)[0])
-        assert math.isnan(accessors.minimum(ds)[0])
-        assert math.isnan(accessors.maximum(ds)[0])
-        assert math.isnan(accessors.median(ds)[0])
+        assert accessors.avg(ds) == [None]
+        assert accessors.minimum(ds) == [None]
+        assert accessors.maximum(ds) == [None]
+        assert accessors.median(ds) == [None]
         assert accessors.pixelcount(ds) == [0]
+
+
+def test_stats_genuine_zero_is_not_null():
+    # A band of genuine 0.0 valid pixels must return 0.0, not None — the
+    # zero-not-null trap. nodata is a sentinel that no pixel equals.
+    data = np.zeros((2, 2), dtype="float32")
+    raster = _custom_raster(data)  # nodata defaults to -9999.0, unmatched
+    with _serde.open_tile(raster) as ds:
+        assert accessors.avg(ds) == [pytest.approx(0.0)]
+        assert accessors.minimum(ds) == [pytest.approx(0.0)]
+        assert accessors.maximum(ds) == [pytest.approx(0.0)]
+        assert accessors.median(ds) == [pytest.approx(0.0)]
+        assert accessors.pixelcount(ds) == [4]
 
 
 # --- geotransform-derived accessors -----------------------------------------

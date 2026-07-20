@@ -1,15 +1,5 @@
 # Genie Map
 
-> **Featured at Data + AI Summit 2026 — with S&P Global.** Genie Map grew out of the
-> AI-powered map-agent demo from the DAIS 2026 session
-> **[Scaling Geospatial Analytics at S&P Global Energy: From Billions of Points to AI-Powered Map Agents with Databricks](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)**,
-> presented by **[Hubert Boguski](https://www.linkedin.com/in/hubertboguski/)** (S&P Global)
-> and **[Michael Johns](https://www.linkedin.com/in/michaeljohns2/)** (Databricks).
->
-> [![Data + AI Summit 2026 session — "From Billions of Points to AI-Powered Map Agents with Databricks: Scaling Geospatial Analytics at S&P Global Energy," presented by Hubert Boguski (S&P Global) and Michael Johns (Databricks)](../../resources/images/screenshots/genie-map/dais-2026-sp-global-session.png)](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)
->
-> ▶ **[Watch the session](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)** on databricks.com.
-
 A Databricks App that turns the GeoBrix-processed Permian methane gold data into
 an interactive map you can explore two ways:
 
@@ -35,6 +25,16 @@ The client is React + [kepler.gl](https://kepler.gl); the server is Databricks
 `geospatial_docs.vapor_eyes_lf` gold schema produced by the
 [Vapor-Eyes](https://databrickslabs.github.io/geobrix/docs/notebooks/vapor-eyes) methane
 pipeline.
+
+> **Featured at Data + AI Summit 2026 — with S&P Global.** Genie Map grew out of the
+> AI-powered map-agent demo from the DAIS 2026 session
+> **[Scaling Geospatial Analytics at S&P Global Energy: From Billions of Points to AI-Powered Map Agents with Databricks](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)**,
+> presented by **[Hubert Boguski](https://www.linkedin.com/in/hubertboguski/)** (S&P Global)
+> and **[Michael Johns](https://www.linkedin.com/in/michaeljohns2/)** (Databricks).
+>
+> [![Data + AI Summit 2026 session — "From Billions of Points to AI-Powered Map Agents with Databricks: Scaling Geospatial Analytics at S&P Global Energy," presented by Hubert Boguski (S&P Global) and Michael Johns (Databricks)](../../resources/images/screenshots/genie-map/dais-2026-sp-global-session.png)](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)
+>
+> ▶ **[Watch the session](https://www.databricks.com/dataaisummit/session/scaling-geospatial-analytics-sp-global-energy-billions-points-ai-powered)** on databricks.com.
 
 ## Prerequisites
 

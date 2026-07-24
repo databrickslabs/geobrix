@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions.grid
 
+import com.databricks.labs.gbx.rasterx.expressions.generators.{RST_BNG_Tessellate, RST_Quadbin_Tessellate}
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.RasterTessellate
 import org.gdal.gdal.gdal
@@ -96,5 +97,14 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         }
         assert(ex.getMessage.contains("mode"))
         RasterDriver.releaseDataset(ds)
+    }
+
+    test("generator names + default mode arity") {
+        assert(RST_Quadbin_Tessellate.name == "gbx_rst_quadbin_tessellate")
+        assert(RST_BNG_Tessellate.name == "gbx_rst_bng_tessellate")
+        // 2-arg builder defaults mode to "covering"
+        import org.apache.spark.sql.catalyst.expressions.Literal
+        val e = RST_Quadbin_Tessellate.builder()(Seq(Literal("t"), Literal(10)))
+        assert(e.isInstanceOf[RST_Quadbin_Tessellate])
     }
 }

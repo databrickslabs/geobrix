@@ -60,7 +60,11 @@ case class RST_BNG_Tessellate(
               iter
                   .map { case (newCell, resDs, resMtd) =>
                       // BNG cell IDs are Strings (e.g. "TQ38SW"); parse back to Long for the tile struct
-                      // cellid field. The string form is preserved in RASTERX_CELL_ID metadata on the Dataset.
+                      // cellid field. The string form is preserved in RASTERX_CELL_ID metadata on the Dataset
+                      // and is the authoritative user-facing id. parse/format round-trips cleanly for the
+                      // resolutions the iterator emits (BNG.resolutions, ±1..±6, all >=6-digit ids); the
+                      // degenerate <6-digit "500km single-letter" case is coarser than ±1..±6 and is never
+                      // produced by tessellateBngIter (polyfill seeds + kLoop-expands at the requested resolution).
                       val tile = RasterSerializationUtil.tileToRow((BNG.parse(newCell), resDs, resMtd), rasterType, exprConf.hConf)
                       RasterDriver.releaseDataset(resDs)
                       InternalRow.fromSeq(Seq(tile)) // Row wrapping in generator

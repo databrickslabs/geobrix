@@ -77,6 +77,28 @@ class RST_BNG_RasterToGridTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(cells.forall(_._1.matches("^[A-Z]{2}\\d*$")), "all cell ids must be valid BNG string form")
     }
 
+    test("bng reducer names are canonical") {
+        assert(RST_BNG_RasterToGridAvg.name == "gbx_rst_bng_rastertogridavg")
+        assert(RST_BNG_RasterToGridCount.name == "gbx_rst_bng_rastertogridcount")
+        assert(RST_BNG_RasterToGridMax.name == "gbx_rst_bng_rastertogridmax")
+        assert(RST_BNG_RasterToGridMin.name == "gbx_rst_bng_rastertogridmin")
+        assert(RST_BNG_RasterToGridMedian.name == "gbx_rst_bng_rastertogridmedian")
+    }
+
+    test("bng rastertogrid reducers: min/max/count/median on the london cell") {
+        val ds = londonDs
+        import scala.collection.mutable.ArrayBuffer
+        val minF = (v: ArrayBuffer[Double]) => v.min
+        val maxF = (v: ArrayBuffer[Double]) => v.max
+        val cntF = (v: ArrayBuffer[Double]) => v.length
+        val medF = (v: ArrayBuffer[Double]) => { val s = v.sorted; val m = s.length / 2; if (s.length % 2 == 0) (s(m - 1) + s(m)) / 2.0 else s(m) }
+        assert(RST_BNG_RasterToGrid.execute(ds, 3, minF).flatten.head._2 == 1.0)
+        assert(RST_BNG_RasterToGrid.execute(ds, 3, maxF).flatten.head._2 == 4.0)
+        assert(RST_BNG_RasterToGrid.execute(ds, 3, cntF).flatten.head._2 == 4)
+        assert(math.abs(RST_BNG_RasterToGrid.execute(ds, 3, medF).flatten.head._2 - 2.5) < 1e-9)
+        RasterDriver.releaseDataset(ds)
+    }
+
     test("bng rastertogrid: pixels fully outside GB extent are dropped (Finding A)") {
         // Build a raster straddling the GB eastern boundary: two pixels at easting ~690000
         // (inside GB) and two at easting ~710000 (outside GB, >700000).

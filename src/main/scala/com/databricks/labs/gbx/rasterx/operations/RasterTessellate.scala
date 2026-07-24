@@ -1,11 +1,12 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import com.databricks.labs.gbx.gridx.grid.{H3, Quadbin}
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager}
+import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operator.GDALWarp
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.gdal.gdal.Dataset
 import org.gdal.gdalconst.gdalconstConstants
-import org.gdal.osr.CoordinateTransformation
+import org.gdal.osr.{CoordinateTransformation, SpatialReference}
 import org.locationtech.jts.geom.Geometry
 
 import scala.collection.mutable
@@ -538,6 +539,321 @@ object RasterTessellate {
           "isSubset" -> "false"
         )
         (cell, out, meta)
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // BNG (British National Grid) tessellation (parallel clone of the H3/quadbin paths above).
+    //
+    // TWO BNG-specific differences from the 4326-native H3/quadbin clones:
+    //   1. BNG has NO lon/lat input path, so the raster is reprojected to EPSG:27700 up front
+    //      (`gdalwarp -t_srs EPSG:27700 -r near`, skipped if already 27700), exactly as
+    //      `RST_BNG_RasterToGrid` does. Both the raster bbox and the BNG cell geometry then live in
+    //      EPSG:27700, so the intersect keep-test and the clip both use the 27700 SRS (NOT WGS84).
+    //   2. ISSUE #49 (safety-critical): this path NEVER touches the vector `bng_tessellate` codepath
+    //      (which had spurious POINT/LINESTRING chips + half-size cells). Cells are enumerated purely
+    //      via `BNG.polyfill(rasterBboxPolygon, resolution)` and geometrised via `BNG.cellIdToGeometry`
+    //      (areal Polygon only). Out-of-GB cells are dropped via `BNG.isValid`.
+    //
+    // Cell ids are `Long` internally and rendered to the user-facing BNG `String` via `BNG.format` at
+    // the output boundary (unlike H3/quadbin, whose ids stay Long).
+    // ------------------------------------------------------------------------------------------------
+
+    /** EPSG:27700 (British National Grid) spatial reference, traditional (easting, northing) axis order. */
+    private val BngSR: SpatialReference = {
+        val sr = new SpatialReference()
+        sr.ImportFromEPSG(27700)
+        sr.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+        sr
+    }
+
+    /**
+      * Reproject `ds` to EPSG:27700 (nearest-neighbour) unless it is already 27700; returns
+      * `(workDs, reprojected)`. When `reprojected` is true the caller owns `workDs` and must release it.
+      * Mirrors `RST_BNG_RasterToGrid`'s warp-up-front behaviour (BNG has no lon/lat input path).
+      */
+    private def warpToBng(ds: Dataset): (Dataset, Boolean) = {
+        val srcWkt = ds.GetProjection()
+        val alreadyBng = srcWkt != null && srcWkt.nonEmpty && {
+            val s = new SpatialReference()
+            s.ImportFromWkt(srcWkt)
+            val same = s.IsSame(BngSR) == 1
+            s.delete()
+            same
+        }
+        if (alreadyBng) (ds, false)
+        else {
+            val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
+            val driver = ds.GetDriver()
+            val extension = GDAL.getExtension(driver.getShortName)
+            val resultPath = s"/vsimem/raster_bng_tess_$uuid.$extension"
+            val (result, _) = GDALWarp.executeWarp(
+              resultPath,
+              Array(ds),
+              Map.empty[String, String],
+              command = "gdalwarp -t_srs EPSG:27700 -r near"
+            )
+            (result, true)
+        }
+    }
+
+    /**
+      * Clips ds to the BNG cell geometry and returns (cellId string, clipped Dataset, metadata); returns null
+      * if the cell polygon does NOT geometrically overlap the raster bbox, or the cell is outside GB. Clone of
+      * [[getTile]] / [[getQuadbinTile]] for BNG: the cell polygon is built from `BNG.cellIdToGeometry` (EPSG:27700,
+      * same CRS as `bbox`), out-of-GB cells are dropped via `BNG.isValid`, and the clip targets the 27700 SRS.
+      * `ds` is assumed already reprojected to EPSG:27700 by the caller.
+      */
+    def getBngTile(
+        ds: Dataset,
+        options: Map[String, String],
+        cell: Long,
+        bbox: Geometry
+    ): (String, Dataset, Map[String, String]) = {
+        if (!BNG.isValid(cell)) return null
+        val cellGeom = BNG.cellIdToGeometry(cell) // areal Polygon in EPSG:27700 (SRID 27700)
+        if (!cellGeom.intersects(bbox)) return null
+        val (resDs, resMtd) = ClipToGeom.clip(ds, options, cellGeom, BngSR)
+        if (resDs == null) return null
+        val cellStr = BNG.format(cell)
+        resDs.SetMetadataItem("RASTERX_CELL_ID", cellStr)
+        resDs.FlushCache()
+        (cellStr, resDs, resMtd)
+    }
+
+    /**
+      * Iterator of (BNG cellId string, Dataset, metadata) per emitted BNG cell at `resolution`. Caller must
+      * release each Dataset; iterator is AutoCloseable. Parallel to [[tessellateH3Iter]] / [[tessellateQuadbinIter]].
+      *
+      *  - `covering` (default): one chip per cell whose square overlaps the raster bbox (chips may overlap).
+      *  - `centroid`: pixel-centroid single-assignment partition — each valid source pixel is assigned to the one
+      *    cell whose square contains its centroid; each cell's chip holds only its assigned pixels (the rest nodata).
+      *
+      * The raster is reprojected to EPSG:27700 first (skipped if already 27700). Cells are enumerated ONLY via
+      * `BNG.polyfill` and geometrised via `BNG.cellIdToGeometry` — the vector `bng_tessellate` codepath is never
+      * reached (ISSUE #49). Only areal chips are emitted.
+      */
+    def tessellateBngIter(
+        ds: Dataset,
+        options: Map[String, String],
+        resolution: Int,
+        mode: String = "covering"
+    ): Iterator[(String, Dataset, Map[String, String])] = {
+        require(
+          Modes.contains(mode),
+          s"gbx_rst_bng_tessellate mode must be one of ${Modes.mkString(", ")}; got '$mode'"
+        )
+        if (mode == "centroid") tessellateBngCentroidIter(ds, options, resolution)
+        else tessellateBngCoveringIter(ds, options, resolution)
+    }
+
+    /** Covering tessellation: see [[tessellateBngIter]]. Clone of [[tessellateQuadbinCoveringIter]] with a 27700 warp. */
+    private def tessellateBngCoveringIter(
+        ds: Dataset,
+        options: Map[String, String],
+        resolution: Int
+    ): Iterator[(String, Dataset, Map[String, String])] = {
+        val (workDs, reprojected) = warpToBng(ds)
+        // Raster bbox in EPSG:27700 (same CRS as BNG.cellIdToGeometry) — the geometric keep-test lives in 27700.
+        val bbox = BoundingBox.bbox(workDs, BngSR)
+        // Enumerate candidate cells purely via BNG.polyfill over the raster bbox polygon (NOT the vector tessellate).
+        val cells = BNG.polyfill(bbox, resolution).toArray
+
+        new Iterator[(String, Dataset, Map[String, String])] with AutoCloseable {
+            private var closed = false
+            private var fetched = false
+            private var _ds = workDs
+            private val _bbox = bbox
+            private val _cells = cells
+            private var cc = 0
+            private var nextTile: (String, Dataset, Map[String, String]) = _
+
+            /** Fetches the next (cellStr, Dataset, metadata) into nextTile or closes when exhausted. */
+            private def advance(): Unit = {
+                fetched = true
+                nextTile = null
+                while (cc < _cells.length && nextTile == null) {
+                    val cell = _cells(cc)
+                    nextTile = getBngTile(_ds, options, cell, _bbox)
+                    cc += 1
+                }
+                if (cc >= _cells.length && nextTile == null) close()
+            }
+
+            /** Overrides Iterator.hasNext: true until advance() exhausts cells or close() called. */
+            override def hasNext: Boolean = {
+                if (!fetched && !closed) advance()
+                !closed && nextTile != null
+            }
+
+            /** Overrides Iterator.next: returns (cellStr, Dataset, metadata); caller must release Dataset. */
+            override def next(): (String, Dataset, Map[String, String]) = {
+                if (!fetched && !closed) advance()
+                fetched = false
+                nextTile
+            }
+
+            /** Overrides AutoCloseable.close: unlinks the working dataset (the 27700 warp if we made one). */
+            override def close(): Unit = {
+                if (!closed) {
+                    closed = true
+                    if (reprojected) RasterDriver.releaseDataset(_ds) else RasterAccessors.unlink(_ds)
+                    _ds = null
+                }
+            }
+        }
+    }
+
+    /**
+      * Centroid (single-assignment) tessellation: see [[tessellateBngIter]]. Clone of [[tessellateQuadbinCentroidIter]],
+      * substituting `BNG.pointToCellID(easting, northing, resolution)` on the WARPED (EPSG:27700) pixel coordinates for
+      * the quadbin point-to-cell rule. The raster is reprojected to 27700 first; pixel centroids are then already in
+      * 27700 (no per-pixel reprojection). Out-of-GB pixels are dropped via `BNG.isValid`.
+      */
+    private def tessellateBngCentroidIter(
+        ds: Dataset,
+        options: Map[String, String],
+        resolution: Int
+    ): Iterator[(String, Dataset, Map[String, String])] = {
+        val (workDs, reprojected) = warpToBng(ds)
+
+        val xSize = workDs.getRasterXSize
+        val ySize = workDs.getRasterYSize
+        val nPix = xSize * ySize
+        val bandCount = workDs.getRasterCount
+        val dtype = workDs.GetRasterBand(1).getDataType
+        val gt = workDs.GetGeoTransform
+
+        // Capture the projection + source path up front so the chip builder does not need workDs alive.
+        val projWkt = workDs.GetProjection()
+        val sourcePath = Option(workDs.GetFileList())
+            .flatMap(_.asScala.headOption.map(_.toString))
+            .getOrElse("unknown source path")
+
+        // Read every band's values + mask once; assign each valid pixel (by flat index) to its cell.
+        val bandVals = new Array[Array[Double]](bandCount)
+        val bandMask = new Array[Array[Byte]](bandCount)
+        val bandNoData = new Array[Double](bandCount)
+        var bi = 0
+        while (bi < bandCount) {
+            val band = workDs.GetRasterBand(bi + 1)
+            val vals = new Array[Double](nPix)
+            val mask = new Array[Byte](nPix)
+            band.ReadRaster(0, 0, xSize, ySize, vals)
+            band.GetMaskBand().ReadRaster(0, 0, xSize, ySize, mask)
+            bandVals(bi) = vals
+            bandMask(bi) = mask
+            val nd = new Array[java.lang.Double](1)
+            band.GetNoDataValue(nd)
+            bandNoData(bi) = if (nd(0) != null) nd(0).doubleValue() else sentinelNoData(dtype)
+            bi += 1
+        }
+
+        // cell -> flat pixel indices. Pixel centroids are in EPSG:27700 (warped), so BNG.pointToCellID takes them directly.
+        val cellPixels = new mutable.LongMap[mutable.ArrayBuffer[Int]]()
+        var y = 0
+        var idx = 0
+        while (y < ySize) {
+            var x = 0
+            while (x < xSize) {
+                var anyValid = false
+                var b = 0
+                while (b < bandCount && !anyValid) { if (bandMask(b)(idx) != 0) anyValid = true; b += 1 }
+                if (anyValid) {
+                    val xOff = 0.5 + x
+                    val yOff = 0.5 + y
+                    val eGeo = gt(0) + xOff * gt(1) + yOff * gt(2)
+                    val nGeo = gt(3) + xOff * gt(4) + yOff * gt(5)
+                    val cell = BNG.pointToCellID(eGeo, nGeo, resolution)
+                    if (BNG.isValid(cell)) cellPixels.getOrElseUpdate(cell, new mutable.ArrayBuffer[Int]) += idx
+                }
+                idx += 1
+                x += 1
+            }
+            y += 1
+        }
+
+        // Working dataset no longer needed (all pixels + projection captured); release the warp if we made one.
+        if (reprojected) RasterDriver.releaseDataset(workDs)
+
+        val cellIter = cellPixels.iterator
+
+        new Iterator[(String, Dataset, Map[String, String])] with AutoCloseable {
+            private var closed = false
+
+            override def hasNext: Boolean = !closed && cellIter.hasNext
+
+            override def next(): (String, Dataset, Map[String, String]) = {
+                val (cell, pixIdx) = cellIter.next()
+                val tile =
+                    buildBngCentroidChip(projWkt, sourcePath, options, cell, pixIdx, xSize, ySize, bandCount, dtype, gt,
+                      bandVals, bandNoData)
+                if (!cellIter.hasNext) close()
+                tile
+            }
+
+            override def close(): Unit = { closed = true }
+        }
+    }
+
+    /**
+      * Builds one full-extent chip holding only `cell`'s assigned pixels (the rest nodata) for
+      * [[tessellateBngCentroidIter]]. Clone of [[buildQuadbinCentroidChip]] but takes the (already 27700) projection
+      * WKT + source path directly (so the caller can release the warped dataset first) and tags the chip with the
+      * user-facing BNG string id (`BNG.format(cell)`).
+      */
+    private def buildBngCentroidChip(
+        projWkt: String,
+        sourcePath: String,
+        options: Map[String, String],
+        cell: Long,
+        pixIdx: mutable.ArrayBuffer[Int],
+        xSize: Int,
+        ySize: Int,
+        bandCount: Int,
+        dtype: Int,
+        gt: Array[Double],
+        bandVals: Array[Array[Double]],
+        bandNoData: Array[Double]
+    ): (String, Dataset, Map[String, String]) = {
+        val cellStr = BNG.format(cell)
+        val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
+        val rasterPath = s"/vsimem/bng_centroid_${cell}_$uuid.tif"
+        val drv = GDALManager.gtiffDriver()
+        val out = drv.Create(rasterPath, xSize, ySize, bandCount, dtype)
+        out.SetGeoTransform(gt)
+        out.SetProjection(projWkt)
+
+        val nPix = xSize * ySize
+        var b = 0
+        while (b < bandCount) {
+            val nd = bandNoData(b)
+            val src = bandVals(b)
+            val buf = new Array[Double](nPix)
+            java.util.Arrays.fill(buf, nd) // blank everything to nodata...
+            var i = 0
+            while (i < pixIdx.length) { val p = pixIdx(i); buf(p) = src(p); i += 1 } // ...then restore assigned pixels
+            val db = out.GetRasterBand(b + 1)
+            db.SetNoDataValue(nd)
+            db.WriteRaster(0, 0, xSize, ySize, buf)
+            b += 1
+        }
+        out.SetMetadataItem("RASTERX_CELL_ID", cellStr)
+        out.FlushCache()
+
+        val meta = Map(
+          "path" -> rasterPath,
+          "parentPath" -> options.getOrElse("path", sourcePath),
+          "driver" -> "GTiff",
+          "format" -> "GTiff",
+          "last_command" -> s"bng_centroid_tessellate cell=$cellStr",
+          "last_error" -> "",
+          "all_parents" -> s"$sourcePath;${options.getOrElse("all_parents", "")}",
+          "size" -> "-1",
+          "compression" -> options.getOrElse("compression", "DEFLATE"),
+          "isZipped" -> "false",
+          "isSubset" -> "false"
+        )
+        (cellStr, out, meta)
     }
 
 }

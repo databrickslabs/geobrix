@@ -8,14 +8,19 @@
 [![license](https://img.shields.io/badge/license-Databricks-blue.svg)](LICENSE)
 
 <!--
-  Function counts — keep verbatim with docs/tests-function-info/registered_functions.txt
-  (the canonical source; total is guarded by `gbx:test:bindings`).
-  Update these badges and the sentence below if functions are added or removed.
+  SQL function counts — keep verbatim with docs/tests-function-info/registered_functions.txt
+  (the canonical source: Functions = total lines; RasterX = gbx_rst_*, GridX =
+  gbx_bng_*+gbx_custom_*+gbx_h3_*+gbx_quadbin_*, VectorX = gbx_st_*, PMTiles = gbx_pmtiles_*).
+  Run `gbx:test:bindings` after changes to confirm binding parity.
+  VizX is NOT a SQL package — its badge counts the public helpers in
+  python/geobrix/src/databricks/labs/gbx/vizx/__init__.py __all__, and is excluded from the total.
+  Update these badges if functions are added or removed.
 -->
-![Functions](https://img.shields.io/badge/functions-154-2e7d32)
-![RasterX](https://img.shields.io/badge/RasterX-107-1565c0)
-![GridX](https://img.shields.io/badge/GridX-40-1565c0)
+![Functions](https://img.shields.io/badge/functions-156-2e7d32)
+![RasterX](https://img.shields.io/badge/RasterX-108-1565c0)
+![GridX](https://img.shields.io/badge/GridX-41-1565c0)
 ![VectorX](https://img.shields.io/badge/VectorX-6-1565c0)
+![VizX](https://img.shields.io/badge/VizX-19-6a1b9a)
 ![PMTiles](https://img.shields.io/badge/PMTiles-1-1565c0)
 
 **GeoBrix** is a high-performance spatial library for Databricks that delivers the next generation of *product-augmenting* capabilities — raster, discrete global grids, and vector format I/O — and is built to drive you *deeper* into Databricks-native [`GEOMETRY`/`GEOGRAPHY` and ST/H3 functions](https://databrickslabs.github.io/geobrix/docs/databricks-spatial), not replace them. It is the modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/) (now in maintenance).

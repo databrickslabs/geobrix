@@ -98,23 +98,33 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         RasterDriver.releaseDataset(ds)
         assert(count >= 1, "centroid tessellation must yield at least one chip")
         assert(seenIds.size == count, "each chip must have a distinct BNG cell id (single-assignment)")
-        assert(totalAssigned <= totalSourcePixels,
-            s"total assigned pixels ($totalAssigned) must not exceed source pixel count ($totalSourcePixels)")
+        assert(totalAssigned == totalSourcePixels,
+            s"total assigned pixels ($totalAssigned) must equal source pixel count ($totalSourcePixels); pixel drop or duplication detected in centroid mode")
     }
 
     test("bng tessellate: 4326 input triggers warp and still yields >=1 BNG chip") {
         val ds = london4326Ds
         val it = RasterTessellate.tessellateBngIter(ds, Map.empty[String, String], resolution = 3, mode = "covering")
         var count = 0
+        var firstChipSrWkt: String = null
         while (it.hasNext) {
             val (cell, chip, _) = it.next()
             assert(bngCellIdPattern.findFirstIn(cell).isDefined, s"BNG id must match pattern; got '$cell'")
+            if (count == 0) firstChipSrWkt = chip.GetProjection()
             RasterDriver.releaseDataset(chip)
             count += 1
         }
         it.asInstanceOf[AutoCloseable].close()
         RasterDriver.releaseDataset(ds)
         assert(count >= 1, "covering tessellation over a 4326 input (post-warp) must yield at least one chip")
+        // Verify that the warp actually ran: emitted chips must be in EPSG:27700 (BNG), not the source 4326.
+        assert(firstChipSrWkt != null, "expected at least one chip to inspect projection")
+        val chipSr = new org.gdal.osr.SpatialReference()
+        chipSr.ImportFromWkt(firstChipSrWkt)
+        val authorityCode = chipSr.GetAuthorityCode("PROJCS")
+        chipSr.delete()
+        assert(authorityCode == "27700",
+            s"emitted chip must be in EPSG:27700 (warp-to-BNG), but GetAuthorityCode(PROJCS)='$authorityCode'")
     }
 
     test("bng tessellate: unknown mode throws IllegalArgumentException mentioning 'mode'") {

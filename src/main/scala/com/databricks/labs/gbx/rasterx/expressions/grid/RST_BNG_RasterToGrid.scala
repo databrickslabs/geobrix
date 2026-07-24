@@ -21,7 +21,7 @@ import scala.collection.mutable
   * input path, so the raster is reprojected to EPSG:27700 up front using nearest-neighbour
   * resampling (`gdalwarp -t_srs EPSG:27700 -r near`). Cell ids are `Long` internally and rendered
   * to the user-facing BNG `String` via [[BNG.format]] at the output boundary. Pixels outside the
-  * GB extent map to out-of-range BNG ids and are silently discarded by the mask check.
+  * GB extent are silently discarded via [[BNG.isValid]] (coordinate bounds + letter-index check).
   *
   * Resampling is hard-coded to `near` because raster→grid aggregation is a pixel-counting
   * operation — any interpolating kernel would fabricate pixel values and corrupt statistics.
@@ -105,8 +105,10 @@ object RST_BNG_RasterToGrid {
                     while (x < xSize) {
                         if (maskBuf(idx) != 0) {
                             val cell = cellPixel(gt, x, y, resolution) // Long id
-                            val buf = acc.getOrElseUpdate(cell, new mutable.ArrayBuffer)
-                            buf += bandBuf(idx)
+                            if (BNG.isValid(cell)) {
+                                val buf = acc.getOrElseUpdate(cell, new mutable.ArrayBuffer)
+                                buf += bandBuf(idx)
+                            }
                         }
                         idx += 1; x += 1
                     }

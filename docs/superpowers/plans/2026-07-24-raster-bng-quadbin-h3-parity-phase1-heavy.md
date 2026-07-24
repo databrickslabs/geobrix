@@ -969,14 +969,105 @@ gbx:test:docs --log docs.log
 grep -rn -iE "wave [0-9]+|wave-[0-9]+" docs/docs/ ; echo "(should print nothing)"
 ```
 
-- [ ] **Step 7: Pre-push checks (do NOT push — user batches pushes)**
+---
+
+## Task 12: Benchmark registration (heavy-tier, existing 20-node cluster)
+
+**Files:**
+- Modify: `src/test/scala/com/databricks/labs/gbx/bench/BenchDispatch.scala`
+- Modify: `docs/docs/api/benchmarking.mdx`
+- Test: `src/test/scala/com/databricks/labs/gbx/bench/BenchDispatchTest.scala`
+- Reference: `BenchDispatch.scala` (the `shape` map, input-classification sets, aggregate-branch sets), `HeavyBenchSuite.scala`, `scripts/commands/gbx-bench-cluster.sh`, `scripts/commands/gbx-bench-heavyweight.sh`.
+
+**Context — the 20-node config is reused, not redefined.** All cluster benches read the same cluster from `notebooks/tests/databricks_cluster_config.env` (via `CLUSTER_ID`, sourced by `gbx:bench:cluster`). "Same 20-node config as other benchmarks" means run the new functions through that existing config unchanged — do **not** author a new cluster spec. The only code change is registering the 9 functions in `BenchDispatch` so the existing harness discovers and dispatches them; the harness then benchmarks them on the same cluster with the same row ladder as every other `rst_*` function.
+
+**Interfaces:**
+- Consumes: the 9 registered SQL/Scala names (Task 7). Bench uses the Scala-API form without the `gbx_` prefix (e.g. `rst_bng_rastertogridavg`, matching how `rst_h3_rastertogridavg` appears in `BenchDispatch`).
+- Produces: `BenchDispatch` entries so `BenchDispatch.all` and `--set full` include the 9; the 2 rasterize_aggs routed to the grid-aggregate branch (the `rst_h3_rasterize_agg` path).
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `BenchDispatchTest.scala` (mirror its existing assertions about `rst_h3_*` membership):
+
+```scala
+test("BenchDispatch registers the 9 BNG/quadbin raster-grid functions") {
+    val expected = Seq(
+        "rst_bng_rastertogridavg", "rst_bng_rastertogridcount", "rst_bng_rastertogridmax",
+        "rst_bng_rastertogridmin", "rst_bng_rastertogridmedian",
+        "rst_bng_tessellate", "rst_quadbin_tessellate",
+        "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg")
+    expected.foreach(fn => assert(BenchDispatch.all.contains(fn), s"$fn not in BenchDispatch.all"))
+    // shape classification: reducers + tessellate are DGGS; the aggs route to the grid-aggregate branch
+    assert(BenchDispatch.shapeOf("rst_bng_rastertogridavg") == "DGGS")
+    assert(BenchDispatch.aggregateBranchOf("rst_bng_rasterize_agg") == "grid_aggregate") // or whatever h3's branch label is
+}
+```
+(Adapt `shapeOf`/`aggregateBranchOf` to the actual accessor names in `BenchDispatch` — read the file; if shape is a private `Map`, assert via the public dispatch entry point the test file already uses.)
+
+- [ ] **Step 2: Run to verify it fails**
+
+Dispatch a Task subagent (Docker):
+```
+gbx:test:scala --suite 'com.databricks.labs.gbx.bench.BenchDispatchTest' --log bench-dispatch.log
+```
+Expected: FAIL — the 9 names absent from `BenchDispatch.all`.
+
+- [ ] **Step 3: Register the 9 in BenchDispatch**
+
+In `BenchDispatch.scala`, add to the `shape` map next to the existing H3/quadbin grid entries (lines ~169–191):
+```scala
+// BNG raster→grid reducers (DGGS shape, same as H3/quadbin reducers)
+"rst_bng_rastertogridavg" -> DGGS, "rst_bng_rastertogridcount" -> DGGS,
+"rst_bng_rastertogridmax" -> DGGS, "rst_bng_rastertogridmedian" -> DGGS,
+"rst_bng_rastertogridmin" -> DGGS,
+// tessellate generators (DGGS, same as rst_h3_tessellate)
+"rst_quadbin_tessellate" -> DGGS, "rst_bng_tessellate" -> DGGS,
+// grid rasterize aggregators (DGGS; routed through the grid-aggregate branch like rst_h3_rasterize_agg)
+"rst_quadbin_rasterize_agg" -> DGGS, "rst_bng_rasterize_agg" -> DGGS
+```
+Add the 2 rasterize_aggs to the same aggregate-branch set that holds `rst_h3_rasterize_agg` (the `h3Aggregate` set at line ~226 — rename to a grid-neutral `gridAggregate` if it now holds 3 grids, updating the `aggregateShape`/branch dispatch at line ~234 accordingly; keep the branch label stable or update the test in Step 1 to match). Ensure the pure-core/spark-path input classification for the new reducers matches the H3/quadbin reducers (they take a single tile + resolution — no special input set needed; verify they are NOT accidentally caught by `byteInput`/`tileArrayInput`/geometry-input sets).
+
+**Parity contract for the aggs:** `rst_h3_rasterize_agg` uses a fixed deterministic cell set with an explicit grid (the PARITY CONTRACT block at line ~237). Add the analogous fixed cell set for quadbin (a fixed zoom + tile range) and BNG (a fixed resolution + a handful of GB cells), so the bench's light-vs-heavy parity check has a deterministic input. Mirror the `h3RaggRes`/`h3RaggCenterLat` constants with quadbin/BNG equivalents.
+
+- [ ] **Step 4: Run to verify it passes**
+
+```
+gbx:test:scala --suite 'com.databricks.labs.gbx.bench.BenchDispatchTest' --log bench-dispatch.log
+```
+Expected: PASS.
+
+- [ ] **Step 5: Document the bench coverage**
+
+In `docs/docs/api/benchmarking.mdx`, add the 9 functions to the results narrative/tables alongside their siblings (the `rst_h3_rastertogrid*` / `rst_quadbin_rastertogrid*` rows already there ~lines 380–400, and `rst_h3_tessellate` ~line 370). Note that BNG reducers/tessellate include an internal EPSG:27700 reproject in their timing (unlike the 4326-native H3/quadbin), so a like-for-like comparison should account for the warp. No actual numbers yet — those come from a cluster run; add the rows as "pending first cluster run" or leave the table and add a one-line note that the new grid functions are covered by the harness. Per `bench-changes-update-docs`, any bench change is reflected here in the same stroke. No internal vocabulary.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/test/scala/com/databricks/labs/gbx/bench/BenchDispatch.scala \
+        src/test/scala/com/databricks/labs/gbx/bench/BenchDispatchTest.scala \
+        docs/docs/api/benchmarking.mdx
+git commit -m "bench(rasterx): register 9 BNG/quadbin raster-grid functions in BenchDispatch"
+```
+
+- [ ] **Step 7: (Optional, user-gated) Run the actual cluster benchmark**
+
+This runs on the shared 20-node cluster — **do not launch without user go-ahead** (bench cluster is shared; guard against duplicate runs; the cluster memory notes apply: poll libs to INSTALLED, give a summary.md link at the end). When approved:
+```
+gbx:bench:cluster --functions rst_bng_rastertogridavg,rst_bng_rastertogridcount,rst_bng_rastertogridmax,rst_bng_rastertogridmin,rst_bng_rastertogridmedian,rst_bng_tessellate,rst_quadbin_tessellate,rst_quadbin_rasterize_agg,rst_bng_rasterize_agg --row-counts 1000 --run-id bng-quadbin-parity
+```
+(1000-scale for the spark path per the bench policy.) Then backfill the real numbers into `benchmarking.mdx` and give the user the run's `summary.md` link.
+
+---
+
+## Final gate: Pre-push checks (after Task 12 — do NOT push, user batches pushes)
+
+- [ ] Run and report results. Hold for user go-ahead before any push.
 
 ```
 gbx:lint:scalastyle
 gbx:lint:python --check
 gbx:test:bindings
 ```
-Report results. Hold for user go-ahead before any push.
 
 ---
 
@@ -989,6 +1080,7 @@ Report results. Hold for user go-ahead before any push.
 - **Spec §3.4 (BNG resolution):** Task 2 `UTF8String` overloads via `BNG.getResolution`; global constraint. ✅
 - **Spec §4 (heavy-first):** this plan is Phase 1 only; light phases are separate plans. ✅
 - **Spec §5 (tests):** Tasks 1,2,3,4,5,6,7,10 unit+integration; Task 10 reproject-correctness + round-trip. ✅
-- **Spec §6 (surfaces):** registered_functions (T7), functions.scala (T7), Python (T8), function-info (T9), docs+README (T11), bindings (T9/T11). ✅
+- **Spec §6 (surfaces):** registered_functions (T7), functions.scala (T7), Python (T8), function-info (T9), docs+README (T11), bindings (T9/T11), benchmark harness + benchmarking.mdx (T12). ✅
+- **Benchmarking (user-requested addition):** Task 12 registers all 9 in `BenchDispatch` (reducers+tessellate→DGGS; aggs→grid-aggregate branch) and reuses the existing 20-node cluster config (`notebooks/tests/databricks_cluster_config.env`) — no new cluster spec. Actual cluster run is user-gated (Task 12 Step 7). ✅
 - **Spec §7 risks:** scan-extraction is optional (Task 1 introduces BNG fresh, no H3 refactor — lowest-risk branch of §3.1/§8); nearest-neighbour warp pinned (global constraint + Task 10 test); GDALManager guard (global constraint).
 - **Spec §8 open question (extract shared scan vs BNG-only helper):** plan chooses **BNG-only** (Task 1 writes a standalone object; no refactor of H3/quadbin reference), the lower-risk option. If a reviewer wants the shared `RasterGridScan` extraction, that is a follow-up refactor task, not a blocker.

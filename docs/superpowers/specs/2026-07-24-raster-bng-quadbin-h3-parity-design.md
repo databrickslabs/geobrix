@@ -261,9 +261,15 @@ Each phase updates the tier badges in `execution-tiers.mdx` as it lands (heavy-o
   derivation; run `gbx:test:bindings` to confirm parity).
 - Binding-parity: `gbx:test:bindings` must pass (Scala `override def name` + Python `functions.py` +
   `function-info.json` all present for each of the 9).
-- Benchmark harness (optional, if perf tracking desired): extend `gbx:bench:*` with
-  raster-grid flags analogous to existing families; record in `benchmarking.mdx`
-  (`bench-changes-update-docs`).
+- **Benchmark harness (in scope):** register all 9 in `BenchDispatch` (heavy-tier bench registry)
+  so the existing `gbx:bench:*` harness discovers them — reducers + tessellate as `DGGS` shape, the
+  two `rasterize_agg` UDAFs routed through the grid-aggregate branch that today holds
+  `rst_h3_rasterize_agg`. Benchmarked on the **same 20-node cluster config as every other function**
+  (`notebooks/tests/databricks_cluster_config.env`, read by `gbx:bench:cluster` via `CLUSTER_ID`) — no
+  new cluster spec is authored. Results recorded in `benchmarking.mdx` (`bench-changes-update-docs`).
+  Note BNG timings include the internal EPSG:27700 reproject (unlike the 4326-native H3/quadbin), so
+  like-for-like comparison should account for the warp. The actual cluster run is user-gated (shared
+  cluster).
 
 ## 7. Risks & mitigations
 

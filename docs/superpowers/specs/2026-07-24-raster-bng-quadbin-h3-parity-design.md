@@ -3,6 +3,7 @@
 **Date:** 2026-07-24
 **Status:** Approved (design), pending implementation plan
 **Roadmap item:** 05x-roadmap-backlog item (2) — "raster BNG + quadbin functions (H3-style)"
+**Originating request:** [databrickslabs/geobrix#49](https://github.com/databrickslabs/geobrix/issues/49) — a customer running computer-vision models on image tiles asked for Mosaic-style **BNG tessellate on rasters** (raster column in, BNG scale like `1km`/`100m`, one row per tile out). That request is satisfied by `gbx_rst_bng_tessellate` (this design's BNG tessellate); the rest of the +9 surface completes quadbin/BNG raster parity around it. Closing #49 requires the BNG tessellate to ship (Phase 1 heavy is sufficient for their classic-cluster CV workload).
 **Related:** `pygx-light-gridx-design`, `h3-raster-tessellation-pedigree`, `tessellate-overlap-default-mosaic-mode`, `heavy-tier-nullable-numeric-return`; issue #59 / PR #52 (0.4.2 empty-band NULL reducers) — reconciled in §2.6
 
 ## 1. Goal & scope
@@ -30,6 +31,26 @@ raster side of RasterX. H3 is the complete reference; quadbin and BNG have gaps:
   scope-creep.
 - No H3 changes. H3 is the untouched reference implementation.
 - No new user-facing custom-grid raster ops.
+
+### 1.1 Issue #49 acceptance criteria (the originating customer ask)
+
+`gbx_rst_bng_tessellate` must satisfy all of these to close #49:
+
+1. **Operates on a raster column** (not vector) — input is a raster tile, output is derived from it.
+2. **Takes a BNG scale** as its resolution argument, accepting the string keys the customer named
+   (`"1km"`, `"100m"`, …) as well as the integer indices — via `BNG.getResolution` (spec §3.4).
+3. **Emits one row per tessellated tile** — a `CollectionGenerator` yielding one output row per BNG
+   cell, each carrying a clipped raster tile (uniform-size chips suitable for CV model input).
+4. **Does NOT inherit the GridX vector-tessellate problems** the customer hit. The raster path
+   enumerates BNG cells for the raster bbox and clips per cell; it must not route through the vector
+   `bng_tessellate` expression (whose inherited Mosaic bugs — mosaic#423 spurious POINT/LINESTRING
+   chips, mosaic#434/#580 half-size cells — are tracked separately under `pygx-light-gridx-design`
+   phase 2, not here). Verify the raster tessellate builds cell geometry directly from
+   `BNG.cellIdToGeometry` and does not depend on the vector tessellate codepath.
+
+The BNG cell id is carried in tile metadata (`RASTERX_CELL_ID`), matching `rst_h3_tessellate` — this
+georeferences each chip. A first-class cell-id output column was **not** requested by #49 and is out of
+scope (would be a small follow-up if the customer needs it).
 
 ## 2. Grounding facts (verified against current code, 2026-07-24)
 

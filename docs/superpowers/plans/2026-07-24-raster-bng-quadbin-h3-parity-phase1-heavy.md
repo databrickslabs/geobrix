@@ -10,6 +10,8 @@
 
 **Spec:** `docs/superpowers/specs/2026-07-24-raster-bng-quadbin-h3-parity-design.md`
 
+**Closes:** [databrickslabs/geobrix#49](https://github.com/databrickslabs/geobrix/issues/49) — customer request for Mosaic-style BNG tessellate on rasters (CV image tiling). The `gbx_rst_bng_tessellate` deliverable (Tasks 3–4) is that function; its #49 acceptance criteria are in spec §1.1 and repeated in the Task 3/4 briefs.
+
 ## Global Constraints
 
 - **No aliases.** One canonical name per function; fix upstream, never add an alias.
@@ -491,6 +493,11 @@ def tessellateBngIter(
 
 Because the H3 covering/centroid helpers are ~120 lines, the implementer MUST read `tessellateH3Iter`, `tessellateH3CoveringIter`, `tessellateH3CentroidIter`, and `getTile` in full and clone their control flow, substituting only the cell-enumeration + cell-geometry + id-tag. Do not invent a new tessellation algorithm. Keep `covering` = geometric-overlap keep-test (per the documented decision at the top of `getTile`), `centroid` = pixel-centroid single-assign.
 
+**Issue #49 acceptance (BNG tessellate is the originating customer ask — spec §1.1):**
+- The BNG iterator MUST build cell geometry directly from `BNG.cellIdToGeometry(cell: Long)` and enumerate cells for the raster bbox itself. It MUST NOT route through the vector `bng_tessellate` expression — that path carries inherited Mosaic bugs (mosaic#423 spurious POINT/LINESTRING chips; mosaic#434/#580 half-size cells) tracked separately for pygx phase 2. The customer explicitly hit "issues with the bng_tessellate function from GridX"; the raster path must sidestep them, not reuse them.
+- `covering` mode yields one clipped chip per BNG cell overlapping the raster — uniform-size image tiles, which is the customer's CV use case.
+- Add a Task-3 test asserting the BNG iterator emits ≥1 chip for a GB raster and each chip is tagged with its BNG `String` id (via `RASTERX_CELL_ID`), and that only areal geometry is used (no POINT/LINESTRING chip leakage).
+
 - [ ] **Step 4: Run to verify it passes**
 
 ```
@@ -952,7 +959,7 @@ git commit -m "test(rasterx): BNG reproject-correctness + rasterize round-trip +
 
 - [ ] **Step 3: performance.mdx** — add the 9 to the existing execution-shape families (rastertogrid reducers, tessellate generator, rasterize UDAF) — classify into existing families, do not invent a new shape (per `performance-doc-update-on-new-function`).
 
-- [ ] **Step 4: beta-release-notes.mdx** — a feature entry: quadbin and BNG now have the full H3 raster surface (rastertogrid reducers, tessellate, rasterize_agg) on the heavy tier. User-facing voice, no internal vocabulary (QC judge `internals-leak` enforces).
+- [ ] **Step 4: beta-release-notes.mdx** — a feature entry: quadbin and BNG now have the full H3 raster surface (rastertogrid reducers, tessellate, rasterize_agg) on the heavy tier. Call out `gbx_rst_bng_tessellate` for raster tiling by BNG scale (the CV image-tiling use case from issue #49). User-facing voice, no internal vocabulary (QC judge `internals-leak` enforces). The PR body / merge commit should reference "Closes #49".
 
 - [ ] **Step 5: README.md badges** — RasterX 108 → 117, Functions 156 → 165. Update the two `img.shields.io` lines (the comment already documents the derivation).
 

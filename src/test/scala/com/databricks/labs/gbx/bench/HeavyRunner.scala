@@ -402,19 +402,32 @@ object HeavyRunner {
         spark.createDataFrame(rows).toDF("cellid", "rasterBytes", "band_index")
           .withColumn("tile", functions.rst_fromcontent(col("rasterBytes"), lit("GTiff")))
           .select(col("tile"), col("band_index"))
-      } else if (kind == "h3_aggregate") {
-        // rst_h3_rasterize_agg: rows of (cellid LONG, value DOUBLE) from the fixed
-        // deterministic H3 cell set (BenchDispatch.h3RasterizeCells -- the SAME
-        // recipe + signed cell ids the pyrx tier generates). value is NULL on
-        // every row -> presence-mask burn (1.0). The explicit grid rides as SQL
-        // literals inside aggregateColumn, so `ext` stays unused here.
+      } else if (kind == "grid_aggregate") {
+        // The grid rasterize aggregators stream (cellid, value) rows from a fixed
+        // deterministic cell set (the SAME recipe the pyrx tier mirrors). value is
+        // NULL on every row -> presence-mask burn (1.0). The grid rides as SQL
+        // literals / auto-derivation inside aggregateColumn, so `ext` stays unused.
+        // H3 + quadbin cellids are LONG; BNG cellids are OS grid reference STRINGS.
         import org.apache.spark.sql.Row
-        import org.apache.spark.sql.types.{DoubleType, LongType, StructField, StructType}
-        val schema = StructType(Seq(
-          StructField("cellid", LongType, nullable = false),
-          StructField("value", DoubleType, nullable = true)))
-        val rows = BenchDispatch.h3RasterizeCells().map(c => Row(c, null))
-        spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
+        import org.apache.spark.sql.types.{DoubleType, LongType, StringType, StructField, StructType}
+        fn match {
+          case "rst_bng_rasterize_agg" =>
+            val schema = StructType(Seq(
+              StructField("cellid", StringType, nullable = false),
+              StructField("value", DoubleType, nullable = true)))
+            val rows = BenchDispatch.bngRasterizeCells().map(c => Row(c, null))
+            spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
+          case _ =>
+            // rst_h3_rasterize_agg / rst_quadbin_rasterize_agg: LONG cell ids.
+            val schema = StructType(Seq(
+              StructField("cellid", LongType, nullable = false),
+              StructField("value", DoubleType, nullable = true)))
+            val cells: Seq[Long] =
+              if (fn == "rst_quadbin_rasterize_agg") BenchDispatch.quadbinRasterizeCells()
+              else BenchDispatch.h3RasterizeCells()
+            val rows = cells.map(c => Row(c, null))
+            spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
+        }
       } else {
         // geometry aggregate: rows of (geom_wkb, value) from the per-tile GeometrySet.
         val gset = geomCorpus.flatMap(_.setFor(arrayRoot, pool.tiles.headOption.map(_.srid).getOrElse(0)))

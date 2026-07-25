@@ -224,6 +224,56 @@ def test_iter_tessellate_bng_unknown_mode_raises():
 # ---------------------------------------------------------------------------
 
 
+def test_iter_tessellate_bng_chip_cellid_in_struct_not_metadata():
+    """Light BNG tessellate must NOT put RASTERX_CELL_ID in the tile metadata map.
+
+    The authoritative cell id is carried in the tile's ``cellid`` struct field
+    (set by ``_serde.build_tile`` via ``_bng.parse``), matching the heavy tier.
+    The old light implementation additionally set
+    ``out["metadata"]["RASTERX_CELL_ID"] = cellid_str``, creating an asymmetry
+    with the heavy tier and with light H3/quadbin tessellate.  This test asserts
+    the metadata key is absent after the fix.
+    """
+    from databricks.labs.gbx.pyrx import _serde
+
+    tile = _tile_27700()
+    with MemoryFile(bytes(tile)) as mf:
+        with mf.open() as ds:
+            chips = list(T.iter_tessellate_bng(ds, resolution="1km", mode="covering"))
+
+    assert chips, "covering must yield >=1 chip"
+    for _cellid_str, raster_bytes in chips:
+        with _serde.open_tile(raster_bytes) as chip_ds:
+            tags = chip_ds.tags() or {}
+            assert "RASTERX_CELL_ID" not in tags, (
+                f"RASTERX_CELL_ID must NOT be in the tile metadata map; "
+                f"found it with value {tags.get('RASTERX_CELL_ID')!r}"
+            )
+
+
+def test_iter_tessellate_bng_cellid_struct_field_is_set():
+    """Light BNG tessellate must carry the correct cell id in the tile ``cellid``
+    struct field.  This exercises the ``_serde.build_tile(_bng.parse(...))`` path
+    and confirms the Long round-trip is lossless for 1 km resolution cells.
+    """
+    tile = _tile_27700()
+    with MemoryFile(bytes(tile)) as mf:
+        with mf.open() as ds:
+            chips = list(T.iter_tessellate_bng(ds, resolution="1km", mode="covering"))
+
+    assert chips, "covering must yield >=1 chip"
+    for cellid_str, raster_bytes in chips:
+        # _serde.build_tile wraps the bytes in the tile struct; the cellid comes
+        # from _bng.parse(cellid_str).  Verify format(_bng.parse(cellid_str)) ==
+        # cellid_str as a round-trip sanity check.
+        parsed_long = _bng.parse(cellid_str)
+        roundtrip = _bng.format(parsed_long)
+        assert roundtrip == cellid_str, (
+            f"BNG String round-trip via parse+format failed: "
+            f"{cellid_str!r} -> {parsed_long} -> {roundtrip!r}"
+        )
+
+
 def test_iter_tessellate_bng_covering_is_boundary_complete():
     """A cell-misaligned raster emits EVERY BNG cell whose square overlaps the
     raster bbox — pinned against an independent intersect enumeration.

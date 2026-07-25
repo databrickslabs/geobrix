@@ -22,7 +22,7 @@ canonical signal for the light-tier dependency set; ``pmtiles``/``pandas``/
 This is robust to the real cause (missing deps) rather than relying on each
 caller remembering to pass ``--ignore``.
 
-CONDITION TO MAINTAIN (every light-tier addition must do BOTH):
+CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
   1. Add the new light test dir to ``_LIGHT_TEST_DIRS`` below, so the heavyweight
      CI phase skips it (otherwise its module-level light imports -- e.g.
      ``from pmtiles.reader import ...`` / ``import pandas`` -- raise
@@ -30,7 +30,15 @@ CONDITION TO MAINTAIN (every light-tier addition must do BOTH):
   2. Add the new light test dir to the explicit pytest dir list in the LIGHT CI
      phase (``.github/actions/pyrx_build/action.yml``), so it is actually RUN.
      The light tier is exercised ONLY in the light phase; the heavy phase skips it.
-Light test dirs so far: pyrx, pyvx, pygx, pmtiles_light, stac, vizx, sample, plus bench + ds.
+  3. Add the new light test dir to the explicit ``--ignore`` list in the HEAVY CI
+     phase (``.github/actions/python_build/action.yml``, ``LIGHT_IGNORES``). That
+     list MUST stay identical to ``_LIGHT_TEST_DIRS``. The collect_ignore fallback
+     below already skips light dirs when rasterio is absent, but the explicit
+     --ignore is belt-and-suspenders: it guarantees a light dir never runs in heavy
+     even if the heavy env drifts (gains rasterio) or a caller targets a light dir
+     directly.
+Light test dirs so far: pyrx, pyvx, pygx, pmtiles_light, stac, earthdata, vizx,
+sample, plus bench + ds.
 """
 
 import importlib.util

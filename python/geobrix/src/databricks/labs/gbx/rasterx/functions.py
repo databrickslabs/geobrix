@@ -910,6 +910,258 @@ def rst_quadbin_rastertogridmedian(tile: ColLike, resolution: ColLike) -> Column
     )
 
 
+def rst_bng_rastertogridavg(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute average pixel value per BNG grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
+            negative indices select quadrant subdivisions) or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
+        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
+    """
+    return f.call_function("gbx_rst_bng_rastertogridavg", _col(tile), _col(resolution))
+
+
+def rst_bng_rastertogridcount(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute pixel count per BNG grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID STRING, measure BIGINT)>>.
+        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
+    """
+    return f.call_function(
+        "gbx_rst_bng_rastertogridcount", _col(tile), _col(resolution)
+    )
+
+
+def rst_bng_rastertogridmax(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute maximum pixel value per BNG grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
+        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
+    """
+    return f.call_function("gbx_rst_bng_rastertogridmax", _col(tile), _col(resolution))
+
+
+def rst_bng_rastertogridmin(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute minimum pixel value per BNG grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
+        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
+    """
+    return f.call_function("gbx_rst_bng_rastertogridmin", _col(tile), _col(resolution))
+
+
+def rst_bng_rastertogridmedian(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute median pixel value per BNG grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
+        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
+    """
+    return f.call_function(
+        "gbx_rst_bng_rastertogridmedian", _col(tile), _col(resolution)
+    )
+
+
+def rst_quadbin_tessellate(
+    tile: ColLike, resolution: ColLike, mode: ColLike = "covering"
+) -> Column:
+    """Tessellate the raster into CARTO quadbin v0 cells at the given zoom level.
+
+    Args:
+        tile: Raster tile column.
+        resolution: Quadbin resolution / zoom (0–20).
+        mode: ``"covering"`` (default) keeps every cell whose tile overlaps
+            the raster bbox (chips may share pixels); ``"centroid"`` single-assigns
+            each valid pixel to the one cell containing its centroid (chips
+            partition the valid pixels). String literals are auto-wrapped
+            in ``f.lit``; pass a ``Column`` to defer.
+
+    Returns:
+        Column of array of (quadbin cell id BIGINT, tile) pairs.
+    """
+    mode_col = f.lit(mode) if isinstance(mode, str) else _col(mode)
+    return f.call_function(
+        "gbx_rst_quadbin_tessellate", _col(tile), _col(resolution), mode_col
+    )
+
+
+def rst_bng_tessellate(
+    tile: ColLike, resolution: ColLike, mode: ColLike = "covering"
+) -> Column:
+    """Tessellate the raster into BNG grid cells at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
+            negative indices select quadrant subdivisions) or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+        mode: ``"covering"`` (default) keeps every cell whose grid square overlaps
+            the raster bbox; ``"centroid"`` single-assigns each valid pixel to
+            the one cell containing its centroid. String literals are auto-wrapped
+            in ``f.lit``; pass a ``Column`` to defer.
+
+    Returns:
+        Column of array of (BNG cell id STRING, tile) pairs.
+    """
+    mode_col = f.lit(mode) if isinstance(mode, str) else _col(mode)
+    return f.call_function(
+        "gbx_rst_bng_tessellate", _col(tile), _col(resolution), mode_col
+    )
+
+
+def rst_quadbin_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+) -> Column:
+    """Rasterize a group's CARTO quadbin v0 cells into one tile (pixel-centroid burn).
+
+    Use with ``groupBy``; each row contributes one quadbin ``cellid`` (BIGINT) and
+    optionally a ``value``. When ``value`` is ``None`` / ``f.lit(None)``, pixels
+    covered by any cell are burned with ``1.0`` (presence mask). Supply an explicit
+    canvas (``xmin`` … ``height``) for aligned multi-band stacking; otherwise the
+    grid is auto-derived from the cell set.
+
+    Args:
+        cellid:     BIGINT column of quadbin cell ids.
+        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
+                    for a presence mask.
+        srid:       EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
+        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
+        xmin:       Minimum X of the output canvas (CRS units).
+        ymin:       Minimum Y of the output canvas (CRS units).
+        xmax:       Maximum X of the output canvas (CRS units).
+        ymax:       Maximum Y of the output canvas (CRS units).
+        width:      Canvas width in pixels (INTEGER).
+        height:     Canvas height in pixels (INTEGER).
+        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        kring_pad:  K-ring expansion around each cell before rasterizing
+                    (``f.lit(0)`` = no expansion).
+
+    Returns:
+        Column of raster tile (tile struct with ``source``, ``raster``,
+        ``metadata`` fields).
+    """
+    return f.call_function(
+        "gbx_rst_quadbin_rasterize_agg",
+        _col(cellid),
+        _col(value),
+        _col(srid),
+        _col(pixel_size),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width),
+        _col(height),
+        _col(mode),
+        _col(kring_pad),
+    )
+
+
+def rst_bng_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+) -> Column:
+    """Rasterize a group's BNG grid cells into one tile (pixel-centroid burn).
+
+    Use with ``groupBy``; each row contributes one BNG ``cellid`` (STRING, e.g.
+    ``"TQ3080"``) and optionally a ``value``. When ``value`` is ``None`` /
+    ``f.lit(None)``, pixels covered by any cell are burned with ``1.0``
+    (presence mask). Supply an explicit canvas (``xmin`` … ``height``) for
+    aligned multi-band stacking; otherwise the grid is auto-derived from the
+    cell set.
+
+    Note on ``srid``: BNG always operates in EPSG:27700 (British National Grid).
+    The ``srid`` argument is accepted for API consistency with the H3 and
+    quadbin variants but is a no-op — the function forces EPSG:27700 regardless
+    of the value passed.
+
+    Args:
+        cellid:     STRING column of BNG cell ids (e.g. ``"TQ3080"``).
+        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
+                    for a presence mask.
+        srid:       Ignored — BNG forces EPSG:27700. Pass ``f.lit(27700)`` for
+                    clarity or any integer; the value has no effect.
+        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
+        xmin:       Minimum X of the output canvas (BNG eastings).
+        ymin:       Minimum Y of the output canvas (BNG northings).
+        xmax:       Maximum X of the output canvas (BNG eastings).
+        ymax:       Maximum Y of the output canvas (BNG northings).
+        width:      Canvas width in pixels (INTEGER).
+        height:     Canvas height in pixels (INTEGER).
+        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        kring_pad:  K-ring expansion around each cell before rasterizing
+                    (``f.lit(0)`` = no expansion).
+
+    Returns:
+        Column of raster tile (tile struct with ``source``, ``raster``,
+        ``metadata`` fields).
+    """
+    return f.call_function(
+        "gbx_rst_bng_rasterize_agg",
+        _col(cellid),
+        _col(value),
+        _col(srid),
+        _col(pixel_size),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width),
+        _col(height),
+        _col(mode),
+        _col(kring_pad),
+    )
+
+
 # Operations
 
 

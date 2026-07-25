@@ -656,7 +656,12 @@ object RasterTessellate {
         // Raster bbox in EPSG:27700 (same CRS as BNG.cellIdToGeometry) — the geometric keep-test lives in 27700.
         val bbox = BoundingBox.bbox(workDs, BngSR)
         // Enumerate candidate cells purely via BNG.polyfill over the raster bbox polygon (NOT the vector tessellate).
-        val cells = BNG.polyfill(bbox, resolution).toArray
+        // Buffer the bbox by the cell half-diagonal before polyfill: polyfill is a centroid flood-fill, so a cell whose
+        // square overlaps the bbox but whose centre sits just outside would be missed (boundary blind spot). Buffering
+        // pulls those fringe centroids inside; the getBngTile intersect keep-test filters any buffered-but-non-overlapping
+        // cell back out (mirrors the H3 covering path).
+        val bufR = BNG.getBufferRadius(bbox, resolution)
+        val cells = BNG.polyfill(bbox.buffer(bufR), resolution).toArray
 
         new Iterator[(String, Dataset, Map[String, String])] with AutoCloseable {
             private var closed = false

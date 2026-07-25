@@ -1,7 +1,7 @@
 # Raster BNG + Quadbin functions (H3 parity) — Design
 
-**Date:** 2026-07-24
-**Status:** Approved (design), pending implementation plan
+**Date:** 2026-07-24 (Phase-2 light design added 2026-07-25)
+**Status:** Phase 1 (heavy) DONE on `issues/49`. Phase 2 (light, all 9) designed — §4.1 — pending its plan. Builds toward v0.4.3.
 **Roadmap item:** 05x-roadmap-backlog item (2) — "raster BNG + quadbin functions (H3-style)"
 **Originating request:** [databrickslabs/geobrix#49](https://github.com/databrickslabs/geobrix/issues/49) — a customer running computer-vision models on image tiles asked for Mosaic-style **BNG tessellate on rasters** (raster column in, BNG scale like `1km`/`100m`, one row per tile out). That request is satisfied by `gbx_rst_bng_tessellate` (this design's BNG tessellate); the rest of the +9 surface completes quadbin/BNG raster parity around it. Closing #49 requires the BNG tessellate to ship (Phase 1 heavy is sufficient for their classic-cluster CV workload).
 **Related:** `pygx-light-gridx-design`, `h3-raster-tessellation-pedigree`, `tessellate-overlap-default-mosaic-mode`, `heavy-tier-nullable-numeric-return`; issue #59 / PR #52 (0.4.2 empty-band NULL reducers) — reconciled in §2.6
@@ -231,17 +231,63 @@ Raster BNG fns accept the **same resolution contract as the vector BNG fns**: in
 
 ## 4. Tiers & phased delivery
 
-Both tiers, **heavy-first**, because light-tier BNG depends on the not-yet-implemented pygx BNG codec
-port (`pygx-light-gridx-design` phase 2).
+**Target: both tiers at full parity** (every one of the 9 is `<Tier both/>`, matching H3). Delivered in
+two phases, heavy-first — but light is **not blocked**, only sequenced.
 
-- **Phase 1 — Heavy (Scala/GDAL): all 9.** Unblocked now. This phase alone satisfies roadmap item (2)
-  on classic compute and can ship independently.
-- **Phase 2 — Light quadbin (`pyrx`/`pygx`): quadbin tessellate + rasterize_agg.** Unblocked (pygx
-  quadbin phase 1 complete). Mirrors `cellraster.py`.
-- **Phase 3 — Light BNG: all 7.** **Gated behind pygx BNG phase 2** (the `BNG.scala` → Python codec
-  port). Does not start until that codec lands. Spec records the dependency explicitly.
+> **Correction (2026-07-25):** the original plan gated all light work behind "the pygx BNG codec is not
+> yet implemented." That rationale was **stale**. `pygx/_bng.py` already exists (`point_to_cell_id`,
+> `format`/`parse`, `cell_id_to_geometry`, `get_edge_size`, `get_resolution_from_digits`, `is_valid`,
+> `CRS_ID=27700`), and the light raster engine is already grid-dispatched (`gridagg.raster_to_grid` takes
+> a `grid` arg; `tessellate.py` / `cellraster.py` have H3 templates). So light BNG/quadbin parity is
+> buildable now — Phase 2 below covers **all 9** light functions. Heavy shipped first only because it was
+> the classic-compute path that closes #49; light completes the both-tier parity promise.
 
-Each phase updates the tier badges in `execution-tiers.mdx` as it lands (heavy-only → both).
+- **Phase 1 — Heavy (Scala/GDAL): all 9. DONE** (branch `issues/49`, review-clean, gates green). Satisfies
+  roadmap item (2) + closes #49 on classic compute.
+- **Phase 2 — Light (`pyrx`): all 9.** Bring every function to a lightweight impl so all badges flip
+  heavy→both. Design in §4.1. Cell math single-sourced from `pygx` (`_bng`, `_quadbin`) — never
+  re-duplicated. Builds toward the **v0.4.3** release (Phase-1 is interim until this lands).
+
+### 4.1 Light-tier (Phase 2) design
+
+Three light engine modules gain grid-generic branches; **each keeps its existing H3 path unchanged**, new
+grids added as sibling branches/adapters that delegate to `pygx`:
+
+- **`pyrx/core/gridagg.py` (raster→grid, the 5 BNG reducers):** already has a `grid` param + encoder
+  dispatch (`_h3_cells` scalar, `_quadbin_cells` vectorized-numpy). Add a `"bng"` branch:
+  - `_bng_cells(e, n, res)` — **scalar loop calling `pygx._bng.point_to_cell_id`** (like `_h3_cells`; no
+    vectorized reimplementation — single source of truth for BNG cell math, correctness-first; vectorize
+    later only if a bench phase flags it). Drop out-of-GB pixels via `pygx._bng.is_valid`.
+  - **CRS:** for `grid=="bng"`, warp the raster to EPSG:27700 (`rasterio.warp`, nearest) up front, then
+    read eastings/northings from the warped geotransform (0.5-px centroid). H3/quadbin path unchanged
+    (assumes 4326, no warp).
+  - **Cell id type:** BNG yields **String** ids (`pygx._bng.format`) at the row boundary; ids stay Long
+    internally (grouping is Long-keyed for all grids). New `_GRID_FLAT_STRING_SCHEMA` (`cellID StringType`)
+    for the BNG reducers; BNG count = String cellID + Integer measure.
+- **`pyrx/core/tessellate.py` (quadbin + BNG tessellate):** add `iter_tessellate_quadbin` /
+  `iter_tessellate_bng` mirroring `iter_tessellate_h3`, reusing the shared clip/emit machinery; only cell
+  enumeration + cell geometry (`pygx._quadbin` / `_bng.cell_id_to_geometry`) + id type differ. BNG warps to
+  27700 first + drops out-of-GB via `is_valid`. covering = geometric-overlap keep-test, centroid =
+  pixel-centroid single-assign (same contract as heavy §3.2).
+- **`pyrx/core/cellraster.py` (quadbin + BNG rasterize_agg):** the most H3-hardcoded module
+  (`_h3_str`/`_resolution`/`compute_gridspec`/`cell_bbox` call `h3.*`). **Refactor these to dispatch on a
+  `grid` param** via a small per-grid adapter (`to_str`, `resolution`, `cell_center`, `cell_boundary`,
+  `edge_size`) backed by `pygx`. H3 keeps its current path (adapter binds `h3.*`; refactor-only, no behavior
+  change — existing H3 tests are the regression gate). BNG is **27700-native** (no WGS84 hop, matching
+  heavy §3.3); quadbin is 4326. This is the one place H3 light code is restructured.
+
+**Registration/bindings:** register 9 light UDTFs/UDFs in `pyrx/functions.py`; `rst_*` Python wrappers stay
+the SQL-LATERAL-invocation pointers (matching existing H3/quadbin), `rasterize_agg` gets a callable wrapper.
+
+**Parity bar (def-of-done):** exact cell-set match (BNG String / quadbin Long ids) + measures within
+tolerance (1e-9 numeric, 1e-6 geometry) vs. the heavy tier — the pygx exact-parity standard. Cross-tier
+tests run in Docker (heavy needs the JAR). No new dependencies (`pygx`, `rasterio`, `shapely`, `pyproj`
+already present); the light-CI checklist still applies (new test dirs → `_LIGHT_TEST_DIRS`).
+
+Each phase updates the tier badges in `raster-functions.mdx` / `execution-tiers.mdx` as it lands
+(heavy-only → both). Phase 2 also corrects the page-level "every RasterX function is both-tier" claim (false
+during Phase 1) and regenerates the coverage-enforced `rasterx-function-categories` diagram (add BNG grid
+card; 108→117).
 
 ## 5. Testing & parity
 

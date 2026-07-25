@@ -77,6 +77,7 @@ def _registrar_groups() -> List[_register.Group]:
         ("gbx_rst_tooverlappingtiles", _RstToOverlappingTilesUDTF),
         ("gbx_rst_maketiles", _RstMakeTilesUDTF),
         ("gbx_rst_h3_tessellate", _RstH3TessellateUDTF),
+        ("gbx_rst_quadbin_tessellate", _RstQuadbinTessellateUDTF),
         ("gbx_rst_xyzpyramid", _RstXyzPyramidUDTF),
     ]
     for name, cls in udtfs:
@@ -1941,6 +1942,64 @@ def rst_h3_tessellate(
     raise NotImplementedError(
         "Invoke the registered UDTF as a SQL LATERAL table function: "
         "SELECT t.* FROM <df>, LATERAL gbx_rst_h3_tessellate(tile, resolution) t"
+    )
+
+
+@udtf(returnType=_serde.TILE_SCHEMA)
+class _RstQuadbinTessellateUDTF:
+    """Streaming UDTF: yield one clipped tile struct per overlapping quadbin cell."""
+
+    def eval(self, tile, resolution, mode=None):
+        if tile is None or tile["raster"] is None or resolution is None:
+            return
+        effective_mode = mode if mode is not None else "covering"
+        if effective_mode not in {"covering", "centroid"}:
+            raise ValueError(
+                f"rst_quadbin_tessellate: mode must be one of covering, centroid; "
+                f"got '{effective_mode}'"
+            )
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with _serde.open_tile(bytes(tile["raster"])) as ds:
+            for cellid, raster in tessellate_core.iter_tessellate_quadbin(
+                ds, int(resolution), mode=effective_mode
+            ):
+                if raster is None:  # defensive: never emit a null-raster tile row
+                    continue
+                yield _serde.build_tile(raster, "GTiff", cellid)
+
+
+def rst_quadbin_tessellate(
+    tile: ColLike, resolution: ColLike, mode: ColLike = "covering"
+) -> None:
+    """Tessellate a raster into quadbin cells (mirrors ``gbx_rst_quadbin_tessellate``).
+
+    For every quadbin cell overlapping the raster's extent at *resolution*, the
+    raster is clipped to that cell's bounding-box polygon and one tile is
+    produced, carrying the quadbin cell id as its ``cellid``. A cell is skipped
+    only when its bbox does not geometrically overlap the raster; a cell that
+    overlaps but clips to entirely NoData is still emitted, and its value
+    reducers return SQL ``NULL`` for it.
+
+    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
+
+        SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_tessellate(tile, resolution) t
+        SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_tessellate(tile, resolution, 'centroid') t
+
+    Each output row is a tile struct; one row per overlapping quadbin cell.
+
+    Args:
+        tile:       Tile struct column.
+        resolution: Quadbin resolution in ``[0, 20]`` (polyfill limit).
+        mode:       Tessellation mode: ``"covering"`` (default) — each quadbin
+                    cell overlapping the raster extent is clipped to its bbox;
+                    ``"centroid"`` — each valid pixel is assigned to exactly one
+                    cell by its centroid (strict partition, no overlap).
+    """
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_tessellate(tile, resolution) t"
     )
 
 

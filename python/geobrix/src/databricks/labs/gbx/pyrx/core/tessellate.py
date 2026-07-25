@@ -1,12 +1,14 @@
-"""Spark-free H3 raster tessellation (mirrors heavyweight ``RST_H3_Tessellate``
-/ ``RasterTessellate``).
+"""Spark-free H3 and quadbin raster tessellation.
 
-For every H3 cell overlapping the raster's bounding box at the requested
-resolution, the raster is clipped to that cell's hexagon geometry and one tile
-is yielded per cell, carrying the H3 cell id as its ``cellid``. A cell is
-skipped only when its hexagon does not geometrically overlap the raster at all;
-a cell that overlaps but clips to entirely NoData is still emitted (its value
-reducers then return NULL), matching the heavyweight tier.
+Mirrors heavyweight ``RST_H3_Tessellate`` / ``RST_Quadbin_Tessellate``
+(``RasterTessellate``).
+
+For every cell overlapping the raster's bounding box at the requested
+resolution, the raster is clipped to that cell's geometry and one tile is
+yielded per cell, carrying the cell id as its ``cellid``. A cell is skipped
+only when its geometry does not geometrically overlap the raster at all; a cell
+that overlaps but clips to entirely NoData is still emitted (its value reducers
+then return NULL), matching the heavyweight tier.
 """
 
 from collections import defaultdict
@@ -16,11 +18,13 @@ import numpy as np
 import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.warp import transform_bounds, transform_geom
-from shapely.geometry import Polygon, mapping, shape
+from shapely.geometry import Polygon, box, mapping, shape
 
+from databricks.labs.gbx.pygx import _quadbin
 from databricks.labs.gbx.pyrx.core import edit
 
 H3_MAX_RES = 15
+QUADBIN_MAX_RES = _quadbin._MAX_POLYFILL_RES
 
 _WGS84 = "EPSG:4326"
 _VALID_MODES = {"covering", "centroid"}
@@ -197,3 +201,158 @@ def tessellate_h3(ds, resolution: int) -> list:
     Spark-free core API and bench/parity callers).
     """
     return list(iter_tessellate_h3(ds, resolution))
+
+
+# ---------------------------------------------------------------------------
+# Quadbin tessellate
+# ---------------------------------------------------------------------------
+
+
+def _quadbin_uint64_to_signed_int64(cell: int) -> int:
+    """Convert an unsigned quadbin cell id to a signed int64 (Spark LongType)."""
+    if cell >= 2**63:
+        return cell - 2**64
+    return int(cell)
+
+
+def _centroid_chips_quadbin(ds, resolution: int):
+    """Centroid-partition mode for quadbin: each valid pixel → exactly one cell.
+
+    Pixel centroid (lon, lat) → ``pygx._quadbin.point_as_cell`` → group pixels
+    by cell.  Each cell's chip is the full-tile raster with all out-of-cell
+    pixels set to nodata.  This guarantees a strict partition: every valid pixel
+    appears in exactly one chip.
+
+    Quadbin is 4326-native — no reprojection is performed (the input raster must
+    be in EPSG:4326 or the pixel coordinates are treated as lon/lat directly,
+    matching H3 centroid behaviour).
+
+    Yields ``(cellid_int, gtiff_bytes)`` pairs.
+    """
+    # Build pixel-center coordinate arrays.
+    rows, cols = np.mgrid[0 : ds.height, 0 : ds.width]
+    xs, ys = ds.xy(rows.ravel(), cols.ravel())
+    xs = np.asarray(xs, dtype="float64")
+    ys = np.asarray(ys, dtype="float64")
+
+    dst_epsg = ds.crs.to_epsg() if ds.crs else None
+    need_reproject = dst_epsg != 4326
+    if need_reproject:
+        from rasterio.warp import transform as warp_transform
+
+        lons, lats = warp_transform(ds.crs, _WGS84, xs.tolist(), ys.tolist())
+        lons = np.asarray(lons, dtype="float64")
+        lats = np.asarray(lats, dtype="float64")
+    else:
+        lons, lats = xs, ys
+
+    # Read all bands + determine the nodata value.
+    data = ds.read()  # shape (bands, height, width)
+    nodata = ds.nodata
+
+    # Valid pixel mask.
+    if nodata is not None:
+        valid_flat = ~np.all(data.reshape(ds.count, -1).T == nodata, axis=1)
+    else:
+        valid_flat = np.ones(ds.height * ds.width, dtype=bool)
+
+    # Map each valid pixel → quadbin cell id.
+    cell_pixels = defaultdict(list)  # cell_int → [flat_idx, ...]
+    for flat_idx in np.where(valid_flat)[0]:
+        lon = float(lons[flat_idx])
+        lat = float(lats[flat_idx])
+        cell_int = _quadbin.point_as_cell(lon, lat, resolution)
+        cell_pixels[cell_int].append(int(flat_idx))
+
+    # Build output profile.
+    profile = ds.profile.copy()
+    profile.update(driver="GTiff")
+    if nodata is None:
+        nd = _DEFAULT_NODATA
+        profile["nodata"] = nd
+    else:
+        nd = nodata
+
+    for cell_int, flat_indices in cell_pixels.items():
+        chip = np.full_like(data, nd)
+        row_indices, col_indices = np.unravel_index(flat_indices, (ds.height, ds.width))
+        chip[:, row_indices, col_indices] = data[:, row_indices, col_indices]
+
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(chip)
+            raster_bytes = mf.read()
+
+        yield (_quadbin_uint64_to_signed_int64(cell_int), raster_bytes)
+
+
+def iter_tessellate_quadbin(ds, resolution: int, mode: str = "covering"):
+    """Streaming quadbin tessellate: yield ``(cellid_int, gtiff_bytes)`` per cell.
+
+    For every quadbin cell overlapping the raster's bounding box at the
+    requested resolution, the raster is clipped to that cell's bounding-box
+    polygon and one tile is yielded carrying the quadbin cell id as its
+    ``cellid``.
+
+    Quadbin cells are axis-aligned rectangular tiles on the Web Mercator grid,
+    so the clip geometry is a simple box derived from
+    ``pygx._quadbin.as_wkb(cell)`` (EWKB, SRID 4326).
+
+    Quadbin is 4326-native — no reprojection of cell geometries is performed
+    when the raster is already in EPSG:4326; for other CRS the cell box is
+    reprojected to the raster CRS before clipping.
+
+    Args:
+        ds:         Open rasterio ``DatasetReader``.
+        resolution: Quadbin resolution in ``[0, 26]`` (polyfill limited to
+                    ``[0, 20]`` — see :data:`QUADBIN_MAX_RES`).
+        mode:       ``"covering"`` (default) — clip each overlapping cell bbox;
+                    ``"centroid"`` — strict pixel partition: each valid pixel
+                    assigned to exactly one cell by its centroid.
+
+    Yields:
+        ``(cellid, raster_bytes)`` tuples, one per quadbin cell with valid
+        pixels.  ``cellid`` is a signed int64 quadbin cell id.
+    """
+    resolution = int(resolution)
+    if resolution < 0 or resolution > QUADBIN_MAX_RES:
+        raise ValueError(
+            f"rst_quadbin_tessellate: resolution must be in [0, {QUADBIN_MAX_RES}]; "
+            f"got {resolution}"
+        )
+    if mode not in _VALID_MODES:
+        raise ValueError(
+            f"rst_quadbin_tessellate: mode must be one of covering, centroid; "
+            f"got '{mode}'"
+        )
+
+    if mode == "centroid":
+        yield from _centroid_chips_quadbin(ds, resolution)
+        return
+
+    # Raster bbox in WGS84 lon/lat.
+    west, south, east, north = transform_bounds(ds.crs, _WGS84, *ds.bounds)
+    bbox_poly = box(west, south, east, north)
+
+    # polyfill: quadbin cells covering the bbox envelope.
+    covered = _quadbin.polyfill(bbox_poly, resolution)
+
+    dst_epsg = ds.crs.to_epsg() if ds.crs else None
+    reproject = dst_epsg != 4326
+
+    for cell in covered:
+        # as_wkb returns EWKB with SRID=4326; shapely.wkb.loads handles EWKB
+        # transparently (reads the geometry; SRID embedded in the EWKB is not
+        # used here because reprojection is handled by the `reproject` branch
+        # below, mirroring the iter_tessellate_h3 pattern).
+        cell_poly = shapely.wkb.loads(_quadbin.as_wkb(cell))
+        if reproject:
+            geom = transform_geom(_WGS84, ds.crs, mapping(cell_poly))
+            cell_poly = shape(geom)
+        try:
+            clipped = edit.clip_to_geom(ds, cell_poly, all_touched=True)
+        except ValueError:
+            continue
+        if clipped is None:
+            continue
+        yield (_quadbin_uint64_to_signed_int64(cell), clipped)

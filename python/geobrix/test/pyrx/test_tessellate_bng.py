@@ -302,3 +302,84 @@ def test_iter_tessellate_bng_covering_is_boundary_complete():
         "covering must be boundary-complete: "
         f"missing {sorted(expected - emitted)}, extra {sorted(emitted - expected)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Spark-struct layer: LE2 regression — RASTERX_CELL_ID must NOT appear in the
+# tile metadata map returned by the UDTF through Spark.
+# ---------------------------------------------------------------------------
+
+
+def test_spark_struct_no_rasterx_cell_id_in_metadata(spark):
+    """RASTERX_CELL_ID must be absent from the tile metadata map at the Spark-
+    struct layer; the authoritative cell id must be in the ``cellid`` struct
+    field (LE2 regression guard).
+
+    Pre-fix behaviour: ``_RstBngTessellateUDTF.eval`` called
+    ``out["metadata"]["RASTERX_CELL_ID"] = cellid_str``, so the metadata map
+    carried the key.  The fix removed that mutation so the struct metadata only
+    contains the driver/width/height/count keys set by ``build_tile``.
+
+    This test drives the UDTF through Spark (register + SQL LATERAL) so it
+    exercises the actual yielded struct row, not the raw GDAL bytes.  The old
+    GDAL-tags test (``test_iter_tessellate_bng_chip_cellid_in_struct_not_metadata``)
+    only checked ``chip_ds.tags()`` on the raw GTiff bytes — those never carried
+    RASTERX_CELL_ID, so that test was vacuously true both before and after the
+    fix and provided no RED-before signal.
+
+    RED-before reasoning: restoring the removed line
+    ``out["metadata"]["RASTERX_CELL_ID"] = cellid_str`` in
+    ``_RstBngTessellateUDTF.eval`` would cause ``row["tile"]["metadata"]`` to
+    contain the key, and the ``assert "RASTERX_CELL_ID" not in metadata`` below
+    would FAIL.  With the line absent (current production code) the key is not
+    present and the test PASSES.
+    """
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.pygx import _bng
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+
+    tile_bytes = _tile_27700()
+    df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
+        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+    )
+    df.createOrReplaceTempView("_bng_tess_le2")
+    # SELECT t.* expands the UDTF struct fields directly: cellid, raster, metadata.
+    rows = spark.sql(
+        "SELECT t.cellid, t.metadata FROM _bng_tess_le2, "
+        "LATERAL gbx_rst_bng_tessellate(tile, 3, 'covering') t"
+    ).collect()
+
+    assert rows, "UDTF must yield >=1 row for the London-area raster"
+
+    for row in rows:
+        metadata = dict(row["metadata"]) if row["metadata"] else {}
+
+        # LE2 assertion: the metadata map must NOT contain RASTERX_CELL_ID.
+        assert "RASTERX_CELL_ID" not in metadata, (
+            f"LE2: RASTERX_CELL_ID must NOT be in the Spark tile metadata map; "
+            f"found value={metadata.get('RASTERX_CELL_ID')!r}. "
+            f"The pre-fix code set out['metadata']['RASTERX_CELL_ID'] in eval(); "
+            f"this key must have been removed."
+        )
+
+        # Authoritative id is in the struct cellid field (Long).
+        cellid_long = row["cellid"]
+        assert cellid_long is not None, "tile.cellid must not be None"
+        assert isinstance(
+            cellid_long, int
+        ), f"tile.cellid must be a Long (int); got {type(cellid_long)}"
+
+        # Round-trip: format(cellid_long) must be a valid BNG string id.
+        cellid_str = _bng.format(cellid_long)
+        assert _BNG_ID_RE.match(
+            cellid_str
+        ), f"tile.cellid {cellid_long} -> {cellid_str!r} is not a valid BNG id"
+
+        # Cross-check: parse(format(cellid_long)) must be lossless.
+        assert _bng.parse(cellid_str) == cellid_long, (
+            f"BNG Long round-trip failed: {cellid_long} -> {cellid_str!r} -> "
+            f"{_bng.parse(cellid_str)}"
+        )

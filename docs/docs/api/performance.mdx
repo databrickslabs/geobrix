@@ -151,7 +151,7 @@ These functions are Arrow-backed `pandas_udf(BinaryType())` aggregators used ins
 | `gbx_rst_dtmfromgeoms_agg` | `rst_dtmfromgeoms_agg` | Build a DTM raster from elevation geometries |
 | `gbx_rst_h3_rasterize_agg` | `rst_h3_rasterize_agg` | Burn a group of H3 cells onto one raster (presence mask, or per-cell value) |
 
-**QuadBin and BNG grid variants** (both tiers — heavyweight Scala/JVM TypedImperativeAggregates and lightweight `pyrx` aggregators backed by `pygx._quadbin` / `_bng` cell math + `rasterio`; the BNG family auto-warps to EPSG:27700 — listed here because they share the same reduce-to-one-raster shape):
+**QuadBin and BNG grid variants** (both tiers — heavyweight Scala/JVM TypedImperativeAggregates and lightweight `pyrx` aggregators backed by `pygx._quadbin` / `_bng` cell math + `rasterio`; the BNG variant works in EPSG:27700 natively — cell geometries are derived from `pygx._bng` with no warp step, since these aggregators take cellid+value rows rather than a raster tile — listed here because they share the same reduce-to-one-raster shape):
 
 | SQL name | Python name | Aggregation |
 |---|---|---|

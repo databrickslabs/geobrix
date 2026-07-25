@@ -842,7 +842,7 @@ Streaming aggregator that burns quadbin cell geometry/value pairs (one row per c
 <Tier both/> <Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
-The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. It auto-warps the input to **EPSG:27700** via `rasterio.warp` before rasterizing, parses the **STRING** BNG cell IDs, and burns each cell's geometry/value into the output band — matching the heavyweight cell set and burn values exactly.
+The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
 :::
 
 :::warning NoData sentinel is -9999.0

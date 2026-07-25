@@ -32,7 +32,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // + 2 bucket-B B-vec (contour, polygonize -> vector fingerprint)
     // + 3 bucket-D geometry-in (rasterize/gridfrompoints/dtmfromgeoms -> raster fp)
     // + 7 bucket-A aggregators (the 7 *_agg, Spark groupBy aggregate harness)
-    // + 1 H3 rasterize aggregator (rst_h3_rasterize_agg, h3_aggregate kind)
+    // + 1 H3 rasterize aggregator (rst_h3_rasterize_agg, grid_aggregate kind)
     // + 9 BNG/quadbin raster-grid fns (5 rst_bng_rastertogrid{avg,count,max,min,
     //   median} + rst_{quadbin,bng}_tessellate + rst_{quadbin,bng}_rasterize_agg)
     assert(BenchDispatch.all.size == 116)

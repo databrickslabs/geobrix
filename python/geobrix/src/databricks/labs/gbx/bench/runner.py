@@ -15,6 +15,7 @@ from databricks.labs.gbx.bench import synth as _synth
 from databricks.labs.gbx.bench.fingerprint import (
     fingerprint_collection,
     fingerprint_dggs_grid,
+    fingerprint_dggs_grid_str,
     fingerprint_output,
     fingerprint_vector,
 )
@@ -224,6 +225,9 @@ def _fingerprint_for(fs, out):
     kind = getattr(fs, "fingerprint_kind", "auto")
     if kind == "dggs_grid":
         return fingerprint_dggs_grid(out)
+    if kind == "dggs_grid_str":
+        # BNG: STRING cell ids (OS grid refs), not Longs -- no signed-int64 fold.
+        return fingerprint_dggs_grid_str(out)
     if kind == "vector":
         return fingerprint_vector(out)
     if kind == "collection":
@@ -554,6 +558,44 @@ def _h3_aggregate_df(spark, fs):
     return spark.createDataFrame(rows, schema=schema)
 
 
+def _grid_aggregate_df(spark, fs):
+    """Build the (cellid, value DOUBLE) DataFrame for a quadbin/BNG rasterize agg.
+
+    The quadbin/BNG grid aggregators stream (cellid, value) rows from a fixed
+    deterministic cell set (the SAME recipe the Scala BenchDispatch generates, so
+    both tiers burn an identical cell set) and use the 2-arg auto-derive overload
+    (the grid is derived from the cell set, not passed explicitly like H3). Unlike
+    ``_h3_aggregate_df`` the cellid dtype varies by grid:
+      - quadbin: LONG cell ids (``spec.quadbin_rasterize_cells``).
+      - BNG:     STRING OS grid reference ids (``spec.bng_rasterize_cells``).
+    ``value`` is NULL on every row -> presence-mask burn (1.0). Returns a df with
+    columns (cellid, value DOUBLE).
+    """
+    from pyspark.sql.types import (
+        DoubleType,
+        LongType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    if fs.name == "rst_bng_rasterize_agg":
+        cells = _spec.bng_rasterize_cells()  # STRING ids
+        cid_type = StringType()
+        rows = [(str(c), None) for c in cells]
+    else:  # rst_quadbin_rasterize_agg: LONG ids
+        cells = _spec.quadbin_rasterize_cells()
+        cid_type = LongType()
+        rows = [(int(c), None) for c in cells]
+    schema = StructType(
+        [
+            StructField("cellid", cid_type, False),
+            StructField("value", DoubleType(), True),
+        ]
+    )
+    return spark.createDataFrame(rows, schema=schema)
+
+
 def _emit_explain(label: str, df, explain_dir: str = "") -> None:
     """Print a DataFrame's formatted physical plan under a labeled header and, when
     explain_dir is set, also persist it to {explain_dir}/{label}.explain.txt so a run's
@@ -616,13 +658,17 @@ def _build_agg_group_df(spark, root, corpus, fs, kind):
     for rst_frombands_agg (its per-row ascending-sort key); ``extent`` is the
     per-group (xmin..height, srid) constants for geometry aggregators, else None.
     h3_aggregate streams (cellid, value) rows from the fixed deterministic cell set
-    (the explicit grid rides in fs.args, so no extent).
+    (the explicit grid rides in fs.args, so no extent). grid_aggregate (quadbin /
+    BNG) streams (cellid, value) rows and auto-derives the grid from the cell set,
+    so likewise no extent.
     """
     if kind == "tile_aggregate":
         group_df, has_band_index = _tile_aggregate_df(spark, root, corpus, fs)
         return group_df, has_band_index, None
     if kind == "h3_aggregate":
         return _h3_aggregate_df(spark, fs), False, None
+    if kind == "grid_aggregate":
+        return _grid_aggregate_df(spark, fs), False, None
     group_df, extent = _geometry_aggregate_df(spark, root, corpus, fs)
     return group_df, False, extent
 
@@ -669,8 +715,10 @@ def _run_aggregate(
             if has_band_index:
                 return fs.col_fn(df["tile"], fs.args, df["band_index"])
             return fs.col_fn(df["tile"], fs.args)
-        if kind == "h3_aggregate":
-            # h3 aggregate: (cellid, value, args); the explicit grid rides in args.
+        if kind in ("h3_aggregate", "grid_aggregate"):
+            # h3/grid aggregate: (cellid, value, args). h3 passes an explicit grid
+            # in args; quadbin/BNG (grid_aggregate) auto-derive the grid from the
+            # streamed cell set, so args is empty -- both take the same 3-arg col_fn.
             return fs.col_fn(df["cellid"], df["value"], fs.args)
         # geometry aggregate: (geom_wkb, value, extent_tuple, args)
         return fs.col_fn(df["geom_wkb"], df["value"], extent, fs.args)
@@ -819,7 +867,12 @@ def _explain_spark_path(
         _k = getattr(_fs, "input_kind", "tile")
         _n = max(row_counts)
         try:
-            if _k in ("tile_aggregate", "geometry_aggregate", "h3_aggregate"):
+            if _k in (
+                "tile_aggregate",
+                "geometry_aggregate",
+                "h3_aggregate",
+                "grid_aggregate",
+            ):
                 _run_aggregate(
                     spark,
                     root,
@@ -867,7 +920,12 @@ def _spark_path_warmup(spark, fnspecs, pool, df_all, input_col):
         for f in fnspecs
         if "spark-path" in f.modes
         and getattr(f, "input_kind", "tile")
-        not in ("tile_aggregate", "geometry_aggregate", "h3_aggregate")
+        not in (
+            "tile_aggregate",
+            "geometry_aggregate",
+            "h3_aggregate",
+            "grid_aggregate",
+        )
     ]
     _warm = next(
         (f for f in _spark_fns if getattr(f, "min_bands", 1) <= pool.bands), None
@@ -1068,7 +1126,12 @@ def run_spark_path(
     # "geometry_aggregate"} and are handled by a dedicated aggregate harness (below)
     # that emits BOTH a consistency fingerprint (a fixed deterministic single group
     # -> one out tile -> raster fingerprint) and the perf timing (scaled groupBy).
-    _agg_kinds = ("tile_aggregate", "geometry_aggregate", "h3_aggregate")
+    _agg_kinds = (
+        "tile_aggregate",
+        "geometry_aggregate",
+        "h3_aggregate",
+        "grid_aggregate",
+    )
     for fs in fnspecs:
         if "spark-path" not in fs.modes:
             continue

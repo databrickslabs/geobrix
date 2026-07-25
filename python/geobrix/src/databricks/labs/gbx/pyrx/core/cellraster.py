@@ -110,9 +110,9 @@ class _QuadbinAdapter:
         return int(cellid) & _U64
 
     def resolution(self, keys) -> int:
-        it = iter(keys)
-        res = self._qb.resolution(next(it))
-        for k in keys:
+        keys = list(keys)
+        res = self._qb.resolution(keys[0])
+        for k in keys[1:]:
             if self._qb.resolution(k) != res:
                 raise ValueError("quadbin cell set has mixed resolutions")
         return res
@@ -137,10 +137,11 @@ class _QuadbinAdapter:
         # Mirror RST_Quadbin_RasterizeAgg.computeGridspec: native edge = a sample
         # cell's bbox lon-width in degrees. In WGS84 that IS the pixel size; for a
         # projected srid approximate the metre edge at the extent's mid-latitude.
-        import quadbin
-
-        w, _s, e, _n = quadbin.cell_to_bounding_box(int(next(iter(keys))))
-        edge_deg = abs(e - w)
+        # Route through pygx._quadbin (SSoT) via as_wkb -> shapely bounds.
+        sample_key = next(iter(keys))
+        poly = self._from_wkb(self._qb.as_wkb(sample_key))
+        minx, _miny, maxx, _maxy = poly.bounds
+        edge_deg = abs(maxx - minx)
         if srid == 4326:
             return edge_deg
         midlat = (bymin + bymax) / 2.0

@@ -72,6 +72,11 @@ def _registrar_groups() -> List[_register.Group]:
         ("gbx_rst_quadbin_rastertogridmax", _RstQuadbinRasterToGridMaxUDTF),
         ("gbx_rst_quadbin_rastertogridmin", _RstQuadbinRasterToGridMinUDTF),
         ("gbx_rst_quadbin_rastertogridmedian", _RstQuadbinRasterToGridMedianUDTF),
+        ("gbx_rst_bng_rastertogridavg", _RstBngRasterToGridAvgUDTF),
+        ("gbx_rst_bng_rastertogridcount", _RstBngRasterToGridCountUDTF),
+        ("gbx_rst_bng_rastertogridmax", _RstBngRasterToGridMaxUDTF),
+        ("gbx_rst_bng_rastertogridmin", _RstBngRasterToGridMinUDTF),
+        ("gbx_rst_bng_rastertogridmedian", _RstBngRasterToGridMedianUDTF),
         ("gbx_rst_separatebands", _RstSeparateBandsUDTF),
         ("gbx_rst_retile", _RstRetileUDTF),
         ("gbx_rst_tooverlappingtiles", _RstToOverlappingTilesUDTF),
@@ -2705,11 +2710,11 @@ def rst_xyzpyramid(
 #   avg/max/min/median -> DoubleType (DOUBLE)
 
 
-def _grid_flat_schema(measure_type):
+def _grid_flat_schema(measure_type, cellid_type=LongType()):
     return StructType(
         [
             StructField("band", IntegerType(), False),
-            StructField("cellID", LongType(), True),
+            StructField("cellID", cellid_type, True),
             StructField("measure", measure_type, True),
         ]
     )
@@ -2718,9 +2723,14 @@ def _grid_flat_schema(measure_type):
 _GRID_FLAT_DOUBLE_SCHEMA = _grid_flat_schema(DoubleType())
 _GRID_FLAT_INT_SCHEMA = _grid_flat_schema(IntegerType())  # h3 count
 _GRID_FLAT_LONG_SCHEMA = _grid_flat_schema(LongType())  # quadbin count
+# BNG renders a formatted BNG string (e.g. "TQ3080") as cellID, matching heavy
+# RST_BNG_RasterToGrid* (StringType cellID). avg/max/min/median -> DOUBLE; count
+# -> INTEGER (heavy RST_BNG_RasterToGridCount measure is IntegerType).
+_GRID_FLAT_STRING_SCHEMA = _grid_flat_schema(DoubleType(), StringType())
+_GRID_FLAT_STRING_INT_SCHEMA = _grid_flat_schema(IntegerType(), StringType())
 
 
-def _make_rastertogrid_udtf(grid, agg, flat_schema):
+def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
     @udtf(returnType=flat_schema)
     class _RasterToGridUDTF:
         def eval(self, tile, resolution):
@@ -2730,11 +2740,14 @@ def _make_rastertogrid_udtf(grid, agg, flat_schema):
 
             _env.configure_gdal_env()
             with _serde.open_tile(bytes(tile["raster"])) as ds:
-                bands_data = gridagg.raster_to_grid(ds, int(resolution), grid, agg)
+                bands_data = gridagg.raster_to_grid(ds, resolution, grid, agg)
             # Yield flat rows (band, cellID, measure) — never buffer full nested list.
+            # BNG cellIDs are already formatted strings from gridagg; H3/quadbin
+            # cellIDs are Long ints (int() coerce numpy scalars).
             for band_idx, cells in enumerate(bands_data, start=1):
                 for cell in cells:
-                    yield (band_idx, int(cell["cellID"]), cell["measure"])
+                    cid = cell["cellID"] if cellid_is_str else int(cell["cellID"])
+                    yield (band_idx, cid, cell["measure"])
 
     return _RasterToGridUDTF
 
@@ -2768,6 +2781,21 @@ _RstQuadbinRasterToGridMinUDTF = _make_rastertogrid_udtf(
 )
 _RstQuadbinRasterToGridMedianUDTF = _make_rastertogrid_udtf(
     "quadbin", "median", _GRID_FLAT_DOUBLE_SCHEMA
+)
+_RstBngRasterToGridAvgUDTF = _make_rastertogrid_udtf(
+    "bng", "avg", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
+)
+_RstBngRasterToGridCountUDTF = _make_rastertogrid_udtf(
+    "bng", "count", _GRID_FLAT_STRING_INT_SCHEMA, cellid_is_str=True
+)
+_RstBngRasterToGridMaxUDTF = _make_rastertogrid_udtf(
+    "bng", "max", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
+)
+_RstBngRasterToGridMinUDTF = _make_rastertogrid_udtf(
+    "bng", "min", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
+)
+_RstBngRasterToGridMedianUDTF = _make_rastertogrid_udtf(
+    "bng", "median", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
 )
 
 _RASTERTOGRID_DOC = """{summary}
@@ -2872,6 +2900,46 @@ def rst_quadbin_rastertogridmedian(tile: ColLike, resolution: ColLike) -> None:
     )
 
 
+def rst_bng_rastertogridavg(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into BNG cells by mean, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridavg(tile, resolution) t"
+    )
+
+
+def rst_bng_rastertogridcount(tile: ColLike, resolution: ColLike) -> None:
+    """Count raster pixels falling in each BNG cell, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridcount(tile, resolution) t"
+    )
+
+
+def rst_bng_rastertogridmax(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into BNG cells by maximum, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridmax(tile, resolution) t"
+    )
+
+
+def rst_bng_rastertogridmin(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into BNG cells by minimum, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridmin(tile, resolution) t"
+    )
+
+
+def rst_bng_rastertogridmedian(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into BNG cells by median, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridmedian(tile, resolution) t"
+    )
+
+
 rst_h3_rastertogridavg.__doc__ = _RASTERTOGRID_DOC.format(
     summary="Aggregate raster pixel values into H3 cells by mean, per band.",
     grid="H3",
@@ -2951,6 +3019,60 @@ rst_quadbin_rastertogridmedian.__doc__ = _RASTERTOGRID_DOC.format(
     res_range="0..20",
     measure="DOUBLE",
     sql_name="quadbin_rastertogridmedian",
+)
+
+_BNG_RASTERTOGRID_DOC = """{summary}
+
+    Per band, every valid (non-NoData) pixel is mapped to a British National Grid
+    cell at the given ``resolution`` via its pixel-centroid coordinate; the pixel
+    values falling in each cell are reduced by {agg_desc}. BNG has no lon/lat
+    input path, so the raster is reprojected to EPSG:27700 (nearest-neighbour)
+    first; pixels outside Great Britain are dropped.
+
+    Light tier is a Python UDTF -- invoke as a SQL LATERAL table function::
+
+        SELECT t.band, t.cellID, t.measure
+        FROM <df>, LATERAL gbx_rst_{sql_name}(tile, resolution) t
+
+    Each row: band INT (1-based), cellID STRING (BNG cell id e.g. ``TQ3080``),
+    measure {measure}.
+
+    Args:
+        tile:       Tile struct column.
+        resolution: BNG resolution: integer index +/-1..+/-6 (1=100km .. 6=1m;
+                    negatives = quadrants) or a resolutionMap string key
+                    (e.g. ``"1km"``, ``"100m"``).
+    """
+
+rst_bng_rastertogridavg.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into BNG cells by mean, per band.",
+    agg_desc="their mean (DOUBLE)",
+    measure="DOUBLE",
+    sql_name="bng_rastertogridavg",
+)
+rst_bng_rastertogridcount.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Count raster pixels falling in each BNG cell, per band.",
+    agg_desc="a pixel count (INTEGER)",
+    measure="INTEGER",
+    sql_name="bng_rastertogridcount",
+)
+rst_bng_rastertogridmax.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into BNG cells by maximum, per band.",
+    agg_desc="their maximum (DOUBLE)",
+    measure="DOUBLE",
+    sql_name="bng_rastertogridmax",
+)
+rst_bng_rastertogridmin.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into BNG cells by minimum, per band.",
+    agg_desc="their minimum (DOUBLE)",
+    measure="DOUBLE",
+    sql_name="bng_rastertogridmin",
+)
+rst_bng_rastertogridmedian.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into BNG cells by median, per band.",
+    agg_desc="their median (DOUBLE; even counts average the two middle values)",
+    measure="DOUBLE",
+    sql_name="bng_rastertogridmedian",
 )
 
 

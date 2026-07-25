@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, RegistryDelegate}
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
-import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_H3_RasterizeAgg, RST_MergeAgg, RST_RasterizeAgg}
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_H3_RasterizeAgg, RST_MergeAgg, RST_Quadbin_RasterizeAgg, RST_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.expressions.analysis._
 import com.databricks.labs.gbx.rasterx.expressions.constructor.{RST_FromBands, RST_FromContent}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
@@ -82,6 +82,8 @@ object functions extends Serializable {
         rd.register(RST_MergeAgg)
         rd.register(RST_RasterizeAgg)
         rd.register(RST_H3_RasterizeAgg)
+        rd.register(RST_Quadbin_RasterizeAgg)
+        rd.register(RST_BNG_RasterizeAgg)
 
         // Constructors
         rd.register(RST_FromBands)
@@ -93,6 +95,8 @@ object functions extends Serializable {
 
         // Generators
         rd.register(RST_H3_Tessellate)
+        rd.register(RST_Quadbin_Tessellate)
+        rd.register(RST_BNG_Tessellate)
         rd.register(RST_MakeTiles)
         rd.register(RST_ReTile)
         rd.register(RST_SeparateBands)
@@ -109,6 +113,11 @@ object functions extends Serializable {
         rd.register(RST_Quadbin_RasterToGridMax)
         rd.register(RST_Quadbin_RasterToGridMin)
         rd.register(RST_Quadbin_RasterToGridMedian)
+        rd.register(RST_BNG_RasterToGridAvg)
+        rd.register(RST_BNG_RasterToGridCount)
+        rd.register(RST_BNG_RasterToGridMax)
+        rd.register(RST_BNG_RasterToGridMin)
+        rd.register(RST_BNG_RasterToGridMedian)
         rd.register(RST_H3_CellBBox)
 
         // Operations
@@ -248,6 +257,61 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
             cellid, value, srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
+    /** UDAF: rasterize a group's quadbin cells into one tile (pixel-centroid burn).
+     *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0). */
+    def rst_quadbin_rasterize_agg(cellid: Column): Column =
+        ColumnAdapter(RST_Quadbin_RasterizeAgg.name, Seq(
+            cellid, lit(null).cast("double"), lit(4326), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("int"), lit(null).cast("int"),
+            lit("centroids"), lit(1)
+        ))
+    def rst_quadbin_rasterize_agg(cellid: Column, value: Column): Column =
+        ColumnAdapter(RST_Quadbin_RasterizeAgg.name, Seq(
+            cellid, value, lit(4326), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("int"), lit(null).cast("int"),
+            lit("centroids"), lit(1)
+        ))
+    def rst_quadbin_rasterize_agg(
+        cellid: Column, value: Column, srid: Column, pixelSize: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        width: Column, height: Column, mode: Column, kringPad: Column
+    ): Column =
+        ColumnAdapter(RST_Quadbin_RasterizeAgg.name, Seq(
+            cellid, value, srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
+        ))
+
+    /** UDAF: rasterize a group's BNG cells (STRING ids) into one 27700-native tile.
+     *  The `srid` argument is retained for signature parity but forced to 27700 (no-op);
+     *  auto-derives the grid from the cell set; value omitted -> presence mask (1.0). */
+    def rst_bng_rasterize_agg(cellid: Column): Column =
+        ColumnAdapter(RST_BNG_RasterizeAgg.name, Seq(
+            cellid, lit(null).cast("double"), lit(27700), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("int"), lit(null).cast("int"),
+            lit("centroids"), lit(1)
+        ))
+    def rst_bng_rasterize_agg(cellid: Column, value: Column): Column =
+        ColumnAdapter(RST_BNG_RasterizeAgg.name, Seq(
+            cellid, value, lit(27700), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("int"), lit(null).cast("int"),
+            lit("centroids"), lit(1)
+        ))
+    def rst_bng_rasterize_agg(
+        cellid: Column, value: Column, srid: Column, pixelSize: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        width: Column, height: Column, mode: Column, kringPad: Column
+    ): Column =
+        ColumnAdapter(RST_BNG_RasterizeAgg.name, Seq(
+            cellid, value, srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
+        ))
+
     // Constructors
     def rst_fromcontent(content: Column, driver: Column): Column = ColumnAdapter(RST_FromContent.name, Seq(content, driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper (see register/#34).
@@ -257,6 +321,14 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
     def rst_h3_tessellate(tileExpr: Column, resolution: Column): Column = ColumnAdapter(RST_H3_Tessellate.name, Seq(tileExpr, resolution))
     def rst_h3_tessellate(tileExpr: Column, resolution: Column, mode: String): Column =
         ColumnAdapter(RST_H3_Tessellate.name, Seq(tileExpr, resolution, lit(mode)))
+    def rst_quadbin_tessellate(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Quadbin_Tessellate.name, Seq(tileExpr, resolution))
+    def rst_quadbin_tessellate(tileExpr: Column, resolution: Column, mode: String): Column =
+        ColumnAdapter(RST_Quadbin_Tessellate.name, Seq(tileExpr, resolution, lit(mode)))
+    def rst_bng_tessellate(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_BNG_Tessellate.name, Seq(tileExpr, resolution))
+    def rst_bng_tessellate(tileExpr: Column, resolution: Column, mode: String): Column =
+        ColumnAdapter(RST_BNG_Tessellate.name, Seq(tileExpr, resolution, lit(mode)))
     def rst_maketiles(tileExpr: Column, tileWidth: Column, tileHeight: Column): Column =
         ColumnAdapter(RST_MakeTiles.name, Seq(tileExpr, tileWidth, tileHeight))
     def rst_retile(tileExpr: Column, tileWidth: Column, tileHeight: Column): Column =
@@ -286,6 +358,16 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
         ColumnAdapter(RST_Quadbin_RasterToGridMin.name, Seq(tileExpr, resolution))
     def rst_quadbin_rastertogridmedian(tileExpr: Column, resolution: Column): Column =
         ColumnAdapter(RST_Quadbin_RasterToGridMedian.name, Seq(tileExpr, resolution))
+    def rst_bng_rastertogridavg(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_BNG_RasterToGridAvg.name, Seq(tileExpr, resolution))
+    def rst_bng_rastertogridcount(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_BNG_RasterToGridCount.name, Seq(tileExpr, resolution))
+    def rst_bng_rastertogridmax(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_BNG_RasterToGridMax.name, Seq(tileExpr, resolution))
+    def rst_bng_rastertogridmin(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_BNG_RasterToGridMin.name, Seq(tileExpr, resolution))
+    def rst_bng_rastertogridmedian(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_BNG_RasterToGridMedian.name, Seq(tileExpr, resolution))
 
     /** Bounding box STRUCT<xmin,ymin,xmax,ymax> of one H3 cell in `srid`. */
     def gbx_h3_cell_bbox(cellid: Column): Column =
@@ -339,6 +421,16 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
     def rst_h3_tessellate(tileExpr: Column, resolution: Int): Column = rst_h3_tessellate(tileExpr, lit(resolution))
     def rst_h3_tessellate(tileExpr: Column, resolution: Int, mode: String): Column =
         rst_h3_tessellate(tileExpr, lit(resolution), mode)
+    def rst_quadbin_tessellate(tileExpr: Column, resolution: Int): Column = rst_quadbin_tessellate(tileExpr, lit(resolution))
+    def rst_quadbin_tessellate(tileExpr: Column, resolution: Int, mode: String): Column =
+        rst_quadbin_tessellate(tileExpr, lit(resolution), mode)
+    // BNG resolution accepts an Int index (±1..±6) or a String key ("1km", "100m", ...).
+    def rst_bng_tessellate(tileExpr: Column, resolution: Int): Column = rst_bng_tessellate(tileExpr, lit(resolution))
+    def rst_bng_tessellate(tileExpr: Column, resolution: Int, mode: String): Column =
+        rst_bng_tessellate(tileExpr, lit(resolution), mode)
+    def rst_bng_tessellate(tileExpr: Column, resolution: String): Column = rst_bng_tessellate(tileExpr, lit(resolution))
+    def rst_bng_tessellate(tileExpr: Column, resolution: String, mode: String): Column =
+        rst_bng_tessellate(tileExpr, lit(resolution), mode)
     def rst_maketiles(tileExpr: Column, tileWidth: Int, tileHeight: Int): Column =
         rst_maketiles(tileExpr, lit(tileWidth), lit(tileHeight))
     def rst_retile(tileExpr: Column, tileWidth: Int, tileHeight: Int): Column =
@@ -355,6 +447,17 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
     def rst_quadbin_rastertogridmax(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridmax(tileExpr, lit(resolution))
     def rst_quadbin_rastertogridmin(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridmin(tileExpr, lit(resolution))
     def rst_quadbin_rastertogridmedian(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridmedian(tileExpr, lit(resolution))
+    // BNG reducer resolution accepts an Int index (±1..±6) or a String key ("1km", "100m", ...).
+    def rst_bng_rastertogridavg(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridavg(tileExpr, lit(resolution))
+    def rst_bng_rastertogridcount(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridcount(tileExpr, lit(resolution))
+    def rst_bng_rastertogridmax(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridmax(tileExpr, lit(resolution))
+    def rst_bng_rastertogridmin(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridmin(tileExpr, lit(resolution))
+    def rst_bng_rastertogridmedian(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridmedian(tileExpr, lit(resolution))
+    def rst_bng_rastertogridavg(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridavg(tileExpr, lit(resolution))
+    def rst_bng_rastertogridcount(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridcount(tileExpr, lit(resolution))
+    def rst_bng_rastertogridmax(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridmax(tileExpr, lit(resolution))
+    def rst_bng_rastertogridmin(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridmin(tileExpr, lit(resolution))
+    def rst_bng_rastertogridmedian(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridmedian(tileExpr, lit(resolution))
     def rst_asformat(tileExpr: Column, newFormat: String): Column = rst_asformat(tileExpr, lit(newFormat))
     def rst_clip(tileExpr: Column, clip: Column, cutlineAllTouched: Boolean): Column =
         rst_clip(tileExpr, clip, lit(cutlineAllTouched))

@@ -64,6 +64,8 @@ runs:
         # dirs via test/conftest.py collect_ignore). Every light test dir must be
         # listed: pyrx, ds, pyvx, pygx (light GridX), pmtiles_light (light
         # pmtiles_agg), stac (light STAC client, [stac] extra),
-        # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra).
+        # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra),
+        # bench (bench-harness spec/compare/fingerprint/runner unit tests -- guards
+        # the light bench FnSpec registry + cross-tier count invariants).
         # See test/conftest.py for the maintained condition.
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample -m "not integration" -v
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench -m "not integration" -v

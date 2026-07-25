@@ -39,6 +39,14 @@ CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
      directly.
 Light test dirs so far: pyrx, pyvx, pygx, pmtiles_light, stac, earthdata, vizx,
 sample, plus bench + ds.
+
+``bench`` is a light dir (its modules import rasterio/shapely/h3/quadbin via the
+bench harness) and satisfies all three conditions: (1) it is in ``_LIGHT_TEST_DIRS``
+below; (2) it RUNS in the light phase -- listed in the pyrx_build action pytest dir
+list; (3) it is skipped in the heavy phase -- present in the heavy action's
+``LIGHT_IGNORES`` (--ignore=test/bench). Its unit tests guard the light bench FnSpec
+registry and the cross-tier coverage/count invariants (previously CI ran none of
+test/bench, so bench-spec drift went uncaught).
 """
 
 import importlib.util

@@ -83,6 +83,7 @@ def _registrar_groups() -> List[_register.Group]:
         ("gbx_rst_maketiles", _RstMakeTilesUDTF),
         ("gbx_rst_h3_tessellate", _RstH3TessellateUDTF),
         ("gbx_rst_quadbin_tessellate", _RstQuadbinTessellateUDTF),
+        ("gbx_rst_bng_tessellate", _RstBngTessellateUDTF),
         ("gbx_rst_xyzpyramid", _RstXyzPyramidUDTF),
     ]
     for name, cls in udtfs:
@@ -1973,6 +1974,78 @@ class _RstQuadbinTessellateUDTF:
                 if raster is None:  # defensive: never emit a null-raster tile row
                     continue
                 yield _serde.build_tile(raster, "GTiff", cellid)
+
+
+@udtf(returnType=_serde.TILE_SCHEMA)
+class _RstBngTessellateUDTF:
+    """Streaming UDTF: yield one clipped tile struct per overlapping BNG cell.
+
+    BNG cell ids are Strings (e.g. ``"TQ38SW"``). The tile struct ``cellid``
+    field is LongType, so the String id is parsed back to its Long digit-id via
+    ``pygx._bng.parse`` (round-trips cleanly for the ±1..±6 resolutions the
+    iterator emits); the authoritative String form is preserved in the tile's
+    ``RASTERX_CELL_ID`` metadata, matching the heavy ``RST_BNG_Tessellate`` tier.
+    """
+
+    def eval(self, tile, resolution, mode=None):
+        if tile is None or tile["raster"] is None or resolution is None:
+            return
+        effective_mode = mode if mode is not None else "covering"
+        if effective_mode not in {"covering", "centroid"}:
+            raise ValueError(
+                f"rst_bng_tessellate: mode must be one of covering, centroid; "
+                f"got '{effective_mode}'"
+            )
+        from databricks.labs.gbx.pygx import _bng
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with _serde.open_tile(bytes(tile["raster"])) as ds:
+            for cellid_str, raster in tessellate_core.iter_tessellate_bng(
+                ds, resolution, mode=effective_mode
+            ):
+                if raster is None:  # defensive: never emit a null-raster tile row
+                    continue
+                out = _serde.build_tile(raster, "GTiff", _bng.parse(cellid_str))
+                out["metadata"]["RASTERX_CELL_ID"] = cellid_str
+                yield out
+
+
+def rst_bng_tessellate(
+    tile: ColLike, resolution: ColLike, mode: ColLike = "covering"
+) -> None:
+    """Tessellate a raster into BNG cells (mirrors ``gbx_rst_bng_tessellate``).
+
+    The raster is reprojected to EPSG:27700 (British National Grid) first
+    (skipped if already 27700). For every BNG cell overlapping the raster's
+    extent at *resolution*, the raster is clipped to that cell's square and one
+    tile is produced, carrying the BNG **String** cell id (e.g. ``"TQ38SW"``) in
+    the tile's ``RASTERX_CELL_ID`` metadata. Cell enumeration is
+    boundary-complete: the bbox is buffered by the cell half-diagonal before
+    polyfill so cells whose square overlaps the raster but whose centroid sits
+    just outside the bbox are still emitted; out-of-GB cells are dropped.
+
+    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
+
+        SELECT t.* FROM <df>, LATERAL gbx_rst_bng_tessellate(tile, resolution) t
+        SELECT t.* FROM <df>, LATERAL gbx_rst_bng_tessellate(tile, resolution, 'centroid') t
+
+    Each output row is a tile struct; one row per overlapping BNG cell.
+
+    Args:
+        tile:       Tile struct column.
+        resolution: BNG resolution — an Int index (``±1..±6``: 1=100km .. 6=1m,
+                    negatives=quadrants) or a resolutionMap string key
+                    (e.g. ``"1km"``, ``"100m"``).
+        mode:       Tessellation mode: ``"covering"`` (default) — each BNG cell
+                    overlapping the raster extent is clipped to its square;
+                    ``"centroid"`` — each valid pixel is assigned to exactly one
+                    cell by its centroid (strict partition, no overlap).
+    """
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_tessellate(tile, resolution) t"
+    )
 
 
 def rst_quadbin_tessellate(

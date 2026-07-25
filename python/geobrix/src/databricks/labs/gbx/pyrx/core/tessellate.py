@@ -12,6 +12,7 @@ then return NULL), matching the heavyweight tier.
 """
 
 from collections import defaultdict
+from contextlib import contextmanager
 
 import h3
 import numpy as np
@@ -20,13 +21,14 @@ from rasterio.io import MemoryFile
 from rasterio.warp import transform_bounds, transform_geom
 from shapely.geometry import Polygon, box, mapping, shape
 
-from databricks.labs.gbx.pygx import _quadbin
-from databricks.labs.gbx.pyrx.core import edit
+from databricks.labs.gbx.pygx import _bng, _quadbin
+from databricks.labs.gbx.pyrx.core import edit, warp
 
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = _quadbin._MAX_POLYFILL_RES
 
 _WGS84 = "EPSG:4326"
+_BNG_EPSG = 27700
 _VALID_MODES = {"covering", "centroid"}
 _DEFAULT_NODATA = -9999.0
 
@@ -356,3 +358,159 @@ def iter_tessellate_quadbin(ds, resolution: int, mode: str = "covering"):
         if clipped is None:
             continue
         yield (_quadbin_uint64_to_signed_int64(cell), clipped)
+
+
+# ---------------------------------------------------------------------------
+# BNG tessellate
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _as_bng_dataset(ds):
+    """Yield ``ds`` (or a 27700-warped copy) as an open EPSG:27700 dataset.
+
+    BNG has no lon/lat input path — the raster must be in EPSG:27700 before cell
+    geometry (``pygx._bng.cell_id_to_geometry``) and the geometric keep-test can
+    be applied.  When ``ds`` is already 27700 it is yielded unchanged; otherwise
+    it is reprojected (nearest) via :func:`warp.reproject_to_srid` and the warped
+    dataset is yielded and cleaned up.  Mirrors heavy ``warpToBng``.
+    """
+    src_epsg = ds.crs.to_epsg() if ds.crs else None
+    if src_epsg == _BNG_EPSG:
+        yield ds
+        return
+    warped_bytes = warp.reproject_to_srid(ds, _BNG_EPSG, resampling="nearest")
+    with MemoryFile(warped_bytes) as mf:
+        with mf.open() as work_ds:
+            yield work_ds
+
+
+def _centroid_chips_bng(ds, resolution: int):
+    """Centroid-partition mode for BNG: each valid pixel → exactly one cell.
+
+    The raster is warped to EPSG:27700 first; pixel centroids are then read
+    directly as eastings/northings (no per-pixel reprojection) and mapped via
+    ``pygx._bng.point_to_cell_id``.  Out-of-GB pixels are dropped via
+    ``pygx._bng.is_valid`` (mirrors heavy ``tessellateBngCentroidIter``).  Each
+    cell's chip is the full-tile raster with all out-of-cell pixels set to
+    nodata, guaranteeing a strict partition.
+
+    Yields ``(cellid_str, gtiff_bytes)`` pairs — ``cellid_str`` is a BNG String
+    id via ``pygx._bng.format``.
+    """
+    with _as_bng_dataset(ds) as work_ds:
+        # Pixel-center coords are already in EPSG:27700 (eastings, northings).
+        rows, cols = np.mgrid[0 : work_ds.height, 0 : work_ds.width]
+        eastings, northings = work_ds.xy(rows.ravel(), cols.ravel())
+        eastings = np.asarray(eastings, dtype="float64")
+        northings = np.asarray(northings, dtype="float64")
+
+        data = work_ds.read()  # (bands, height, width)
+        nodata = work_ds.nodata
+
+        if nodata is not None:
+            valid_flat = ~np.all(data.reshape(work_ds.count, -1).T == nodata, axis=1)
+        else:
+            valid_flat = np.ones(work_ds.height * work_ds.width, dtype=bool)
+
+        # Map each valid pixel → BNG Long cell id; drop out-of-GB via is_valid.
+        cell_pixels = defaultdict(list)  # cell_int → [flat_idx, ...]
+        for flat_idx in np.where(valid_flat)[0]:
+            e = float(eastings[flat_idx])
+            n = float(northings[flat_idx])
+            cell_int = _bng.point_to_cell_id(e, n, resolution)
+            if not _bng.is_valid(cell_int):
+                continue
+            cell_pixels[cell_int].append(int(flat_idx))
+
+        profile = work_ds.profile.copy()
+        profile.update(driver="GTiff")
+        if nodata is None:
+            nd = _DEFAULT_NODATA
+            profile["nodata"] = nd
+        else:
+            nd = nodata
+
+        for cell_int, flat_indices in cell_pixels.items():
+            chip = np.full_like(data, nd)
+            row_indices, col_indices = np.unravel_index(
+                flat_indices, (work_ds.height, work_ds.width)
+            )
+            chip[:, row_indices, col_indices] = data[:, row_indices, col_indices]
+
+            with MemoryFile() as chip_mf:
+                with chip_mf.open(**profile) as dst:
+                    dst.write(chip)
+                raster_bytes = chip_mf.read()
+
+            yield (_bng.format(cell_int), raster_bytes)
+
+
+def iter_tessellate_bng(ds, resolution, mode: str = "covering"):
+    """Streaming BNG tessellate: yield ``(cellid_str, gtiff_bytes)`` per cell.
+
+    The raster is reprojected to EPSG:27700 first (skipped if already 27700).
+    Cells are enumerated ONLY via ``pygx._bng.polyfill`` over the (buffered)
+    raster bbox polygon and geometrised via ``pygx._bng.cell_id_to_geometry`` —
+    the vector ``bng_tessellate`` codepath is never touched.  Out-of-GB cells are
+    dropped via ``pygx._bng.is_valid``.  Mirrors heavy ``tessellateBngIter``.
+
+    covering enumeration is BOUNDARY-COMPLETE: ``BNG.polyfill`` is a centroid
+    flood-fill, so a cell whose square overlaps the raster but whose centroid
+    sits just outside the bbox would be missed.  The bbox is therefore BUFFERED
+    by the cell half-diagonal (``pygx._bng.get_buffer_radius``) before polyfill to
+    pull those fringe centroids in; the ``intersects`` keep-test against the
+    UNBUFFERED bbox then filters any buffered-but-non-overlapping cell.
+
+    Args:
+        ds:         Open rasterio ``DatasetReader`` (any CRS; warped to 27700).
+        resolution: BNG resolution — an Int index (±1..±6) or a resolutionMap
+                    string key (e.g. ``"1km"``, ``"100m"``); resolved via
+                    ``pygx._bng.get_resolution``.
+        mode:       ``"covering"`` (default) — clip each overlapping cell square;
+                    ``"centroid"`` — strict pixel partition: each valid pixel
+                    assigned to exactly one cell by its centroid.
+
+    Yields:
+        ``(cellid, raster_bytes)`` tuples, one per BNG cell with valid pixels.
+        ``cellid`` is a BNG String id (e.g. ``"TQ38"``).
+    """
+    if mode not in _VALID_MODES:
+        raise ValueError(
+            f"rst_bng_tessellate: mode must be one of covering, centroid; "
+            f"got '{mode}'"
+        )
+    # Resolve the BNG resolution (Int index ±1..±6 or resolutionMap string key).
+    resolution = _bng.get_resolution(resolution)
+
+    if mode == "centroid":
+        yield from _centroid_chips_bng(ds, resolution)
+        return
+
+    with _as_bng_dataset(ds) as work_ds:
+        # Raster bbox in EPSG:27700 (same CRS as BNG.cell_id_to_geometry) — the
+        # geometric keep-test lives in 27700; NO WGS84 hop.
+        west, south, east, north = work_ds.bounds
+        bbox_poly = box(west, south, east, north)
+
+        # Buffer the bbox by the cell half-diagonal before polyfill so boundary
+        # cells (centroid just outside the bbox) are not dropped by the centroid
+        # flood-fill.  The intersects keep-test below runs on the UNBUFFERED bbox.
+        buf_radius = _bng.get_buffer_radius(resolution)
+        covered = _bng.polyfill(bbox_poly.buffer(buf_radius), resolution)
+
+        for cell in covered:
+            if not _bng.is_valid(cell):
+                continue
+            cell_poly = _bng.cell_id_to_geometry(cell)  # 27700 shapely polygon
+            # Standard covering keep-test: cell square must overlap the raster
+            # bbox (unbuffered).  Filters buffered-but-non-overlapping fringe.
+            if not cell_poly.intersects(bbox_poly):
+                continue
+            try:
+                clipped = edit.clip_to_geom(work_ds, cell_poly, all_touched=True)
+            except ValueError:
+                continue
+            if clipped is None:
+                continue
+            yield (_bng.format(cell), clipped)

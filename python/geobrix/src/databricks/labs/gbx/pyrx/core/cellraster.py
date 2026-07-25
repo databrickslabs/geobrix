@@ -10,7 +10,10 @@ Grid dispatch: ``compute_gridspec`` / ``cell_bbox`` / ``cells_to_raster`` take a
 (``_ADAPTERS``). The H3 adapter binds the original ``h3.*`` calls verbatim, so
 the H3 path is behaviorally identical to the pre-adapter code (its existing
 tests are the regression gate). The quadbin adapter binds ``pygx._quadbin``
-exclusively -- quadbin cell math has a single source of truth.
+exclusively -- quadbin cell math has a single source of truth. The BNG adapter
+binds ``pygx._bng`` exclusively and is EPSG:27700-NATIVE (``src_crs`` 27700, no
+WGS84 hop): its cell ids are STRING on the public surface (``parse``/``format``
+round-trip a Long digit-id internally).
 """
 
 import math
@@ -148,14 +151,71 @@ class _QuadbinAdapter:
         return edge_deg * 111320.0 * max(math.cos(math.radians(midlat)), 1e-6)
 
 
-_ADAPTERS = {"h3": _H3Adapter(), "quadbin": _QuadbinAdapter()}
+class _BngAdapter:
+    """Binds ``pygx._bng`` -- the single source of truth for BNG cell math.
+
+    BNG is EPSG:27700-NATIVE: unlike the H3/quadbin adapters (which sample in
+    WGS84 lon/lat and let ``compute_gridspec``/``cells_to_raster`` reproject to
+    the output srid), ``src_crs`` here is 27700. ``cell_center``/``cell_boundary``
+    return 27700 eastings/northings directly from ``pygx._bng.cell_id_to_geometry``,
+    so with a 27700 output srid ``_reproject`` is an identity no-op -- there is NO
+    WGS84 hop anywhere in the BNG path. Public BNG ids are STRING; the internal
+    key space is the Long digit-id (``parse``/``format`` round-trip).
+    """
+
+    src_crs = 27700
+
+    def __init__(self):
+        from databricks.labs.gbx.pygx import _bng as _b
+
+        self._b = _b
+
+    def to_key(self, cellid):
+        # Public BNG ids are STRING; parse to the internal Long digit-id. Tolerate
+        # an already-parsed Long (idempotent for internal callers).
+        if isinstance(cellid, str):
+            return self._b.parse(cellid)
+        return int(cellid)
+
+    def resolution(self, keys) -> int:
+        keys = list(keys)
+        res = self._b.get_resolution_from_digits(self._b.cell_digits(keys[0]))
+        for k in keys[1:]:
+            if self._b.get_resolution_from_digits(self._b.cell_digits(k)) != res:
+                raise ValueError("BNG cell set has mixed resolutions")
+        return res
+
+    def k_ring(self, key, k):
+        return self._b.k_ring(key, k)
+
+    def cell_center(self, key):
+        # 27700 eastings/northings directly (NO WGS84 reproject).
+        c = self._b.cell_id_to_geometry(key).centroid
+        return c.x, c.y
+
+    def cell_boundary(self, key):
+        # 27700 boundary ring (NO WGS84 reproject).
+        return list(self._b.cell_id_to_geometry(key).exterior.coords)
+
+    def pixel_key(self, x, y, res):
+        # x, y are 27700 eastings/northings (src_crs == output srid == 27700).
+        return self._b.point_to_cell_id(float(x), float(y), res)
+
+    def default_pixel_size(self, keys, res, srid, bymin, bymax):
+        # BNG has a metric edge (metres); 27700 is metric, so the metre edge IS
+        # the pixel size directly -- NO degree conversion (the whole BNG path is
+        # 27700-native). ``srid`` is forced 27700 by the UDF, so no 4326 branch.
+        return float(self._b.get_edge_size(res))
+
+
+_ADAPTERS = {"h3": _H3Adapter(), "quadbin": _QuadbinAdapter(), "bng": _BngAdapter()}
 
 
 def _adapter(grid):
     try:
         return _ADAPTERS[grid]
     except KeyError:
-        raise ValueError(f"unknown grid {grid!r}; expected 'h3' or 'quadbin'")
+        raise ValueError(f"unknown grid {grid!r}; expected 'h3', 'quadbin' or 'bng'")
 
 
 def cell_bbox(cellid, srid=4326, mode="centroids", grid="h3"):

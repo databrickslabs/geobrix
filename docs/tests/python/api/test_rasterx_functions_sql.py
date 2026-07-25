@@ -687,15 +687,15 @@ def test_h3_cell_bbox_sql_example(spark):
 # BNG / quadbin raster-grid functions (9 functions)
 #
 # BNG examples require a UK raster (BNG warps any CRS to EPSG:27700; a NYC
-# raster over Britain would bin no pixels). The London Sentinel-2 raster
-# (EPSG:32630, over the TQ grid square) is used. Quadbin/tessellate examples
-# warp to EPSG:4326 (web-mercator quadtree) and work on lon/lat overlap.
+# raster over Britain would bin no pixels). The London SRTM elevation raster
+# (srtm_n51w001.tif, EPSG:4326, over the TQ grid square) is used. Quadbin/tessellate
+# examples warp to EPSG:4326 (web-mercator quadtree) and work on lon/lat overlap.
 # ============================================================================
 
 
 @pytest.fixture(scope="module")
 def london_rasters_view(spark):
-    """Temp view `london_rasters` over the London Sentinel-2 raster (EPSG:32630).
+    """Temp view `london_rasters` over the London SRTM elevation raster (srtm_n51w001.tif, EPSG:4326).
 
     Used by BNG examples (warp to EPSG:27700) and quadbin examples (warp to
     EPSG:4326). Skips the dependent test when the sample raster is absent.

@@ -1380,8 +1380,10 @@ rst_quadbin_rastertogridmedian_sql_example_output = """
 # BNG works natively in EPSG:27700; a raster in any CRS is warped to 27700
 # before pixels are binned. Cell ids are STRINGS (e.g. "TQ38SW"), not Longs.
 # Resolution is an integer index (1=100km, 2=10km, 3=1km, 4=100m, 5=10m, 6=1m)
-# or a resolution string ("1km", "100m", ...). Examples use the London
-# Sentinel-2 raster, which overlaps the TQ grid square over central London.
+# or a resolution string ("1km", "100m", ...). Most examples use the resolution
+# string "1km"; rastertogridcount uses the integer form (2 == 10km) to show the
+# integer binding path. Examples use the London SRTM elevation raster
+# (srtm_n51w001.tif, EPSG:4326), which overlaps the TQ grid square over central London.
 # ============================================================================
 
 

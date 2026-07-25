@@ -482,9 +482,18 @@ def test_summarize_compare_exact_label_is_bare():
     assert "exact (" not in row
 
 
-def test_pyrx_implemented_returns_all_107():
+def test_pyrx_implemented_guards_against_binding_regression():
+    # pyrx_implemented() parses `def rst_*` out of functions.py -- the guard is
+    # "no registered function lost its pyrx binding", NOT a brittle exact count.
+    # Assert the meaningful invariant: every registered rst_ function has a pyrx
+    # binding (so pyrx_implemented ⊇ the registered set), plus membership spot-checks.
+    from databricks.labs.gbx.bench import spec
+
     impl = c.pyrx_implemented()
-    assert len(impl) == 107
+    registered = spec.registered_rst()
+    missing = registered - impl
+    assert not missing, f"registered fns missing a pyrx binding: {sorted(missing)}"
+    assert len(impl) >= len(registered)
     assert "rst_slope" in impl
     assert "rst_merge" in impl
 
@@ -499,10 +508,16 @@ def test_coverage_block_reports_coverage_parity_gap_and_uncovered():
         _cmp("rst_clip", "pure-core", 20.0, 10.0, 2.0, "na", ""),
     ]
     md = c.coverage_block(cells)
-    # Coverage: distinct fn count across all cells = 5, out of 108
+    # Coverage: distinct fn count across all cells = 5, out of the registered rst_
+    # total. Derive the denominator from the SAME source coverage_block uses
+    # (spec.registered_rst) so the "N / <total>" string matches whatever the code
+    # emits -- no magic literal.
+    from databricks.labs.gbx.bench import spec
+
+    total = len(spec.registered_rst())
     assert "Benchmark coverage:" in md
-    assert "/ 108" in md
-    assert "5 / 108" in md
+    assert f"/ {total}" in md
+    assert f"5 / {total}" in md
     # Parity counts among non-na cells (4 compared: exact 2, within_tol 1, divergent 1)
     assert "exact" in md
     assert "within_tol" in md
@@ -524,8 +539,11 @@ def test_summarize_compare_includes_coverage_block():
         _cmp("rst_clip", "pure-core", 20.0, 10.0, 2.0, "na", ""),
     ]
     md = c.summarize_compare(cells, [], [], [])
+    from databricks.labs.gbx.bench import spec
+
+    total = len(spec.registered_rst())
     assert "Coverage & parity" in md
-    assert "/ 108" in md
+    assert f"/ {total}" in md
     assert "Functional parity gap:** 0" in md
     assert "No comparison cell in this run:" in md
     # ordering: Insights before Coverage before the per-mode tables

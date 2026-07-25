@@ -94,7 +94,13 @@ def test_select_defaults_to_core():
 def test_full_has_only_registered_names():
     reg = s.registered_rst()
     assert {f.name for f in s.select(set="full")} <= reg
-    assert len(reg) == 108  # canonical registered rst_ set
+    # The registered rst_ set is the canonical registered_functions.txt list. Guard
+    # the real invariant (every bench FnSpec is a registered function; the counts
+    # agree) without a brittle literal that trips whenever a function is legitimately
+    # added. registered_rst() is the source of truth; the bench REGISTRY must be a
+    # subset of it AND cover every one of them (bench parity == full registration).
+    assert reg  # non-empty
+    assert {f.name for f in s.select(set="full")} == reg
 
 
 def test_every_full_spec_is_wellformed():
@@ -446,19 +452,14 @@ def test_complex_arg_band_index_specs_require_two_bands():
         assert s.REGISTRY[name].min_bands == 2, name
 
 
-def test_full_set_running_tally():
-    # 19 representative + 15 Task2 + 7 Task3 + 6 Task4 + 13 Task5 + 10 Task6
-    # + 6 bucket-C group C1/C2 (4 readers/overviews + 2 subdataset)
-    # + 3 bucket-C group C3 (multi-tile: frombands/combineavg/merge)
-    # + 5 bucket-C group C4 (tiling: maketiles/retile/tooverlappingtiles/
-    #   separatebands/xyzpyramid -> raster_collection fingerprint)
-    # + 11 bucket-B group B-grid (DGGS: h3_tessellate + 10 {h3,quadbin}
-    #   rastertogrid{avg,count,max,median,min} -> dggs_grid fingerprint)
-    # + 2 bucket-B group B-vec (contour, polygonize -> vector fingerprint)
-    # + 3 bucket-D geometry-in (rasterize/gridfrompoints/dtmfromgeoms)  = 100
-    # + 7 bucket-A aggregators (the 7 *_agg)                            = 107
-    # + 1 H3 rasterize aggregator (rst_h3_rasterize_agg, h3_aggregate)  = 108
-    assert len(s.select(set="full")) == 108
+def test_full_set_covers_every_registered_function():
+    # The bench "full" set must cover EVERY registered rst_ function (no heavy-only
+    # fn left unbenched, no bench fn that isn't registered). Derive the expectation
+    # from registered_rst() so the test self-adjusts when a function is legitimately
+    # added -- it fails only when bench coverage and registration actually diverge,
+    # not on a magic count. (The bench REGISTRY is the light-side mirror of the
+    # canonical registered_functions.txt list.)
+    assert {f.name for f in s.select(set="full")} == s.registered_rst()
 
 
 # --- bucket C, group C1/C2: readers + buildoverviews + subdataset fns (6) ----
@@ -1041,10 +1042,14 @@ def test_bucket_a_derivedband_func_name_present():
     assert fs.args["func_name"] == "mean_bands"
 
 
-def test_full_set_count_is_one_hundred_eight():
-    # 100 (P4.2) + 7 bucket-A aggregators + 1 H3 rasterize aggregator
-    # (rst_h3_rasterize_agg) -> 108 == the canonical registered rst_ set
-    assert len(s.select(set="full")) == 108
+def test_full_set_size_equals_registered_count():
+    # The "full" bench set size == the registered rst_ count (every registered fn
+    # is benched, and nothing extra). Derived from registered_rst() so a legitimate
+    # function addition self-adjusts; only a real coverage/registration divergence
+    # fails this. Every entry is unique (REGISTRY is keyed by name).
+    full = s.select(set="full")
+    assert len({f.name for f in full}) == len(full)  # no dupes
+    assert len(full) == len(s.registered_rst())
 
 
 def test_every_fnspec_declares_existing_sources():

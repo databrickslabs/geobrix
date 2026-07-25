@@ -28,7 +28,7 @@ Rasterize landscape PNG (for slides / 16:9 decks):
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-# --- Data: 108 functions, organized by category --------------------------------
+# --- Data: 117 functions, organized by category --------------------------------
 
 @dataclass
 class Section:
@@ -87,6 +87,7 @@ CARDS_LEFT = [
             "rst_frombands_agg", "rst_rasterize_agg",
             "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg",
             "rst_h3_rasterize_agg",
+            "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg",
         ],
     ),
     Card(
@@ -115,6 +116,7 @@ CARDS_RIGHT = [
         fns=[
             "rst_maketiles", "rst_retile", "rst_tooverlappingtiles",
             "rst_separatebands", "rst_h3_tessellate",
+            "rst_quadbin_tessellate", "rst_bng_tessellate",
         ],
     ),
     Card(
@@ -173,6 +175,16 @@ CARDS_RIGHT = [
             "rst_quadbin_rastertogridavg", "rst_quadbin_rastertogridcount",
             "rst_quadbin_rastertogridmax", "rst_quadbin_rastertogridmin",
             "rst_quadbin_rastertogridmedian",
+        ],
+    ),
+    Card(
+        title="BNG Grid",
+        subtitle="Aggregate raster values onto British National Grid cells",
+        color="#B0357A", tint="#F8E1EF",
+        fns=[
+            "rst_bng_rastertogridavg", "rst_bng_rastertogridcount",
+            "rst_bng_rastertogridmax", "rst_bng_rastertogridmin",
+            "rst_bng_rastertogridmedian",
         ],
     ),
     Card(
@@ -374,7 +386,7 @@ def render():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'108 SQL functions for raster data on Spark &#8212; registered as '
+        f'117 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -483,7 +495,7 @@ def render_landscape():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'108 SQL functions for raster data on Spark &#8212; registered as '
+        f'117 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '

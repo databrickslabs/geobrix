@@ -815,10 +815,10 @@ The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to
 
 ### rst_quadbin_rasterize_agg
 
-<Tier heavy/> <Impl groupedAgg/>
+<Tier both/> <Impl groupedAgg/>
 
-:::note Heavyweight tier only
-Quadbin rasterize aggregation is currently **heavy-tier only**. Lightweight support is planned for a future release.
+:::note Lightweight tier (pyrx)
+The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio` — it burns each quadbin cell's geometry/value into the output band via `rasterio.features.rasterize`, matching the heavyweight cell set and burn values exactly.
 :::
 
 :::warning NoData sentinel is -9999.0
@@ -827,7 +827,7 @@ Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-r
 
 Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is interpreted as EPSG:4326 (lon/lat); resolution is the quadbin zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
-Heavyweight `gbx_rst_quadbin_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
+`gbx_rst_quadbin_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
 
 **Signature:** `rst_quadbin_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, srid: Column): Column`
 
@@ -839,10 +839,10 @@ Heavyweight `gbx_rst_quadbin_rasterize_agg` returns a tile **`STRUCT<cellid, ras
 
 ### rst_bng_rasterize_agg
 
-<Tier heavy/> <Impl groupedAgg/>
+<Tier both/> <Impl groupedAgg/>
 
-:::note Heavyweight tier only
-BNG rasterize aggregation is currently **heavy-tier only**. Lightweight support is planned for a future release (pending `pygx` BNG raster integration).
+:::note Lightweight tier (pyrx)
+The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. It auto-warps the input to **EPSG:27700** via `rasterio.warp` before rasterizing, parses the **STRING** BNG cell IDs, and burns each cell's geometry/value into the output band — matching the heavyweight cell set and burn values exactly.
 :::
 
 :::warning NoData sentinel is -9999.0
@@ -851,7 +851,7 @@ Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-r
 
 Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is automatically reprojected to **EPSG:27700** (British National Grid) before rasterization. BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
-Heavyweight `gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
+`gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
 
 **Signature:** `rst_bng_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, srid: Column): Column`
 
@@ -1012,10 +1012,10 @@ Powered by **rasterio** + **h3**. Clips the raster to each overlapping H3 cell a
 
 ### rst_quadbin_tessellate
 
-<Tier heavy/> <Impl udtf/>
+<Tier both/> <Impl udtf/>
 
-:::note Heavyweight tier only
-Tessellate to CARTO quadbin v0 cells is currently **heavy-tier only**. Lightweight support is planned for a future release.
+:::note Lightweight tier (pyrx)
+The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio`. It enumerates the overlapping quadbin cells for the raster bbox and clips one tile per cell, matching the heavyweight cell set and clip windows.
 :::
 
 Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. The input raster must be in EPSG:4326 (lon/lat); reproject upstream with `rst_transform` if your source CRS differs. Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
@@ -1028,10 +1028,10 @@ Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, 
 
 ### rst_bng_tessellate
 
-<Tier heavy/> <Impl udtf/>
+<Tier both/> <Impl udtf/>
 
-:::note Heavyweight tier only
-Tessellate to BNG cells is currently **heavy-tier only**. Lightweight support is planned for a future release (pending `pygx` BNG raster integration).
+:::note Lightweight tier (pyrx)
+The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. It auto-warps the input to **EPSG:27700** via `rasterio.warp`, enumerates the overlapping BNG cells, and clips one tile per cell — rendering **STRING** BNG cell IDs at the row boundary and matching the heavyweight cell set and clip windows.
 :::
 
 Tessellate a raster to British National Grid (BNG) cells — one row per overlapping cell, each clipped to that cell's extent. The raster is automatically reprojected to **EPSG:27700** (British National Grid) before tessellation, so any projected or geographic input is handled transparently. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys from `BNG.resolutionMap` (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING** (e.g. `"TQ28"`, `"SU3412"`).
@@ -1325,8 +1325,8 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 Aggregate raster values to British National Grid (BNG) cells (5 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
 
-:::note Heavy-tier only
-The BNG raster-grid functions are currently heavy-tier only. Lightweight support is planned for a future release (pending `pygx` BNG raster integration).
+:::note Lightweight tier (pyrx)
+The BNG raster-grid reducers are available in both tiers. The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`: it auto-warps the input to **EPSG:27700** via `rasterio.warp`, samples pixels per cell, and renders **STRING** BNG cell IDs — matching the heavyweight cell set and measures exactly.
 :::
 
 :::warning NoData and NULL
@@ -1335,7 +1335,7 @@ A cell that covers only NoData pixels returns **`NULL`** for the measure (not `0
 
 ### rst_bng_rastertogridavg
 
-<Tier heavy/> <Impl udtf/>
+<Tier both/> <Impl udtf/>
 
 Mean pixel value per BNG cell. The raster is reprojected to EPSG:27700 internally before sampling.
 
@@ -1347,7 +1347,7 @@ Mean pixel value per BNG cell. The raster is reprojected to EPSG:27700 internall
 
 ### rst_bng_rastertogridcount
 
-<Tier heavy/> <Impl udtf/>
+<Tier both/> <Impl udtf/>
 
 Valid (non-NoData) pixel count per BNG cell.
 
@@ -1359,7 +1359,7 @@ Valid (non-NoData) pixel count per BNG cell.
 
 ### rst_bng_rastertogridmax
 
-<Tier heavy/> <Impl udtf/>
+<Tier both/> <Impl udtf/>
 
 Maximum pixel value per BNG cell.
 
@@ -1371,7 +1371,7 @@ Maximum pixel value per BNG cell.
 
 ### rst_bng_rastertogridmin
 
-<Tier heavy/> <Impl udtf/>
+<Tier both/> <Impl udtf/>
 
 Minimum pixel value per BNG cell.
 
@@ -1383,7 +1383,7 @@ Minimum pixel value per BNG cell.
 
 ### rst_bng_rastertogridmedian
 
-<Tier heavy/> <Impl udtf/>
+<Tier both/> <Impl udtf/>
 
 Median pixel value per BNG cell.
 

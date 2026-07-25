@@ -195,9 +195,10 @@ def test_build_bench_notebook_one_cell_per_section_in_order():
     assert (
         'show_section("heavyweight", "spark-path", run_heavy("spark-path"))' in secs[3]
     )
-    # 2 install cells + setup + 4 sections + epilogue + exit (exit is its own cell
-    # so the compare summary render isn't truncated -- see build_bench_notebook)
-    assert len(nb["cells"]) == 9
+    # 3 install cells (uninstall + install + restartPython) + setup + 4 sections +
+    # epilogue + exit (exit is its own cell so the compare summary render isn't
+    # truncated -- see build_bench_notebook)
+    assert len(nb["cells"]) == 10
     src = "\n".join("".join(c["source"]) for c in nb["cells"])
     assert "def show_section(" in src
     assert "dbutils.notebook.exit" in src
@@ -269,13 +270,11 @@ def test_build_bench_notebook_fix_errors_default_and_override():
 
 
 def test_build_bench_notebook_setup_cell_collapsed():
-    # Cmd 3 (cells[2], the big setup cell) is collapsed by default; the install/restart cells
-    # and the section cells are not.
+    # cells[3] (the big setup cell) is collapsed by default; the 3 install/restart cells
+    # (uninstall + install + restartPython) and the section cells are not.
     nb = cl.build_bench_notebook(_cfg())
-    setup = nb["cells"][2]
-    assert "_PREAMBLE" not in "".join(
-        setup["source"]
-    )  # it's the assembled setup, sanity
+    setup = nb["cells"][3]
+    assert "import json" in "".join(setup["source"])  # it's the assembled setup, sanity
     assert setup["metadata"].get("collapsed") is True
     assert setup["metadata"].get("jupyter", {}).get("source_hidden") is True
     # install cell (cells[0]) stays expanded

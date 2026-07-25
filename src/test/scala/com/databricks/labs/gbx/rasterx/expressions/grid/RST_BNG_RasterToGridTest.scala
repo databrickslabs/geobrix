@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.rasterx.expressions.grid
 
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import org.gdal.gdal.gdal
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operator.GDALWarp
+import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
@@ -75,6 +76,48 @@ class RST_BNG_RasterToGridTest extends AnyFunSuite with BeforeAndAfterAll {
         val cells = out.flatten
         assert(cells.nonEmpty, "warped EPSG:4326 raster must produce at least one BNG cell")
         assert(cells.forall(_._1.matches("^[A-Z]{2}\\d*$")), "all cell ids must be valid BNG string form")
+    }
+
+    /** Reproject `src` to EPSG:27700 with the SAME command the internal auto-warp uses
+      * (`gdalwarp -t_srs EPSG:27700 -r near`). Returns a pre-warped Dataset the caller must
+      * release. Written to a distinct /vsimem path so it never collides with the internal
+      * warp output. */
+    private def explicitWarpToBNG(src: Dataset): Dataset = {
+        val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
+        val driver = src.GetDriver()
+        val ext = GDAL.getExtension(driver.getShortName)
+        val outPath = s"/vsimem/explicit_bng_$uuid.$ext"
+        val (result, _) = GDALWarp.executeWarp(
+          outPath,
+          Array(src),
+          Map.empty[String, String],
+          command = "gdalwarp -t_srs EPSG:27700 -r near"
+        )
+        result
+    }
+
+    // Cross-cutting correctness (spec §5): the internal auto-warp (4326 -> 27700) must
+    // produce IDENTICAL BNG cell assignments + measures to an explicit upstream gdalwarp
+    // using the same nearest-neighbour command. This proves the internal reprojection is
+    // not silently perturbing pixel positions or values relative to a user's own warp.
+    test("bng rastertogrid: internal warp matches explicit upstream warp (reproject-equivalence)") {
+        val ds4326 = london4326Ds                 // execute() triggers the internal warp
+        val ds27700 = explicitWarpToBNG(london4326Ds) // pre-warped; execute() skips its warp
+        val meanF = (v: ArrayBuffer[Double]) => v.sum / v.length
+
+        val a = RST_BNG_RasterToGrid.execute(ds4326, 3, meanF).flatten.toMap  // internal warp path
+        val b = RST_BNG_RasterToGrid.execute(ds27700, 3, meanF).flatten.toMap // no-warp path
+
+        RasterDriver.releaseDataset(ds4326)
+        RasterDriver.releaseDataset(ds27700)
+
+        assert(a.nonEmpty, "reproject-equivalence fixture must yield at least one BNG cell")
+        assert(a.keySet == b.keySet,
+          s"internal-warp cell set ${a.keySet} must equal explicit-warp cell set ${b.keySet}")
+        a.foreach { case (cell, v) =>
+            assert(math.abs(v - b(cell)) < 1e-9,
+              s"cell $cell measure diverged: internal=$v explicit=${b(cell)}")
+        }
     }
 
     test("bng reducer names are canonical") {

@@ -88,6 +88,10 @@ These functions are Python UDTFs registered via `spark.udtf.register(...)`. Each
 | `gbx_rst_h3_rastertogridmax` | `rst_h3_rastertogridmax` | One row per H3 cell |
 | `gbx_rst_h3_rastertogridmin` | `rst_h3_rastertogridmin` | One row per H3 cell |
 | `gbx_rst_h3_rastertogridmedian` | `rst_h3_rastertogridmedian` | One row per H3 cell |
+**Heavy-tier variants** (Scala/JVM CollectionGenerators, not Python UDTFs — listed here because they share the same fan-out shape):
+
+| SQL name | Python name | Output per input tile |
+|---|---|---|
 | `gbx_rst_quadbin_rastertogridavg` | `rst_quadbin_rastertogridavg` | One row per QuadBin cell covering the tile |
 | `gbx_rst_quadbin_rastertogridcount` | `rst_quadbin_rastertogridcount` | One row per QuadBin cell |
 | `gbx_rst_quadbin_rastertogridmax` | `rst_quadbin_rastertogridmax` | One row per QuadBin cell |
@@ -146,6 +150,11 @@ These functions are Arrow-backed `pandas_udf(BinaryType())` aggregators used ins
 | `gbx_rst_gridfrompoints_agg` | `rst_gridfrompoints_agg` | Interpolate a raster from point observations |
 | `gbx_rst_dtmfromgeoms_agg` | `rst_dtmfromgeoms_agg` | Build a DTM raster from elevation geometries |
 | `gbx_rst_h3_rasterize_agg` | `rst_h3_rasterize_agg` | Burn a group of H3 cells onto one raster (presence mask, or per-cell value) |
+
+**Heavy-tier variants** (Scala/JVM TypedImperativeAggregates, not Arrow pandas_udf aggregators — listed here because they share the same reduce-to-one-raster shape):
+
+| SQL name | Python name | Aggregation |
+|---|---|---|
 | `gbx_rst_quadbin_rasterize_agg` | `rst_quadbin_rasterize_agg` | Burn quadbin cell geometry/value pairs onto one raster per group |
 | `gbx_rst_bng_rasterize_agg` | `rst_bng_rasterize_agg` | Burn BNG cell geometry/value pairs onto one raster per group (auto-reprojects to EPSG:27700) |
 

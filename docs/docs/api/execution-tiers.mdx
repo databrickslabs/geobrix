@@ -70,12 +70,12 @@ The reverse — re-registering a few **heavy** functions over a lightweight sess
 | Execution model | JVM-native (Scala + GDAL JNI) | Python-worker UDFs (rasterio + NumPy) |
 | Driver coverage | Full custom GDAL build | rasterio's bundled build (narrower) |
 | SQL default arguments | Supported | Pass all arguments explicitly |
-| Function coverage | Full raster set | Full raster set — every `rst_*` function |
+| Function coverage | Full raster set | Full raster set — every `rst_*` function except BNG/quadbin raster-grid functions (heavy-tier for now; lightweight support planned) |
 | Readers / Writers | `gtiff_gdal`, `gdal`, OGR readers | `raster_gbx` / `gtiff_gbx` native Python DataSource V2 reader + writer (no JAR); vector OGR readers still heavy-only |
 
 ## How to choose
 
-**Start with Lightweight (pyrx).** It installs as a single wheel (`%pip` or cluster library) with no GDAL and no JAR, runs everywhere — serverless, standard/shared clusters, ARM, and Lakeflow declarative pipelines — and covers the full raster set: every `rst_*` function. For most raster work it is the recommended default.
+**Start with Lightweight (pyrx).** It installs as a single wheel (`%pip` or cluster library) with no GDAL and no JAR, runs everywhere — serverless, standard/shared clusters, ARM, and Lakeflow declarative pipelines — and covers the full raster set: every `rst_*` function except the BNG/quadbin raster-grid functions listed below (heavy-tier for now; lightweight support planned). For most raster work it is the recommended default.
 
 Choose **Heavyweight (rasterx)** in three cases:
 
@@ -87,7 +87,7 @@ The vector OGR readers, the `conforming` triangulation mode, and the heavy `pmti
 
 ## Performance
 
-The one-line swap keeps your code identical across tiers. The lightweight tier is functionally complete for raster — it implements every `rst_*` function — and for VectorX, implementing every `gbx_st_*` function (MVT, TIN, legacy migration).
+The one-line swap keeps your code identical across tiers. The lightweight tier is functionally complete for raster — it implements every `rst_*` function except the BNG/quadbin raster-grid functions listed below (heavy-tier for now; lightweight support planned) — and for VectorX, implementing every `gbx_st_*` function (MVT, TIN, legacy migration).
 
 **Raster-grid surface (BNG/quadbin) — current tier status:**
 

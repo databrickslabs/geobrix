@@ -1983,8 +1983,9 @@ class _RstBngTessellateUDTF:
     BNG cell ids are Strings (e.g. ``"TQ38SW"``). The tile struct ``cellid``
     field is LongType, so the String id is parsed back to its Long digit-id via
     ``pygx._bng.parse`` (round-trips cleanly for the ±1..±6 resolutions the
-    iterator emits); the authoritative String form is preserved in the tile's
-    ``RASTERX_CELL_ID`` metadata, matching the heavy ``RST_BNG_Tessellate`` tier.
+    iterator emits); the authoritative cell id is carried in the tile's
+    ``cellid`` struct field (matching the heavy ``RST_BNG_Tessellate`` tier),
+    NOT the metadata map.
     """
 
     def eval(self, tile, resolution, mode=None):
@@ -2007,7 +2008,6 @@ class _RstBngTessellateUDTF:
                 if raster is None:  # defensive: never emit a null-raster tile row
                     continue
                 out = _serde.build_tile(raster, "GTiff", _bng.parse(cellid_str))
-                out["metadata"]["RASTERX_CELL_ID"] = cellid_str
                 yield out
 
 
@@ -2019,8 +2019,9 @@ def rst_bng_tessellate(
     The raster is reprojected to EPSG:27700 (British National Grid) first
     (skipped if already 27700). For every BNG cell overlapping the raster's
     extent at *resolution*, the raster is clipped to that cell's square and one
-    tile is produced, carrying the BNG **String** cell id (e.g. ``"TQ38SW"``) in
-    the tile's ``RASTERX_CELL_ID`` metadata. Cell enumeration is
+    tile is produced; the BNG cell id (e.g. ``"TQ38SW"``) is carried in the
+    tile's ``cellid`` struct field (matching heavy tier behaviour). Cell
+    enumeration is
     boundary-complete: the bbox is buffered by the cell half-diagonal before
     polyfill so cells whose square overlaps the raster but whose centroid sits
     just outside the bbox are still emitted; out-of-GB cells are dropped.
@@ -3434,12 +3435,18 @@ def _rst_h3_rasterize_agg_udf(
     from databricks.labs.gbx.pyrx.core import cellraster as cr
 
     _env.configure_gdal_env()
-    cells = [int(c) for c in cellid if c is not None]
-    if not cells:
+    # Zip cellid and value TOGETHER first so each value stays paired with its own
+    # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
+    # would misalign values when nulls appear in the middle of the series.
+    # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
+    # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
+    pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
+    if not pairs:
         return None
+    cells = [int(c) for c, _ in pairs]
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
-    vals = [1.0 if v is None or pd.isna(v) else float(v) for v in value]
+    vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
     cell_values = {}
     for c, v in zip(cells, vals):
         cell_values[c] = v  # last-wins (cells of one res don't overlap)
@@ -3496,12 +3503,18 @@ def _rst_quadbin_rasterize_agg_udf(
     from databricks.labs.gbx.pyrx.core import cellraster as cr
 
     _env.configure_gdal_env()
-    cells = [int(c) for c in cellid if c is not None]
-    if not cells:
+    # Zip cellid and value TOGETHER first so each value stays paired with its own
+    # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
+    # would misalign values when nulls appear in the middle of the series.
+    # pd.notna guards both Python None and float NaN (PySpark delivers a null Long
+    # as float('nan') inside the pandas Series, so `c is not None` is insufficient).
+    pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
+    if not pairs:
         return None
+    cells = [int(c) for c, _ in pairs]
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
-    vals = [1.0 if v is None or pd.isna(v) else float(v) for v in value]
+    vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
     cell_values = {}
     for c, v in zip(cells, vals):
         cell_values[c] = v  # last-wins (cells of one res don't overlap)
@@ -3561,12 +3574,17 @@ def _rst_bng_rasterize_agg_udf(
     _env.configure_gdal_env()
     # BNG cell ids are STRING on the public surface (e.g. "TQ3080"); the adapter
     # parses each to the internal Long via pygx._bng.parse (single source of truth).
-    cells = [str(c) for c in cellid if c is not None]
-    if not cells:
+    # Zip cellid and value TOGETHER first so each value stays paired with its own
+    # cellid, then drop pairs whose cellid is null.  Filtering cellid before zipping
+    # would misalign values when nulls appear in the middle of the series.
+    # pd.notna guards both Python None and float NaN consistently across grid types.
+    pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
+    if not pairs:
         return None
+    cells = [str(c) for c, _ in pairs]
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
-    vals = [1.0 if v is None or pd.isna(v) else float(v) for v in value]
+    vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
     cell_values = {}
     for c, v in zip(cells, vals):
         cell_values[c] = v  # last-wins (cells of one res don't overlap)

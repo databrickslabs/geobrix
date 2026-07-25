@@ -87,7 +87,16 @@ The vector OGR readers, the `conforming` triangulation mode, and the heavy `pmti
 
 ## Performance
 
-The one-line swap keeps your code identical across tiers. The lightweight tier is functionally complete for raster — it implements every `rst_*` function (all 107) — and for VectorX, implementing every `gbx_st_*` function (MVT, TIN, legacy migration).
+The one-line swap keeps your code identical across tiers. The lightweight tier is functionally complete for raster — it implements every `rst_*` function — and for VectorX, implementing every `gbx_st_*` function (MVT, TIN, legacy migration).
+
+**Raster-grid surface (BNG/quadbin) — current tier status:**
+
+| Function family | Tier | Notes |
+|---|---|---|
+| `gbx_rst_bng_rastertogrid{avg,count,max,min,median}` | Heavy only | Light quadbin planned; light BNG pending `pygx` BNG raster integration |
+| `gbx_rst_quadbin_rastertogrid{avg,count,max,min,median}` | Both | Light support available via `pyrx` |
+| `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate` | Heavy only | Light quadbin planned; light BNG pending `pygx` BNG raster integration |
+| `gbx_rst_quadbin_rasterize_agg`, `gbx_rst_bng_rasterize_agg` | Heavy only | Light quadbin planned; light BNG pending `pygx` BNG raster integration |
 
 On per-operation timing the lightweight tier is **competitive-to-faster for the large majority** of functions. Band math is dramatically faster, because the heavyweight tier shells out to a subprocess there. Terrain, focal filters, and discrete-grid (H3/quadbin) aggregation are a few times faster following recent vectorization. A small number of algorithm-bound operations (for example viewshed) are slower on the lightweight tier but remain sub-second in absolute terms. Metadata accessors are sub-millisecond on both.
 

@@ -101,22 +101,25 @@ class RST_BNG_RasterToGridTest extends AnyFunSuite with BeforeAndAfterAll {
     // using the same nearest-neighbour command. This proves the internal reprojection is
     // not silently perturbing pixel positions or values relative to a user's own warp.
     test("bng rastertogrid: internal warp matches explicit upstream warp (reproject-equivalence)") {
-        val ds4326 = london4326Ds                 // execute() triggers the internal warp
-        val ds27700 = explicitWarpToBNG(london4326Ds) // pre-warped; execute() skips its warp
+        val ds4326     = london4326Ds                   // execute() triggers the internal warp
+        val dsSrc27700 = london4326Ds                   // named handle for the warp source
+        val ds27700    = explicitWarpToBNG(dsSrc27700)  // pre-warped; execute() skips its warp
         val meanF = (v: ArrayBuffer[Double]) => v.sum / v.length
+        try {
+            val a = RST_BNG_RasterToGrid.execute(ds4326, 3, meanF).flatten.toMap  // internal warp path
+            val b = RST_BNG_RasterToGrid.execute(ds27700, 3, meanF).flatten.toMap // no-warp path
 
-        val a = RST_BNG_RasterToGrid.execute(ds4326, 3, meanF).flatten.toMap  // internal warp path
-        val b = RST_BNG_RasterToGrid.execute(ds27700, 3, meanF).flatten.toMap // no-warp path
-
-        RasterDriver.releaseDataset(ds4326)
-        RasterDriver.releaseDataset(ds27700)
-
-        assert(a.nonEmpty, "reproject-equivalence fixture must yield at least one BNG cell")
-        assert(a.keySet == b.keySet,
-          s"internal-warp cell set ${a.keySet} must equal explicit-warp cell set ${b.keySet}")
-        a.foreach { case (cell, v) =>
-            assert(math.abs(v - b(cell)) < 1e-9,
-              s"cell $cell measure diverged: internal=$v explicit=${b(cell)}")
+            assert(a.nonEmpty, "reproject-equivalence fixture must yield at least one BNG cell")
+            assert(a.keySet == b.keySet,
+              s"internal-warp cell set ${a.keySet} must equal explicit-warp cell set ${b.keySet}")
+            a.foreach { case (cell, v) =>
+                assert(math.abs(v - b(cell)) < 1e-9,
+                  s"cell $cell measure diverged: internal=$v explicit=${b(cell)}")
+            }
+        } finally {
+            RasterDriver.releaseDataset(ds4326)
+            RasterDriver.releaseDataset(dsSrc27700)
+            RasterDriver.releaseDataset(ds27700)
         }
     }
 

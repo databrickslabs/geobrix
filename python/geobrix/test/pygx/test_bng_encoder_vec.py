@@ -120,3 +120,17 @@ def test_vec_dtype_is_int64_at_high_resolution():
     assert vec.dtype == np.int64
     for ei, ni, c in zip(e, n, vec):
         assert int(c) == _bng.point_to_cell_id(float(ei), float(ni), 6)
+
+
+@pytest.mark.parametrize("res", _RESOLUTIONS)
+def test_is_valid_vec_equals_scalar(res):
+    e, n = _grid()  # includes out-of-GB coords -> some ids are invalid
+    ids = _bng.point_to_cell_id_vec(e, n, res)
+    vec = _bng.is_valid_vec(ids, res)
+    assert vec.dtype == bool
+    for c, v in zip(ids, vec):
+        assert bool(v) == _bng.is_valid(int(c)), f"id={int(c)} res={res}"
+
+
+def test_is_valid_vec_empty():
+    assert _bng.is_valid_vec(np.array([], dtype=np.int64), 3).tolist() == []

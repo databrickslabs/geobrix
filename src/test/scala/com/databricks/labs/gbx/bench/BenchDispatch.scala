@@ -253,6 +253,16 @@ object BenchDispatch {
     else if (gridAggregate.contains(fn)) "grid_aggregate"
     else "tile"
 
+  // Functions whose pure-core sweep must run on the Great-Britain-overlapping tile
+  // (TileEntry.role == "bng_gb") rather than the ordinary NYC-ish sweep tiles: the
+  // BNG raster->grid reducers + BNG tessellate reproject to EPSG:27700 internally
+  // and drop out-of-GB pixels, so on a sweep tile they bin an EMPTY grid (a vacuous
+  // both-empty cross-tier match). Mirrors the Python FnSpec.gb_tile flag exactly.
+  private val gbTileFns: Set[String] = Set(
+    "rst_bng_rastertogridavg", "rst_bng_rastertogridcount", "rst_bng_rastertogridmax",
+    "rst_bng_rastertogridmedian", "rst_bng_rastertogridmin", "rst_bng_tessellate")
+  def gbTile(fn: String): Boolean = gbTileFns.contains(fn)
+
   // --- rst_h3_rasterize_agg: fixed cell set + EXPLICIT grid (PARITY CONTRACT) ---
   // These MUST stay byte-for-byte in sync with the Python bench/spec.py block
   // (search "rst_h3_rasterize_agg: fixed deterministic cell set"):

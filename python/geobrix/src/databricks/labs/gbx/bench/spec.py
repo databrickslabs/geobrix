@@ -257,6 +257,14 @@ class FnSpec:
     # re-bench. Deliberately EXCLUDES the bench harness (this file, BenchDispatch)
     # so editing the registry does not mark every function stale.
     sources: tuple = ()
+    # Route this function's pure-core sweep to the Great-Britain-overlapping corpus
+    # tile (``TileEntry.role == "bng_gb"``) instead of the ordinary sweep tiles.
+    # The BNG raster->grid / tessellate functions reproject the tile to EPSG:27700
+    # internally and drop out-of-GB pixels, so on the NYC-ish sweep tiles they bin
+    # an EMPTY grid (a vacuous both-empty cross-tier match). Set on those fns so
+    # they bench REAL cells; every other fn leaves it False and skips the GB tile,
+    # keeping its tile selection unchanged.
+    gb_tile: bool = False
 
 
 _BOTH = ("pure-core", "spark-path")
@@ -2042,6 +2050,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
+        gb_tile=True,
         core=False,
     ),
     "rst_bng_rastertogridcount": FnSpec(
@@ -2062,6 +2071,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
+        gb_tile=True,
         core=False,
     ),
     "rst_bng_rastertogridmax": FnSpec(
@@ -2080,6 +2090,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
+        gb_tile=True,
         core=False,
     ),
     "rst_bng_rastertogridmedian": FnSpec(
@@ -2100,6 +2111,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
+        gb_tile=True,
         core=False,
     ),
     "rst_bng_rastertogridmin": FnSpec(
@@ -2118,6 +2130,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),
+        gb_tile=True,
         core=False,
     ),
     # --- quadbin + BNG tessellation (tessellate.py): one tile per overlapping cell
@@ -2165,6 +2178,7 @@ REGISTRY: Dict[str, FnSpec] = {
             _OPS + "RasterTessellate.scala",
             _GRIDX + "BNG.scala",
         ),
+        gb_tile=True,
         core=False,
     ),
     # --- bucket B, group B-vec: vector-out functions (2) ----------------------

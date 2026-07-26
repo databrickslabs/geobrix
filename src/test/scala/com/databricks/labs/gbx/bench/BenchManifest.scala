@@ -3,8 +3,14 @@ package com.databricks.labs.gbx.bench
 import com.fasterxml.jackson.databind.{DeserializationFeature, ObjectMapper}
 import com.fasterxml.jackson.module.scala.DefaultScalaModule
 
+// `role` (default "sweep") mirrors the Python TileEntry: "bng_gb" marks the
+// Great-Britain-overlapping tile the BNG raster->grid / tessellate fns bench
+// (they reproject to EPSG:27700 and drop out-of-GB pixels, so the NYC-ish sweep
+// tiles bin an empty grid). Defaulted so older corpus.json (no role field) reads
+// as "sweep". FAIL_ON_UNKNOWN_PROPERTIES is off, so a present field is honored.
 case class TileEntry(path: String, cellid: Long, srid: Int, dtype: String,
-                     bands: Int, tile_px: Int, nodata_frac: Double)
+                     bands: Int, tile_px: Int, nodata_frac: Double,
+                     role: String = "sweep")
 case class RowPool(tile_px: Int, bands: Int, dtype: String, tiles: Seq[TileEntry])
 case class Corpus(seed: Long, size_sweep: Seq[TileEntry], row_pool: RowPool)
 

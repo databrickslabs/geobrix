@@ -138,7 +138,17 @@ object HeavyRunner {
     // pure-core run over a set that includes aggregators emitted heavy error rows
     // the lightweight side never produced -> unmatched comparison rows.
     val pureCoreFns = fns.filterNot(f => BenchDispatch.inputKind(f).endsWith("aggregate"))
-    for (fn <- pureCoreFns; te <- corpus.size_sweep) {
+    // Tile routing (mirrors the pyrx runner): a gb_tile fn (the BNG raster->grid /
+    // tessellate fns, which reproject to EPSG:27700 and drop out-of-GB pixels)
+    // benches ONLY the Great-Britain-overlapping tile (role "bng_gb") so it bins
+    // REAL cells; every other fn benches the ordinary sweep tiles and SKIPS the GB
+    // tile. Fall back to the full sweep if the corpus predates the GB tile.
+    def tilesFor(fn: String): Seq[TileEntry] = {
+      val wantGb = BenchDispatch.gbTile(fn)
+      val sel = corpus.size_sweep.filter(t => (t.role == "bng_gb") == wantGb)
+      if (wantGb && sel.isEmpty) corpus.size_sweep else sel
+    }
+    for (fn <- pureCoreFns; te <- tilesFor(fn)) {
       val a = argsByFn.getOrElse(fn, Map.empty)
       if (te.bands < BenchDispatch.minBands(fn)) {
         emit(row(e, runId, fn, "pure-core", te.tile_px, te.bands, te.dtype, te.srid, 1,

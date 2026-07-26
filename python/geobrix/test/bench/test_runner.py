@@ -93,8 +93,10 @@ def test_run_pure_core_produces_ok_rows(tmp_path):
     assert all(r.mode == "pure-core" and r.rows == 1 for r in rows)
     # consistency fingerprint captured for every pure-core row
     assert all(r.output_fingerprint for r in rows)
-    # one row per (fn x size_sweep tile)
-    assert len(rows) == 2 * len(corpus.size_sweep)
+    # one row per (fn x size_sweep tile). Non-BNG fns skip the GB-only tile
+    # (role "bng_gb"), so the expected tile count excludes it.
+    _sweep = [t for t in corpus.size_sweep if t.role != "bng_gb"]
+    assert len(rows) == 2 * len(_sweep)
 
 
 def test_run_pure_core_geometry_in_fns_produce_raster_fingerprints(tmp_path):
@@ -143,7 +145,8 @@ def test_run_pure_core_geometry_in_fns_produce_raster_fingerprints(tmp_path):
         assert r.output_fingerprint, r.fn
         fp = json.loads(r.output_fingerprint)
         assert fp["kind"] == "raster", (r.fn, fp.get("kind"))
-    assert len(rows) == 3 * len(corpus.size_sweep)
+    _sweep = [t for t in corpus.size_sweep if t.role != "bng_gb"]
+    assert len(rows) == 3 * len(_sweep)
 
 
 @pytest.fixture(scope="module")

@@ -18,6 +18,14 @@ class TileEntry:
     bands: int
     tile_px: int  # square tile edge in pixels
     nodata_frac: float
+    # Which functions consume this tile in the pure-core sweep. Default "sweep":
+    # the ordinary size-sweep tile every function benchmarks. "bng_gb": a tile
+    # whose extent overlaps Great Britain when warped to EPSG:27700 -- consumed
+    # ONLY by the BNG raster->grid / tessellate functions (which reproject to
+    # 27700 internally and would otherwise bin an EMPTY grid on the NYC-ish sweep
+    # tiles), and SKIPPED by every other function (so their tile selection is
+    # unchanged). Both runners route on this so the two tiers stay symmetric.
+    role: str = "sweep"
 
 
 @dataclass(frozen=True)

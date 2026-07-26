@@ -258,7 +258,17 @@ def run_pure_core(
         if "pure-core" not in fs.modes:
             continue
         _mark = len(out)
-        for te in corpus.size_sweep:
+        # Tile routing: a gb_tile fn (the BNG raster->grid / tessellate fns, which
+        # reproject to EPSG:27700 and drop out-of-GB pixels) benches ONLY the
+        # Great-Britain-overlapping tile (role "bng_gb") so it bins REAL cells;
+        # every other fn benches the ordinary sweep tiles and SKIPS the GB tile, so
+        # its tile selection is unchanged. Fall back to the full sweep if the corpus
+        # predates the GB tile (older corpora carry no role="bng_gb" entry).
+        _want_gb = getattr(fs, "gb_tile", False)
+        _tiles = [te for te in corpus.size_sweep if (te.role == "bng_gb") == _want_gb]
+        if _want_gb and not _tiles:
+            _tiles = list(corpus.size_sweep)  # older corpus: no GB tile -> full sweep
+        for te in _tiles:
             if te.bands < getattr(fs, "min_bands", 1):
                 out.append(
                     ResultRow(

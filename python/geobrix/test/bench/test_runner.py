@@ -205,6 +205,154 @@ def test_run_spark_path_produces_ok_rows(tmp_path, spark):
     assert sorted({r.rows for r in rows}) == [2, 4]
 
 
+def test_run_pure_core_emits_per_fn_progress(tmp_path, capsys):
+    # Per-function progress lines must be printed to stdout as each fn finishes:
+    # leg header "[bench] lightweight pure-core: N fn(s) to run", then per-fn
+    # "[i/N] fn_name  lightweight pure-core  <ms>  <status>" for each fn.
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=11,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=2,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_width", "rst_avg"])
+    rows = rn.run_pure_core(
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="prog-test",
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    # Leg header is the first line.
+    assert any("[bench] lightweight pure-core:" in ln for ln in lines)
+    # One progress line per fn (2 fns).
+    fn_lines = [
+        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
+    ]
+    assert len(fn_lines) == 2
+    # Each progress line contains "i/N", the fn name, tier+mode, and a status.
+    for i, fn_name in enumerate(["rst_width", "rst_avg"], 1):
+        matching = [ln for ln in fn_lines if fn_name in ln]
+        assert matching, f"no progress line for {fn_name}"
+        pl = matching[0]
+        # i/N prefix
+        assert f"[{i}/2]" in pl or f"/{2}]" in pl
+        assert "lightweight pure-core" in pl
+        assert "ok" in pl or "error" in pl or "na_by_design" in pl
+    # Result rows are unaffected.
+    assert rows and all(r.fn in {"rst_width", "rst_avg"} for r in rows)
+
+
+def test_run_pure_core_progress_on_error_fn(tmp_path, capsys, monkeypatch):
+    # When a fn raises, its progress line must still be printed with status=error,
+    # and the remaining fns must still run (the loop continues).
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=13,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=2,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_width", "rst_avg"])
+    import databricks.labs.gbx.bench.runner as _rn_mod
+
+    _orig = _rn_mod._capture_and_call
+
+    call_count = {"n": 0}
+
+    def _patched_cap(fs, *a, **kw):
+        call_count["n"] += 1
+        if fs.name == "rst_width":
+            raise RuntimeError("simulated error")
+        return _orig(fs, *a, **kw)
+
+    monkeypatch.setattr(_rn_mod, "_capture_and_call", _patched_cap)
+    rows = rn.run_pure_core(
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="err-test",
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    fn_lines = [
+        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
+    ]
+    # Both fns produce a progress line.
+    assert len(fn_lines) == 2
+    err_lines = [ln for ln in fn_lines if "rst_width" in ln]
+    assert err_lines and "error" in err_lines[0]
+    ok_lines = [ln for ln in fn_lines if "rst_avg" in ln]
+    assert ok_lines and "ok" in ok_lines[0]
+    # Error rows present for rst_width; ok rows present for rst_avg.
+    assert any(r.fn == "rst_width" and r.status == "error" for r in rows)
+    assert any(r.fn == "rst_avg" and r.status == "ok" for r in rows)
+
+
+def test_run_spark_path_emits_per_fn_progress(tmp_path, spark, capsys):
+    # Per-function progress lines for spark-path:
+    # leg header "[bench] lightweight spark-path: N fn(s) to run", then per-fn line.
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=17,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_width"])
+    rows = rn.run_spark_path(
+        spark=spark,
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="sp-prog",
+        row_counts=[2, 4],
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert any("[bench] lightweight spark-path:" in ln for ln in lines)
+    fn_lines = [
+        ln for ln in lines if "lightweight spark-path" in ln and "[bench]" not in ln
+    ]
+    assert len(fn_lines) == 1
+    line = fn_lines[0]
+    assert "[1/1]" in line
+    assert "rst_width" in line
+    assert "lightweight spark-path" in line
+    assert "ok" in line or "error" in line
+    # Result rows unaffected.
+    assert rows and all(r.fn == "rst_width" for r in rows)
+
+
 def test_emit_explain_prints_and_writes_file(tmp_path, spark, capsys):
     # _emit_explain echoes a labeled formatted plan to stdout AND tees it to
     # {explain_dir}/{label}.explain.txt so a run's plans can be harvested off a Volume.

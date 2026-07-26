@@ -253,10 +253,15 @@ def run_pure_core(
     # Loaded lazily-once: geometry-input fns read the tile's GeometrySet from the
     # geometry corpus written alongside corpus.json (write-once-read-both).
     geom_corpus = _load_geometry_corpus(root)
+    _leg_fns = [f for f in fnspecs if "pure-core" in f.modes]
+    _leg_n = len(_leg_fns)
+    print(f"[bench] lightweight pure-core: {_leg_n} fn(s) to run")
     out: List[ResultRow] = []
+    _leg_i = 0
     for fs in fnspecs:
         if "pure-core" not in fs.modes:
             continue
+        _leg_i += 1
         _mark = len(out)
         # Tile routing: a gb_tile fn (the BNG raster->grid / tessellate fns, which
         # reproject to EPSG:27700 and drop out-of-GB pixels) benches ONLY the
@@ -398,6 +403,23 @@ def run_pure_core(
                 sink(out[_mark:])
             except Exception:  # noqa: BLE001 — a sink failure must never abort timing
                 pass
+        # Per-function progress line: emitted outside the timed region so it adds no
+        # timing bias.  Pick the representative "ok" row (best-available tile); fall back
+        # to the first row of any status if none are ok.
+        try:
+            _fn_rows = out[_mark:]
+            _ok_rows = [r for r in _fn_rows if r.status == "ok"]
+            _rep = _ok_rows[0] if _ok_rows else (_fn_rows[0] if _fn_rows else None)
+            if _rep is not None:
+                _ms_str = f"{_rep.iter_median_s * 1000:.1f}ms"
+                print(
+                    f"[{_leg_i}/{_leg_n}] {fs.name}  lightweight pure-core"
+                    f"  {_ms_str}  {_rep.status}"
+                )
+            else:
+                print(f"[{_leg_i}/{_leg_n}] {fs.name}  lightweight pure-core  -  error")
+        except Exception:  # noqa: BLE001 — progress print must never abort the leg
+            pass
     return out
 
 
@@ -1348,9 +1370,43 @@ def run_spark_path(
         "h3_aggregate",
         "grid_aggregate",
     )
+    _sp_leg_fns = [f for f in fnspecs if "spark-path" in f.modes]
+    _sp_leg_n = len(_sp_leg_fns)
+    print(f"[bench] lightweight spark-path: {_sp_leg_n} fn(s) to run")
+    _sp_leg_i = 0
+
+    def _sp_progress(fn_name, fn_rows, mark):
+        # Emit one progress line after a fn finishes; must never raise.
+        try:
+            _fn_rows = fn_rows[mark:]
+            # For spark-path, prefer the max-row row (headline throughput); fall back to any ok.
+            _ok_rows = [r for r in _fn_rows if r.status == "ok"]
+            if _ok_rows:
+                _rep = max(_ok_rows, key=lambda r: r.rows)
+                _ms_str = (
+                    f"{_rep.per_tile_avg_ms:.2f}ms/tile @{_rep.rows}r"
+                    if _rep.per_tile_avg_ms
+                    else f"{_rep.iter_median_s * 1000:.1f}ms"
+                )
+                _status = "ok"
+            elif _fn_rows:
+                _rep = _fn_rows[-1]
+                _ms_str = "-"
+                _status = _rep.status
+            else:
+                _ms_str = "-"
+                _status = "error"
+            print(
+                f"[{_sp_leg_i}/{_sp_leg_n}] {fn_name}  lightweight spark-path"
+                f"  {_ms_str}  {_status}"
+            )
+        except Exception:  # noqa: BLE001 — progress print must never abort the leg
+            pass
+
     for fs in fnspecs:
         if "spark-path" not in fs.modes:
             continue
+        _sp_leg_i += 1
         _mark = len(out)
         if getattr(fs, "input_kind", "tile") in _agg_kinds:
             out += _run_aggregate(
@@ -1366,6 +1422,7 @@ def run_spark_path(
                 partition_size=partition_size,
             )
             _flush(out, _mark)
+            _sp_progress(fs.name, out, _mark)
             continue
         if getattr(fs, "udtf", False):
             # UDTF grid fns (rastertogrid* / tessellate): the lightweight impl is a
@@ -1393,6 +1450,7 @@ def run_spark_path(
                 F,
             )
             _flush(out, _mark)
+            _sp_progress(fs.name, out, _mark)
             continue
         _kind = getattr(fs, "input_kind", "tile")
         for n in sorted(row_counts):
@@ -1506,6 +1564,7 @@ def run_spark_path(
                     )
                 )
         _flush(out, _mark)
+        _sp_progress(fs.name, out, _mark)
     df_all.unpersist()
     return out
 

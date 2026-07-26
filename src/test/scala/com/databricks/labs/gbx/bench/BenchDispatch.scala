@@ -169,10 +169,10 @@ object BenchDispatch {
     "rst_h3_tessellate" -> DGGS,
     "rst_h3_rastertogridavg" -> DGGS, "rst_h3_rastertogridcount" -> DGGS,
     "rst_h3_rastertogridmax" -> DGGS, "rst_h3_rastertogridmedian" -> DGGS,
-    "rst_h3_rastertogridmin" -> DGGS,
+    "rst_h3_rastertogridmin" -> DGGS, "rst_h3_rastertogridsum" -> DGGS,
     "rst_quadbin_rastertogridavg" -> DGGS, "rst_quadbin_rastertogridcount" -> DGGS,
     "rst_quadbin_rastertogridmax" -> DGGS, "rst_quadbin_rastertogridmedian" -> DGGS,
-    "rst_quadbin_rastertogridmin" -> DGGS,
+    "rst_quadbin_rastertogridmin" -> DGGS, "rst_quadbin_rastertogridsum" -> DGGS,
     // BNG raster->grid reducers (DGGS, same shape as H3/quadbin reducers). Their
     // cell ids are OS grid STRINGS (e.g. "TQ3080"), not Longs, so the pure-core
     // path fingerprints them via ofDggsGridStr; the timing is otherwise identical.
@@ -180,7 +180,7 @@ object BenchDispatch {
     // the 4326-native H3/quadbin), so their timing includes that warp.
     "rst_bng_rastertogridavg" -> DGGS, "rst_bng_rastertogridcount" -> DGGS,
     "rst_bng_rastertogridmax" -> DGGS, "rst_bng_rastertogridmedian" -> DGGS,
-    "rst_bng_rastertogridmin" -> DGGS,
+    "rst_bng_rastertogridmin" -> DGGS, "rst_bng_rastertogridsum" -> DGGS,
     // tessellate generators (DGGS, same as rst_h3_tessellate). quadbin is
     // 4326-native; BNG reprojects to 27700 and emits STRING cell ids.
     "rst_quadbin_tessellate" -> DGGS, "rst_bng_tessellate" -> DGGS,
@@ -260,7 +260,8 @@ object BenchDispatch {
   // both-empty cross-tier match). Mirrors the Python FnSpec.gb_tile flag exactly.
   private val gbTileFns: Set[String] = Set(
     "rst_bng_rastertogridavg", "rst_bng_rastertogridcount", "rst_bng_rastertogridmax",
-    "rst_bng_rastertogridmedian", "rst_bng_rastertogridmin", "rst_bng_tessellate")
+    "rst_bng_rastertogridmedian", "rst_bng_rastertogridmin", "rst_bng_rastertogridsum",
+    "rst_bng_tessellate")
   def gbTile(fn: String): Boolean = gbTileFns.contains(fn)
 
   // --- rst_h3_rasterize_agg: fixed cell set + EXPLICIT grid (PARITY CONTRACT) ---
@@ -598,6 +599,8 @@ object BenchDispatch {
       BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridMedian.execute(ds, argI(a, "resolution", 7)).toSeq)
     case "rst_h3_rastertogridmin" =>
       BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridMin.execute(ds, argI(a, "resolution", 7)).toSeq)
+    case "rst_h3_rastertogridsum" =>
+      BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridSum.execute(ds, argI(a, "resolution", 7)).toSeq)
     case "rst_quadbin_rastertogridavg" =>
       BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridAvg.execute(ds, argI(a, "resolution", 15)).toSeq)
     case "rst_quadbin_rastertogridcount" =>
@@ -610,6 +613,8 @@ object BenchDispatch {
       BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridMedian.execute(ds, argI(a, "resolution", 15)).toSeq)
     case "rst_quadbin_rastertogridmin" =>
       BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridMin.execute(ds, argI(a, "resolution", 15)).toSeq)
+    case "rst_quadbin_rastertogridsum" =>
+      BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridSum.execute(ds, argI(a, "resolution", 15)).toSeq)
     // BNG raster->grid reducers. BNG cell ids are OS grid STRINGS (not Longs), so
     // fingerprint via ofDggsGridStr. The reducers reproject the tile to EPSG:27700
     // internally, so their timing includes that warp (unlike 4326-native H3/quadbin).
@@ -626,6 +631,8 @@ object BenchDispatch {
       BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridMedian.execute(ds, argI(a, "resolution", 3)).toSeq)
     case "rst_bng_rastertogridmin" =>
       BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridMin.execute(ds, argI(a, "resolution", 3)).toSeq)
+    case "rst_bng_rastertogridsum" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridSum.execute(ds, argI(a, "resolution", 3)).toSeq)
     // tessellate: one tile per overlapping H3 cell, NO scalar measure. Drain the
     // iterator (a CLONE of the shared input ds, since the iterator closes its
     // source on exhaustion), collect the cell ids, RELEASE each output tile, and
@@ -1077,11 +1084,13 @@ object BenchDispatch {
       case "rst_h3_rastertogridmax"        => rst_h3_rastertogridmax(tile, argI(a, "resolution", 7))
       case "rst_h3_rastertogridmedian"     => rst_h3_rastertogridmedian(tile, argI(a, "resolution", 7))
       case "rst_h3_rastertogridmin"        => rst_h3_rastertogridmin(tile, argI(a, "resolution", 7))
+      case "rst_h3_rastertogridsum"        => rst_h3_rastertogridsum(tile, argI(a, "resolution", 7))
       case "rst_quadbin_rastertogridavg"   => rst_quadbin_rastertogridavg(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridcount" => rst_quadbin_rastertogridcount(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridmax"   => rst_quadbin_rastertogridmax(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridmedian" => rst_quadbin_rastertogridmedian(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridmin"   => rst_quadbin_rastertogridmin(tile, argI(a, "resolution", 15))
+      case "rst_quadbin_rastertogridsum"   => rst_quadbin_rastertogridsum(tile, argI(a, "resolution", 15))
       // BNG reducers/tessellate: 27700-reprojecting (timing includes the warp).
       // resolution default 3 == "1km"; the Int overload maps to BNG.getResolution.
       case "rst_bng_rastertogridavg"       => rst_bng_rastertogridavg(tile, argI(a, "resolution", 3))
@@ -1089,6 +1098,7 @@ object BenchDispatch {
       case "rst_bng_rastertogridmax"       => rst_bng_rastertogridmax(tile, argI(a, "resolution", 3))
       case "rst_bng_rastertogridmedian"    => rst_bng_rastertogridmedian(tile, argI(a, "resolution", 3))
       case "rst_bng_rastertogridmin"       => rst_bng_rastertogridmin(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridsum"       => rst_bng_rastertogridsum(tile, argI(a, "resolution", 3))
       case "rst_quadbin_tessellate"        => rst_quadbin_tessellate(tile, argI(a, "resolution", 15))
       case "rst_bng_tessellate"            => rst_bng_tessellate(tile, argI(a, "resolution", 3))
       // bucket B, group B-vec: vector-out fns -> ARRAY<struct> column (spark-path

@@ -1926,6 +1926,23 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core=False,
     ),
+    "rst_h3_rastertogridsum": FnSpec(
+        "rst_h3_rastertogridsum",
+        "gbx_rst_h3_rastertogridsum",
+        "dggs",
+        _BOTH,
+        {"resolution": 7},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "h3", "sum"),
+        col_fn=lambda t, a: prx.rst_h3_rastertogridsum(t, a["resolution"]),
+        fingerprint_kind="dggs_grid",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _HEAVY + "grid/RST_H3_RasterToGridSum.scala",
+            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
+            _GRIDX + "H3.scala",
+        ),
+        core=False,
+    ),
     # --- quadbin raster->grid aggregates (gridagg.py) -------------------------
     "rst_quadbin_rastertogridavg": FnSpec(
         "rst_quadbin_rastertogridavg",
@@ -2017,6 +2034,25 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridMin.scala",
+            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
+            _GRIDX + "Quadbin.scala",
+        ),
+        core=False,
+    ),
+    "rst_quadbin_rastertogridsum": FnSpec(
+        "rst_quadbin_rastertogridsum",
+        "gbx_rst_quadbin_rastertogridsum",
+        "dggs",
+        _BOTH,
+        {"resolution": 15},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(
+            ds, a["resolution"], "quadbin", "sum"
+        ),
+        col_fn=lambda t, a: prx.rst_quadbin_rastertogridsum(t, a["resolution"]),
+        fingerprint_kind="dggs_grid",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _HEAVY + "grid/RST_Quadbin_RasterToGridSum.scala",
             _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
             _GRIDX + "Quadbin.scala",
         ),
@@ -2127,6 +2163,25 @@ REGISTRY: Dict[str, FnSpec] = {
         + (
             _BNG_LIB,
             _HEAVY + "grid/RST_BNG_RasterToGridMin.scala",
+            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
+            _GRIDX + "BNG.scala",
+        ),
+        gb_tile=True,
+        core=False,
+    ),
+    "rst_bng_rastertogridsum": FnSpec(
+        "rst_bng_rastertogridsum",
+        "gbx_rst_bng_rastertogridsum",
+        "dggs",
+        _BOTH,
+        {"resolution": 3},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "bng", "sum"),
+        col_fn=lambda t, a: prx.rst_bng_rastertogridsum(t, a["resolution"]),
+        fingerprint_kind="dggs_grid_str",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _BNG_LIB,
+            _HEAVY + "grid/RST_BNG_RasterToGridSum.scala",
             _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),

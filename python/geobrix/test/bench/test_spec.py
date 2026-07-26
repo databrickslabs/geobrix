@@ -698,12 +698,16 @@ _DGGS = {
     "rst_h3_rastertogridmedian",
     "rst_h3_rastertogridmin",
     "rst_h3_rastertogridsum",
+    "rst_h3_rastertogridvariance",
+    "rst_h3_rastertogridstddev",
     "rst_quadbin_rastertogridavg",
     "rst_quadbin_rastertogridcount",
     "rst_quadbin_rastertogridmax",
     "rst_quadbin_rastertogridmedian",
     "rst_quadbin_rastertogridmin",
     "rst_quadbin_rastertogridsum",
+    "rst_quadbin_rastertogridvariance",
+    "rst_quadbin_rastertogridstddev",
 }
 
 _DGGS_H3_RES = 7
@@ -716,8 +720,8 @@ def test_dggs_registered_in_full():
     assert not missing, f"registry missing DGGS fns: {sorted(missing)}"
 
 
-def test_dggs_count_is_thirteen():
-    assert len(_DGGS) == 13
+def test_dggs_count_is_seventeen():
+    assert len(_DGGS) == 17
 
 
 def test_dggs_wellformed_dggs_grid_fingerprint():

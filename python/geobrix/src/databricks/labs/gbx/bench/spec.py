@@ -1943,6 +1943,44 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core=False,
     ),
+    "rst_h3_rastertogridvariance": FnSpec(
+        "rst_h3_rastertogridvariance",
+        "gbx_rst_h3_rastertogridvariance",
+        "dggs",
+        _BOTH,
+        {"resolution": 7},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(
+            ds, a["resolution"], "h3", "variance"
+        ),
+        col_fn=lambda t, a: prx.rst_h3_rastertogridvariance(t, a["resolution"]),
+        fingerprint_kind="dggs_grid",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _HEAVY + "grid/RST_H3_RasterToGridVariance.scala",
+            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
+            _GRIDX + "H3.scala",
+        ),
+        core=False,
+    ),
+    "rst_h3_rastertogridstddev": FnSpec(
+        "rst_h3_rastertogridstddev",
+        "gbx_rst_h3_rastertogridstddev",
+        "dggs",
+        _BOTH,
+        {"resolution": 7},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(
+            ds, a["resolution"], "h3", "stddev"
+        ),
+        col_fn=lambda t, a: prx.rst_h3_rastertogridstddev(t, a["resolution"]),
+        fingerprint_kind="dggs_grid",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _HEAVY + "grid/RST_H3_RasterToGridStddev.scala",
+            _HEAVY + "grid/RST_H3_RasterToGrid.scala",
+            _GRIDX + "H3.scala",
+        ),
+        core=False,
+    ),
     # --- quadbin raster->grid aggregates (gridagg.py) -------------------------
     "rst_quadbin_rastertogridavg": FnSpec(
         "rst_quadbin_rastertogridavg",
@@ -2053,6 +2091,44 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridSum.scala",
+            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
+            _GRIDX + "Quadbin.scala",
+        ),
+        core=False,
+    ),
+    "rst_quadbin_rastertogridvariance": FnSpec(
+        "rst_quadbin_rastertogridvariance",
+        "gbx_rst_quadbin_rastertogridvariance",
+        "dggs",
+        _BOTH,
+        {"resolution": 15},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(
+            ds, a["resolution"], "quadbin", "variance"
+        ),
+        col_fn=lambda t, a: prx.rst_quadbin_rastertogridvariance(t, a["resolution"]),
+        fingerprint_kind="dggs_grid",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _HEAVY + "grid/RST_Quadbin_RasterToGridVariance.scala",
+            _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
+            _GRIDX + "Quadbin.scala",
+        ),
+        core=False,
+    ),
+    "rst_quadbin_rastertogridstddev": FnSpec(
+        "rst_quadbin_rastertogridstddev",
+        "gbx_rst_quadbin_rastertogridstddev",
+        "dggs",
+        _BOTH,
+        {"resolution": 15},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(
+            ds, a["resolution"], "quadbin", "stddev"
+        ),
+        col_fn=lambda t, a: prx.rst_quadbin_rastertogridstddev(t, a["resolution"]),
+        fingerprint_kind="dggs_grid",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _HEAVY + "grid/RST_Quadbin_RasterToGridStddev.scala",
             _HEAVY + "grid/RST_Quadbin_RasterToGrid.scala",
             _GRIDX + "Quadbin.scala",
         ),
@@ -2182,6 +2258,48 @@ REGISTRY: Dict[str, FnSpec] = {
         + (
             _BNG_LIB,
             _HEAVY + "grid/RST_BNG_RasterToGridSum.scala",
+            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
+            _GRIDX + "BNG.scala",
+        ),
+        gb_tile=True,
+        core=False,
+    ),
+    "rst_bng_rastertogridvariance": FnSpec(
+        "rst_bng_rastertogridvariance",
+        "gbx_rst_bng_rastertogridvariance",
+        "dggs",
+        _BOTH,
+        {"resolution": 3},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(
+            ds, a["resolution"], "bng", "variance"
+        ),
+        col_fn=lambda t, a: prx.rst_bng_rastertogridvariance(t, a["resolution"]),
+        fingerprint_kind="dggs_grid_str",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _BNG_LIB,
+            _HEAVY + "grid/RST_BNG_RasterToGridVariance.scala",
+            _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
+            _GRIDX + "BNG.scala",
+        ),
+        gb_tile=True,
+        core=False,
+    ),
+    "rst_bng_rastertogridstddev": FnSpec(
+        "rst_bng_rastertogridstddev",
+        "gbx_rst_bng_rastertogridstddev",
+        "dggs",
+        _BOTH,
+        {"resolution": 3},
+        core_fn=lambda ds, a: gridagg.raster_to_grid(
+            ds, a["resolution"], "bng", "stddev"
+        ),
+        col_fn=lambda t, a: prx.rst_bng_rastertogridstddev(t, a["resolution"]),
+        fingerprint_kind="dggs_grid_str",
+        sources=_GRIDAGG_LIGHT
+        + (
+            _BNG_LIB,
+            _HEAVY + "grid/RST_BNG_RasterToGridStddev.scala",
             _HEAVY + "grid/RST_BNG_RasterToGrid.scala",
             _GRIDX + "BNG.scala",
         ),

@@ -100,7 +100,7 @@ The one-line swap keeps your code identical across tiers. The lightweight tier i
 
 On per-operation timing the lightweight tier is **competitive-to-faster for the large majority** of functions. Band math is dramatically faster, because the heavyweight tier shells out to a subprocess there. Terrain, focal filters, and discrete-grid (H3/quadbin) aggregation are a few times faster following recent vectorization. A small number of algorithm-bound operations (for example viewshed) are slower on the lightweight tier but remain sub-second in absolute terms. Metadata accessors are sub-millisecond on both.
 
-Across the benchmark suite the two tiers agree within tolerance on **106 of 107** functions; the sole exception is **`rst_convolve`**, which differs slightly at raster edges — the heavyweight tier applies a GDAL block-halo convolution that no single lightweight boundary mode reproduces exactly. Interior values match. See **[Benchmarking](./benchmarking)** for the full per-function heavy-vs-light results and how to run the benchmark on a cluster or locally.
+Across the benchmark suite the two tiers agree within tolerance on **115 of 116** functions; the sole exception is **`rst_convolve`**, which differs slightly at raster edges — the heavyweight tier applies a GDAL block-halo convolution that no single lightweight boundary mode reproduces exactly. Interior values match. The BNG and quadbin raster-grid functions listed above were measured on a cluster and agree **exactly** across tiers (byte-identical cell sets and rasterized output). See **[Benchmarking](./benchmarking)** for the full per-function heavy-vs-light results and how to run the benchmark on a cluster or locally.
 
 ## Function availability
 

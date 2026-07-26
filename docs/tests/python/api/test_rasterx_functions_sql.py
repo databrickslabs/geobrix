@@ -726,6 +726,12 @@ def london_rasters_view(spark):
      "gbx_rst_bng_rastertogridmin"),
     ("rst_bng_rastertogridmedian_sql_example",
      "gbx_rst_bng_rastertogridmedian"),
+    ("rst_bng_rastertogridsum_sql_example",
+     "gbx_rst_bng_rastertogridsum"),
+    ("rst_bng_rastertogridvariance_sql_example",
+     "gbx_rst_bng_rastertogridvariance"),
+    ("rst_bng_rastertogridstddev_sql_example",
+     "gbx_rst_bng_rastertogridstddev"),
 ])
 def test_bng_rastertogrid_sql_example(spark, london_rasters, london_rasters_view,
                                       example_attr, sql_fn):

@@ -163,7 +163,7 @@ def _quadbin_raster_4326():
 # Reducer parity (5 BNG functions) — exact cell-set + measure within 1e-9
 # ---------------------------------------------------------------------------
 
-_REDUCERS = ["avg", "count", "max", "min", "median", "sum"]
+_REDUCERS = ["avg", "count", "max", "min", "median", "sum", "variance", "stddev"]
 
 
 def _heavy_reducer_rows(spark, raster, resolution, agg):
@@ -340,36 +340,48 @@ def _light_grid_rows(spark, raster, resolution, grid, agg):
     return {(r["band"], r["cellID"]): r["measure"] for r in rows}
 
 
+@pytest.mark.parametrize("agg", ["sum", "variance", "stddev"])
 @pytest.mark.parametrize("grid,resolution", [("quadbin", 12), ("h3", 7)])
-def test_grid_rastertogridsum_parity(spark_with_jar, grid, resolution):
-    """h3/quadbin sum: exact Long cell-set + per-cell measure within relative tol.
+def test_grid_rastertogrid_reducer_parity(spark_with_jar, grid, resolution, agg):
+    """h3/quadbin sum/variance/stddev: exact Long cell-set + measure within tol.
 
     Real multi-value tile (ramp 1..256) so cells carry several pixels and the
-    sum exercises real accumulation, not a single-pixel degenerate case.
+    reducer exercises REAL spread — variance/stddev are non-degenerate (not the
+    single-pixel variance-0 case). variance/stddev use the SAME two-pass
+    population formula on both tiers, so they share sum/avg's within_tol class;
+    a formula mismatch would surface here as a divergence (do NOT loosen tol —
+    fix the formula).
     """
     spark = spark_with_jar
     raster = _quadbin_raster_4326()  # 16x16 4326 ramp — valid for both h3 & quadbin
 
-    light = _light_grid_rows(spark, raster, resolution, grid, "sum")
-    heavy = _heavy_grid_rows(spark, raster, resolution, grid, "sum")
+    light = _light_grid_rows(spark, raster, resolution, grid, agg)
+    heavy = _heavy_grid_rows(spark, raster, resolution, grid, agg)
 
-    assert light, f"light emitted no cells for {grid} sum"
-    assert heavy, f"heavy emitted no cells for {grid} sum"
+    assert light, f"light emitted no cells for {grid} {agg}"
+    assert heavy, f"heavy emitted no cells for {grid} {agg}"
 
     light_keys, heavy_keys = set(light), set(heavy)
     if light_keys != heavy_keys:
         pytest.fail(
-            f"{grid} sum cell-set MISMATCH: "
+            f"{grid} {agg} cell-set MISMATCH: "
             f"|light|={len(light_keys)} |heavy|={len(heavy_keys)} "
             f"light_only={sorted(light_keys - heavy_keys)[:8]} "
             f"heavy_only={sorted(heavy_keys - light_keys)[:8]}"
         )
 
+    # A tile ramp with real spread means at least one multi-pixel cell has
+    # nonzero variance -- guard against a vacuous all-zero (single-pixel) pass.
+    if agg in ("variance", "stddev"):
+        assert any(
+            abs(v) > 1e-6 for v in light.values()
+        ), f"{grid} {agg}: all cells zero -- fixture lacks real spread"
+
     # within_tol (same summation-order class as avg): relative tolerance.
     for key in light_keys:
         lv, hv = float(light[key]), float(heavy[key])
         assert abs(lv - hv) <= 1e-9 * max(1.0, abs(hv)), (
-            f"{grid} sum cell {key} diverged beyond within_tol: "
+            f"{grid} {agg} cell {key} diverged beyond within_tol: "
             f"light={lv} heavy={hv} (diff={abs(lv - hv):.3e})"
         )
 

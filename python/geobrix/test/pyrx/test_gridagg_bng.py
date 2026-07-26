@@ -9,6 +9,7 @@ out-of-GB pixels dropped via is_valid, String cell ids at the output boundary).
 import re
 
 import numpy as np
+import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
@@ -78,6 +79,39 @@ def test_bng_sum_london_string_ids_and_total():
     assert isinstance(cell["cellID"], str)
     assert _BNG_ID_RE.match(cell["cellID"]), cell["cellID"]
     assert cell["measure"] == 20.0
+    assert isinstance(cell["measure"], float)
+
+
+def test_bng_variance_london_string_ids_and_population_variance():
+    # Same central-London 27700 raster wholly inside a single 1 km (res 3) cell.
+    # Population variance of [2,4,6,8]: mean=5, sq-devs sum 20, 20/4 == 5.0.
+    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
+    raster = _raster(data, epsg=27700, origin=(530000.0, 180400.0), px=200.0)
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, 3, "bng", "variance")
+    assert len(result) == 1
+    band = result[0]
+    assert len(band) == 1
+    cell = band[0]
+    assert isinstance(cell["cellID"], str)
+    assert _BNG_ID_RE.match(cell["cellID"]), cell["cellID"]
+    assert cell["measure"] == pytest.approx(5.0)
+    assert isinstance(cell["measure"], float)
+
+
+def test_bng_stddev_london_string_ids_and_population_stddev():
+    # stddev == sqrt(population variance) == sqrt(5.0) on the same GB cell.
+    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
+    raster = _raster(data, epsg=27700, origin=(530000.0, 180400.0), px=200.0)
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, 3, "bng", "stddev")
+    assert len(result) == 1
+    band = result[0]
+    assert len(band) == 1
+    cell = band[0]
+    assert isinstance(cell["cellID"], str)
+    assert _BNG_ID_RE.match(cell["cellID"]), cell["cellID"]
+    assert cell["measure"] == pytest.approx(np.sqrt(5.0))
     assert isinstance(cell["measure"], float)
 
 

@@ -115,6 +115,50 @@ def test_sum_excludes_nodata(grid):
     assert band[0]["measure"] == pytest.approx(16.0)
 
 
+@pytest.mark.parametrize("grid", ["h3", "quadbin"])
+def test_variance_is_population_variance_of_cell_pixels(grid):
+    # Coarse resolution so [2,4,6,8] land in one cell. Population (ddof=0):
+    # mean=5, sq-devs=[9,1,1,9] sum 20, variance = 20/4 = 5.0 (NOT 20/3).
+    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
+    raster = _custom_raster(data)
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, 0, grid, "variance")
+    band = result[0]
+    assert len(band) == 1
+    assert band[0]["measure"] == pytest.approx(5.0)
+    assert isinstance(band[0]["measure"], float)
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin"])
+def test_stddev_is_sqrt_of_population_variance(grid):
+    # stddev == sqrt(population variance); sqrt(5.0) == 2.2360679...
+    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
+    raster = _custom_raster(data)
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, 0, grid, "stddev")
+    band = result[0]
+    assert len(band) == 1
+    assert band[0]["measure"] == pytest.approx(np.sqrt(5.0))
+    assert isinstance(band[0]["measure"], float)
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin"])
+@pytest.mark.parametrize("agg", ["variance", "stddev"])
+def test_single_pixel_cell_variance_stddev_zero(grid, agg):
+    # A cell covering exactly one valid pixel has zero spread -> variance 0,
+    # stddev 0 (clean under population semantics; no divide-by-(n-1)).
+    # Fine resolution so each pixel occupies its own cell.
+    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
+    raster = _custom_raster(data)
+    res = 12 if grid == "quadbin" else 9
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, res, grid, agg)
+    band = result[0]
+    assert len(band) == 4  # one cell per pixel
+    for cell in band:
+        assert cell["measure"] == pytest.approx(0.0)
+
+
 # --- median: even/odd correctness on a hand-built single cell ---------------
 @pytest.mark.parametrize("grid", ["h3", "quadbin"])
 def test_median_even_count(grid):

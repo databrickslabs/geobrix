@@ -582,6 +582,60 @@ def test_run_spark_path_h3_rasterize_agg_produces_raster_fingerprint(tmp_path, s
     assert parsed["kind"] == "raster", parsed.get("kind")
 
 
+def test_udtf_grid_fn_spark_path_runs_via_lateral_not_error(tmp_path, spark):
+    # The rastertogrid* / tessellate fns are registered Python UDTFs, so their
+    # lightweight spark-path must run via SQL LATERAL (a table-function join over the
+    # tile DataFrame), NOT the scalar .select(col_fn(...)) path -- the scalar
+    # prx.<fn> wrapper raises NotImplementedError. This proves the runner takes the
+    # udtf branch and produces OK rows (not error rows) with a real timing.
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=11,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_h3_rastertogridavg"])
+    assert fns and fns[0].udtf, "rst_h3_rastertogridavg must be flagged udtf=True"
+    rows = rn.run_spark_path(
+        spark=spark,
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="t",
+        row_counts=[2, 4],
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    assert rows, "expected UDTF spark-path rows"
+    assert all(r.status == "ok" for r in rows), [
+        (r.fn, r.status, r.note) for r in rows if r.status != "ok"
+    ]
+    assert all(
+        r.mode == "spark-path" and r.fn == "rst_h3_rastertogridavg" for r in rows
+    )
+    # the udtf branch tags its rows so the invocation shape is auditable in the store
+    assert all(r.note == "lateral-udtf" for r in rows)
+    assert sorted({r.rows for r in rows}) == [2, 4]
+
+
+def test_udtf_lateral_sql_builds_expected_shape():
+    # The LATERAL SQL feeds the tile struct as the first UDTF arg and the scalar
+    # bench args (resolution etc.) as SQL literals after it, projecting t.* so the
+    # whole per-tile row fan-out is realized.
+    fs = s.select(functions=["rst_h3_rastertogridavg"])[0]
+    sql = rn._udtf_lateral_sql("_v", fs)
+    assert "LATERAL gbx_rst_h3_rastertogridavg(d.tile, 7)" in sql
+    assert sql.startswith("SELECT t.* FROM _v AS d")
+
+
 def test_pure_core_emits_na_by_design_for_low_band_count(tmp_path):
     corpus = dg.generate_corpus(
         out_dir=tmp_path,

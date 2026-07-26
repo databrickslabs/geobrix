@@ -265,6 +265,27 @@ class FnSpec:
     # they bench REAL cells; every other fn leaves it False and skips the GB tile,
     # keeping its tile selection unchanged.
     gb_tile: bool = False
+    # This function's LIGHTWEIGHT implementation is a Python UDTF (a table-valued
+    # function), NOT a scalar Column. The pyrx ``prx.<fn>(...)`` wrapper for a UDTF
+    # deliberately RAISES ``NotImplementedError`` (with a LATERAL hint) because a
+    # UDTF cannot be expressed as a scalar column -- it must be invoked as a SQL
+    # ``LATERAL`` table function against a registered name (``gbx_<fn>``). The
+    # spark-path runner branches on this flag: udtf=True fns time
+    # ``SELECT ... FROM <df> [AS t], LATERAL <sql_name>(t.tile, <scalar args>) ...``
+    # (the realistic distributed per-tile cost) instead of the scalar
+    # ``.select(col_fn(...))`` path (which would raise). The col_fn is left as the
+    # NotImplementedError-raising wrapper for the FnSpec contract; the udtf branch
+    # never calls it. The scalar args ride from ``args`` in signature order (all the
+    # grid-family UDTFs take numeric scalars only: resolution / width / height /
+    # overlap / min_z / max_z), passed as SQL literals after ``t.tile``.
+    # HEAVY-TIER SYMMETRY NOTE: the heavyweight grid expressions (RST_H3_RasterToGrid*
+    # etc.) are ARRAY-returning SCALAR expressions -- their production form IS a
+    # scalar column, so the heavy tier keeps its ``.select(column(...))`` path
+    # (BenchDispatch.column). The two tiers therefore time each engine's REAL
+    # production invocation shape for the same logical op (light: LATERAL UDTF row
+    # stream; heavy: array-returning scalar), which is the honest comparison -- there
+    # is no light scalar form to force, and no heavy UDTF form to force.
+    udtf: bool = False
 
 
 _BOTH = ("pure-core", "spark-path")
@@ -1828,6 +1849,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [tessellate.tessellate_h3(ds, a["resolution"])],
         col_fn=lambda t, a: prx.rst_h3_tessellate(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
         + (
             _HEAVY + "generators/RST_H3_Tessellate.scala",
@@ -1846,6 +1868,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "h3", "avg"),
         col_fn=lambda t, a: prx.rst_h3_rastertogridavg(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridAvg.scala",
@@ -1865,6 +1888,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_h3_rastertogridcount(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridCount.scala",
@@ -1882,6 +1906,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "h3", "max"),
         col_fn=lambda t, a: prx.rst_h3_rastertogridmax(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridMax.scala",
@@ -1901,6 +1926,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_h3_rastertogridmedian(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridMedian.scala",
@@ -1918,6 +1944,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "h3", "min"),
         col_fn=lambda t, a: prx.rst_h3_rastertogridmin(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridMin.scala",
@@ -1935,6 +1962,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "h3", "sum"),
         col_fn=lambda t, a: prx.rst_h3_rastertogridsum(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridSum.scala",
@@ -1954,6 +1982,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_h3_rastertogridvariance(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridVariance.scala",
@@ -1973,6 +2002,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_h3_rastertogridstddev(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_H3_RasterToGridStddev.scala",
@@ -1993,6 +2023,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridavg(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridAvg.scala",
@@ -2012,6 +2043,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridcount(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridCount.scala",
@@ -2031,6 +2063,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridmax(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridMax.scala",
@@ -2050,6 +2083,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridmedian(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridMedian.scala",
@@ -2069,6 +2103,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridmin(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridMin.scala",
@@ -2088,6 +2123,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridsum(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridSum.scala",
@@ -2107,6 +2143,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridvariance(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridVariance.scala",
@@ -2126,6 +2163,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_quadbin_rastertogridstddev(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _HEAVY + "grid/RST_Quadbin_RasterToGridStddev.scala",
@@ -2155,6 +2193,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "bng", "avg"),
         col_fn=lambda t, a: prx.rst_bng_rastertogridavg(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2176,6 +2215,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_bng_rastertogridcount(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2195,6 +2235,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "bng", "max"),
         col_fn=lambda t, a: prx.rst_bng_rastertogridmax(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2216,6 +2257,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_bng_rastertogridmedian(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2235,6 +2277,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "bng", "min"),
         col_fn=lambda t, a: prx.rst_bng_rastertogridmin(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2254,6 +2297,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: gridagg.raster_to_grid(ds, a["resolution"], "bng", "sum"),
         col_fn=lambda t, a: prx.rst_bng_rastertogridsum(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2275,6 +2319,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_bng_rastertogridvariance(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2296,6 +2341,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=lambda t, a: prx.rst_bng_rastertogridstddev(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_GRIDAGG_LIGHT
         + (
             _BNG_LIB,
@@ -2324,6 +2370,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ],
         col_fn=lambda t, a: prx.rst_quadbin_tessellate(t, a["resolution"]),
         fingerprint_kind="dggs_grid",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
         + (
             _QUADBIN_LIB,
@@ -2344,6 +2391,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ],
         col_fn=lambda t, a: prx.rst_bng_tessellate(t, a["resolution"]),
         fingerprint_kind="dggs_grid_str",
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
         + (
             _BNG_LIB,

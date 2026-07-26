@@ -897,6 +897,33 @@ def _explain_spark_path(
                     explain_only=True,
                     explain_dir=explain_dir,
                 )
+            elif getattr(_fs, "udtf", False):
+                # UDTF grid fn: the spark-path is a SQL LATERAL join, not a scalar
+                # column, so build + explain the LATERAL plan (the scalar col_fn
+                # would raise NotImplementedError). Register the light UDTF first.
+                from databricks.labs.gbx.pyrx import functions as _prx_reg
+
+                _prx_reg.register(spark, only=[_fs.sql_name])
+                _ps = (
+                    partition_size
+                    if (partition_size and partition_size > 0)
+                    else max(1, _n // (nparts * 4))
+                )
+                _parts = max(1, math.ceil(_n / _ps))
+                _edf = df_all.repartition(max(1, _parts), F.rand())
+                _view = f"_bench_udtf_explain_{_fs.name}"
+                _edf.createOrReplaceTempView(_view)
+                try:
+                    _emit_explain(
+                        f"{_fs.name} (udtf-lateral, n={_n}, parts={_parts})",
+                        spark.sql(_udtf_lateral_sql(_view, _fs)),
+                        explain_dir,
+                    )
+                finally:
+                    try:
+                        spark.catalog.dropTempView(_view)
+                    except Exception:  # noqa: BLE001
+                        pass
             else:
                 _ps = (
                     partition_size
@@ -919,6 +946,39 @@ def _explain_spark_path(
             print(f"  explain error for {_fs.name}: {_e}")
 
 
+def _sql_literal(v) -> str:
+    """Render a scalar bench arg as a SQL literal for a LATERAL UDTF call.
+
+    The grid-family UDTFs (rastertogrid* / tessellate) take numeric scalars only
+    (resolution / tile_width / tile_height / overlap / min_z / max_z), but keep the
+    string branch defensive so a future string-arg UDTF still renders correctly.
+    """
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def _udtf_lateral_sql(view: str, fs) -> str:
+    """The timed SQL for a UDTF grid fn: SELECT ... FROM <view>, LATERAL <udtf>(...).
+
+    The lightweight grid functions (rastertogrid* / tessellate) are registered as
+    Python UDTFs, so their realistic distributed per-tile cost is a SQL LATERAL
+    table-function join over the tile DataFrame -- NOT a scalar column (the pyrx
+    ``prx.<fn>`` wrapper raises NotImplementedError for exactly this reason). The
+    UDTF's first positional arg is the tile struct (``d.tile``); the remaining
+    scalar args ride from ``fs.args`` in signature order as SQL literals. ``t.*``
+    projects every emitted row so the whole per-tile cell/row fan-out is realized
+    (and written to noop for timing), not short-circuited.
+    """
+    scalar_args = "".join(", " + _sql_literal(v) for v in fs.args.values())
+    return (
+        f"SELECT t.* FROM {view} AS d, "
+        f"LATERAL {fs.sql_name}(d.tile{scalar_args}) AS t"
+    )
+
+
 def _spark_path_warmup(spark, fnspecs, pool, df_all, input_col):
     """One throwaway Spark job so JVM/Spark spin-up isn't charged to the first timed
     cell. Band-aware (mirrors the Scala HeavyRunner warm-up) + guarded so a warm-up
@@ -929,6 +989,10 @@ def _spark_path_warmup(spark, fnspecs, pool, df_all, input_col):
         f
         for f in fnspecs
         if "spark-path" in f.modes
+        # Exclude the aggregators (no _input_col column form) AND the UDTF grid fns
+        # (their scalar col_fn raises NotImplementedError -- they warm up per-fn via
+        # the LATERAL warm body inside _run_udtf_lateral instead).
+        and not getattr(f, "udtf", False)
         and getattr(f, "input_kind", "tile")
         not in (
             "tile_aggregate",
@@ -953,6 +1017,135 @@ def _spark_path_warmup(spark, fnspecs, pool, df_all, input_col):
             ).save()
         except Exception:  # noqa: BLE001 — warm-up failures must never abort timing
             pass
+
+
+def _run_udtf_lateral(
+    spark,
+    fs,
+    run_id,
+    row_counts,
+    warmup,
+    measured,
+    env,
+    pool,
+    df_all,
+    warm_df,
+    max_rows,
+    nparts,
+    partition_size,
+    math,
+    F,
+) -> List[ResultRow]:
+    """Time a UDTF grid fn's spark-path via SQL LATERAL over the tile ladder.
+
+    The lightweight rastertogrid* / tessellate functions are registered Python
+    UDTFs; their realistic distributed per-tile cost is a SQL LATERAL table-function
+    join over the tile DataFrame (``SELECT t.* FROM <view> AS d, LATERAL
+    <udtf>(d.tile, <scalar args>) AS t``), NOT a scalar column -- the scalar
+    ``prx.<fn>`` wrapper raises NotImplementedError. This mirrors the scalar
+    spark-path cell exactly (same row ladder, same repartition sizing, same noop
+    write, same warm-up-one-row-per-slot), only the timed body is the LATERAL SQL.
+    Registers the per-fn view name off df_all / warm_df so ``spark.sql`` can join it.
+    """
+    out: List[ResultRow] = []
+    # Register the cached tile DataFrames as temp views the LATERAL SQL can join.
+    # Per-fn unique names so parallel/repeated calls don't collide; dropped in finally.
+    _safe = fs.name
+    _view = f"_bench_udtf_{_safe}"
+    _warm_view = f"_bench_udtf_warm_{_safe}"
+    for n in sorted(row_counts):
+        # Same partition sizing as the scalar spark-path cell (oversubscribe slots).
+        if partition_size and partition_size > 0:
+            _psize = partition_size
+        else:
+            _psize = max(1, n // (nparts * 4))
+        _parts = max(1, math.ceil(n / _psize))
+        _src = df_all if n >= max_rows else df_all.limit(n)
+        df = _src.repartition(max(1, _parts), F.rand())
+        try:
+            df.createOrReplaceTempView(_view)
+            warm_df.createOrReplaceTempView(_warm_view)
+            _sql = _udtf_lateral_sql(_view, fs)
+            _warm_sql = _udtf_lateral_sql(_warm_view, fs)
+
+            def job(_q=_sql):
+                spark.sql(_q).write.format("noop").mode("overwrite").save()
+
+            def warm(_q=_warm_sql):
+                spark.sql(_q).write.format("noop").mode("overwrite").save()
+
+            stats = time_iters(job, warmup, measured, warmup_fn=warm)
+            ms = stats["iter_median_ms"]
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn=fs.name,
+                    category=fs.category,
+                    mode="spark-path",
+                    tile_px=pool.tile_px,
+                    bands=pool.bands,
+                    dtype=pool.dtype,
+                    srid=(pool.tiles[0].srid if pool.tiles else 0),
+                    rows=n,
+                    nodata_frac=0.0,
+                    warmup_iters=stats["warmup_iters"],
+                    measured_iters=stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                    avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                    per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+                    per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+                    throughput_mpix_s=(
+                        (_mpix(pool.tile_px, pool.bands, n) / (ms / 1000.0))
+                        if ms
+                        else 0.0
+                    ),
+                    throughput_rows_s=(n / (ms / 1000.0)) if ms else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status="ok",
+                    note="lateral-udtf",
+                    output_fingerprint="",
+                    **env,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn=fs.name,
+                    category=fs.category,
+                    mode="spark-path",
+                    tile_px=pool.tile_px,
+                    bands=pool.bands,
+                    dtype=pool.dtype,
+                    srid=(pool.tiles[0].srid if pool.tiles else 0),
+                    rows=n,
+                    nodata_frac=0.0,
+                    warmup_iters=warmup,
+                    measured_iters=0,
+                    iter_median_s=0.0,
+                    iter_min_s=0.0,
+                    iter_p90_s=0.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=0.0,
+                    peak_rss_mb=0.0,
+                    status="error",
+                    note=str(e)[:300],
+                    output_fingerprint="",
+                    **env,
+                )
+            )
+        finally:
+            try:
+                spark.catalog.dropTempView(_view)
+                spark.catalog.dropTempView(_warm_view)
+            except Exception:  # noqa: BLE001
+                pass
+    return out
 
 
 def run_spark_path(
@@ -1118,6 +1311,19 @@ def run_spark_path(
         )
         return []
 
+    # UDTF grid fns (rastertogrid* / tessellate) are invoked via SQL LATERAL, so
+    # their registered gbx_ names must exist in this session. Register JUST the light
+    # UDTFs needed by this run's udtf fns (idempotent; last registration wins) so the
+    # LATERAL branch below can call them. The scalar col_fn path never needs this
+    # (its UDFs are module-level singletons), so register only when a udtf fn is present.
+    _udtf_fns = [
+        f for f in fnspecs if getattr(f, "udtf", False) and "spark-path" in f.modes
+    ]
+    if _udtf_fns:
+        from databricks.labs.gbx.pyrx import functions as _prx_reg
+
+        _prx_reg.register(spark, only=[f.sql_name for f in _udtf_fns])
+
     # Spark warm-up: one throwaway job so JVM/Spark spin-up isn't charged to the first
     # timed cell (delegated to _spark_path_warmup).
     _spark_path_warmup(spark, fnspecs, pool, df_all, _input_col)
@@ -1158,6 +1364,33 @@ def run_spark_path(
                 measured,
                 env,
                 partition_size=partition_size,
+            )
+            _flush(out, _mark)
+            continue
+        if getattr(fs, "udtf", False):
+            # UDTF grid fns (rastertogrid* / tessellate): the lightweight impl is a
+            # registered Python UDTF, so the realistic distributed per-tile cost is a
+            # SQL LATERAL table-function join over the tile DataFrame -- NOT a scalar
+            # column (prx.<fn> raises NotImplementedError). Time
+            # `SELECT t.* FROM <view> AS d, LATERAL <udtf>(d.tile, <args>) AS t`
+            # written to noop, over the same row ladder + partitioning as the scalar
+            # path, so the number is comparable to the scalar spark-path cells.
+            out += _run_udtf_lateral(
+                spark,
+                fs,
+                run_id,
+                row_counts,
+                warmup,
+                measured,
+                env,
+                pool,
+                df_all,
+                _warm_df,
+                max_rows,
+                _nparts,
+                partition_size,
+                math,
+                F,
             )
             _flush(out, _mark)
             continue

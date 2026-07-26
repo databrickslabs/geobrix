@@ -72,17 +72,13 @@ def _h3_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
 
 
 def _bng_cells(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
-    """Per-valid-pixel BNG cell ids (Long). Scalar loop over pygx._bng.
+    """Per-valid-pixel BNG cell ids (Long int64), fully vectorized.
 
     ``e``/``n`` are EPSG:27700 eastings/northings (pixel centroids of the WARPED
-    raster). Single source of truth: delegates to ``pygx._bng.point_to_cell_id``
-    -- NO vectorized reimplementation of the BNG codec.
+    raster). Delegates to ``pygx._bng.point_to_cell_id_vec`` -- the SAME shared
+    numpy core the scalar ``point_to_cell_id`` wraps, so cell ids are identical.
     """
-    cells = [
-        _bng.point_to_cell_id(float(ei), float(ni), resolution)
-        for ei, ni in zip(e, n)  # vectorscan: ok (pygx._bng single source of truth)
-    ]
-    return np.array(cells, dtype="int64")
+    return _bng.point_to_cell_id_vec(e, n, resolution)
 
 
 def _quadbin_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
@@ -291,13 +287,9 @@ def _raster_to_bng(ds, resolution: int, agg: str) -> list:
 
             cids = _bng_cells(e, n, resolution)
             # Drop out-of-GB pixels (is_valid) BEFORE grouping so a cell is only
-            # emitted for >=1 valid, in-GB pixel (sec 2.6).
-            keep = np.array(
-                [
-                    _bng.is_valid(int(c)) for c in cids
-                ],  # vectorscan: ok (pygx._bng SSoT)
-                dtype=bool,
-            )
+            # emitted for >=1 valid, in-GB pixel (sec 2.6). Vectorized over the
+            # single-resolution batch.
+            keep = _bng.is_valid_vec(cids, resolution)
             cids = cids[keep]
             vals = vals[keep]
             if cids.size == 0:

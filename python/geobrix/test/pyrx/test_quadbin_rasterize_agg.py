@@ -1,5 +1,8 @@
 """Spark-level tests for the light quadbin rasterize_agg grouped-agg UDF."""
 
+import numpy as np
+from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
+
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx import functions as rx
 
@@ -101,3 +104,81 @@ def test_rst_quadbin_rasterize_agg_null_cellid_value_alignment():
         assert any(
             v in covered for v in (10.0, 20.0)
         ), f"neither 10.0 nor 20.0 found in output: {sorted(set(covered.tolist()))}"
+
+
+def test_rst_quadbin_rasterize_agg_null_cellid_no_precision_loss(spark):
+    """Null cellid in a BIGINT column must not corrupt surviving large quadbin ids.
+
+    Quadbin cell ids (~4.6e18 at fine resolutions) exceed float64's exact-integer
+    ceiling (2**53 ~= 9e15).  When a group has ANY null cellid, PySpark/Arrow
+    upcast the LongType Series to float64, rounding every id.  The Python wrapper
+    must cast cellid to STRING on the wire so the Series arrives as object-dtype
+    (strings + None), preserving full 64-bit precision.
+
+    Test: a group of one large quadbin id + one null-cellid row.  The result must
+    be IDENTICAL to the control group that has only the single large id (no null
+    row).  Before the fix the two tiles differ because the rounded id maps to a
+    different (adjacent) quadbin cell.
+    """
+    from shapely import set_srid, to_wkb
+    from shapely.geometry import box
+
+    from databricks.labs.gbx.pygx import _quadbin as qb
+
+    res = 15  # fine res -> large ids well above 2**53
+    # A single cell over a known location at fine resolution.
+    ewkb = to_wkb(
+        set_srid(box(-0.105, 51.505, -0.100, 51.510), 4326), include_srid=True
+    )
+    cells = qb.polyfill(ewkb, res)
+    assert len(cells) >= 1, "polyfill returned no cells"
+    large_cell_id = int(cells[0])
+    assert (
+        large_cell_id > 2**53
+    ), f"chosen quadbin id {large_cell_id} is not > 2**53; try a finer resolution"
+
+    schema = StructType(
+        [
+            StructField("cellid", LongType(), True),  # nullable BIGINT
+            StructField("val", DoubleType(), True),
+            StructField("group", StringType(), False),
+        ]
+    )
+    # Control: single large cell, no null.
+    df_control = spark.createDataFrame([(large_cell_id, 7.0, "control")], schema)
+    # Test: same large cell + a null-cellid row in the same group.
+    df_test = spark.createDataFrame(
+        [(large_cell_id, 7.0, "test"), (None, 99.0, "test")], schema
+    )
+
+    def _rasterize(df):
+        return (
+            df.groupBy("group")
+            .agg(rx.rst_quadbin_rasterize_agg("cellid", "val").alias("tile"))
+            .collect()[0]["tile"]["raster"]
+        )
+
+    raster_control = bytes(_rasterize(df_control))
+    raster_test = bytes(_rasterize(df_test))
+
+    with _serde.open_tile(raster_control) as ds_ctrl:
+        arr_ctrl = ds_ctrl.read(1)
+        nodata = ds_ctrl.nodata
+
+    with _serde.open_tile(raster_test) as ds_test:
+        arr_test = ds_test.read(1)
+
+    # The burned pixels (non-nodata) must match exactly.  Before the fix, the
+    # rounded cellid maps to a different cell → different pixel position → mismatch.
+    burned_ctrl = set(zip(*np.where(arr_ctrl != nodata)))
+    burned_test = set(zip(*np.where(arr_test != nodata)))
+    assert burned_ctrl == burned_test, (
+        f"Null-cellid float64 precision loss corrupted the surviving cell id: "
+        f"control pixels={burned_ctrl}, test pixels={burned_test}.  "
+        f"large_cell_id={large_cell_id}"
+    )
+    # The burned value must be 7.0 (not 99.0 from the null-cellid row).
+    for r, c in burned_test:
+        assert (
+            arr_test[r, c] == 7.0
+        ), f"Expected value 7.0 at ({r},{c}) but got {arr_test[r, c]}"

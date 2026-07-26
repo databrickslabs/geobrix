@@ -3617,6 +3617,22 @@ def _rst_h3_rasterize_agg_udf(
     pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
     if not pairs:
         return None
+    # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
+    # PySpark/Arrow to upcast the Series), any H3 id > 2**53 has already been
+    # silently rounded.  Fail loud instead of burning wrong pixels.  The Python
+    # wrapper (rst_h3_rasterize_agg) casts to STRING before calling this UDF, so
+    # it never triggers this guard.  SQL callers that pass a BIGINT column with
+    # nulls should use CAST(cellid AS STRING).
+    if pd.api.types.is_float_dtype(cellid) and any(
+        abs(float(c)) > 2**53 for c, _ in pairs
+    ):
+        raise ValueError(
+            "rst_h3_rasterize_agg: cellid column contains large H3 ids (> 2**53) "
+            "but arrived as float64 — a null in a BIGINT cellid column caused "
+            "PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
+            "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
+            "rst_h3_rasterize_agg() wrapper which applies this cast automatically."
+        )
     cells = [int(c) for c, _ in pairs]
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
@@ -3685,6 +3701,22 @@ def _rst_quadbin_rasterize_agg_udf(
     pairs = [(c, v) for c, v in zip(cellid, value) if pd.notna(c)]
     if not pairs:
         return None
+    # Guard: if cellid arrived as float64 (a null-containing BIGINT column causes
+    # PySpark/Arrow to upcast the Series), any quadbin id > 2**53 has already been
+    # silently rounded.  Fail loud instead of burning wrong pixels.  The Python
+    # wrapper (rst_quadbin_rasterize_agg) casts to STRING before calling this UDF,
+    # so it never triggers this guard.  SQL callers that pass a BIGINT column with
+    # nulls should use CAST(cellid AS STRING).
+    if pd.api.types.is_float_dtype(cellid) and any(
+        abs(float(c)) > 2**53 for c, _ in pairs
+    ):
+        raise ValueError(
+            "rst_quadbin_rasterize_agg: cellid column contains large quadbin ids "
+            "(> 2**53) but arrived as float64 — a null in a BIGINT cellid column "
+            "caused PySpark/Arrow to upcast the Series, silently rounding cell ids.  "
+            "Pass CAST(cellid AS STRING) to the SQL UDF, or use the Python "
+            "rst_quadbin_rasterize_agg() wrapper which applies this cast automatically."
+        )
     cells = [int(c) for c, _ in pairs]
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
@@ -4018,9 +4050,12 @@ def rst_h3_rasterize_agg(
     def _c(x, default):
         return _col(x) if x is not None else f.lit(default)
 
+    _cellid_col = _col(cellid)
+    if isinstance(_cellid_col, str):
+        _cellid_col = f.col(_cellid_col)
     return _as_tile_udf(
         _rst_h3_rasterize_agg_udf(
-            _col(cellid),
+            _cellid_col.cast("string"),
             _c(value, None),
             _c(srid, 4326),
             _c(pixel_size, None),
@@ -4066,9 +4101,12 @@ def rst_quadbin_rasterize_agg(
     def _c(x, default):
         return _col(x) if x is not None else f.lit(default)
 
+    _cellid_col = _col(cellid)
+    if isinstance(_cellid_col, str):
+        _cellid_col = f.col(_cellid_col)
     return _as_tile_udf(
         _rst_quadbin_rasterize_agg_udf(
-            _col(cellid),
+            _cellid_col.cast("string"),
             _c(value, None),
             _c(srid, 4326),
             _c(pixel_size, None),

@@ -1,4 +1,6 @@
 import h3
+import numpy as np
+from pyspark.sql.types import DoubleType, LongType, StringType, StructField, StructType
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx import functions as rx
@@ -141,3 +143,72 @@ def test_rst_h3_rasterize_agg_null_typed_value_column_is_presence(spark):
         assert covered.size >= len(cells)
         assert not np.isnan(covered).any(), "null value column burned NaN, not presence"
         assert np.all(covered == 1.0), f"expected all 1.0, got {np.unique(covered)}"
+
+
+def test_rst_h3_rasterize_agg_null_cellid_no_precision_loss(spark):
+    """Null cellid in a BIGINT column must not corrupt surviving large cell ids.
+
+    H3 cell ids (~6e17) exceed float64's exact-integer ceiling (2**53 ~= 9e15).
+    When a group has ANY null cellid, PySpark/Arrow upcast the LongType Series to
+    float64, rounding every id.  The Python wrapper must cast cellid to STRING on
+    the wire so the Series arrives as object-dtype (strings + None), preserving
+    full 64-bit precision.
+
+    Test: a group of one large H3 id + one null-cellid row.  The result must be
+    IDENTICAL to the control group that has only the single large id (no null row).
+    Before the fix the two tiles differ because the rounded id maps to a different
+    (adjacent) H3 cell.
+    """
+    res = 9
+    # A concrete res-9 cell whose integer id is well above 2**53.
+    large_cell_str = h3.latlng_to_cell(51.5, -0.1, res)  # London, res 9
+    large_cell_id = int(h3.str_to_int(large_cell_str))
+    assert (
+        large_cell_id > 2**53
+    ), f"chosen H3 id {large_cell_id} is not > 2**53; pick a finer resolution"
+
+    schema = StructType(
+        [
+            StructField("cellid", LongType(), True),  # nullable BIGINT
+            StructField("val", DoubleType(), True),
+            StructField("group", StringType(), False),
+        ]
+    )
+    # Control: single large cell, no null.
+    df_control = spark.createDataFrame([(large_cell_id, 7.0, "control")], schema)
+    # Test: same large cell + a null-cellid row in the same group.
+    df_test = spark.createDataFrame(
+        [(large_cell_id, 7.0, "test"), (None, 99.0, "test")], schema
+    )
+
+    def _rasterize(df):
+        return (
+            df.groupBy("group")
+            .agg(rx.rst_h3_rasterize_agg("cellid", "val").alias("tile"))
+            .collect()[0]["tile"]["raster"]
+        )
+
+    raster_control = bytes(_rasterize(df_control))
+    raster_test = bytes(_rasterize(df_test))
+
+    with _serde.open_tile(raster_control) as ds_ctrl:
+        arr_ctrl = ds_ctrl.read(1)
+        nodata = ds_ctrl.nodata
+
+    with _serde.open_tile(raster_test) as ds_test:
+        arr_test = ds_test.read(1)
+
+    # The burned pixels (non-nodata) must match exactly.  Before the fix, the
+    # rounded cellid maps to a different cell → different pixel position → mismatch.
+    burned_ctrl = set(zip(*np.where(arr_ctrl != nodata)))
+    burned_test = set(zip(*np.where(arr_test != nodata)))
+    assert burned_ctrl == burned_test, (
+        f"Null-cellid float64 precision loss corrupted the surviving cell id: "
+        f"control pixels={burned_ctrl}, test pixels={burned_test}.  "
+        f"large_cell_id={large_cell_id}"
+    )
+    # The burned value must be 7.0 (not 99.0 from the null-cellid row).
+    for r, c in burned_test:
+        assert (
+            arr_test[r, c] == 7.0
+        ), f"Expected value 7.0 at ({r},{c}) but got {arr_test[r, c]}"

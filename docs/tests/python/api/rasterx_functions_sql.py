@@ -1262,6 +1262,26 @@ rst_h3_rastertogridmedian_sql_example_output = """
 """
 
 
+def rst_h3_rastertogridsum_sql_example():
+    """Get the sum of pixel values per H3 cell"""
+    return """
+SELECT
+    cell.cellID as h3_cell,
+    cell.measure as sum_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_h3_rastertogridsum(tile, 7)[0]) AS cell;
+"""
+
+
+rst_h3_rastertogridsum_sql_example_output = """
++--------+---------+
+|h3_cell |sum_value|
++--------+---------+
+|8f283...|4096.0   |
++--------+---------+
+"""
+
+
 def rst_quadbin_rastertogridavg_sql_example():
     """Aggregate raster values to CARTO quadbin v0 cells using average"""
     return """
@@ -1371,6 +1391,26 @@ rst_quadbin_rastertogridmedian_sql_example_output = """
 +------------+------------+
 |5188146...  |128.0       |
 +------------+------------+
+"""
+
+
+def rst_quadbin_rastertogridsum_sql_example():
+    """Get the sum of pixel values per CARTO quadbin v0 cell"""
+    return """
+SELECT
+    cell.cellID as quadbin_cell,
+    cell.measure as sum_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_quadbin_rastertogridsum(tile, 7)[0]) AS cell;
+"""
+
+
+rst_quadbin_rastertogridsum_sql_example_output = """
++------------+---------+
+|quadbin_cell|sum_value|
++------------+---------+
+|5188146...  |4096.0   |
++------------+---------+
 """
 
 
@@ -1496,6 +1536,26 @@ rst_bng_rastertogridmedian_sql_example_output = """
 +--------+------------+
 |TQ38SW  |128.0       |
 +--------+------------+
+"""
+
+
+def rst_bng_rastertogridsum_sql_example():
+    """Get the sum of pixel values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as sum_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridsum(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridsum_sql_example_output = """
++--------+---------+
+|bng_cell|sum_value|
++--------+---------+
+|TQ38SW  |32896.0  |
++--------+---------+
 """
 
 

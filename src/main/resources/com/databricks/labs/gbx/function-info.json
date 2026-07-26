@@ -34,6 +34,9 @@
     "gbx_rst_bng_rastertogridmin": {
       "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridmin(tile, '1km')[0]) AS cell;"
     },
+    "gbx_rst_bng_rastertogridsum": {
+      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridsum(tile, '1km')[0]) AS cell;"
+    },
     "gbx_rst_bng_tessellate": {
       "examples": "Examples:\n      > SELECT r.path, g.tile FROM rasters r LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'covering') g AS tile;"
     },
@@ -133,6 +136,9 @@
     "gbx_rst_h3_rastertogridmin": {
       "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridmin(tile, 7)[0]) AS cell;"
     },
+    "gbx_rst_h3_rastertogridsum": {
+      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridsum(tile, 7)[0]) AS cell;"
+    },
     "gbx_rst_h3_tessellate": {
       "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;"
     },
@@ -225,6 +231,9 @@
     },
     "gbx_rst_quadbin_rastertogridmin": {
       "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmin(tile, 7)[0]) AS cell;"
+    },
+    "gbx_rst_quadbin_rastertogridsum": {
+      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridsum(tile, 7)[0]) AS cell;"
     },
     "gbx_rst_quadbin_tessellate": {
       "examples": "Examples:\n      > SELECT r.path, g.tile FROM rasters r LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'covering') g AS tile;"

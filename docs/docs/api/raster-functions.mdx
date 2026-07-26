@@ -49,9 +49,9 @@ RasterX exposes 87+ SQL functions (registered as `gbx_rst_*`; available in Pytho
 - **Aggregator Functions**: Combine or merge rasters in group-by (combineavg_agg, derivedband_agg, merge_agg, h3_rasterize_agg)
 - **Constructor Functions**: Create or load rasters from paths, binary content, or bands
 - **Generator Functions**: Produce multiple tiles or bands (h3_tessellate, maketiles, retile, separatebands, tooverlappingtiles)
-- **Grid Functions (H3)**: Aggregate raster values to H3 cells (rastertogrid avg/count/max/min/median/sum)
-- **Grid Functions (quadbin)**: Aggregate raster values to CARTO quadbin v0 cells (rastertogrid avg/count/max/min/median/sum; tessellate; rasterize_agg)
-- **Grid Functions (BNG)**: Aggregate raster values to British National Grid cells (rastertogrid avg/count/max/min/median/sum; tessellate; rasterize_agg)
+- **Grid Functions (H3)**: Aggregate raster values to H3 cells (rastertogrid avg/count/max/min/median/sum/variance/stddev)
+- **Grid Functions (quadbin)**: Aggregate raster values to CARTO quadbin v0 cells (rastertogrid avg/count/max/min/median/sum/variance/stddev; tessellate; rasterize_agg)
+- **Grid Functions (BNG)**: Aggregate raster values to British National Grid cells (rastertogrid avg/count/max/min/median/sum/variance/stddev; tessellate; rasterize_agg)
 - **Operations**: Transform and analyze rasters (clip, transform, merge, asformat, ndvi, filter, convolve, map algebra, coordinate conversion, isEmpty, tryOpen, initNoData, updateType, combineavg, derivedband)
 - **Web-Mercator Tile Output**: Reproject to EPSG:3857 and emit slippy-map XYZ tiles (to_webmercator, tilexyz, xyzpyramid)
 - **Vector-raster bridge**: Burn polygons into rasters and trace contiguous regions back to polygons (rasterize, polygonize)
@@ -1106,7 +1106,7 @@ Powered by **rasterio**. Streams one tile row per overlapping region via streami
 
 ## Grid Functions (H3) {#h3-grid}
 
-Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (7 total).
+Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (9 total).
 
 ### rst_h3_rastertogridavg
 
@@ -1192,6 +1192,34 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridsum_sql_example" outputConstant="rst_h3_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
 
+### rst_h3_rastertogridvariance
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridvariance(tile: Column, resolution: Column): Column` — Population variance of pixel values per H3 cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridvariance_sql_example" outputConstant="rst_h3_rastertogridvariance_sql_example_output" code={rasterxSqlCode} />
+
+### rst_h3_rastertogridstddev
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per H3 cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridstddev_sql_example" outputConstant="rst_h3_rastertogridstddev_sql_example_output" code={rasterxSqlCode} />
+
 ### gbx_h3_cell_bbox
 
 <Tier both/>
@@ -1263,7 +1291,7 @@ STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE,
 
 ## Grid Functions (quadbin)
 
-Aggregate raster values to CARTO quadbin v0 grid cells (5 reducers). Each reducer returns an array (one entry per band) of `struct<cellID: BIGINT, measure: DOUBLE>` rows; explode the array element you want to drive per-cell rows. Resolution is the quadbin zoom (0..26). See also [`rst_quadbin_tessellate`](#rst_quadbin_tessellate) (Generator Functions) and [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg) (Aggregator Functions) for the remaining quadbin raster-grid surface.
+Aggregate raster values to CARTO quadbin v0 grid cells (8 reducers). Each reducer returns an array (one entry per band) of `struct<cellID: BIGINT, measure: DOUBLE>` rows; explode the array element you want to drive per-cell rows. Resolution is the quadbin zoom (0..26). See also [`rst_quadbin_tessellate`](#rst_quadbin_tessellate) (Generator Functions) and [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg) (Aggregator Functions) for the remaining quadbin raster-grid surface.
 
 ### rst_quadbin_rastertogridavg
 
@@ -1349,11 +1377,39 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridsum_sql_example" outputConstant="rst_quadbin_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
 
+### rst_quadbin_rastertogridvariance
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_quadbin_rastertogridvariance(tile: Column, resolution: Column): Column` — Population variance of pixel values per quadbin cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridvariance_sql_example" outputConstant="rst_quadbin_rastertogridvariance_sql_example_output" code={rasterxSqlCode} />
+
+### rst_quadbin_rastertogridstddev
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_quadbin_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per quadbin cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridstddev_sql_example" outputConstant="rst_quadbin_rastertogridstddev_sql_example_output" code={rasterxSqlCode} />
+
 ---
 
 ## Grid Functions (BNG) {#bng-grid}
 
-Aggregate raster values to British National Grid (BNG) cells (6 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
+Aggregate raster values to British National Grid (BNG) cells (8 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
 
 :::note Lightweight tier (pyrx)
 The BNG raster-grid reducers are available in both tiers. The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`: it auto-warps the input to **EPSG:27700** via `rasterio.warp`, samples pixels per cell, and renders **STRING** BNG cell IDs — matching the heavyweight cell set and measures exactly.
@@ -1434,6 +1490,30 @@ Sum of pixel values per BNG cell.
 **SQL:**
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridsum_sql_example" outputConstant="rst_bng_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
+
+### rst_bng_rastertogridvariance
+
+<Tier both/> <Impl udtf/>
+
+Population variance (`÷ n`, two-pass) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
+
+**Signature:** `rst_bng_rastertogridvariance(tile: Column, resolution: Column): Column` — Population variance of pixel values per BNG cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridvariance_sql_example" outputConstant="rst_bng_rastertogridvariance_sql_example_output" code={rasterxSqlCode} />
+
+### rst_bng_rastertogridstddev
+
+<Tier both/> <Impl udtf/>
+
+Population standard deviation (`sqrt` of the population variance) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
+
+**Signature:** `rst_bng_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per BNG cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridstddev_sql_example" outputConstant="rst_bng_rastertogridstddev_sql_example_output" code={rasterxSqlCode} />
 
 ---
 

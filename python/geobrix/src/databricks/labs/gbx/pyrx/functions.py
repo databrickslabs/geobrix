@@ -67,16 +67,19 @@ def _registrar_groups() -> List[_register.Group]:
         ("gbx_rst_h3_rastertogridmax", _RstH3RasterToGridMaxUDTF),
         ("gbx_rst_h3_rastertogridmin", _RstH3RasterToGridMinUDTF),
         ("gbx_rst_h3_rastertogridmedian", _RstH3RasterToGridMedianUDTF),
+        ("gbx_rst_h3_rastertogridsum", _RstH3RasterToGridSumUDTF),
         ("gbx_rst_quadbin_rastertogridavg", _RstQuadbinRasterToGridAvgUDTF),
         ("gbx_rst_quadbin_rastertogridcount", _RstQuadbinRasterToGridCountUDTF),
         ("gbx_rst_quadbin_rastertogridmax", _RstQuadbinRasterToGridMaxUDTF),
         ("gbx_rst_quadbin_rastertogridmin", _RstQuadbinRasterToGridMinUDTF),
         ("gbx_rst_quadbin_rastertogridmedian", _RstQuadbinRasterToGridMedianUDTF),
+        ("gbx_rst_quadbin_rastertogridsum", _RstQuadbinRasterToGridSumUDTF),
         ("gbx_rst_bng_rastertogridavg", _RstBngRasterToGridAvgUDTF),
         ("gbx_rst_bng_rastertogridcount", _RstBngRasterToGridCountUDTF),
         ("gbx_rst_bng_rastertogridmax", _RstBngRasterToGridMaxUDTF),
         ("gbx_rst_bng_rastertogridmin", _RstBngRasterToGridMinUDTF),
         ("gbx_rst_bng_rastertogridmedian", _RstBngRasterToGridMedianUDTF),
+        ("gbx_rst_bng_rastertogridsum", _RstBngRasterToGridSumUDTF),
         ("gbx_rst_separatebands", _RstSeparateBandsUDTF),
         ("gbx_rst_retile", _RstRetileUDTF),
         ("gbx_rst_tooverlappingtiles", _RstToOverlappingTilesUDTF),
@@ -2841,6 +2844,9 @@ _RstH3RasterToGridMinUDTF = _make_rastertogrid_udtf(
 _RstH3RasterToGridMedianUDTF = _make_rastertogrid_udtf(
     "h3", "median", _GRID_FLAT_DOUBLE_SCHEMA
 )
+_RstH3RasterToGridSumUDTF = _make_rastertogrid_udtf(
+    "h3", "sum", _GRID_FLAT_DOUBLE_SCHEMA
+)
 _RstQuadbinRasterToGridAvgUDTF = _make_rastertogrid_udtf(
     "quadbin", "avg", _GRID_FLAT_DOUBLE_SCHEMA
 )
@@ -2856,6 +2862,9 @@ _RstQuadbinRasterToGridMinUDTF = _make_rastertogrid_udtf(
 _RstQuadbinRasterToGridMedianUDTF = _make_rastertogrid_udtf(
     "quadbin", "median", _GRID_FLAT_DOUBLE_SCHEMA
 )
+_RstQuadbinRasterToGridSumUDTF = _make_rastertogrid_udtf(
+    "quadbin", "sum", _GRID_FLAT_DOUBLE_SCHEMA
+)
 _RstBngRasterToGridAvgUDTF = _make_rastertogrid_udtf(
     "bng", "avg", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
 )
@@ -2870,6 +2879,9 @@ _RstBngRasterToGridMinUDTF = _make_rastertogrid_udtf(
 )
 _RstBngRasterToGridMedianUDTF = _make_rastertogrid_udtf(
     "bng", "median", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
+)
+_RstBngRasterToGridSumUDTF = _make_rastertogrid_udtf(
+    "bng", "sum", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
 )
 
 _RASTERTOGRID_DOC = """{summary}
@@ -2934,6 +2946,14 @@ def rst_h3_rastertogridmedian(tile: ColLike, resolution: ColLike) -> None:
     )
 
 
+def rst_h3_rastertogridsum(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into H3 cells by sum, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_h3_rastertogridsum(tile, resolution) t"
+    )
+
+
 def rst_quadbin_rastertogridavg(tile: ColLike, resolution: ColLike) -> None:
     """Aggregate raster pixel values into quadbin cells by mean, per band."""
     raise NotImplementedError(
@@ -2971,6 +2991,14 @@ def rst_quadbin_rastertogridmedian(tile: ColLike, resolution: ColLike) -> None:
     raise NotImplementedError(
         "Invoke the registered UDTF as a SQL LATERAL table function: "
         "SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, resolution) t"
+    )
+
+
+def rst_quadbin_rastertogridsum(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into quadbin cells by sum, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_rastertogridsum(tile, resolution) t"
     )
 
 
@@ -3014,6 +3042,14 @@ def rst_bng_rastertogridmedian(tile: ColLike, resolution: ColLike) -> None:
     )
 
 
+def rst_bng_rastertogridsum(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into BNG cells by sum, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridsum(tile, resolution) t"
+    )
+
+
 rst_h3_rastertogridavg.__doc__ = _RASTERTOGRID_DOC.format(
     summary="Aggregate raster pixel values into H3 cells by mean, per band.",
     grid="H3",
@@ -3054,6 +3090,14 @@ rst_h3_rastertogridmedian.__doc__ = _RASTERTOGRID_DOC.format(
     measure="DOUBLE",
     sql_name="h3_rastertogridmedian",
 )
+rst_h3_rastertogridsum.__doc__ = _RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into H3 cells by sum, per band.",
+    grid="H3",
+    agg_desc="their sum (DOUBLE)",
+    res_range="0..15",
+    measure="DOUBLE",
+    sql_name="h3_rastertogridsum",
+)
 rst_quadbin_rastertogridavg.__doc__ = _RASTERTOGRID_DOC.format(
     summary="Aggregate raster pixel values into quadbin cells by mean, per band.",
     grid="quadbin",
@@ -3093,6 +3137,14 @@ rst_quadbin_rastertogridmedian.__doc__ = _RASTERTOGRID_DOC.format(
     res_range="0..20",
     measure="DOUBLE",
     sql_name="quadbin_rastertogridmedian",
+)
+rst_quadbin_rastertogridsum.__doc__ = _RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into quadbin cells by sum, per band.",
+    grid="quadbin",
+    agg_desc="their sum (DOUBLE)",
+    res_range="0..20",
+    measure="DOUBLE",
+    sql_name="quadbin_rastertogridsum",
 )
 
 _BNG_RASTERTOGRID_DOC = """{summary}
@@ -3147,6 +3199,12 @@ rst_bng_rastertogridmedian.__doc__ = _BNG_RASTERTOGRID_DOC.format(
     agg_desc="their median (DOUBLE; even counts average the two middle values)",
     measure="DOUBLE",
     sql_name="bng_rastertogridmedian",
+)
+rst_bng_rastertogridsum.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into BNG cells by sum, per band.",
+    agg_desc="their sum (DOUBLE)",
+    measure="DOUBLE",
+    sql_name="bng_rastertogridsum",
 )
 
 

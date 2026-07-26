@@ -31,7 +31,7 @@ from databricks.labs.gbx.pygx import _bng
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = 20
 
-_AGGS = ("avg", "count", "min", "max", "median")
+_AGGS = ("avg", "count", "min", "max", "median", "sum")
 
 # quadbin 64-bit cell layout constants (see quadbin.main / quadbin.utils).
 _QB_HEADER = np.uint64(0x4000000000000000)
@@ -165,6 +165,11 @@ def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
     if agg == "avg":
         sums = np.bincount(inv, weights=vals, minlength=uniq.size)
         out = sums / counts
+    elif agg == "sum":
+        # Total of valid pixel values per cell -- the avg numerator (bincount
+        # weighted sum) WITHOUT dividing by counts. A cell is only emitted with
+        # >=1 valid pixel (sec 2.6), so sum is always well-defined.
+        out = np.bincount(inv, weights=vals, minlength=uniq.size)
     elif agg == "min":
         out = np.full(uniq.size, np.inf)
         np.minimum.at(out, inv, vals)
@@ -192,7 +197,7 @@ def raster_to_grid(ds, resolution: int, grid: str, agg: str) -> list:
                     +/-1..+/-6 or a resolutionMap string key e.g. ``"1km"``).
         grid:       ``"h3"``, ``"quadbin"`` or ``"bng"``.
         agg:        One of ``"avg"``, ``"count"``, ``"min"``, ``"max"``,
-                    ``"median"``.
+                    ``"median"``, ``"sum"``.
 
     Returns:
         One list per band; each is a list of ``{"cellID": id, "measure":

@@ -108,16 +108,19 @@ object functions extends Serializable {
         rd.register(RST_H3_RasterToGridMax)
         rd.register(RST_H3_RasterToGridMin)
         rd.register(RST_H3_RasterToGridMedian)
+        rd.register(RST_H3_RasterToGridSum)
         rd.register(RST_Quadbin_RasterToGridAvg)
         rd.register(RST_Quadbin_RasterToGridCount)
         rd.register(RST_Quadbin_RasterToGridMax)
         rd.register(RST_Quadbin_RasterToGridMin)
         rd.register(RST_Quadbin_RasterToGridMedian)
+        rd.register(RST_Quadbin_RasterToGridSum)
         rd.register(RST_BNG_RasterToGridAvg)
         rd.register(RST_BNG_RasterToGridCount)
         rd.register(RST_BNG_RasterToGridMax)
         rd.register(RST_BNG_RasterToGridMin)
         rd.register(RST_BNG_RasterToGridMedian)
+        rd.register(RST_BNG_RasterToGridSum)
         rd.register(RST_H3_CellBBox)
 
         // Operations
@@ -348,6 +351,8 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
         ColumnAdapter(RST_H3_RasterToGridMin.name, Seq(tileExpr, resolution))
     def rst_h3_rastertogridmedian(tileExpr: Column, resolution: Column): Column =
         ColumnAdapter(RST_H3_RasterToGridMedian.name, Seq(tileExpr, resolution))
+    def rst_h3_rastertogridsum(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_H3_RasterToGridSum.name, Seq(tileExpr, resolution))
     def rst_quadbin_rastertogridavg(tileExpr: Column, resolution: Column): Column =
         ColumnAdapter(RST_Quadbin_RasterToGridAvg.name, Seq(tileExpr, resolution))
     def rst_quadbin_rastertogridcount(tileExpr: Column, resolution: Column): Column =
@@ -358,6 +363,8 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
         ColumnAdapter(RST_Quadbin_RasterToGridMin.name, Seq(tileExpr, resolution))
     def rst_quadbin_rastertogridmedian(tileExpr: Column, resolution: Column): Column =
         ColumnAdapter(RST_Quadbin_RasterToGridMedian.name, Seq(tileExpr, resolution))
+    def rst_quadbin_rastertogridsum(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Quadbin_RasterToGridSum.name, Seq(tileExpr, resolution))
     def rst_bng_rastertogridavg(tileExpr: Column, resolution: Column): Column =
         ColumnAdapter(RST_BNG_RasterToGridAvg.name, Seq(tileExpr, resolution))
     def rst_bng_rastertogridcount(tileExpr: Column, resolution: Column): Column =
@@ -368,6 +375,8 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
         ColumnAdapter(RST_BNG_RasterToGridMin.name, Seq(tileExpr, resolution))
     def rst_bng_rastertogridmedian(tileExpr: Column, resolution: Column): Column =
         ColumnAdapter(RST_BNG_RasterToGridMedian.name, Seq(tileExpr, resolution))
+    def rst_bng_rastertogridsum(tileExpr: Column, resolution: Column): Column =
+        ColumnAdapter(RST_BNG_RasterToGridSum.name, Seq(tileExpr, resolution))
 
     /** Bounding box STRUCT<xmin,ymin,xmax,ymax> of one H3 cell in `srid`. */
     def gbx_h3_cell_bbox(cellid: Column): Column =
@@ -442,22 +451,26 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
     def rst_h3_rastertogridmax(tileExpr: Column, resolution: Int): Column = rst_h3_rastertogridmax(tileExpr, lit(resolution))
     def rst_h3_rastertogridmin(tileExpr: Column, resolution: Int): Column = rst_h3_rastertogridmin(tileExpr, lit(resolution))
     def rst_h3_rastertogridmedian(tileExpr: Column, resolution: Int): Column = rst_h3_rastertogridmedian(tileExpr, lit(resolution))
+    def rst_h3_rastertogridsum(tileExpr: Column, resolution: Int): Column = rst_h3_rastertogridsum(tileExpr, lit(resolution))
     def rst_quadbin_rastertogridavg(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridavg(tileExpr, lit(resolution))
     def rst_quadbin_rastertogridcount(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridcount(tileExpr, lit(resolution))
     def rst_quadbin_rastertogridmax(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridmax(tileExpr, lit(resolution))
     def rst_quadbin_rastertogridmin(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridmin(tileExpr, lit(resolution))
     def rst_quadbin_rastertogridmedian(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridmedian(tileExpr, lit(resolution))
+    def rst_quadbin_rastertogridsum(tileExpr: Column, resolution: Int): Column = rst_quadbin_rastertogridsum(tileExpr, lit(resolution))
     // BNG reducer resolution accepts an Int index (±1..±6) or a String key ("1km", "100m", ...).
     def rst_bng_rastertogridavg(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridavg(tileExpr, lit(resolution))
     def rst_bng_rastertogridcount(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridcount(tileExpr, lit(resolution))
     def rst_bng_rastertogridmax(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridmax(tileExpr, lit(resolution))
     def rst_bng_rastertogridmin(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridmin(tileExpr, lit(resolution))
     def rst_bng_rastertogridmedian(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridmedian(tileExpr, lit(resolution))
+    def rst_bng_rastertogridsum(tileExpr: Column, resolution: Int): Column = rst_bng_rastertogridsum(tileExpr, lit(resolution))
     def rst_bng_rastertogridavg(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridavg(tileExpr, lit(resolution))
     def rst_bng_rastertogridcount(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridcount(tileExpr, lit(resolution))
     def rst_bng_rastertogridmax(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridmax(tileExpr, lit(resolution))
     def rst_bng_rastertogridmin(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridmin(tileExpr, lit(resolution))
     def rst_bng_rastertogridmedian(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridmedian(tileExpr, lit(resolution))
+    def rst_bng_rastertogridsum(tileExpr: Column, resolution: String): Column = rst_bng_rastertogridsum(tileExpr, lit(resolution))
     def rst_asformat(tileExpr: Column, newFormat: String): Column = rst_asformat(tileExpr, lit(newFormat))
     def rst_clip(tileExpr: Column, clip: Column, cutlineAllTouched: Boolean): Column =
         rst_clip(tileExpr, clip, lit(cutlineAllTouched))

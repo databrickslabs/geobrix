@@ -1282,6 +1282,46 @@ rst_h3_rastertogridsum_sql_example_output = """
 """
 
 
+def rst_h3_rastertogridvariance_sql_example():
+    """Get the population variance of pixel values per H3 cell"""
+    return """
+SELECT
+    cell.cellID as h3_cell,
+    cell.measure as variance_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_h3_rastertogridvariance(tile, 7)[0]) AS cell;
+"""
+
+
+rst_h3_rastertogridvariance_sql_example_output = """
++--------+--------------+
+|h3_cell |variance_value|
++--------+--------------+
+|8f283...|0.0           |
++--------+--------------+
+"""
+
+
+def rst_h3_rastertogridstddev_sql_example():
+    """Get the population standard deviation of pixel values per H3 cell"""
+    return """
+SELECT
+    cell.cellID as h3_cell,
+    cell.measure as stddev_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_h3_rastertogridstddev(tile, 7)[0]) AS cell;
+"""
+
+
+rst_h3_rastertogridstddev_sql_example_output = """
++--------+------------+
+|h3_cell |stddev_value|
++--------+------------+
+|8f283...|0.0         |
++--------+------------+
+"""
+
+
 def rst_quadbin_rastertogridavg_sql_example():
     """Aggregate raster values to CARTO quadbin v0 cells using average"""
     return """
@@ -1411,6 +1451,46 @@ rst_quadbin_rastertogridsum_sql_example_output = """
 +------------+---------+
 |5188146...  |4096.0   |
 +------------+---------+
+"""
+
+
+def rst_quadbin_rastertogridvariance_sql_example():
+    """Get the population variance of pixel values per CARTO quadbin v0 cell"""
+    return """
+SELECT
+    cell.cellID as quadbin_cell,
+    cell.measure as variance_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_quadbin_rastertogridvariance(tile, 7)[0]) AS cell;
+"""
+
+
+rst_quadbin_rastertogridvariance_sql_example_output = """
++------------+--------------+
+|quadbin_cell|variance_value|
++------------+--------------+
+|5188146...  |0.0           |
++------------+--------------+
+"""
+
+
+def rst_quadbin_rastertogridstddev_sql_example():
+    """Get the population standard deviation of pixel values per CARTO quadbin v0 cell"""
+    return """
+SELECT
+    cell.cellID as quadbin_cell,
+    cell.measure as stddev_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_quadbin_rastertogridstddev(tile, 7)[0]) AS cell;
+"""
+
+
+rst_quadbin_rastertogridstddev_sql_example_output = """
++------------+------------+
+|quadbin_cell|stddev_value|
++------------+------------+
+|5188146...  |0.0         |
++------------+------------+
 """
 
 
@@ -1556,6 +1636,46 @@ rst_bng_rastertogridsum_sql_example_output = """
 +--------+---------+
 |TQ38SW  |32896.0  |
 +--------+---------+
+"""
+
+
+def rst_bng_rastertogridvariance_sql_example():
+    """Get the population variance of pixel values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as variance_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridvariance(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridvariance_sql_example_output = """
++--------+--------------+
+|bng_cell|variance_value|
++--------+--------------+
+|TQ38SW  |0.0           |
++--------+--------------+
+"""
+
+
+def rst_bng_rastertogridstddev_sql_example():
+    """Get the population standard deviation of pixel values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as stddev_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridstddev(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridstddev_sql_example_output = """
++--------+------------+
+|bng_cell|stddev_value|
++--------+------------+
+|TQ38SW  |0.0         |
++--------+------------+
 """
 
 

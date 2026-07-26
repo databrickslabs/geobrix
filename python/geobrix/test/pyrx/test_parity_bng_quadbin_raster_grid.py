@@ -163,7 +163,7 @@ def _quadbin_raster_4326():
 # Reducer parity (5 BNG functions) — exact cell-set + measure within 1e-9
 # ---------------------------------------------------------------------------
 
-_REDUCERS = ["avg", "count", "max", "min", "median"]
+_REDUCERS = ["avg", "count", "max", "min", "median", "sum"]
 
 
 def _heavy_reducer_rows(spark, raster, resolution, agg):
@@ -284,6 +284,93 @@ def test_bng_rastertogrid_avg_parity_4326_warp_path(spark_with_jar):
             f"BNG avg 4326-warp cell {key} measure diverged: "
             f"light={lv} heavy={hv} (diff={abs(lv - hv):.3e}) — "
             "REAL gdalwarp-vs-rasterio.warp boundary finding"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Sum reducer parity (h3 + quadbin, Long cell ids) — cell-set + within_tol
+# ---------------------------------------------------------------------------
+# sum is the same machinery as avg (bincount weighted sum, without /count), so
+# it shares avg's within_tol summation-order class cross-tier. We assert the
+# EXACT Long cell-set and per-cell measure within a relative tolerance on a
+# real multi-value tile (ramp values, several cells with >1 pixel each).
+
+
+def _heavy_grid_rows(spark, raster, resolution, grid, agg):
+    """Heavy tier (Long cell id grids): -> {(band,cellID): measure}."""
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.rasterx import functions as hx
+
+    hx.register(spark)
+    fn = getattr(hx, f"rst_{grid}_rastertogrid{agg}")
+    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
+        hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+    )
+    rows = (
+        df.select(fn(f.col("tile"), f.lit(resolution)).alias("bands"))
+        .select(f.posexplode("bands").alias("band0", "cells"))
+        .select((f.col("band0") + 1).alias("band"), f.explode("cells").alias("c"))
+        .select(
+            "band",
+            f.col("c.cellID").alias("cellID"),
+            f.col("c.measure").alias("measure"),
+        )
+        .collect()
+    )
+    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
+
+
+def _light_grid_rows(spark, raster, resolution, grid, agg):
+    """Light tier (Long cell id grids): SQL LATERAL over the pyrx UDTF."""
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
+        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+    )
+    df.createOrReplaceTempView("_ras_light_grid")
+    rows = spark.sql(
+        f"SELECT t.band AS band, t.cellID AS cellID, t.measure AS measure "
+        f"FROM _ras_light_grid, "
+        f"LATERAL gbx_rst_{grid}_rastertogrid{agg}(tile, {resolution}) t"
+    ).collect()
+    return {(r["band"], r["cellID"]): r["measure"] for r in rows}
+
+
+@pytest.mark.parametrize("grid,resolution", [("quadbin", 12), ("h3", 7)])
+def test_grid_rastertogridsum_parity(spark_with_jar, grid, resolution):
+    """h3/quadbin sum: exact Long cell-set + per-cell measure within relative tol.
+
+    Real multi-value tile (ramp 1..256) so cells carry several pixels and the
+    sum exercises real accumulation, not a single-pixel degenerate case.
+    """
+    spark = spark_with_jar
+    raster = _quadbin_raster_4326()  # 16x16 4326 ramp — valid for both h3 & quadbin
+
+    light = _light_grid_rows(spark, raster, resolution, grid, "sum")
+    heavy = _heavy_grid_rows(spark, raster, resolution, grid, "sum")
+
+    assert light, f"light emitted no cells for {grid} sum"
+    assert heavy, f"heavy emitted no cells for {grid} sum"
+
+    light_keys, heavy_keys = set(light), set(heavy)
+    if light_keys != heavy_keys:
+        pytest.fail(
+            f"{grid} sum cell-set MISMATCH: "
+            f"|light|={len(light_keys)} |heavy|={len(heavy_keys)} "
+            f"light_only={sorted(light_keys - heavy_keys)[:8]} "
+            f"heavy_only={sorted(heavy_keys - light_keys)[:8]}"
+        )
+
+    # within_tol (same summation-order class as avg): relative tolerance.
+    for key in light_keys:
+        lv, hv = float(light[key]), float(heavy[key])
+        assert abs(lv - hv) <= 1e-9 * max(1.0, abs(hv)), (
+            f"{grid} sum cell {key} diverged beyond within_tol: "
+            f"light={lv} heavy={hv} (diff={abs(lv - hv):.3e})"
         )
 
 

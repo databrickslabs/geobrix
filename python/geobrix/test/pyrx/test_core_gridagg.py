@@ -90,6 +90,31 @@ def test_avg_is_mean_of_cell_pixels(grid):
     assert band[0]["measure"] == pytest.approx(5.0)
 
 
+@pytest.mark.parametrize("grid", ["h3", "quadbin"])
+def test_sum_is_total_of_cell_pixels(grid):
+    # Coarse resolution so all pixels land in a single cell; sum == grand total.
+    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
+    raster = _custom_raster(data)
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, 0, grid, "sum")
+    band = result[0]
+    assert len(band) == 1
+    assert band[0]["measure"] == pytest.approx(20.0)
+    assert isinstance(band[0]["measure"], float)
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin"])
+def test_sum_excludes_nodata(grid):
+    # One nodata pixel is skipped; sum == 2+6+8 == 16 (single coarse cell).
+    data = np.array([[2.0, -9999.0], [6.0, 8.0]], dtype="float32")
+    raster = _custom_raster(data)
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, 0, grid, "sum")
+    band = result[0]
+    assert len(band) == 1
+    assert band[0]["measure"] == pytest.approx(16.0)
+
+
 # --- median: even/odd correctness on a hand-built single cell ---------------
 @pytest.mark.parametrize("grid", ["h3", "quadbin"])
 def test_median_even_count(grid):

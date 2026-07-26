@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.grid.{RST_H3_RasterToGridAvg, RST_H3_RasterToGridCount, RST_H3_RasterToGridMax, RST_H3_RasterToGridMedian, RST_H3_RasterToGridMin}
+import com.databricks.labs.gbx.rasterx.expressions.grid.{RST_H3_RasterToGridAvg, RST_H3_RasterToGridCount, RST_H3_RasterToGridMax, RST_H3_RasterToGridMedian, RST_H3_RasterToGridMin, RST_H3_RasterToGridSum}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.BeforeAndAfterAll
@@ -75,6 +75,23 @@ class RST_GridExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         sample.foreach { case (cellID, measure) =>
             cellID should be > 0L
             measure should be >= 0.0
+        }
+    }
+
+    test("RST_H3_RasterToGridSum should produce sum cells consistent with avg*count") {
+        val sumRes = RST_H3_RasterToGridSum.execute(ds, 2)
+        sumRes.length shouldBe 1
+        sumRes(0).length should be > 0
+        sumRes(0).take(5).foreach { case (cellID, measure) =>
+            cellID should be > 0L
+            measure should be >= 0.0
+        }
+        // sum == avg * count per cell (same summation-order class as avg).
+        val avgByCell = RST_H3_RasterToGridAvg.execute(ds, 2)(0).toMap
+        val cntByCell = RST_H3_RasterToGridCount.execute(ds, 2)(0).toMap
+        sumRes(0).foreach { case (cellID, sumVal) =>
+            val expected = avgByCell(cellID) * cntByCell(cellID)
+            sumVal shouldBe (expected +- 1e-6)
         }
     }
 

@@ -64,6 +64,23 @@ def test_bng_avg_london_string_ids_and_mean():
     assert cell["measure"] == 5.0
 
 
+def test_bng_sum_london_string_ids_and_total():
+    # Same central-London 27700 raster wholly inside a single 1 km (res 3) cell:
+    # sum of [2,4,6,8] == 20.0, emitted against a BNG String cell id.
+    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
+    raster = _raster(data, epsg=27700, origin=(530000.0, 180400.0), px=200.0)
+    with _open(raster) as ds:
+        result = gridagg.raster_to_grid(ds, 3, "bng", "sum")
+    assert len(result) == 1
+    band = result[0]
+    assert len(band) == 1
+    cell = band[0]
+    assert isinstance(cell["cellID"], str)
+    assert _BNG_ID_RE.match(cell["cellID"]), cell["cellID"]
+    assert cell["measure"] == 20.0
+    assert isinstance(cell["measure"], float)
+
+
 def test_bng_count_measure_is_int():
     data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
     raster = _raster(data, epsg=27700, origin=(530000.0, 180400.0), px=200.0)

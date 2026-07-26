@@ -22,6 +22,7 @@ Mosaic-lineage bug status (validated against this port):
 import math
 from typing import Any
 
+import numpy as np
 from shapely import equals_exact as _equals_exact
 from shapely import to_wkb as _to_wkb
 from shapely.geometry import Point as _Point
@@ -162,32 +163,44 @@ def get_y(digits, edge_size: int) -> int:
     return int("".join(str(d) for d in y_digits)) * edge_adj + y_offset
 
 
+def _get_quadrant_core(resolution, eastings, northings, divisor):
+    """Numpy-polymorphic quadrant (0 for res >= -1; 1/2/4/3 for res < -1).
+
+    ``eastings``/``northings`` are int64 (scalar or array). Mirrors the scalar
+    ``get_quadrant`` if-chain order via nested ``np.where``.
+    """
+    if resolution >= -1:
+        return eastings * 0  # int64 zeros, scalar or array
+    e_q = eastings / divisor
+    n_q = northings / divisor
+    e_dec = e_q - np.floor(e_q)
+    n_dec = n_q - np.floor(n_q)
+    q = np.where(
+        (e_dec < 0.5) & (n_dec < 0.5),
+        1,
+        np.where(e_dec < 0.5, 2, np.where(n_dec < 0.5, 4, 3)),
+    )
+    return q.astype(np.int64)
+
+
 def get_quadrant(
     resolution: int, eastings: float, northings: float, divisor: float
 ) -> int:
-    if resolution < -1:
-        e_q = eastings / divisor
-        n_q = northings / divisor
-        e_dec = e_q - math.floor(e_q)
-        n_dec = n_q - math.floor(n_q)
-        if e_dec < 0.5 and n_dec < 0.5:
-            return 1  # SW
-        if e_dec < 0.5:
-            return 2  # NW
-        if n_dec < 0.5:
-            return 4  # SE
-        return 3  # NE
-    return 0
+    """Scalar wrapper over :func:`_get_quadrant_core` (unchanged public behavior)."""
+    return int(_get_quadrant_core(resolution, eastings, northings, divisor))
 
 
-def encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution) -> int:
+def _encode_core(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution):
+    """Pack the BNG digit-id in int64 (scalar or array). Bit-exact with the
+    original pure-integer ``encode`` (the res==-1 ``/100`` is always exactly
+    divisible, so integer ``//100`` matches ``int(float/100)``)."""
     id_placeholder = 10 ** (5 + 2 * n_positions - 2)
     e_letter_shift = 10 ** (3 + 2 * n_positions - 2)
     n_letter_shift = 10 ** (1 + 2 * n_positions - 2)
     e_shift = 10**n_positions
     n_shift = 10
     if resolution == -1:
-        val = (id_placeholder + e_letter * e_letter_shift) / 100 + quadrant
+        val = (id_placeholder + e_letter * e_letter_shift) // 100 + quadrant
     else:
         val = (
             id_placeholder
@@ -197,27 +210,61 @@ def encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution) 
             + n_bin * n_shift
             + quadrant
         )
-    return int(val)
+    return val
 
 
-def point_to_cell_id(eastings: float, northings: float, resolution: int) -> int:
-    if math.isnan(eastings) or math.isnan(northings):
-        raise ValueError("NaN coordinates are not supported.")
-    e_int = int(eastings)
-    n_int = int(northings)
-    # Scala uses integer division (eastingsInt / 100000); int(...) truncates toward
-    # zero, matching JVM Int division for the BNG-positive coordinate domain.
-    e_letter = int(e_int / 100000)
-    n_letter = int(n_int / 100000)
+def encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution) -> int:
+    """Scalar wrapper over :func:`_encode_core` (unchanged public behavior)."""
+    return int(
+        _encode_core(
+            e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution
+        )
+    )
+
+
+def _point_to_cell_id_core(e, n, resolution: int):
+    """Numpy-polymorphic BNG encoder core (int64 result; scalar or array).
+
+    Mirrors the scalar ``point_to_cell_id`` EXACTLY, incl. truncation semantics:
+    letter indices use ``int(e_int/100000)`` (truncate toward zero -> ``np.trunc``);
+    bins use ``math.floor(.../divisor)`` (floor -> ``np.floor``). These differ for
+    negative (out-of-GB) coords, which the encoder sees (encode runs before is_valid).
+    """
+    e_int = np.trunc(e).astype(np.int64)
+    n_int = np.trunc(n).astype(np.int64)
+    # int(e_int/100000): float division then truncate toward zero (NOT floor-div).
+    e_letter = np.trunc(e_int / 100000).astype(np.int64)
+    n_letter = np.trunc(n_int / 100000).astype(np.int64)
     if resolution < 0:
         divisor = 10 ** (6 - abs(resolution) + 1)
     else:
         divisor = 10 ** (6 - resolution)
-    quadrant = get_quadrant(resolution, e_int, n_int, divisor)
+    quadrant = _get_quadrant_core(resolution, e_int, n_int, divisor)
     n_positions = abs(resolution) if resolution >= -1 else abs(resolution) - 1
-    e_bin = math.floor((e_int % 100000) / divisor)
-    n_bin = math.floor((n_int % 100000) / divisor)
-    return encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution)
+    # math.floor((e_int % 100000) / divisor): float division then floor.
+    e_bin = np.floor((e_int % 100000) / divisor).astype(np.int64)
+    n_bin = np.floor((n_int % 100000) / divisor).astype(np.int64)
+    return _encode_core(
+        e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution
+    )
+
+
+def point_to_cell_id(eastings: float, northings: float, resolution: int) -> int:
+    """Scalar wrapper over :func:`_point_to_cell_id_core` (unchanged behavior)."""
+    if math.isnan(eastings) or math.isnan(northings):
+        raise ValueError("NaN coordinates are not supported.")
+    return int(_point_to_cell_id_core(float(eastings), float(northings), resolution))
+
+
+def point_to_cell_id_vec(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
+    """Vectorized BNG encoder: array of int64 cell ids from EPSG:27700 (e, n).
+
+    Shares :func:`_point_to_cell_id_core` with the scalar ``point_to_cell_id``, so
+    the two forms cannot drift. Fed clean (post-mask) coords, so no NaN guard.
+    """
+    e = np.asarray(e, dtype="float64")
+    n = np.asarray(n, dtype="float64")
+    return _point_to_cell_id_core(e, n, resolution).astype(np.int64)
 
 
 def format(cell_id: int) -> str:

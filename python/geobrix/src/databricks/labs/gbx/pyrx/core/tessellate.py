@@ -51,6 +51,8 @@ def _has_positive_area_overlap(cell_poly, bbox_poly) -> bool:
     if not cell_poly.intersects(bbox_poly):
         return False
     return cell_poly.intersection(bbox_poly).area > 0.0
+
+
 _DEFAULT_NODATA = -9999.0
 
 

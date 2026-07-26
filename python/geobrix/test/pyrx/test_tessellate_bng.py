@@ -332,7 +332,9 @@ def test_iter_tessellate_bng_covering_grid_aligned_excludes_edge_touch():
     # Ground truth: the 4 fully-covered cells (positive-area). Edge-touch neighbours
     # (e.g. the cell to the west, sharing only the x=minx line) are excluded.
     expected = _independent_intersecting_cells(minx, miny, maxx, maxy, res)
-    assert len(expected) == 4, f"aligned 2km window should cover 4 cells, got {expected}"
+    assert (
+        len(expected) == 4
+    ), f"aligned 2km window should cover 4 cells, got {expected}"
 
     # An explicit edge-touch neighbour just west of the window shares only x=minx.
     west_neighbour = _bng.format(
@@ -354,7 +356,9 @@ def test_iter_tessellate_bng_covering_grid_aligned_excludes_edge_touch():
         "grid-aligned covering must exclude edge-touch cells: "
         f"missing {sorted(expected - emitted)}, extra {sorted(emitted - expected)}"
     )
-    assert west_neighbour not in emitted, "edge-only-touching neighbour must not be emitted"
+    assert (
+        west_neighbour not in emitted
+    ), "edge-only-touching neighbour must not be emitted"
 
 
 def test_iter_tessellate_bng_covering_keeps_within_extent_nodata_cell():

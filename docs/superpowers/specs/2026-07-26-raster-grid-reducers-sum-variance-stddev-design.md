@@ -17,8 +17,9 @@ new zonal statistics, across **all three grids** (H3, quadbin, BNG) and **both t
 That is **+9 functions** (3 reducers × 3 grids), each with a light + heavy impl:
 `gbx_rst_{h3,quadbin,bng}_rastertogrid{sum,variance,stddev}`.
 
-**Explicitly deferred (YAGNI / need a concrete use case):** `mode` and `count_distinct` — only meaningful
-on categorical rasters and need a defined deterministic tie-break; revisit if land-cover demand appears.
+**Dropped — not planned (decision 2026-07-26):** `mode` and `count_distinct`. Only meaningful on
+categorical rasters and would need a defined deterministic tie-break; no concrete use case, so they are
+explicitly NOT a tracked task. If categorical/land-cover demand appears later, re-open as new work.
 
 **Sequencing:** ship `sum` first (trivial, reuses existing sum machinery), then `variance`+`stddev`
 together (they share the two-pass core and the parity-pinning work). This spec covers all three; the plan

@@ -76,8 +76,17 @@ def _tile_4326(size=64, res_deg=0.005, origin=(-0.12, 51.52)):
 
 
 def _independent_intersecting_cells(minx, miny, maxx, maxy, res):
-    """Independent (non-polyfill) enumeration of every BNG cell whose square
-    intersects the bbox — the ground truth the covering set must match."""
+    """Independent (non-polyfill) enumeration of every BNG cell whose square has
+    POSITIVE-AREA overlap with the bbox — the ground truth the covering set must
+    match.
+
+    Uses ``.intersection(bbox).area > 0``, NOT bare ``.intersects()``: on a
+    grid-aligned tile a fringe cell just outside the data shares only a 1-D
+    boundary line with the raster (``intersects() is True`` but zero overlap
+    area, zero pixels). The covering contract emits a cell iff it has real areal
+    overlap, so the ground truth must use the positive-area test too. On a
+    cell-MISaligned window the two tests agree (no cell touches only an edge).
+    """
     edge = _bng.get_edge_size(res)
     bbox = box(minx, miny, maxx, maxy)
     out = set()
@@ -88,8 +97,10 @@ def _independent_intersecting_cells(minx, miny, maxx, maxy, res):
         y = y0
         while y <= maxy:
             cell = _bng.point_to_cell_id(x + edge / 2.0, y + edge / 2.0, res)
-            if _bng.is_valid(cell) and _bng.cell_id_to_geometry(cell).intersects(bbox):
-                out.add(_bng.format(cell))
+            if _bng.is_valid(cell):
+                cell_geom = _bng.cell_id_to_geometry(cell)
+                if cell_geom.intersection(bbox).area > 0.0:
+                    out.add(_bng.format(cell))
             y += edge
         x += edge
     return out
@@ -300,6 +311,95 @@ def test_iter_tessellate_bng_covering_is_boundary_complete():
 
     assert emitted == expected, (
         "covering must be boundary-complete: "
+        f"missing {sorted(expected - emitted)}, extra {sorted(emitted - expected)}"
+    )
+
+
+def test_iter_tessellate_bng_covering_grid_aligned_excludes_edge_touch():
+    """On a GRID-ALIGNED tile (raster edges land exactly on 1km cell boundaries),
+    covering emits ONLY the cells with positive-area overlap — the edge-only-
+    touching neighbours (which share just a 1-D boundary line, zero pixel overlap)
+    are NOT emitted. This is the root-cause regression guard: a bare ``intersects``
+    keep-test kept those neighbours and clipped them into spurious empty all-NoData
+    chips (the 48-vs-36 heavy-vs-light divergence).
+    """
+    res = _bng.get_resolution("1km")
+    edge = _bng.get_edge_size(res)  # 1000 m
+    # A 2km x 2km window whose edges land on 1km cell boundaries -> 4 whole cells.
+    minx, miny = 529000, 179000
+    maxx, maxy = minx + 2 * edge, miny + 2 * edge
+
+    # Ground truth: the 4 fully-covered cells (positive-area). Edge-touch neighbours
+    # (e.g. the cell to the west, sharing only the x=minx line) are excluded.
+    expected = _independent_intersecting_cells(minx, miny, maxx, maxy, res)
+    assert len(expected) == 4, f"aligned 2km window should cover 4 cells, got {expected}"
+
+    # An explicit edge-touch neighbour just west of the window shares only x=minx.
+    west_neighbour = _bng.format(
+        _bng.point_to_cell_id(minx - edge / 2.0, miny + edge / 2.0, res)
+    )
+    assert west_neighbour not in expected
+
+    tile = _tile_27700(minx=minx, miny=miny, maxx=maxx, maxy=maxy)
+    with MemoryFile(bytes(tile)) as mf:
+        with mf.open() as ds:
+            emitted = {
+                cellid
+                for cellid, _ in T.iter_tessellate_bng(
+                    ds, resolution="1km", mode="covering"
+                )
+            }
+
+    assert emitted == expected, (
+        "grid-aligned covering must exclude edge-touch cells: "
+        f"missing {sorted(expected - emitted)}, extra {sorted(emitted - expected)}"
+    )
+    assert west_neighbour not in emitted, "edge-only-touching neighbour must not be emitted"
+
+
+def test_iter_tessellate_bng_covering_keeps_within_extent_nodata_cell():
+    """Case A: a cell that genuinely OVERLAPS the raster but whose pixels are all
+    NoData is STILL emitted (positive area > 0). Covering mode fills its position;
+    dropping it would punch a gap into the mosaic. Only zero-area edge touches are
+    dropped.
+    """
+    res = _bng.get_resolution("1km")
+    edge = _bng.get_edge_size(res)
+    minx, miny = 529000, 179000
+    maxx, maxy = minx + 2 * edge, miny + 2 * edge
+
+    # A tile fully covering 4 cells, but every pixel is NoData.
+    size = 64
+    data = np.full((size, size), -9999.0, dtype="float32")
+    xres = (maxx - minx) / size
+    yres = (maxy - miny) / size
+    prof = dict(
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="float32",
+        crs="EPSG:27700",
+        transform=rasterio.transform.from_origin(minx, maxy, xres, yres),
+        nodata=-9999.0,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(data, 1)
+        tile = mf.read()
+
+    expected = _independent_intersecting_cells(minx, miny, maxx, maxy, res)
+    with MemoryFile(bytes(tile)) as mf:
+        with mf.open() as ds:
+            emitted = {
+                cellid
+                for cellid, _ in T.iter_tessellate_bng(
+                    ds, resolution="1km", mode="covering"
+                )
+            }
+    # All 4 within-extent cells are emitted despite being all-NoData (case A kept).
+    assert emitted == expected, (
+        f"within-extent all-NoData cells must still be emitted: "
         f"missing {sorted(expected - emitted)}, extra {sorted(emitted - expected)}"
     )
 

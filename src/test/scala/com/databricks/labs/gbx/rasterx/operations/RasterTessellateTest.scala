@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import com.databricks.labs.gbx.gridx.grid.H3
+import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Max
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
 import org.gdal.gdal.{Dataset, gdal}
@@ -183,6 +183,113 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         }
         emptySeen should be > 0  // the hole must yield >=1 all-nodata covering cell
         dataSeen should be > 0
+    }
+
+    // -------------------------------------------------------------------------------------------------
+    // Positive-area covering keep-test: on a GRID-ALIGNED tile (raster edges land exactly on cell
+    // boundaries), edge-only-touching cells share just a 1-D boundary line with the raster (zero pixel
+    // overlap) and must NOT be emitted (they would otherwise clip to spurious empty all-NoData chips).
+    // A cell with real areal overlap IS emitted even when all-NoData (case A). Guards the 48-vs-36
+    // heavy-vs-light BNG divergence at its root; applied identically to all three grids.
+    // -------------------------------------------------------------------------------------------------
+
+    /** A GB (London) EPSG:27700 raster whose edges land exactly on 1km BNG cell boundaries — a 2km x 2km
+      * window over exactly 4 whole 1km cells. `fill` sets every pixel (Some(v) = data, None = all NoData). */
+    private def bngAlignedDs(fill: Option[Double] = Some(42.0)): Dataset = {
+        val (minX, minY) = (529000.0, 179000.0)
+        val edge = 1000.0
+        val (w, h) = (2 * edge, 2 * edge)
+        val size = 64
+        val path = s"/vsimem/tess_bng_aligned_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+        val drv = gdal.GetDriverByName("GTiff")
+        val d = drv.Create(path, size, size, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
+        d.SetGeoTransform(Array(minX, w / size, 0.0, minY + h, 0.0, -(h / size)))
+        val srs = new org.gdal.osr.SpatialReference()
+        srs.ImportFromEPSG(27700)
+        d.SetProjection(srs.ExportToWkt())
+        srs.delete()
+        val band = d.GetRasterBand(1)
+        band.SetNoDataValue(-9999.0)
+        val buf = Array.fill[Double](size * size)(fill.getOrElse(-9999.0))
+        band.WriteRaster(0, 0, size, size, buf)
+        band.FlushCache(); d.FlushCache(); band.delete()
+        d
+    }
+
+    private def bngCells(ds: Dataset, resolution: Int, mode: String = "covering"): Seq[String] = {
+        val iter = RasterTessellate.tessellateBngIter(ds, Map.empty, resolution, mode)
+        try iter.map { case (cell, resDs, _) => RasterDriver.releaseDataset(resDs); cell }.toList
+        finally iter match { case ac: AutoCloseable => ac.close(); case _ => }
+    }
+
+    test("BNG covering on a grid-aligned tile excludes edge-only-touching cells (positive-area keep-test)") {
+        val res = BNG.getResolution("1km")
+        val emitted = bngCells(bngAlignedDs(), res).toSet
+        // A 2km x 2km grid-aligned window covers exactly 4 whole 1km cells; the edge-touch neighbours
+        // (sharing only a boundary line) must be excluded.
+        withClue(s"grid-aligned 2km window should emit exactly 4 cells, got ${emitted.toList.sorted}: ") {
+            emitted.size shouldBe 4
+        }
+        // The cell immediately west of the window shares only the x=minX boundary line -> zero-area -> excluded.
+        val westNeighbour = BNG.format(BNG.pointToCellID(529000.0 - 500.0, 179000.0 + 500.0, res))
+        emitted should not contain westNeighbour
+    }
+
+    test("BNG covering keeps a within-extent all-NoData cell (case A: positive area, all NoData)") {
+        val res = BNG.getResolution("1km")
+        // Every pixel NoData but all 4 cells genuinely overlap the raster extent -> all 4 still emitted.
+        val emitted = bngCells(bngAlignedDs(fill = None), res).toSet
+        withClue(s"within-extent all-NoData cells must still be emitted, got ${emitted.toList.sorted}: ") {
+            emitted.size shouldBe 4
+        }
+    }
+
+    /** A quadbin-aligned EPSG:4326 raster: window == exactly one whole quadbin cell at `z` (edges on the
+      * cell's own bbox). `fill` None => all NoData. */
+    private def quadbinAlignedDs(z: Int, fill: Option[Double] = Some(42.0)): Dataset = {
+        // Pick a cell near London and align the raster to a 2x2 block of its children (edges land on the
+        // child boundaries, so the 4 children are whole and their outer neighbours only edge-touch).
+        val parent = Quadbin.pointToCell(-0.1, 51.5, z - 1)
+        val (lonMin, latMin, lonMax, latMax) = Quadbin.cellBbox(parent)
+        val size = 64
+        val (w, h) = (lonMax - lonMin, latMax - latMin)
+        val path = s"/vsimem/tess_qb_aligned_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+        val drv = gdal.GetDriverByName("GTiff")
+        val d = drv.Create(path, size, size, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
+        d.SetGeoTransform(Array(lonMin, w / size, 0.0, latMax, 0.0, -(h / size)))
+        val srs = new org.gdal.osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        d.SetProjection(srs.ExportToWkt())
+        srs.delete()
+        val band = d.GetRasterBand(1)
+        band.SetNoDataValue(-9999.0)
+        val buf = Array.fill[Double](size * size)(fill.getOrElse(-9999.0))
+        band.WriteRaster(0, 0, size, size, buf)
+        band.FlushCache(); d.FlushCache(); band.delete()
+        d
+    }
+
+    private def quadbinCells(ds: Dataset, z: Int, mode: String = "covering"): Seq[Long] = {
+        val iter = RasterTessellate.tessellateQuadbinIter(ds, Map.empty, z, mode)
+        try iter.map { case (cell, resDs, _) => RasterDriver.releaseDataset(resDs); cell }.toList
+        finally iter match { case ac: AutoCloseable => ac.close(); case _ => }
+    }
+
+    test("quadbin covering on a grid-aligned tile excludes edge-only-touching cells (positive-area keep-test)") {
+        val z = 12
+        val emitted = quadbinCells(quadbinAlignedDs(z), z).toSet
+        // The window == one parent cell at z-1 == exactly 4 whole child cells at z. Edge-touch neighbours excluded.
+        withClue(s"grid-aligned parent window should emit exactly 4 child cells at z=$z, got ${emitted.size}: ") {
+            emitted.size shouldBe 4
+        }
+    }
+
+    test("quadbin covering keeps a within-extent all-NoData cell (case A: positive area, all NoData)") {
+        val z = 12
+        val emitted = quadbinCells(quadbinAlignedDs(z, fill = None), z).toSet
+        withClue(s"within-extent all-NoData cells must still be emitted, got ${emitted.size}: ") {
+            emitted.size shouldBe 4
+        }
     }
 
 }

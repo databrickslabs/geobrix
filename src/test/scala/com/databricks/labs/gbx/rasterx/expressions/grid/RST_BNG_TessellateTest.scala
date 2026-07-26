@@ -171,9 +171,13 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             val rasterBbox = JTS.fromWKT(
                 "POLYGON((528600 178600, 530400 178600, 530400 180400, 528600 180400, 528600 178600))"
             )
+            // Positive-area overlap (not mere boundary touch): the covering contract emits a cell iff its
+            // square has >0 area overlap with the raster. On this cell-MISaligned fixture no cell touches
+            // only along an edge, so this coincides with `.intersects` — but the positive-area test is the
+            // authoritative contract shared with the light tier and both other grids.
             val overlapping = BNG
                 .polyfill(rasterBbox.buffer(2000.0), resolution)
-                .filter(cell => BNG.cellIdToGeometry(cell).intersects(rasterBbox))
+                .filter(cell => BNG.cellIdToGeometry(cell).intersection(rasterBbox).getArea > 0.0)
                 .map(BNG.format)
                 .toSet
 

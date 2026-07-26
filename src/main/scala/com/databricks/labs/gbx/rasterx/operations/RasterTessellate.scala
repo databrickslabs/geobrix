@@ -21,6 +21,22 @@ object RasterTessellate {
     val Modes: Set[String] = Set("covering", "centroid")
 
     /**
+      * Covering keep-test shared by all three grids (H3, quadbin, BNG): a cell is emitted iff its geometry
+      * has POSITIVE-AREA overlap with the raster bbox — mere boundary touch (a shared edge line or corner
+      * point) is NOT enough. On a grid-aligned tile (raster edges land exactly on cell boundaries) a fringe
+      * cell just outside the data shares only a 1-D boundary with the raster: `intersects == true` but
+      * `intersection(bbox).getArea == 0.0` and it holds ZERO source pixels, so clipping it yields a spurious
+      * empty all-NoData chip. This test drops those (matches the light tier). It KEEPS cells with real areal
+      * overlap even if they clip to all-NoData (e.g. a cloud hole or the raster's own NoData) — those fill
+      * their position in covering mode and must not be dropped, else white gaps are punched into the mosaic.
+      */
+    private def hasPositiveAreaOverlap(cellGeom: Geometry, bbox: Geometry): Boolean = {
+        if (!cellGeom.intersects(bbox)) return false
+        val inter = cellGeom.intersection(bbox)
+        inter != null && !inter.isEmpty && inter.getArea > 0.0
+    }
+
+    /**
       * Clips ds to the H3 cell geometry and returns (cellId, clipped Dataset, metadata); returns null if the
       * cell hexagon does NOT geometrically overlap the raster bbox.
       *
@@ -36,7 +52,11 @@ object RasterTessellate {
         bbox: Geometry
     ): (Long, Dataset, Map[String, String]) = {
         val cellGeom = H3.cellIdToGeometry(cell)
-        if (!cellGeom.intersects(bbox)) return null
+        // Positive-area overlap (not mere boundary touch) — edge-only-touching cells produce empty chips.
+        // A cell sharing only a 1-D boundary line/point with the raster yields a LineString/Point
+        // intersection with getArea == 0.0 and zero pixel overlap; drop it. A cell with real areal
+        // overlap is kept, including all-NoData-but-overlapping cells (covering mode fills their position).
+        if (!hasPositiveAreaOverlap(cellGeom, bbox)) return null
         val (resDs, resMtd) = ClipToGeom.clip(ds, options, cellGeom, GDAL.WSG84)
         if (resDs == null) return null
         resDs.SetMetadataItem("RASTERX_CELL_ID", cell.toString)
@@ -300,7 +320,10 @@ object RasterTessellate {
         bbox: Geometry
     ): (Long, Dataset, Map[String, String]) = {
         val cellGeom = quadbinCellGeometry(cell)
-        if (!cellGeom.intersects(bbox)) return null
+        // Positive-area overlap (not mere boundary touch) — edge-only-touching cells produce empty chips.
+        // See [[getTile]]: an edge/point-only touch yields getArea == 0.0 and zero pixels (dropped);
+        // real areal overlap is kept, including all-NoData-but-overlapping cells.
+        if (!hasPositiveAreaOverlap(cellGeom, bbox)) return null
         val (resDs, resMtd) = ClipToGeom.clip(ds, options, cellGeom, GDAL.WSG84)
         if (resDs == null) return null
         resDs.SetMetadataItem("RASTERX_CELL_ID", cell.toString)
@@ -611,7 +634,12 @@ object RasterTessellate {
     ): (String, Dataset, Map[String, String]) = {
         if (!BNG.isValid(cell)) return null
         val cellGeom = BNG.cellIdToGeometry(cell) // areal Polygon in EPSG:27700 (SRID 27700)
-        if (!cellGeom.intersects(bbox)) return null
+        // Positive-area overlap (not mere boundary touch) — edge-only-touching cells produce empty chips.
+        // On a grid-aligned tile (raster edges land on cell boundaries) a fringe cell shares only a 1-D
+        // boundary line with the raster: getArea == 0.0, zero pixels. Drop it. Real areal overlap is kept,
+        // including all-NoData-but-overlapping cells (covering mode fills their position; NoData renders,
+        // it does not punch gaps into the mosaic).
+        if (!hasPositiveAreaOverlap(cellGeom, bbox)) return null
         val (resDs, resMtd) = ClipToGeom.clip(ds, options, cellGeom, BngSR)
         if (resDs == null) return null
         val cellStr = BNG.format(cell)

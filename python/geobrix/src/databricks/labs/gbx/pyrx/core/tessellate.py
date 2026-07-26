@@ -30,6 +30,27 @@ QUADBIN_MAX_RES = _quadbin._MAX_POLYFILL_RES
 _WGS84 = "EPSG:4326"
 _BNG_EPSG = 27700
 _VALID_MODES = {"covering", "centroid"}
+
+
+def _has_positive_area_overlap(cell_poly, bbox_poly) -> bool:
+    """Covering keep-test: cell is emitted iff it has POSITIVE-AREA overlap with the raster bbox.
+
+    Mere boundary touch (a shared edge line or corner point) is NOT enough. On a grid-aligned
+    tile (raster edges land exactly on cell boundaries) a fringe cell just outside the data
+    shares only a 1-D boundary with the raster: ``cell_poly.intersects(bbox) is True`` but
+    ``cell_poly.intersection(bbox).area == 0.0`` and it holds ZERO source pixels, so the clip
+    would (via rasterio "shapes do not overlap") drop it anyway. This guard makes that intent
+    EXPLICIT and consistent with the heavyweight tier's positive-area keep-test.
+
+    KEEPS cells with real areal overlap even if they clip to all-NoData (cloud hole, the raster's
+    own NoData) — those have ``area > 0`` and must still be emitted (covering mode fills their
+    position; the clip yields a real chip with NoData pixels, not a gap in the mosaic).
+
+    ``cell_poly`` and ``bbox_poly`` MUST be in the same CRS.
+    """
+    if not cell_poly.intersects(bbox_poly):
+        return False
+    return cell_poly.intersection(bbox_poly).area > 0.0
 _DEFAULT_NODATA = -9999.0
 
 
@@ -167,11 +188,19 @@ def iter_tessellate_h3(ds, resolution: int, mode: str = "covering"):
     )
     covered = h3.polygon_to_cells_experimental(bbox_poly, resolution, contain="overlap")
 
+    # Shapely bbox in WGS84 for the positive-area keep-test (cell_poly is WGS84 here, pre-reproject).
+    bbox_wgs84 = box(west, south, east, north)
+
     dst_epsg = ds.crs.to_epsg() if ds.crs else None
     reproject = dst_epsg != 4326
 
     for cell in covered:
         cell_poly = _cell_polygon_lonlat(cell)
+        # Positive-area covering keep-test (WGS84): drop edge-only-touching cells (zero pixel
+        # overlap on grid-aligned tiles); keep real areal overlap incl. all-NoData-but-overlapping.
+        # The clip below remains the pixel-level safety net.
+        if not _has_positive_area_overlap(cell_poly, bbox_wgs84):
+            continue
         if reproject:
             geom = transform_geom(_WGS84, ds.crs, mapping(cell_poly))
             cell_poly = shape(geom)
@@ -348,6 +377,10 @@ def iter_tessellate_quadbin(ds, resolution: int, mode: str = "covering"):
         # used here because reprojection is handled by the `reproject` branch
         # below, mirroring the iter_tessellate_h3 pattern).
         cell_poly = shapely.wkb.loads(_quadbin.as_wkb(cell))
+        # Positive-area covering keep-test (WGS84, pre-reproject): drop edge-only-touching cells;
+        # keep real areal overlap incl. all-NoData-but-overlapping. Clip stays the pixel safety net.
+        if not _has_positive_area_overlap(cell_poly, bbox_poly):
+            continue
         if reproject:
             geom = transform_geom(_WGS84, ds.crs, mapping(cell_poly))
             cell_poly = shape(geom)
@@ -503,9 +536,11 @@ def iter_tessellate_bng(ds, resolution, mode: str = "covering"):
             if not _bng.is_valid(cell):
                 continue
             cell_poly = _bng.cell_id_to_geometry(cell)  # 27700 shapely polygon
-            # Standard covering keep-test: cell square must overlap the raster
-            # bbox (unbuffered).  Filters buffered-but-non-overlapping fringe.
-            if not cell_poly.intersects(bbox_poly):
+            # Positive-area covering keep-test (EPSG:27700): cell square must have >0 area overlap
+            # with the raster bbox (unbuffered). Filters buffered-but-non-overlapping fringe AND
+            # edge-only-touching cells (zero pixel overlap on grid-aligned tiles). Keeps real areal
+            # overlap incl. all-NoData-but-overlapping cells. Clip stays the pixel-level safety net.
+            if not _has_positive_area_overlap(cell_poly, bbox_poly):
                 continue
             try:
                 clipped = edit.clip_to_geom(work_ds, cell_poly, all_touched=True)

@@ -1297,7 +1297,7 @@ rst_h3_rastertogridvariance_sql_example_output = """
 +--------+--------------+
 |h3_cell |variance_value|
 +--------+--------------+
-|8f283...|0.0           |
+|8f283...|152.0         |
 +--------+--------------+
 """
 
@@ -1317,7 +1317,7 @@ rst_h3_rastertogridstddev_sql_example_output = """
 +--------+------------+
 |h3_cell |stddev_value|
 +--------+------------+
-|8f283...|0.0         |
+|8f283...|12.33       |
 +--------+------------+
 """
 
@@ -1469,7 +1469,7 @@ rst_quadbin_rastertogridvariance_sql_example_output = """
 +------------+--------------+
 |quadbin_cell|variance_value|
 +------------+--------------+
-|5188146...  |0.0           |
+|5188146...  |152.0         |
 +------------+--------------+
 """
 
@@ -1489,7 +1489,7 @@ rst_quadbin_rastertogridstddev_sql_example_output = """
 +------------+------------+
 |quadbin_cell|stddev_value|
 +------------+------------+
-|5188146...  |0.0         |
+|5188146...  |12.33       |
 +------------+------------+
 """
 
@@ -1654,7 +1654,7 @@ rst_bng_rastertogridvariance_sql_example_output = """
 +--------+--------------+
 |bng_cell|variance_value|
 +--------+--------------+
-|TQ38SW  |0.0           |
+|TQ38SW  |152.0         |
 +--------+--------------+
 """
 
@@ -1674,7 +1674,7 @@ rst_bng_rastertogridstddev_sql_example_output = """
 +--------+------------+
 |bng_cell|stddev_value|
 +--------+------------+
-|TQ38SW  |0.0         |
+|TQ38SW  |12.33       |
 +--------+------------+
 """
 

@@ -88,6 +88,7 @@ These functions are Python UDTFs registered via `spark.udtf.register(...)`. Each
 | `gbx_rst_h3_rastertogridmax` | `rst_h3_rastertogridmax` | One row per H3 cell |
 | `gbx_rst_h3_rastertogridmin` | `rst_h3_rastertogridmin` | One row per H3 cell |
 | `gbx_rst_h3_rastertogridmedian` | `rst_h3_rastertogridmedian` | One row per H3 cell |
+| `gbx_rst_h3_rastertogridsum` | `rst_h3_rastertogridsum` | One row per H3 cell |
 **QuadBin and BNG grid variants** (both tiers — heavyweight Scala/JVM CollectionGenerators and lightweight `pyrx` UDTFs backed by `pygx._quadbin` / `_bng` cell math + `rasterio`; the BNG family auto-warps to EPSG:27700 and renders STRING cell IDs — listed here because they share the same fan-out shape):
 
 | SQL name | Python name | Output per input tile |
@@ -97,12 +98,14 @@ These functions are Python UDTFs registered via `spark.udtf.register(...)`. Each
 | `gbx_rst_quadbin_rastertogridmax` | `rst_quadbin_rastertogridmax` | One row per QuadBin cell |
 | `gbx_rst_quadbin_rastertogridmin` | `rst_quadbin_rastertogridmin` | One row per QuadBin cell |
 | `gbx_rst_quadbin_rastertogridmedian` | `rst_quadbin_rastertogridmedian` | One row per QuadBin cell |
+| `gbx_rst_quadbin_rastertogridsum` | `rst_quadbin_rastertogridsum` | One row per QuadBin cell |
 | `gbx_rst_quadbin_tessellate` | `rst_quadbin_tessellate` | One row per QuadBin cell covering the tile (clipped chip) |
 | `gbx_rst_bng_rastertogridavg` | `rst_bng_rastertogridavg` | One row per BNG cell covering the tile (auto-reprojects to EPSG:27700) |
 | `gbx_rst_bng_rastertogridcount` | `rst_bng_rastertogridcount` | One row per BNG cell |
 | `gbx_rst_bng_rastertogridmax` | `rst_bng_rastertogridmax` | One row per BNG cell |
 | `gbx_rst_bng_rastertogridmin` | `rst_bng_rastertogridmin` | One row per BNG cell |
 | `gbx_rst_bng_rastertogridmedian` | `rst_bng_rastertogridmedian` | One row per BNG cell |
+| `gbx_rst_bng_rastertogridsum` | `rst_bng_rastertogridsum` | One row per BNG cell |
 | `gbx_rst_bng_tessellate` | `rst_bng_tessellate` | One row per BNG cell covering the tile (auto-reprojects to EPSG:27700) |
 
 **VectorX (pyvx)**

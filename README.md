@@ -16,8 +16,8 @@
   python/geobrix/src/databricks/labs/gbx/vizx/__init__.py __all__, and is excluded from the total.
   Update these badges if functions are added or removed.
 -->
-![Functions](https://img.shields.io/badge/functions-165-2e7d32)
-![RasterX](https://img.shields.io/badge/RasterX-117-1565c0)
+![Functions](https://img.shields.io/badge/functions-168-2e7d32)
+![RasterX](https://img.shields.io/badge/RasterX-120-1565c0)
 ![GridX](https://img.shields.io/badge/GridX-41-1565c0)
 ![VectorX](https://img.shields.io/badge/VectorX-6-1565c0)
 ![VizX](https://img.shields.io/badge/VizX-19-6a1b9a)

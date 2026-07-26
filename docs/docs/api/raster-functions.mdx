@@ -49,9 +49,9 @@ RasterX exposes 87+ SQL functions (registered as `gbx_rst_*`; available in Pytho
 - **Aggregator Functions**: Combine or merge rasters in group-by (combineavg_agg, derivedband_agg, merge_agg, h3_rasterize_agg)
 - **Constructor Functions**: Create or load rasters from paths, binary content, or bands
 - **Generator Functions**: Produce multiple tiles or bands (h3_tessellate, maketiles, retile, separatebands, tooverlappingtiles)
-- **Grid Functions (H3)**: Aggregate raster values to H3 cells (rastertogrid avg/count/max/min/median)
-- **Grid Functions (quadbin)**: Aggregate raster values to CARTO quadbin v0 cells (rastertogrid avg/count/max/min/median; tessellate; rasterize_agg)
-- **Grid Functions (BNG)**: Aggregate raster values to British National Grid cells (rastertogrid avg/count/max/min/median; tessellate; rasterize_agg)
+- **Grid Functions (H3)**: Aggregate raster values to H3 cells (rastertogrid avg/count/max/min/median/sum)
+- **Grid Functions (quadbin)**: Aggregate raster values to CARTO quadbin v0 cells (rastertogrid avg/count/max/min/median/sum; tessellate; rasterize_agg)
+- **Grid Functions (BNG)**: Aggregate raster values to British National Grid cells (rastertogrid avg/count/max/min/median/sum; tessellate; rasterize_agg)
 - **Operations**: Transform and analyze rasters (clip, transform, merge, asformat, ndvi, filter, convolve, map algebra, coordinate conversion, isEmpty, tryOpen, initNoData, updateType, combineavg, derivedband)
 - **Web-Mercator Tile Output**: Reproject to EPSG:3857 and emit slippy-map XYZ tiles (to_webmercator, tilexyz, xyzpyramid)
 - **Vector-raster bridge**: Burn polygons into rasters and trace contiguous regions back to polygons (rasterize, polygonize)
@@ -1178,6 +1178,20 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridmedian_sql_example" outputConstant="rst_h3_rastertogridmedian_sql_example_output" code={rasterxSqlCode} />
 
+### rst_h3_rastertogridsum
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridsum(tile: Column, resolution: Column): Column` — Sum of pixel values per H3 cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridsum_sql_example" outputConstant="rst_h3_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
+
 ### gbx_h3_cell_bbox
 
 <Tier both/>
@@ -1321,11 +1335,25 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridmedian_sql_example" outputConstant="rst_quadbin_rastertogridmedian_sql_example_output" code={rasterxSqlCode} />
 
+### rst_quadbin_rastertogridsum
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_quadbin_rastertogridsum(tile: Column, resolution: Column): Column` — Sum of pixel values per quadbin cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridsum_sql_example" outputConstant="rst_quadbin_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
+
 ---
 
 ## Grid Functions (BNG) {#bng-grid}
 
-Aggregate raster values to British National Grid (BNG) cells (5 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
+Aggregate raster values to British National Grid (BNG) cells (6 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
 
 :::note Lightweight tier (pyrx)
 The BNG raster-grid reducers are available in both tiers. The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`: it auto-warps the input to **EPSG:27700** via `rasterio.warp`, samples pixels per cell, and renders **STRING** BNG cell IDs — matching the heavyweight cell set and measures exactly.
@@ -1395,9 +1423,17 @@ Median pixel value per BNG cell.
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridmedian_sql_example" outputConstant="rst_bng_rastertogridmedian_sql_example_output" code={rasterxSqlCode} />
 
----
+### rst_bng_rastertogridsum
 
-## Operations
+<Tier both/> <Impl udtf/>
+
+Sum of pixel values per BNG cell.
+
+**Signature:** `rst_bng_rastertogridsum(tile: Column, resolution: Column): Column` — Sum of pixel values per BNG cell.
+
+**SQL:**
+
+<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridsum_sql_example" outputConstant="rst_bng_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
 
 Transform and analyze rasters (20 total).
 

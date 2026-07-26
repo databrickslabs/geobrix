@@ -68,18 +68,24 @@ def _registrar_groups() -> List[_register.Group]:
         ("gbx_rst_h3_rastertogridmin", _RstH3RasterToGridMinUDTF),
         ("gbx_rst_h3_rastertogridmedian", _RstH3RasterToGridMedianUDTF),
         ("gbx_rst_h3_rastertogridsum", _RstH3RasterToGridSumUDTF),
+        ("gbx_rst_h3_rastertogridvariance", _RstH3RasterToGridVarianceUDTF),
+        ("gbx_rst_h3_rastertogridstddev", _RstH3RasterToGridStddevUDTF),
         ("gbx_rst_quadbin_rastertogridavg", _RstQuadbinRasterToGridAvgUDTF),
         ("gbx_rst_quadbin_rastertogridcount", _RstQuadbinRasterToGridCountUDTF),
         ("gbx_rst_quadbin_rastertogridmax", _RstQuadbinRasterToGridMaxUDTF),
         ("gbx_rst_quadbin_rastertogridmin", _RstQuadbinRasterToGridMinUDTF),
         ("gbx_rst_quadbin_rastertogridmedian", _RstQuadbinRasterToGridMedianUDTF),
         ("gbx_rst_quadbin_rastertogridsum", _RstQuadbinRasterToGridSumUDTF),
+        ("gbx_rst_quadbin_rastertogridvariance", _RstQuadbinRasterToGridVarianceUDTF),
+        ("gbx_rst_quadbin_rastertogridstddev", _RstQuadbinRasterToGridStddevUDTF),
         ("gbx_rst_bng_rastertogridavg", _RstBngRasterToGridAvgUDTF),
         ("gbx_rst_bng_rastertogridcount", _RstBngRasterToGridCountUDTF),
         ("gbx_rst_bng_rastertogridmax", _RstBngRasterToGridMaxUDTF),
         ("gbx_rst_bng_rastertogridmin", _RstBngRasterToGridMinUDTF),
         ("gbx_rst_bng_rastertogridmedian", _RstBngRasterToGridMedianUDTF),
         ("gbx_rst_bng_rastertogridsum", _RstBngRasterToGridSumUDTF),
+        ("gbx_rst_bng_rastertogridvariance", _RstBngRasterToGridVarianceUDTF),
+        ("gbx_rst_bng_rastertogridstddev", _RstBngRasterToGridStddevUDTF),
         ("gbx_rst_separatebands", _RstSeparateBandsUDTF),
         ("gbx_rst_retile", _RstRetileUDTF),
         ("gbx_rst_tooverlappingtiles", _RstToOverlappingTilesUDTF),
@@ -2847,6 +2853,12 @@ _RstH3RasterToGridMedianUDTF = _make_rastertogrid_udtf(
 _RstH3RasterToGridSumUDTF = _make_rastertogrid_udtf(
     "h3", "sum", _GRID_FLAT_DOUBLE_SCHEMA
 )
+_RstH3RasterToGridVarianceUDTF = _make_rastertogrid_udtf(
+    "h3", "variance", _GRID_FLAT_DOUBLE_SCHEMA
+)
+_RstH3RasterToGridStddevUDTF = _make_rastertogrid_udtf(
+    "h3", "stddev", _GRID_FLAT_DOUBLE_SCHEMA
+)
 _RstQuadbinRasterToGridAvgUDTF = _make_rastertogrid_udtf(
     "quadbin", "avg", _GRID_FLAT_DOUBLE_SCHEMA
 )
@@ -2865,6 +2877,12 @@ _RstQuadbinRasterToGridMedianUDTF = _make_rastertogrid_udtf(
 _RstQuadbinRasterToGridSumUDTF = _make_rastertogrid_udtf(
     "quadbin", "sum", _GRID_FLAT_DOUBLE_SCHEMA
 )
+_RstQuadbinRasterToGridVarianceUDTF = _make_rastertogrid_udtf(
+    "quadbin", "variance", _GRID_FLAT_DOUBLE_SCHEMA
+)
+_RstQuadbinRasterToGridStddevUDTF = _make_rastertogrid_udtf(
+    "quadbin", "stddev", _GRID_FLAT_DOUBLE_SCHEMA
+)
 _RstBngRasterToGridAvgUDTF = _make_rastertogrid_udtf(
     "bng", "avg", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
 )
@@ -2882,6 +2900,12 @@ _RstBngRasterToGridMedianUDTF = _make_rastertogrid_udtf(
 )
 _RstBngRasterToGridSumUDTF = _make_rastertogrid_udtf(
     "bng", "sum", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
+)
+_RstBngRasterToGridVarianceUDTF = _make_rastertogrid_udtf(
+    "bng", "variance", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
+)
+_RstBngRasterToGridStddevUDTF = _make_rastertogrid_udtf(
+    "bng", "stddev", _GRID_FLAT_STRING_SCHEMA, cellid_is_str=True
 )
 
 _RASTERTOGRID_DOC = """{summary}
@@ -2954,6 +2978,22 @@ def rst_h3_rastertogridsum(tile: ColLike, resolution: ColLike) -> None:
     )
 
 
+def rst_h3_rastertogridvariance(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into H3 cells by population variance, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_h3_rastertogridvariance(tile, resolution) t"
+    )
+
+
+def rst_h3_rastertogridstddev(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into H3 cells by population stddev, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_h3_rastertogridstddev(tile, resolution) t"
+    )
+
+
 def rst_quadbin_rastertogridavg(tile: ColLike, resolution: ColLike) -> None:
     """Aggregate raster pixel values into quadbin cells by mean, per band."""
     raise NotImplementedError(
@@ -2999,6 +3039,22 @@ def rst_quadbin_rastertogridsum(tile: ColLike, resolution: ColLike) -> None:
     raise NotImplementedError(
         "Invoke the registered UDTF as a SQL LATERAL table function: "
         "SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_rastertogridsum(tile, resolution) t"
+    )
+
+
+def rst_quadbin_rastertogridvariance(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into quadbin cells by population variance, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, resolution) t"
+    )
+
+
+def rst_quadbin_rastertogridstddev(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into quadbin cells by population stddev, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, resolution) t"
     )
 
 
@@ -3050,6 +3106,22 @@ def rst_bng_rastertogridsum(tile: ColLike, resolution: ColLike) -> None:
     )
 
 
+def rst_bng_rastertogridvariance(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into BNG cells by population variance, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridvariance(tile, resolution) t"
+    )
+
+
+def rst_bng_rastertogridstddev(tile: ColLike, resolution: ColLike) -> None:
+    """Aggregate raster pixel values into BNG cells by population stddev, per band."""
+    raise NotImplementedError(
+        "Invoke the registered UDTF as a SQL LATERAL table function: "
+        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_rastertogridstddev(tile, resolution) t"
+    )
+
+
 rst_h3_rastertogridavg.__doc__ = _RASTERTOGRID_DOC.format(
     summary="Aggregate raster pixel values into H3 cells by mean, per band.",
     grid="H3",
@@ -3098,6 +3170,22 @@ rst_h3_rastertogridsum.__doc__ = _RASTERTOGRID_DOC.format(
     measure="DOUBLE",
     sql_name="h3_rastertogridsum",
 )
+rst_h3_rastertogridvariance.__doc__ = _RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into H3 cells by population variance, per band.",
+    grid="H3",
+    agg_desc="their population variance (DOUBLE)",
+    res_range="0..15",
+    measure="DOUBLE",
+    sql_name="h3_rastertogridvariance",
+)
+rst_h3_rastertogridstddev.__doc__ = _RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into H3 cells by population standard deviation, per band.",
+    grid="H3",
+    agg_desc="their population standard deviation (DOUBLE)",
+    res_range="0..15",
+    measure="DOUBLE",
+    sql_name="h3_rastertogridstddev",
+)
 rst_quadbin_rastertogridavg.__doc__ = _RASTERTOGRID_DOC.format(
     summary="Aggregate raster pixel values into quadbin cells by mean, per band.",
     grid="quadbin",
@@ -3145,6 +3233,22 @@ rst_quadbin_rastertogridsum.__doc__ = _RASTERTOGRID_DOC.format(
     res_range="0..20",
     measure="DOUBLE",
     sql_name="quadbin_rastertogridsum",
+)
+rst_quadbin_rastertogridvariance.__doc__ = _RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into quadbin cells by population variance, per band.",
+    grid="quadbin",
+    agg_desc="their population variance (DOUBLE)",
+    res_range="0..20",
+    measure="DOUBLE",
+    sql_name="quadbin_rastertogridvariance",
+)
+rst_quadbin_rastertogridstddev.__doc__ = _RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into quadbin cells by population standard deviation, per band.",
+    grid="quadbin",
+    agg_desc="their population standard deviation (DOUBLE)",
+    res_range="0..20",
+    measure="DOUBLE",
+    sql_name="quadbin_rastertogridstddev",
 )
 
 _BNG_RASTERTOGRID_DOC = """{summary}
@@ -3205,6 +3309,18 @@ rst_bng_rastertogridsum.__doc__ = _BNG_RASTERTOGRID_DOC.format(
     agg_desc="their sum (DOUBLE)",
     measure="DOUBLE",
     sql_name="bng_rastertogridsum",
+)
+rst_bng_rastertogridvariance.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into BNG cells by population variance, per band.",
+    agg_desc="their population variance (DOUBLE)",
+    measure="DOUBLE",
+    sql_name="bng_rastertogridvariance",
+)
+rst_bng_rastertogridstddev.__doc__ = _BNG_RASTERTOGRID_DOC.format(
+    summary="Aggregate raster pixel values into BNG cells by population standard deviation, per band.",
+    agg_desc="their population standard deviation (DOUBLE)",
+    measure="DOUBLE",
+    sql_name="bng_rastertogridstddev",
 )
 
 

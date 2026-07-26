@@ -31,7 +31,7 @@ from databricks.labs.gbx.pygx import _bng
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = 20
 
-_AGGS = ("avg", "count", "min", "max", "median", "sum")
+_AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")
 
 # quadbin 64-bit cell layout constants (see quadbin.main / quadbin.utils).
 _QB_HEADER = np.uint64(0x4000000000000000)
@@ -170,6 +170,15 @@ def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
         # weighted sum) WITHOUT dividing by counts. A cell is only emitted with
         # >=1 valid pixel (sec 2.6), so sum is always well-defined.
         out = np.bincount(inv, weights=vals, minlength=uniq.size)
+    elif agg in ("variance", "stddev"):
+        # Population (ddof=0), TWO-PASS (numerically stable; NOT E[x^2]-E[x]^2):
+        # pass 1 per-cell mean; pass 2 mean of squared deviations. A 1-pixel
+        # cell gives variance 0 (clean). stddev = sqrt(variance) so it tracks
+        # variance's cross-tier parity exactly.
+        means = np.bincount(inv, weights=vals, minlength=uniq.size) / counts
+        sq = (vals - means[inv]) ** 2
+        var = np.bincount(inv, weights=sq, minlength=uniq.size) / counts
+        out = var if agg == "variance" else np.sqrt(var)
     elif agg == "min":
         out = np.full(uniq.size, np.inf)
         np.minimum.at(out, inv, vals)
@@ -197,7 +206,7 @@ def raster_to_grid(ds, resolution: int, grid: str, agg: str) -> list:
                     +/-1..+/-6 or a resolutionMap string key e.g. ``"1km"``).
         grid:       ``"h3"``, ``"quadbin"`` or ``"bng"``.
         agg:        One of ``"avg"``, ``"count"``, ``"min"``, ``"max"``,
-                    ``"median"``, ``"sum"``.
+                    ``"median"``, ``"sum"``, ``"variance"``, ``"stddev"``.
 
     Returns:
         One list per band; each is a list of ``{"cellID": id, "measure":

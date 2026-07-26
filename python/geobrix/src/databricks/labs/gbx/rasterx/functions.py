@@ -848,6 +848,36 @@ def rst_h3_rastertogridsum(tile: ColLike, resolution: ColLike) -> Column:
     return f.call_function("gbx_rst_h3_rastertogridsum", _col(tile), _col(resolution))
 
 
+def rst_h3_rastertogridvariance(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute the population variance of pixel values per H3 cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: H3 resolution (0–15).
+
+    Returns:
+        Column of grid values (e.g. struct with H3 index and variance).
+    """
+    return f.call_function(
+        "gbx_rst_h3_rastertogridvariance", _col(tile), _col(resolution)
+    )
+
+
+def rst_h3_rastertogridstddev(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute the population standard deviation of pixel values per H3 cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: H3 resolution (0–15).
+
+    Returns:
+        Column of grid values (e.g. struct with H3 index and stddev).
+    """
+    return f.call_function(
+        "gbx_rst_h3_rastertogridstddev", _col(tile), _col(resolution)
+    )
+
+
 def rst_quadbin_rastertogridavg(tile: ColLike, resolution: ColLike) -> Column:
     """Compute average pixel value per CARTO quadbin v0 cell at the given resolution.
 
@@ -935,6 +965,36 @@ def rst_quadbin_rastertogridsum(tile: ColLike, resolution: ColLike) -> Column:
     """
     return f.call_function(
         "gbx_rst_quadbin_rastertogridsum", _col(tile), _col(resolution)
+    )
+
+
+def rst_quadbin_rastertogridvariance(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute the population variance of pixel values per CARTO quadbin v0 cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: Quadbin resolution / zoom (0–20).
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+    """
+    return f.call_function(
+        "gbx_rst_quadbin_rastertogridvariance", _col(tile), _col(resolution)
+    )
+
+
+def rst_quadbin_rastertogridstddev(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute the population standard deviation of pixel values per CARTO quadbin v0 cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: Quadbin resolution / zoom (0–20).
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+    """
+    return f.call_function(
+        "gbx_rst_quadbin_rastertogridstddev", _col(tile), _col(resolution)
     )
 
 
@@ -1032,6 +1092,42 @@ def rst_bng_rastertogridsum(tile: ColLike, resolution: ColLike) -> Column:
         Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
     """
     return f.call_function("gbx_rst_bng_rastertogridsum", _col(tile), _col(resolution))
+
+
+def rst_bng_rastertogridvariance(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute the population variance of pixel values per BNG grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
+            negative indices select quadrant subdivisions) or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
+        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
+    """
+    return f.call_function(
+        "gbx_rst_bng_rastertogridvariance", _col(tile), _col(resolution)
+    )
+
+
+def rst_bng_rastertogridstddev(tile: ColLike, resolution: ColLike) -> Column:
+    """Compute the population standard deviation of pixel values per BNG grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
+            negative indices select quadrant subdivisions) or a resolution
+            string such as ``"1km"`` or ``"100m"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID STRING, measure DOUBLE)>>.
+        Output cell ids are BNG grid-square strings (e.g. ``"TQ3080"``).
+    """
+    return f.call_function(
+        "gbx_rst_bng_rastertogridstddev", _col(tile), _col(resolution)
+    )
 
 
 def rst_quadbin_tessellate(

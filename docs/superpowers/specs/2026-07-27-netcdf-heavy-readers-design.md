@@ -163,11 +163,30 @@ as the other cross-tier raster comparisons).
   DSG — CMIP5/coral/ECMWF are grids; a small DSG `.nc` may need adding to `src/test/resources/binary/`).
 - **Light tests:** auto-enumerate default returns all grid variables; `variable` filter restricts;
   back-compat — an explicit `variable` still returns exactly that variable's tile.
-- **Benchmarking (both tiers):** add `netcdf_gdal` and light `netcdf_gbx` to the reader-bench harness
-  (`gbx:bench:readers` family) so the two tiers are timed on the **same NetCDF corpus**. Stage a
-  representative `.nc` into the bench corpus (the reader-bench corpus, not `sample-data/`); measure
-  read/tile throughput. Per the `bench-changes-update-docs` rule, reflect the readers-bench addition in
-  `benchmarking.mdx`.
+- **Benchmarking (both tiers) — real granule corpus via `TropomiDownloader`.** The reader-bench harness
+  today only globs `*.tif` (`readers.py::_list_tifs`) and the cluster reader cell hard-codes the GeoTIFF
+  `rows/` pool with `filterRegex: .*\.tif$` (`cluster.py`), so benchmarking NetCDF requires (a) a NetCDF
+  corpus and (b) a harness path that reads it. Decisions:
+  - **Corpus = real S5P granules staged by the existing downloader.** `TropomiDownloader().download(bbox,
+    out_dir, temporal=...)` stages real netCDF-4 Sentinel-5P L2 CH4 swath granules as `{out_dir}/{item_id}.nc`
+    on a Volume — byte-faithful, retained, and **decoupled from `read()`** (download-and-stop is a supported
+    mode; verified). Each granule is a full-orbit swath, ~150–300 MB, **multi-variable** (CH4 + `qa_value` +
+    geolocation), so it genuinely exercises `netcdf_gdal`'s subdataset-enumeration cost — which the small
+    single-variable test fixtures do not. Auth is a Planetary Computer token (no Earthdata needed). Corpus
+    scale is dialed by the bbox / the multi-window `temporal` loop (1 granule ≈ 200 MB up to a multi-GB N-file
+    set). Stage into a dedicated `netcdf/` subdir of the reader-bench corpus (the Volume bench corpus, not
+    `sample-data/`), parallel to `rows/`.
+  - **Harness change:** add a format-parameterized reader-bench path (or a new cluster cell) that calls the
+    existing generic `readers.run_format_read(spark, netcdf_dir, ..., fmt="netcdf_gdal")` and
+    `fmt="netcdf_gbx"` (raster mode) over the same staged `.nc` dir with `filterRegex: .*\.nc$` — a true
+    same-corpus heavy-vs-light comparison. `run_format_read` is already generic over `fmt`; the missing piece
+    is the corpus + the invocation cell, not new timing code.
+  - **Swath caveat:** S5P granules are curvilinear **swaths**, not regular CF grids — the realistic sensor
+    shape and a good stress case, but note the cross-tier *raster* parity nuance (§8). For a clean
+    regular-grid bench a gridded granule (CMIP/ERA-style) could complement it later; S5P alone is a
+    legitimate realistic corpus for the throughput number.
+  - Per the `bench-changes-update-docs` rule, reflect the readers-bench addition (and the NetCDF corpus
+    recipe) in `benchmarking.mdx`.
 
 ## 7. Surfaces to update
 
@@ -178,7 +197,8 @@ as the other cross-tier raster comparisons).
 - `src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister` (+2 entries).
 - Light: `python/geobrix/src/databricks/labs/gbx/ds/netcdf.py` (`_requested_variables` + raster
   multi-variable emission), possibly `_netcdf.py` (enumerate-readable-variables helper).
-- Bench: reader-bench spec/harness + a staged NetCDF corpus file; `docs/docs/api/benchmarking.mdx`.
+- Bench: reader-bench harness format-parameterized `.nc` path (readers.py / a new `cluster.py` cell) +
+  a `TropomiDownloader`-staged NetCDF corpus under `{CORPUS}/netcdf`; `docs/docs/api/benchmarking.mdx`.
 - Docs: `docs/docs/readers/netcdf.mdx` (document `netcdf_gdal` + `netcdf_ogr` alongside `netcdf_gbx`; the
   optional-filter contract; the light behavior change; the swath→points light-only asymmetry);
   `docs/docs/beta-release-notes.mdx` (new heavy readers + light behavior change).
@@ -195,5 +215,14 @@ as the other cross-tier raster comparisons).
   against — may need to stage a small one.
 - **Light behavior change** to a shipped reader — mitigated: strictly more permissive, back-compat test
   for explicit `variable`, release-noted.
-- **Bench corpus:** NetCDF read cost is subdataset-open-heavy; ensure the bench corpus file has multiple
-  variables so enumeration cost is represented.
+- **Bench corpus:** NetCDF read cost is subdataset-open-heavy; the real S5P granules (multi-variable
+  full-orbit swaths) staged by `TropomiDownloader` represent enumeration cost well. Two dependencies to
+  note: the corpus build requires a Planetary Computer token at stage time (non-deterministic vs the
+  synthetic GeoTIFF corpus — the granule set depends on the S5P archive for the chosen bbox/temporal), and
+  the harness needs the format-parameterized `.nc` read path added (§6). Guard the bench so it skips
+  cleanly if the corpus dir is empty (token/download unavailable), rather than failing.
+- **Swath vs regular-grid in the raster path:** S5P is curvilinear swath geometry. `netcdf_gdal` and light
+  raster mode will surface swath variables as subdatasets; the read works and enumeration is exercised, but
+  the cross-tier raster *parity* comparison (§5) should use a regular-grid fixture (e.g. the CMIP5/coral
+  test resources) where geotransform equality is well-defined — the S5P swath corpus is for the *throughput*
+  bench, not the bit-parity gate. Keep the two concerns separate (parity = gridded fixture; bench = S5P).

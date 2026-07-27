@@ -50,15 +50,25 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                 val vars = subs.toSeq.filter(_._1.endsWith("_NAME")).map { case (_, sel) =>
                     sel.reverse.takeWhile(_ != ':').reverse   // trailing :var
                 }.filter(v => !v.endsWith("_bnds") && !v.endsWith("_bounds"))
-                // Keep only subdatasets GDAL opens as a >1x1 raster (drops degenerate/coordinate arrays).
+                // Keep only subdatasets that are true georeferenced raster grids.
                 // A subdataset selector (NETCDF:"file":var) is not a filesystem path, so it is opened
-                // directly via gdal.Open — RasterDriver.read would try to Hadoop-stage the selector string.
+                // directly via gdal.Open - RasterDriver.read would try to Hadoop-stage the selector string.
+                // Swath subdatasets (e.g. S5P /PRODUCT/methane_mixing_ratio) report an empty projection
+                // AND the identity geotransform [0,1,0,0,0,1] - their georeferencing lives in a GEOLOCATION
+                // array. They are correctly dropped here, matching the light classify() which returns
+                // CURVILINEAR and excludes them from raster mode. Regular grids (coral/CMIP/NASA-NEX) have
+                // a real CRS or a non-identity geotransform and are kept.
                 val grids = vars.filter { v =>
                     try {
                         val sub = gdal.Open(s"""NETCDF:"$localPath":$v""", GA_ReadOnly)
                         if (sub == null) false
                         else {
-                            val ok = sub.GetRasterXSize > 1 && sub.GetRasterYSize > 1 && sub.GetRasterCount >= 1
+                            val bigEnough = sub.GetRasterXSize > 1 && sub.GetRasterYSize > 1 && sub.GetRasterCount >= 1
+                            val hasCrs = { val p = sub.GetProjectionRef; p != null && p.nonEmpty }
+                            val gt = new Array[Double](6); sub.GetGeoTransform(gt)
+                            val identity = gt(0) == 0.0 && gt(1) == 1.0 && gt(2) == 0.0 &&
+                                           gt(3) == 0.0 && gt(4) == 0.0 && gt(5) == 1.0
+                            val ok = bigEnough && (hasCrs || !identity)
                             sub.delete(); ok
                         }
                     } catch { case _: Throwable => false }

@@ -55,4 +55,14 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
             .option("variable", "no_such_variable_xyz").load(ncDir)
         df.count() shouldBe 0L
     }
+
+    test("netcdf_gdal enumerates only georeferenced grid variables (coral grid = 2)") {
+        import com.databricks.labs.gbx.rasterx.functions._
+        rasterx.functions.register(spark)
+        val ncDir = this.getClass.getResource("/binary/netcdf-coral/").toString
+        val df = spark.read.format("netcdf_gdal").option("sizeInMB", "-1")
+            .option("filterRegex", ".*20220101\\.nc$").load(ncDir)
+        val vars = df.select("source").collect().map(_.getString(0).split(":").last).toSet
+        vars shouldBe Set("bleaching_alert_area", "mask")
+    }
 }

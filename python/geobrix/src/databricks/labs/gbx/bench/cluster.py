@@ -254,7 +254,21 @@ print(
     + " databricks.adaptive="
     + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
 )
-corpus = _m.Corpus.read(f"{{CORPUS}}/corpus.json")
+# Reader-only runs (readers/pmtiles/vector/mvt/pmtiles-agg/tin/grid/fanout/netcdf --*-only) stage
+# their OWN corpus (a reader pool, a vector corpus, synthetic in-memory rows, or -- for netcdf --
+# the {{CORPUS}}/netcdf + {{CORPUS}}/netcdf-swath pools). They do NOT use the function-bench row
+# pool, so requiring {{CORPUS}}/corpus.json for them would hard-fail a valid reader run on a missing
+# scaffold. Read corpus.json LAZILY: only when a function-bench leg actually runs. When it is not
+# read, `corpus` is None and downstream pool_size usages fall back to None (summarize accepts it).
+_READER_ONLY = (
+    READERS_ONLY or PMTILES_ONLY or VECTOR_ONLY or MVT_ONLY or PMTILES_AGG_ONLY
+    or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
+    or FANOUT_ONLY or NETCDF_ONLY
+)
+corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
+# Function-bench summaries annotate results with the row-pool size; reader-only runs have no
+# function pool (corpus is None), so POOL_SIZE is None and results.summarize omits that annotation.
+POOL_SIZE = None if corpus is None else len(corpus.row_pool.tiles)
 fnspecs = _s.select(functions=[x for x in FUNCTIONS.split(",") if x] or None, set=SET)
 # --redo-functions FORCES its fns into the run scope even when they fall outside --set /
 # --functions, so `--redo-functions X` actually RE-RUNS X. Purging alone (the old behavior)
@@ -457,7 +471,7 @@ def show_section(api, mode, rows):
         display(_df)
     except Exception:
         _df.show(300, truncate=False)
-    _md = results.summarize(rows, pool_size=len(corpus.row_pool.tiles))
+    _md = results.summarize(rows, pool_size=POOL_SIZE)
     _path = f"{OUT}/{api}.{mode}.summary.md"
     with open(_path, "w") as fh:
         fh.write(_md)
@@ -656,39 +670,40 @@ if _reader_rows:
     _show_md(f"reader benchmark -- {RUN_ID}", _md)
 """
 
-_CELL_NETCDF = """# NetCDF reader benchmark: light netcdf_gbx vs heavy netcdf_gdal (same corpus, both on-cluster)
-# Same-corpus heavy-vs-light throughput over real Sentinel-5P L2 CH4 granules staged at
-# {CORPUS}/netcdf (download-and-stop via TropomiDownloader -- staged separately, decoupled from
-# read()). Both tiers enumerate the SAME .nc pool with filterRegex .*\\.nc$ (raster mode), so this
-# is a fair heavy-vs-light comparison. S5P swaths are a THROUGHPUT bench, NOT a bit-parity gate
-# (cross-tier parity uses a gridded fixture, not S5P swaths -- see docs/api/benchmarking.mdx).
+_CELL_NETCDF = """# NetCDF RASTER reader benchmark: heavy netcdf_gdal vs light netcdf_gbx (regular grids, on-cluster)
+# Honest heavy-vs-light throughput over real NASA-NEX GDDP-CMIP6 granules staged at {CORPUS}/netcdf
+# (download-and-stop via NasaNexDownloader -- staged separately, decoupled from read()). These are
+# regular 0.25-degree lat/lon global grids, so BOTH tiers can enumerate the SAME .nc pool with
+# filterRegex .*\\.nc$ (light in raster mode) -- a fair comparison. size_mib=-1 makes each grid var
+# ONE tile in both tiers (matching one-tile-per-var granularity). This is a THROUGHPUT bench, NOT a
+# bit-parity gate (cross-tier parity uses a small gridded fixture -- see docs/api/benchmarking.mdx).
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
 import glob as _glob
 _netcdf_dir = f"{CORPUS}/netcdf"
-# GUARD: the S5P corpus is staged separately (download-and-stop at stage time).
+# GUARD: the NASA-NEX grid corpus is staged separately (download-and-stop at stage time).
 # When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
 _nc_files = _rd.list_corpus_files(_netcdf_dir, r".*\\.nc$") if _os.path.isdir(_netcdf_dir) else []
 if not _nc_files:
     print(
         f"NETCDF BENCH SKIPPED: no .nc granules under {_netcdf_dir}. "
-        f"Stage the corpus first via readers.stage_netcdf_corpus(spark, '{{CORPUS}}/netcdf', ...) "
-        f"(real S5P L2 CH4 granules from Planetary Computer, anonymous access), then re-run "
-        f"with --benchmark-netcdf / --netcdf-only.",
+        f"Stage the raster corpus first via readers.stage_nasanex_corpus(spark, '{{CORPUS}}/netcdf', ...) "
+        f"(real NASA-NEX GDDP-CMIP6 regular grids from Planetary Computer, anonymous access), then "
+        f"re-run with --benchmark-netcdf / --netcdf-only.",
         flush=True,
     )
 else:
-    print(f"NETCDF BENCH: {len(_nc_files)} .nc granule(s) under {_netcdf_dir}", flush=True)
+    print(f"NETCDF RASTER BENCH: {len(_nc_files)} .nc grid granule(s) under {_netcdf_dir}", flush=True)
     _netcdf_rows = []
     if LIGHTWEIGHT:
         _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                                  api="lightweight", fmt="netcdf_gbx",
-                                 options={"filterRegex": r".*\\.nc$"}, where="cluster")
+                                 options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
         _sink([_r]); lw.append(_r); _netcdf_rows.append(_r)
     if HEAVYWEIGHT:
         _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                                  api="heavyweight", fmt="netcdf_gdal",
-                                 options={"filterRegex": r".*\\.nc$"}, where="cluster")
+                                 options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
         _sink([_r]); hw.append(_r); _netcdf_rows.append(_r)
     if _netcdf_rows:
         _df = spark.sql(
@@ -699,7 +714,54 @@ else:
         except Exception:
             _df.show(100, truncate=False)
         _md = results.summarize(_netcdf_rows)
-        _show_md(f"netcdf reader benchmark -- {RUN_ID}", _md)
+        _show_md(f"netcdf RASTER reader benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_NETCDF_SWATH = """# NetCDF VECTOR (swath) reader benchmark: light netcdf_gbx mode=vector ONLY (S5P swaths, on-cluster)
+# Real Sentinel-5P L2 CH4 SWATH granules staged at {CORPUS}/netcdf-swath (download-and-stop via
+# TropomiDownloader -- staged separately, decoupled from read()). S5P L2 is an irregular per-pixel
+# lat/lon SWATH, so it is read in the light netcdf_gbx VECTOR mode (one point row per pixel). There
+# is NO heavy swath path -- netcdf_gdal has no swath reader -- so this leg is a LIGHT-ONLY throughput
+# measurement, NOT a heavy-vs-light comparison. (The heavy-vs-light comparison lives in the RASTER
+# leg above, over regular-grid NASA-NEX granules.)
+from databricks.labs.gbx.bench import readers as _rd
+import os as _os
+_swath_dir = f"{CORPUS}/netcdf-swath"
+# GUARD: the S5P swath corpus is staged separately (download-and-stop at stage time).
+# When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
+_swath_files = _rd.list_corpus_files(_swath_dir, r".*\\.nc$") if _os.path.isdir(_swath_dir) else []
+if not _swath_files:
+    print(
+        f"NETCDF SWATH BENCH SKIPPED: no .nc granules under {_swath_dir}. "
+        f"Stage the swath corpus first via readers.stage_netcdf_corpus(spark, '{{CORPUS}}/netcdf-swath', ...) "
+        f"(real S5P L2 CH4 swaths from Planetary Computer, anonymous access), then re-run "
+        f"with --benchmark-netcdf / --netcdf-only.",
+        flush=True,
+    )
+elif not LIGHTWEIGHT:
+    # Light-only leg: heavy has no swath path, so nothing to run when --heavyweight-only.
+    print(
+        "NETCDF SWATH BENCH SKIPPED: swath (vector) mode is light-only (heavy has no swath path); "
+        "run with --lightweight to include it.",
+        flush=True,
+    )
+else:
+    print(f"NETCDF SWATH BENCH (light-only): {len(_swath_files)} .nc swath granule(s) under {_swath_dir}", flush=True)
+    _swath_rows = []
+    _r = _rd.run_format_read(spark, _swath_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                             api="lightweight", fmt="netcdf_gbx",
+                             options={"mode": "vector", "filterRegex": r".*\\.nc$"}, where="cluster")
+    _sink([_r]); lw.append(_r); _swath_rows.append(_r)
+    if _swath_rows:
+        _df = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'reader' AND fn LIKE 'read_netcdf%'"
+        )
+        try:
+            display(_df)
+        except Exception:
+            _df.show(100, truncate=False)
+        _md = results.summarize(_swath_rows)
+        _show_md(f"netcdf VECTOR (swath, light-only) reader benchmark -- {RUN_ID}", _md)
 """
 
 _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
@@ -2537,11 +2599,11 @@ all_rows = lw + hw
 if lw:
     results.write_jsonl(lw, f"{OUT}/lightweight.jsonl")
     with open(f"{OUT}/lightweight.summary.md", "w") as fh:
-        fh.write(results.summarize(lw, pool_size=len(corpus.row_pool.tiles)))
+        fh.write(results.summarize(lw, pool_size=POOL_SIZE))
 if hw:
     results.write_jsonl(hw, f"{OUT}/heavyweight.jsonl")
     with open(f"{OUT}/heavyweight.summary.md", "w") as fh:
-        fh.write(results.summarize(hw, pool_size=len(corpus.row_pool.tiles)))
+        fh.write(results.summarize(hw, pool_size=POOL_SIZE))
 
 # Rows were appended incrementally by _sink as each function finished, so there is no
 # bulk append here -- delta_rows is the running count the sink accumulated.
@@ -2562,7 +2624,7 @@ if hw and lw:
     cells, unmatched = compare.compare_cells(hw, lw)
     compare.write_csv(cells, f"{OUT}/comparison.csv")
     _cmp_md = compare.summarize_compare(
-        cells, unmatched, hw, lw, pool_size=len(corpus.row_pool.tiles)
+        cells, unmatched, hw, lw, pool_size=POOL_SIZE
     )
     with open(f"{OUT}/summary.md", "w") as fh:
         fh.write(_cmp_md)
@@ -2731,7 +2793,9 @@ def build_bench_notebook(cfg: dict) -> dict:
     if benchmark_readers or readers_only:
         cells.append(_cell(_CELL_READERS))
     if benchmark_netcdf or netcdf_only:
+        # RASTER leg (heavy-vs-light over NASA-NEX grids) + VECTOR leg (light-only over S5P swaths).
         cells.append(_cell(_CELL_NETCDF))
+        cells.append(_cell(_CELL_NETCDF_SWATH))
     if benchmark_pmtiles or pmtiles_only:
         cells.append(_cell(_CELL_PMTILES))
     if benchmark_vector or vector_only:

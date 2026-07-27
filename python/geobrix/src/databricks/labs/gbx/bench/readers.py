@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from databricks.labs.gbx.bench.results import ResultRow
 from databricks.labs.gbx.bench.runner import capture_env, peak_rss_mb, time_iters
@@ -252,7 +252,10 @@ def run_format_read(
         from databricks.labs.gbx.ds.register import register
 
         register(spark)
-    elif fmt == "gdal":
+    elif fmt in ("gdal", "gtiff_gdal", "netcdf_gdal"):
+        # Heavy raster readers need the GDAL drivers initialised (registered via the
+        # synchronized GDALManager guard inside rasterx.register). netcdf_gdal is the
+        # heavy leg of the NetCDF raster bench; gtiff_gdal/gdal are the GeoTIFF readers.
         try:
             from databricks.labs.gbx.rasterx import functions as _rx
 
@@ -265,7 +268,12 @@ def run_format_read(
         if options:
             for k, v in options.items():
                 reader = reader.option(k, str(v))
-        if fmt == "raster_gbx":
+        # sizeInMB is honored by the light raster reader (raster_gbx) AND the heavy
+        # raster readers (netcdf_gdal / gdal / gtiff_gdal). Broadened beyond raster_gbx
+        # so the netcdf raster leg can pass size_mib=-1 to BOTH tiers -- one tile per
+        # grid variable -- giving the heavy reader the same one-tile-per-var granularity
+        # as light (a fair heavy-vs-light comparison).
+        if fmt in ("raster_gbx", "netcdf_gdal", "gdal", "gtiff_gdal"):
             reader = reader.option("sizeInMB", str(size_mib))
         df = reader.load(path)
         if ingest_table:
@@ -6455,18 +6463,23 @@ def stage_netcdf_corpus(
     partitions: Optional[int] = None,
 ):
     """Stage real Sentinel-5P L2 CH4 NetCDF granules into ``corpus_dir`` for the
-    reader bench (download-and-stop mode).
+    NetCDF VECTOR (swath) reader bench (download-and-stop mode).
 
     Bench-only helper -- NOT product code and NOT run at import time. The human
     invokes it once (interactively / from a staging notebook) to populate the
-    parallel ``{CORPUS}/netcdf`` pool that the NetCDF reader-bench cell reads.
-    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool,
-    so the download happens at stage time only, while the
-    bench itself does not.
+    ``{CORPUS}/netcdf-swath`` pool that the NetCDF reader-bench VECTOR leg reads.
+    S5P L2 granules are SWATHS (irregular per-pixel lat/lon), so they are read in
+    the light ``netcdf_gbx`` VECTOR mode -- there is no heavy swath path, so this
+    leg is a light-only throughput measurement, not a heavy-vs-light comparison.
+    (The heavy-vs-light RASTER leg uses regular-grid NASA-NEX granules staged by
+    ``stage_nasanex_corpus`` into ``{CORPUS}/netcdf``.)
+
+    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool, so
+    the download happens at stage time only, while the bench itself does not.
 
     Granules land as ``{item_id}.nc`` (matching the ``.*\\.nc$`` filter the bench
-    passes to both tiers). Returns the download-manifest DataFrame. Prints the
-    resulting file count so a partial/empty stage is never silent.
+    passes). Returns the download-manifest DataFrame. Prints the resulting file
+    count so a partial/empty stage is never silent.
     """
     from databricks.labs.gbx.sample.tropomi import TropomiDownloader
 
@@ -6478,7 +6491,7 @@ def stage_netcdf_corpus(
     if temporal is None:
         temporal = "2021-01-01/2021-01-08"
     print(
-        f"stage_netcdf_corpus: downloading S5P L2 CH4 granules to {corpus_dir} "
+        f"stage_netcdf_corpus: downloading S5P L2 CH4 swath granules to {corpus_dir} "
         f"(bbox={bbox}, temporal={temporal})",
         flush=True,
     )
@@ -6487,7 +6500,67 @@ def stage_netcdf_corpus(
     )
     staged = list_corpus_files(corpus_dir, r".*\.nc$")
     print(
-        f"stage_netcdf_corpus: {len(staged)} .nc granule(s) staged under {corpus_dir}",
+        f"stage_netcdf_corpus: {len(staged)} .nc swath granule(s) staged under "
+        f"{corpus_dir}",
+        flush=True,
+    )
+    return manifest
+
+
+def stage_nasanex_corpus(
+    spark,
+    corpus_dir: str,
+    bbox: Optional[List[float]] = None,
+    temporal: Optional[str] = None,
+    variables: Tuple[str, ...] = ("tas",),
+    partitions: Optional[int] = None,
+):
+    """Stage real NASA-NEX GDDP-CMIP6 regular-grid NetCDF granules into
+    ``corpus_dir`` for the NetCDF RASTER reader bench (download-and-stop mode).
+
+    Bench-only helper -- NOT product code and NOT run at import time. The human
+    invokes it once (interactively / from a staging notebook) to populate the
+    ``{CORPUS}/netcdf`` pool that the NetCDF reader-bench RASTER leg reads.
+    NASA-NEX GDDP-CMIP6 granules are regular 0.25-degree lat/lon global grids, so
+    BOTH the heavy ``netcdf_gdal`` and the light ``netcdf_gbx`` (raster mode)
+    readers can enumerate them -- a fair heavy-vs-light comparison. (The S5P swath
+    VECTOR leg is staged separately by ``stage_netcdf_corpus`` into
+    ``{CORPUS}/netcdf-swath``.)
+
+    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool, so
+    the download happens at stage time only, while the bench itself does not.
+
+    Granules land as ``{item_id}_{asset_name}.nc`` (one file per climate variable
+    per item; matching the ``.*\\.nc$`` filter the bench passes). Returns the
+    download-manifest DataFrame. Prints the resulting file count so a partial or
+    empty stage is never silent.
+    """
+    from databricks.labs.gbx.sample.nasanex import NasaNexDownloader
+
+    # Default AOI: a modest box over the US Southwest with a short window -- enough
+    # real regular-grid granules for a throughput bench without pulling the whole
+    # archive. Override via bbox/temporal/variables for other AOIs.
+    if bbox is None:
+        bbox = [-104.5, 31.0, -101.5, 33.0]
+    if temporal is None:
+        temporal = "2021-01-01/2021-01-08"
+    print(
+        f"stage_nasanex_corpus: downloading NASA-NEX GDDP-CMIP6 grid granules to "
+        f"{corpus_dir} (bbox={bbox}, temporal={temporal}, variables={variables})",
+        flush=True,
+    )
+    manifest = NasaNexDownloader().download(
+        bbox,
+        corpus_dir,
+        temporal=temporal,
+        variables=variables,
+        partitions=partitions,
+        spark=spark,
+    )
+    staged = list_corpus_files(corpus_dir, r".*\.nc$")
+    print(
+        f"stage_nasanex_corpus: {len(staged)} .nc grid granule(s) staged under "
+        f"{corpus_dir}",
         flush=True,
     )
     return manifest

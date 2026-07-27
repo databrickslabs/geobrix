@@ -35,7 +35,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // + 1 H3 rasterize aggregator (rst_h3_rasterize_agg, grid_aggregate kind)
     // + 9 BNG/quadbin raster-grid fns (5 rst_bng_rastertogrid{avg,count,max,min,
     //   median} + rst_{quadbin,bng}_tessellate + rst_{quadbin,bng}_rasterize_agg)
-    assert(BenchDispatch.all.size == 116)
+    // + 9 sum/variance/stddev reducers (rst_{h3,quadbin,bng}_rastertogrid{sum,
+    //   variance,stddev})
+    assert(BenchDispatch.all.size == 125)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")

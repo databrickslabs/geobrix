@@ -424,3 +424,124 @@ def test_auto_does_not_crush_heavy(heavy_registered):
         "Rebuild: gbx:docker:exec 'mvn clean package -PskipScoverage -DskipTests' "
         "then copy target/geobrix-0.4.2-jar-with-dependencies.jar to python/geobrix/lib/"
     )
+
+
+# --- Task 3: cross-tier RGBA parity (shape + alpha-position + RGB distribution) ---
+
+
+def _make_uint16_with_nodata_hole(width=64, height=64, lo=8000, hi=12000, nodata=0):
+    """uint16 ramp with a NoData square in the center (tests internal-NoData transparency)."""
+    transform = from_origin(10.0, 50.0, 0.03125, 0.03125)
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=transform,
+        nodata=nodata,
+    )
+    ramp = np.linspace(lo, hi, width * height).astype("uint16").reshape(height, width)
+    ramp[height // 3 : 2 * height // 3, width // 3 : 2 * width // 3] = nodata  # hole
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(ramp, 1)
+        return mf.read()
+
+
+def _decode_rgba(png_bytes):
+    """Decode to a full HxWx4 uint8 RGBA array (alpha as the 4th channel).
+
+    Asserts that the raw image already carries alpha (mode RGBA or LA) before
+    any conversion, so `heavy.shape[2] == 4` is a real claim about the encoder
+    rather than a vacuous post-convert artifact.
+    """
+    from PIL import Image
+
+    img = Image.open(io.BytesIO(png_bytes))
+    assert img.mode in (
+        "RGBA",
+        "LA",
+    ), (
+        f"PNG was decoded as mode={img.mode!r}, not an alpha-carrying mode "
+        f"(RGBA or LA); the encoder did not emit alpha -- check the heavy tier's "
+        f"toDisplayRGBA wantAlpha path"
+    )
+    return np.asarray(img.convert("RGBA"))
+
+
+def test_light_vs_heavy_rgba_shape_and_alpha_parity(heavy_registered):
+    """Both tiers emit RGBA PNGs whose transparent-pixel positions match exactly,
+    and whose RGB channels agree within tolerance, on a source with internal NoData."""
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    spark = heavy_registered
+    raster_bytes = _make_uint16_with_nodata_hole()
+
+    with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        z, x, y = _center_tile_zxy(ds)
+    with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        light_png = xyz.render_tile(ds, z, x, y, rescale="auto")
+
+    df = spark.range(1).select(
+        rx.rst_tilexyz(
+            rx.rst_fromcontent(f.lit(raster_bytes), f.lit("GTiff")),
+            z,
+            x,
+            y,
+            "PNG",
+            256,
+            "near",
+            "auto",
+        ).alias("bytes")
+    )
+    heavy_png = bytes(df.collect()[0]["bytes"])
+
+    light = _decode_rgba(light_png)
+    heavy = _decode_rgba(heavy_png)
+
+    # Same dimensions and 4-band RGBA.
+    assert (
+        light.shape == heavy.shape
+    ), f"shape mismatch light={light.shape} heavy={heavy.shape}"
+    assert light.shape[2] == 4, "light not RGBA"
+    assert heavy.shape[2] == 4, "heavy not RGBA"
+
+    # (a) Exact alpha-position parity: the set of transparent pixels is identical.
+    light_transparent = light[..., 3] == 0
+    heavy_transparent = heavy[..., 3] == 0
+    # There MUST be a transparent hole (the NoData square) and opaque data around it.
+    assert (
+        light_transparent.any() and (~light_transparent).any()
+    ), "light has no alpha variation"
+    assert (
+        heavy_transparent.any() and (~heavy_transparent).any()
+    ), "heavy has no alpha variation"
+    # Allow a thin disagreement fringe from warp-resampling edges (<=1% of pixels).
+    disagree = int(np.sum(light_transparent != heavy_transparent))
+    frac = disagree / light_transparent.size
+    print(
+        f"\n[rgba] alpha disagreement {disagree}/{light_transparent.size} = {frac:.4f}"
+    )
+    assert frac <= 0.01, (
+        f"alpha-position parity: {frac:.4f} of pixels disagree on transparency "
+        f"(tolerance 0.01) -- heavy and light derive different NoData masks"
+    )
+
+    # (b) RGB distribution within tolerance over the OPAQUE (data) pixels of each tier.
+    qs = (0.05, 0.25, 0.5, 0.75, 0.95)
+    light_rgb = light[..., 0][~light_transparent].astype(float)
+    heavy_rgb = heavy[..., 0][~heavy_transparent].astype(float)
+    light_q = np.quantile(light_rgb, qs)
+    heavy_q = np.quantile(heavy_rgb, qs)
+    max_q_diff = float(np.max(np.abs(light_q - heavy_q)))
+    print(
+        f"[rgba] light R quantiles={light_q.round(1)} heavy={heavy_q.round(1)} maxdiff={max_q_diff:.1f}"
+    )
+    assert max_q_diff <= 20, (
+        f"cross-tier RGB quantile mismatch {max_q_diff:.1f} > 20 "
+        f"(light {light_q.round(1)} vs heavy {heavy_q.round(1)})"
+    )

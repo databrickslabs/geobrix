@@ -90,6 +90,43 @@ this is already the documented cross-tier asymmetry (from the prior spec + `benc
 This also means the "log the swallowed cause" hardening from `7ba0d2dd` stays — a genuine
 per-file failure still prints rather than vanishing.
 
+### 3.1a Cross-tier value parity: apply scale/offset in heavy (opt-in)
+
+The one remaining heavy-vs-light *value* divergence on a real regular grid: light `netcdf_gbx`
+opens with xarray `mask_and_scale=True` and emits **decoded physical** values, while heavy
+`netcdf_gdal` emits **raw stored** values — GDAL's netCDF driver reports `scale_factor` /
+`add_offset` as band scale/offset but does not apply them. Verified in the code: shared
+`WindowedExtract.extract` copies raw bytes at native dtype (lines 77–78) and copies scale/offset
+onto the output band as **metadata** (lines 89–95) but never applies them.
+
+**Decision (user, 2026-07-27): make heavy apply scale/offset so it matches light.**
+
+**Mechanism — opt-in, netcdf-only, do NOT change other readers.** `WindowedExtract` is shared by
+every raster reader (GeoTIFF etc.); silently unscaling everywhere would change GeoTIFF output and
+break other tiers' expectations. So:
+- Add an `applyScale` option (default `false`) threaded from the reader's `options` into
+  `WindowedExtract.extract` / `ReTile`. `NetCDF_Reader` passes `applyScale=true`; all other
+  readers keep the current raw-copy behavior.
+- When `applyScale=true` **and** a band has a non-identity scale/offset (`GetScale`≠1 or
+  `GetOffset`≠0): promote the output band to `Float64` (or `Float32` when the scale/values fit)
+  and write `physical = raw*scale + offset`, mapping the raw `_FillValue`/nodata to the decoded
+  nodata (NaN) so masked cells stay masked — matching light's `mask_and_scale`. Do NOT also
+  re-copy scale/offset as metadata in that case (the values are already physical; leaving the
+  metadata would double-apply on a downstream re-read).
+- When the band has identity scale/offset, behavior is unchanged (raw == physical).
+
+**Verification:** the cross-tier parity test (`test_netcdf_cross_tier.py`) currently passes on
+the coral fixture only because its variable is unscaled. Add a **scaled** grid fixture (or use a
+NASA-NEX variable that carries `scale_factor`) and assert heavy (applyScale) values match light
+within tolerance — this becomes the gate that the unscaling is correct. Precision note: heavy
+Float32 vs light Float64 decode may differ in the last bits; the test tolerance (`rtol/atol
+~1e-4`) already accounts for cross-engine float differences.
+
+**Grounding still needed (Risk):** confirm whether NASA-NEX GDDP variables actually carry
+`scale_factor`/`add_offset` (many CMIP6-downscaled products store float already). If they do not,
+the scaled-fixture test uses a synthetic scaled `.nc` instead; the reader change ships regardless
+(it is correct for any scaled CF grid, e.g. ERA5/S5P-style packed integers).
+
 ### 3.2 CMIP6 gridded-raster downloader
 
 New `sample/nasanex.py` (mirrors `sample/tropomi.py`), class `NasaNexDownloader`:
@@ -152,7 +189,12 @@ removes a foot-gun that already cost one failed run.
   should still enumerate its 2 grid vars.
 - **Cross-tier parity (existing `test_netcdf_cross_tier.py`):** unchanged contract — on the
   gridded coral fixture heavy and light enumerate the same variable set. Add an assertion that
-  a swath fixture yields the same (empty) raster set on both tiers.
+  a swath fixture yields the same (empty) raster set on both tiers. **Add a scaled-grid case**
+  (synthetic packed-integer `.nc` with `scale_factor`/`add_offset`, or a scaled NASA-NEX var):
+  heavy (`applyScale=true`) tile values match light decoded values within tolerance (§3.1a gate).
+- **GeoTIFF-unchanged regression (Scala):** a `gtiff_gdal` read of a scaled-band GeoTIFF still
+  emits raw values (proving `applyScale` defaults off and `WindowedExtract` is unchanged for
+  non-netcdf readers).
 - **Downloader:** unit-test `NasaNexDownloader` discovery/asset-filter with an injected STAC
   client seam (mirror `tropomi` tests); the live download is exercised only in the staging step
   (guarded/skipped when offline).
@@ -162,7 +204,11 @@ removes a foot-gun that already cost one failed run.
 ## 5. Surfaces to update
 
 - `src/main/scala/.../rasterx/ds/netcdf/NetCDF_Batch.scala` — geotransform/CRS grid filter.
-- `src/test/scala/.../rasterx/ds/NetCDF_DataSourceTest.scala` — swath-enumerates-0 test.
+- `src/main/scala/.../rasterx/operations/WindowedExtract.scala` (+ `ReTile`, `BalancedSubdivision`
+  option passthrough) — opt-in `applyScale`: decode `raw*scale+offset` to Float when set (§3.1a).
+- `src/main/scala/.../rasterx/ds/netcdf/NetCDF_Reader.scala` — pass `applyScale=true` into tiling.
+- `src/test/scala/.../rasterx/ds/NetCDF_DataSourceTest.scala` — swath-enumerates-0 test;
+  GeoTIFF-unchanged (raw values, `applyScale` off) regression.
 - `python/.../sample/nasanex.py` (new) + `sample/__init__.py` export; `sample` tests.
 - `python/.../bench/readers.py` — `run_format_read` passes `sizeInMB` to `netcdf_gdal`;
   `stage_*` for NASA-NEX; possibly a `stage_netcdf_swath_corpus` for S5P.
@@ -188,6 +234,9 @@ removes a foot-gun that already cost one failed run.
 - **`sizeInMB` semantics.** Passing `sizeInMB=-1` to heavy = one tile per grid subdataset; this
   is the fair comparison but means very large grids emit one big tile. That is the intended
   reader default (no split); a tiled sweep is a separate, opt-in bench.
-- **Cross-tier value parity on scaled variables** (carried from prior spec): heavy = raw stored
-  values, light = decoded physical. NASA-NEX variables may carry scale/offset — the raster bench
-  is a *throughput* measure, not a bit-parity gate; parity stays scoped to unscaled fixtures.
+- **Cross-tier value parity on scaled variables:** now being CLOSED by §3.1a (heavy applies
+  scale/offset when `applyScale=true`). The risk shifts to the shared `WindowedExtract`: the
+  change MUST be opt-in so GeoTIFF and other readers keep raw-copy behavior — a regression here
+  would silently alter every raster reader's output. Mitigation: `applyScale` defaults false;
+  only `NetCDF_Reader` sets it; add a GeoTIFF-unchanged regression assertion. The raster bench
+  itself remains a *throughput* measure; the scaled-fixture parity test is the correctness gate.

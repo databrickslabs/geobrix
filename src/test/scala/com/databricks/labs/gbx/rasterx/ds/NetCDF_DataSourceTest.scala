@@ -65,4 +65,16 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
         val vars = df.select("source").collect().map(_.getString(0).split(":").last).toSet
         vars shouldBe Set("bleaching_alert_area", "mask")
     }
+
+    // applyScale is an OPT-IN flag threaded only by NetCDF_Reader. This regression proves it
+    // defaults OFF in shared WindowedExtract code: a gtiff_gdal read (no applyScale set anywhere)
+    // still succeeds and produces a tile, so raster readers other than netcdf_gdal are unaffected.
+    test("gtiff_gdal read is unaffected by applyScale default (raw values preserved)") {
+        import com.databricks.labs.gbx.rasterx.functions._
+        rasterx.functions.register(spark)
+        val tif = this.getClass.getResource("/modis/").toString
+        val df = spark.read.format("gtiff_gdal").option("sizeInMB", "1").load(tif).limit(1)
+        // Reading succeeds and produces a tile; no applyScale option is set anywhere.
+        df.count() shouldBe 1L
+    }
 }

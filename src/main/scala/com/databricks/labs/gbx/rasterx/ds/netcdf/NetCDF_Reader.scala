@@ -32,7 +32,10 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
         }
         opened
     }
-    private val tilesIter = BalancedSubdivision.splitRasterIter(ds, Map.empty, partition.sizeInMB)
+    // applyScale=true: decode CF scale_factor/add_offset to physical Float64 in WindowedExtract,
+    // matching the light netcdf_gbx reader (xarray mask_and_scale=True). Heavy default is OFF;
+    // only netcdf_gdal opts in, so other raster readers keep raw-copy behavior.
+    private val tilesIter = BalancedSubdivision.splitRasterIter(ds, Map("applyScale" -> "true"), partition.sizeInMB)
     RST_ExpressionUtil.addCleanupListener(tilesIter)
     private val hconf = partition.expressionConfig.hConf
     // The result-facing source keeps the ORIGINAL (remote) path, not the local staging copy.

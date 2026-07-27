@@ -25,20 +25,15 @@ class NetcdfVectorReader(DataSourceReader):
         self.path = options.get("path")
         if not self.path:
             raise ValueError("netcdf_gbx requires a 'path' (e.g. .load(path)).")
-        raw = options.get("variables") or options.get("variable")
-        if not raw:
-            raise ValueError(
-                "netcdf_gbx vector mode requires a 'variables' option naming the "
-                "NetCDF variable(s) to emit as point attributes."
-            )
-        self.variables: List[str] = [
-            v.strip() for v in str(raw).split(",") if v.strip()
-        ]
+        self.options = dict(options)
         self.group: Optional[str] = options.get("group")
         self.filter_regex = options.get("filterRegex", ".*")
 
     def _members(self) -> List[str]:
         return _listing.list_files(self.path, self.filter_regex)
+
+    def _variables(self, ds) -> List[str]:
+        return _netcdf.select_variables(ds, self.options, "vector")
 
     def schema(self) -> StructType:
         members = self._members()
@@ -47,10 +42,9 @@ class NetcdfVectorReader(DataSourceReader):
                 f"netcdf_gbx: no files matched filterRegex {self.filter_regex!r} "
                 f"under {self.path!r} — nothing to infer a schema from."
             )
-        member = members[0]
         fields: List[StructField] = []
-        with _netcdf.open_dataset(member, self.group) as ds:
-            for name in self.variables:
+        with _netcdf.open_dataset(members[0], self.group) as ds:
+            for name in self._variables(ds):
                 fields.append(
                     StructField(name, _netcdf.np_to_spark(ds[name].values.dtype), True)
                 )
@@ -66,18 +60,12 @@ class NetcdfVectorReader(DataSourceReader):
         import shapely
 
         with _netcdf.open_dataset(partition.file_path, self.group) as ds:
-            kind = _netcdf.classify(ds, self.variables[0])
-            if kind == _netcdf.UNSUPPORTED:
-                raise ValueError(
-                    f"netcdf_gbx: variable '{self.variables[0]}' in "
-                    f"{partition.file_path} has no per-pixel lon/lat (sensor "
-                    f"geometry / unsupported); orthorectify it first."
-                )
-            lon, lat, attrs, srid = _netcdf.point_arrays(ds, self.variables)
-
+            variables = self._variables(ds)
+            if not variables:
+                return
+            lon, lat, attrs, srid = _netcdf.point_arrays(ds, variables)
         wkb = shapely.to_wkb(shapely.points(lon, lat))
         proj = f"EPSG:{srid}"
-        n = len(lon)
-        for i in range(n):
-            row = tuple(attrs[name][i].item() for name in self.variables)
+        for i in range(len(lon)):
+            row = tuple(attrs[name][i].item() for name in variables)
             yield row + (bytes(wkb[i]), srid, proj)

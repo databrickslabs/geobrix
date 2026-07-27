@@ -67,6 +67,21 @@ def _write_points(path):
         qa[:] = np.array([0, 1, 0, 1, 1], dtype="int32")
 
 
+def _write_regular_grid_two(path):
+    with Dataset(path, "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        for name in ("ch4", "co"):
+            v = ds.createVariable(name, "f4", ("lat", "lon"), fill_value=-9999.0)
+            v[:] = np.arange(12, dtype="float32").reshape(3, 4)
+
+
 # --- raster mode (Task 3) ---------------------------------------------------
 
 
@@ -95,15 +110,33 @@ def test_raster_read_round_trip(spark, tmp_path):
     )
 
 
-def test_raster_mode_rejects_curvilinear(tmp_path):
+def test_raster_bare_load_returns_all_grid_variables(spark, tmp_path):
+    f = tmp_path / "grid2.nc"
+    _write_regular_grid_two(str(f))
+    spark.dataSource.register(NetcdfGbxDataSource)
+    df = spark.read.format("netcdf_gbx").load(str(f))  # NO variable option
+    rows = df.collect()
+    assert len(rows) == 2  # one tile per grid variable
+    sources = sorted(r["source"] for r in rows)
+    assert sources[0].endswith(":ch4") and sources[1].endswith(":co")
+
+
+def test_raster_variable_option_filters(spark, tmp_path):
+    f = tmp_path / "grid2.nc"
+    _write_regular_grid_two(str(f))
+    spark.dataSource.register(NetcdfGbxDataSource)
+    df = spark.read.format("netcdf_gbx").option("variable", "co").load(str(f))
+    rows = df.collect()
+    assert len(rows) == 1 and rows[0]["source"].endswith(":co")
+
+
+def test_raster_mode_skips_curvilinear_variable(spark, tmp_path):
     f = tmp_path / "curv.nc"
     _write_curvilinear(str(f))
-    from databricks.labs.gbx.ds.netcdf import NetcdfRasterReader
-    from databricks.labs.gbx.ds.raster import _FilePartition
-
-    reader = NetcdfRasterReader({"path": str(f), "variable": "ch4"})
-    with pytest.raises(ValueError, match="vector"):
-        list(reader.read(_FilePartition(str(f), reader.size_mib)))
+    spark.dataSource.register(NetcdfGbxDataSource)
+    # bare load: curvilinear var is not a readable GRID -> zero rows, no error
+    df = spark.read.format("netcdf_gbx").load(str(f))
+    assert df.count() == 0
 
 
 # --- vector mode (Task 4) ---------------------------------------------------
@@ -160,6 +193,17 @@ def test_vector_read_curvilinear_to_points(spark, tmp_path):
         .load(str(f))
     )
     assert df.count() == 6  # one point per cell (2x3)
+
+
+def test_vector_bare_load_returns_all_dsg_variables(spark, tmp_path):
+    f = tmp_path / "pts.nc"
+    _write_points(str(f))
+    spark.dataSource.register(NetcdfGbxDataSource)
+    df = (
+        spark.read.format("netcdf_gbx").option("mode", "vector").load(str(f))
+    )  # no variables
+    assert {"ch4", "qa_value"}.issubset(set(df.columns))
+    assert df.count() == 5
 
 
 # --- registration (Task 5) --------------------------------------------------

@@ -178,6 +178,28 @@ def point_arrays(
     return lon_flat, lat_flat, attrs, "4326"
 
 
+def readable_variables(ds, mode: str) -> List[str]:
+    """Data variables readable in `mode` ('raster' -> GRID; 'vector' -> POINTS/CURVILINEAR).
+
+    Iterates ds.data_vars only: with open_dataset's decode_coords="all", lat/lon,
+    grid-mapping, and bounds coordinate variables are xarray coords, not data_vars,
+    so they are never surfaced as readable fields.
+    """
+    keep = {GRID} if mode == "raster" else {POINTS, CURVILINEAR}
+    return [name for name in list(ds.data_vars) if classify(ds, name) in keep]
+
+
+def select_variables(ds, options: Dict[str, str], mode: str) -> List[str]:
+    """Auto-enumerate all readable variables, narrowed by an optional variable filter."""
+    readable = readable_variables(ds, mode)
+    raw = options.get("variables") or options.get("variable")
+    if not raw:
+        return readable
+    requested = [v.strip() for v in str(raw).split(",") if v.strip()]
+    readable_set = set(readable)
+    return [v for v in requested if v in readable_set]
+
+
 def np_to_spark(dtype) -> "object":
     import numpy as np
     from pyspark.sql import types as T

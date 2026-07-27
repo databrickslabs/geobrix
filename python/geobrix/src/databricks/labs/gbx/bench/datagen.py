@@ -236,6 +236,28 @@ def generate_corpus(
         size_sweep.append(m.TileEntry(rel, cellid, srid, dt, bd, tp, ndf))
         cellid += 1
 
+    # Great-Britain-overlapping tile for the BNG raster->grid / tessellate fns.
+    # Those functions reproject the tile to EPSG:27700 internally and drop any
+    # pixel that falls outside GB (BNG.isValid). Every ordinary sweep tile is
+    # NYC-ish, so warping it to 27700 lands outside Britain -> an EMPTY grid, and
+    # the cross-tier comparison becomes a vacuous both-empty match. This tile is
+    # 27700-native over central London (see _CRS_GEO[27700]), so BNG binning lands
+    # REAL cells on BOTH tiers. It is tagged role="bng_gb": the runners feed it ONLY
+    # to the BNG raster-input fns and skip it for every other function (whose tile
+    # selection is therefore unchanged). It matches the first sweep tile's
+    # band-count / dtype / pixel conventions so the synth + heavy-read path is
+    # identical to a normal tile in every respect but its CRS + extent.
+    gb_tp, gb_bd, gb_dt = combos[0]
+    gb_ndf = nodata_fracs[0]
+    gb_seed = seed + cellid
+    gb_bytes = make_tile_bytes(gb_tp, gb_bd, gb_dt, 27700, gb_ndf, gb_seed)
+    gb_rel = f"size/t{cellid}_{gb_tp}px_{gb_bd}b_{gb_dt}_27700_bng_gb.tif"
+    (out_dir / gb_rel).write_bytes(gb_bytes)
+    size_sweep.append(
+        m.TileEntry(gb_rel, cellid, 27700, gb_dt, gb_bd, gb_tp, gb_ndf, role="bng_gb")
+    )
+    cellid += 1
+
     row_tiles = []
     for j in range(row_rows):
         srid = srids[j % len(srids)]

@@ -117,6 +117,41 @@ object BenchFingerprint {
     dggsGridJson(ids.toSeq, Some(vals.toSeq))
   }
 
+  /** String-cell-id variant of [[ofDggsGrid]] for BNG (whose cell ids are OS grid
+    * STRINGS, e.g. "TQ3080", not Longs like H3/quadbin). Records the cell COUNT, a
+    * sha256 over the SORTED string ids, the sorted ids, and order-independent agg
+    * stats over the measures. The light pygx `_bng` tier emits the SAME string ids,
+    * so the fingerprints are parity-comparable without a Long round-trip. */
+  def ofDggsGridStr(cells: Seq[Array[(String, Double)]]): String = {
+    val ids = scala.collection.mutable.ArrayBuffer.empty[String]
+    val vals = scala.collection.mutable.ArrayBuffer.empty[Double]
+    cells.foreach(_.foreach { case (cid, measure) => ids += cid; vals += measure })
+    dggsGridStrJson(ids.toSeq, Some(vals.toSeq))
+  }
+
+  /** Count-only string-cell-id dggs_grid fingerprint for BNG tessellation (no
+    * per-cell measure); the string analogue of [[ofDggsGridIds]]. */
+  def ofDggsGridStrIds(ids: Seq[String]): String = dggsGridStrJson(ids, None)
+
+  /** Shared dggs_grid JSON builder for STRING cell ids (BNG): cell COUNT, sha256
+    * over the SORTED string ids, the sorted ids, and the agg. Mirrors
+    * [[dggsGridJson]] but keeps ids as strings (BNG is natively string-keyed). */
+  private def dggsGridStrJson(ids: Seq[String], vals: Option[Seq[Double]]): String = {
+    val sorted = ids.sorted
+    val joined = sorted.mkString("\n")
+    val digest = MessageDigest.getInstance("SHA-256").digest(joined.getBytes("UTF-8"))
+    val hashHex = digest.map(b => f"${b & 0xff}%02x").mkString
+    val n = mapper.createObjectNode()
+    n.put("kind", "dggs_grid")
+    n.put("count", sorted.length)
+    n.put("cells_hash", hashHex)
+    val idArr: ArrayNode = n.putArray("cell_ids")
+    sorted.foreach(idArr.add)
+    val agg: ObjectNode = n.putObject("agg")
+    vals.foreach(v => putStats(agg, v))
+    mapper.writeValueAsString(n)
+  }
+
   /** Count-only dggs_grid fingerprint for tessellation (no per-cell measure).
     *
     * `RST_H3_Tessellate` yields one Dataset per cell with NO scalar measure, so

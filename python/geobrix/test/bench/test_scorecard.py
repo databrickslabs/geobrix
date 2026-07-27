@@ -49,9 +49,12 @@ def _write(root, fn, *, sources, cells):
 
 def test_scorecard_empty_store(tmp_path):
     out = compare.scorecard_from_store(root=tmp_path)
+    # Denominator derived from the SAME source the scorecard uses
+    # (spec.registered_rst) so it matches whatever the code emits -- no literal.
+    total = len(spec.registered_rst())
     assert "Benchmark coverage:** 0" in out
-    assert "/ 108" in out
-    # nothing covered -> all 108 listed as not-yet-covered
+    assert f"/ {total}" in out
+    # nothing covered -> every registered fn listed as not-yet-covered
     assert "Not yet covered" in out
 
 
@@ -83,13 +86,14 @@ def test_scorecard_aggregates_over_store(tmp_path):
     }
     out = compare.scorecard_from_store(root=tmp_path, specs_by_name=specs_by_name)
 
-    assert "Benchmark coverage:** 3 / 108" in out
+    total = len(spec.registered_rst())
+    assert f"Benchmark coverage:** 3 / {total}" in out
     # parity: 1 exact, 1 divergent, 1 timing-only (na)
     assert "exact 1" in out
     assert "rst_slope" in out  # divergent fn surfaced
     # functional parity gap line present (computed registered - implemented)
     assert "Functional parity gap" in out
-    # not-yet-covered: 108 - 3 = 105
+    # not-yet-covered: total - 3
     assert "Not yet covered" in out
     # the mutated-source record is flagged STALE
     assert "STALE" in out
@@ -110,7 +114,8 @@ def test_scorecard_default_specs_from_registry(tmp_path):
         cells=[_cell("exact", 0.0, 2.0)],
     )
     out = compare.scorecard_from_store(root=tmp_path)
-    assert "Benchmark coverage:** 1 / 108" in out
+    total = len(spec.registered_rst())
+    assert f"Benchmark coverage:** 1 / {total}" in out
     assert fn in out
 
 

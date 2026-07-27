@@ -22,6 +22,7 @@ Mosaic-lineage bug status (validated against this port):
 import math
 from typing import Any
 
+import numpy as np
 from shapely import equals_exact as _equals_exact
 from shapely import to_wkb as _to_wkb
 from shapely.geometry import Point as _Point
@@ -162,32 +163,44 @@ def get_y(digits, edge_size: int) -> int:
     return int("".join(str(d) for d in y_digits)) * edge_adj + y_offset
 
 
+def _get_quadrant_core(resolution, eastings, northings, divisor):
+    """Numpy-polymorphic quadrant (0 for res >= -1; 1/2/4/3 for res < -1).
+
+    ``eastings``/``northings`` are int64 (scalar or array). Mirrors the scalar
+    ``get_quadrant`` if-chain order via nested ``np.where``.
+    """
+    if resolution >= -1:
+        return eastings * 0  # int64 zeros, scalar or array
+    e_q = eastings / divisor
+    n_q = northings / divisor
+    e_dec = e_q - np.floor(e_q)
+    n_dec = n_q - np.floor(n_q)
+    q = np.where(
+        (e_dec < 0.5) & (n_dec < 0.5),
+        1,
+        np.where(e_dec < 0.5, 2, np.where(n_dec < 0.5, 4, 3)),
+    )
+    return q.astype(np.int64)
+
+
 def get_quadrant(
     resolution: int, eastings: float, northings: float, divisor: float
 ) -> int:
-    if resolution < -1:
-        e_q = eastings / divisor
-        n_q = northings / divisor
-        e_dec = e_q - math.floor(e_q)
-        n_dec = n_q - math.floor(n_q)
-        if e_dec < 0.5 and n_dec < 0.5:
-            return 1  # SW
-        if e_dec < 0.5:
-            return 2  # NW
-        if n_dec < 0.5:
-            return 4  # SE
-        return 3  # NE
-    return 0
+    """Scalar wrapper over :func:`_get_quadrant_core` (unchanged public behavior)."""
+    return int(_get_quadrant_core(resolution, eastings, northings, divisor))
 
 
-def encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution) -> int:
+def _encode_core(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution):
+    """Pack the BNG digit-id in int64 (scalar or array). Bit-exact with the
+    original pure-integer ``encode`` (the res==-1 ``/100`` is always exactly
+    divisible, so integer ``//100`` matches ``int(float/100)``)."""
     id_placeholder = 10 ** (5 + 2 * n_positions - 2)
     e_letter_shift = 10 ** (3 + 2 * n_positions - 2)
     n_letter_shift = 10 ** (1 + 2 * n_positions - 2)
     e_shift = 10**n_positions
     n_shift = 10
     if resolution == -1:
-        val = (id_placeholder + e_letter * e_letter_shift) / 100 + quadrant
+        val = (id_placeholder + e_letter * e_letter_shift) // 100 + quadrant
     else:
         val = (
             id_placeholder
@@ -197,27 +210,61 @@ def encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution) 
             + n_bin * n_shift
             + quadrant
         )
-    return int(val)
+    return val
 
 
-def point_to_cell_id(eastings: float, northings: float, resolution: int) -> int:
-    if math.isnan(eastings) or math.isnan(northings):
-        raise ValueError("NaN coordinates are not supported.")
-    e_int = int(eastings)
-    n_int = int(northings)
-    # Scala uses integer division (eastingsInt / 100000); int(...) truncates toward
-    # zero, matching JVM Int division for the BNG-positive coordinate domain.
-    e_letter = int(e_int / 100000)
-    n_letter = int(n_int / 100000)
+def encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution) -> int:
+    """Scalar wrapper over :func:`_encode_core` (unchanged public behavior)."""
+    return int(
+        _encode_core(
+            e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution
+        )
+    )
+
+
+def _point_to_cell_id_core(e, n, resolution: int):
+    """Numpy-polymorphic BNG encoder core (int64 result; scalar or array).
+
+    Mirrors the scalar ``point_to_cell_id`` EXACTLY, incl. truncation semantics:
+    letter indices use ``int(e_int/100000)`` (truncate toward zero -> ``np.trunc``);
+    bins use ``math.floor(.../divisor)`` (floor -> ``np.floor``). These differ for
+    negative (out-of-GB) coords, which the encoder sees (encode runs before is_valid).
+    """
+    e_int = np.trunc(e).astype(np.int64)
+    n_int = np.trunc(n).astype(np.int64)
+    # int(e_int/100000): float division then truncate toward zero (NOT floor-div).
+    e_letter = np.trunc(e_int / 100000).astype(np.int64)
+    n_letter = np.trunc(n_int / 100000).astype(np.int64)
     if resolution < 0:
         divisor = 10 ** (6 - abs(resolution) + 1)
     else:
         divisor = 10 ** (6 - resolution)
-    quadrant = get_quadrant(resolution, e_int, n_int, divisor)
+    quadrant = _get_quadrant_core(resolution, e_int, n_int, divisor)
     n_positions = abs(resolution) if resolution >= -1 else abs(resolution) - 1
-    e_bin = math.floor((e_int % 100000) / divisor)
-    n_bin = math.floor((n_int % 100000) / divisor)
-    return encode(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution)
+    # math.floor((e_int % 100000) / divisor): float division then floor.
+    e_bin = np.floor((e_int % 100000) / divisor).astype(np.int64)
+    n_bin = np.floor((n_int % 100000) / divisor).astype(np.int64)
+    return _encode_core(
+        e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolution
+    )
+
+
+def point_to_cell_id(eastings: float, northings: float, resolution: int) -> int:
+    """Scalar wrapper over :func:`_point_to_cell_id_core` (unchanged behavior)."""
+    if math.isnan(eastings) or math.isnan(northings):
+        raise ValueError("NaN coordinates are not supported.")
+    return int(_point_to_cell_id_core(float(eastings), float(northings), resolution))
+
+
+def point_to_cell_id_vec(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
+    """Vectorized BNG encoder: array of int64 cell ids from EPSG:27700 (e, n).
+
+    Shares :func:`_point_to_cell_id_core` with the scalar ``point_to_cell_id``, so
+    the two forms cannot drift. Fed clean (post-mask) coords, so no NaN guard.
+    """
+    e = np.asarray(e, dtype="float64")
+    n = np.asarray(n, dtype="float64")
+    return _point_to_cell_id_core(e, n, resolution).astype(np.int64)
 
 
 def format(cell_id: int) -> str:
@@ -610,6 +657,10 @@ def is_valid(cell_id: int) -> bool:
     letter-grid indices must fall within the LETTER_MAP dimensions.
     """
     digits = cell_digits(cell_id)
+    if len(digits) < 4:
+        # Malformed id (e.g. extreme-negative-easting res=-1 encode output):
+        # not a valid BNG cell.
+        return False
     x_letter = int("".join(str(d) for d in digits[3:5]))
     y_letter = int("".join(str(d) for d in digits[1:3]))
     resolution = get_resolution_from_digits(digits)
@@ -621,6 +672,88 @@ def is_valid(cell_id: int) -> bool:
         and 0 <= y <= 1300000
         and x_letter < len(LETTER_MAP)
         and y_letter < len(LETTER_MAP[0])
+    )
+
+
+def is_valid_vec(cell_ids: np.ndarray, resolution: int) -> np.ndarray:
+    """Vectorized :func:`is_valid` for a single-resolution batch of Long ids.
+
+    Equivalent to ``[is_valid(int(c)) for c in cell_ids]`` when every id was
+    produced at ``resolution``. Extracts digit slices by integer arithmetic
+    (fixed digit layout per resolution), reproducing ``get_x``/``get_y`` and the
+    bounds/index checks on arrays.
+
+    The digit layout (most-significant first) at a given resolution:
+
+    - ``digits[0]``        : leading ``1`` placeholder
+    - ``digits[1:3]``      : easting 100km letter index (``y_letter`` in :func:`is_valid`)
+    - ``digits[3:5]``      : northing 100km letter index (``x_letter`` in :func:`is_valid`)
+    - ``digits[5:5+k]``    : easting sub-cell bins
+    - ``digits[5+k:5+2k]`` : northing sub-cell bins
+    - ``digits[-1]``       : quadrant (0 for positive resolutions)
+
+    where ``k = (ndigits - 6) // 2`` and ``ndigits = 4 + 2 * n_positions``.
+    """
+    cell_ids = np.asarray(cell_ids, dtype=np.int64)
+    if cell_ids.size == 0:
+        return np.zeros(0, dtype=bool)
+
+    # res -1 (500km) is a DEGENERATE 4-digit id (encode divides by 100) and its
+    # get_x/get_y math has k=-1 -- the generic array formula below does NOT apply.
+    # 500km cells never arise at raster-tile scale, so keep parity via the scalar
+    # path for this one resolution (still correct; not the hot case).
+    if resolution == -1:
+        return np.array(
+            [is_valid(int(c)) for c in cell_ids], dtype=bool
+        )  # vectorscan: ok (res -1 degenerate, non-hot)
+
+    # For all other resolutions the digit count is fixed by the encode layout:
+    #   ndigits = 4 + 2*n_positions  (leading placeholder '1' + letter + coord fields).
+    n_positions = abs(resolution) if resolution >= -1 else abs(resolution) - 1
+    ndigits = 4 + 2 * n_positions
+
+    def digit(pos):
+        """Extract decimal digit at ``pos`` (0=MSB) from every cell id."""
+        p = ndigits - 1 - pos  # power of 10 for that position
+        return (cell_ids // (10**p)) % 10
+
+    k = (ndigits - 6) // 2
+    edge = get_edge_size(resolution)
+
+    # Easting 100km letter index: digits[1:3] (called y_letter in is_valid).
+    east_100km = digit(1) * 10 + digit(2)
+    # Northing 100km letter index: digits[3:5] (called x_letter in is_valid).
+    north_100km = digit(3) * 10 + digit(4)
+
+    quadrant = digit(ndigits - 1)
+    edge_adj = np.where(quadrant > 0, 2 * edge, edge)
+
+    # Easting value (reproduces get_x): east_100km base + digits[5:5+k].
+    east_base = east_100km
+    for i in range(k):
+        east_base = east_base * 10 + digit(5 + i)
+    x_offset = np.where((quadrant == 3) | (quadrant == 4), edge, 0)
+    easting = east_base * edge_adj + x_offset
+
+    # Northing value (reproduces get_y): north_100km base + digits[5+k:5+2k].
+    north_base = north_100km
+    for i in range(k):
+        north_base = north_base * 10 + digit(5 + k + i)
+    y_offset = np.where((quadrant == 2) | (quadrant == 3), edge, 0)
+    northing = north_base * edge_adj + y_offset
+
+    # Reproduces is_valid bounds check:
+    #   0 <= x (=easting=get_x) <= 700000
+    #   0 <= y (=northing=get_y) <= 1300000
+    #   x_letter (north_100km) < len(LETTER_MAP) = 14
+    #   y_letter (east_100km)  < len(LETTER_MAP[0]) = 8
+    return (
+        (easting >= 0)
+        & (easting <= 700000)
+        & (northing >= 0)
+        & (northing <= 1300000)
+        & (north_100km < len(LETTER_MAP))
+        & (east_100km < len(LETTER_MAP[0]))
     )
 
 

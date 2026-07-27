@@ -69,9 +69,13 @@ def test_benchmark_vector_false_no_vector_cell():
     src = _src(nb)
     assert "VECTOR PARITY" not in src
     # run_format_read may appear in the readers cell if benchmark_readers is also set,
-    # but the vector formats should not appear.
-    assert "geojson_gbx" not in src
+    # but the vector cell (and its formats) should not be emitted. Guard on
+    # shapefile_gbx: it only appears in _CELL_VECTOR, whereas geojson_gbx also shows up
+    # in an always-emitted preamble help comment (--vector-formats), so it is not a
+    # reliable sentinel for the cell's presence.
     assert "shapefile_gbx" not in src
+    assert "gpkg_gbx" not in src
+    assert "file_gdb_gbx" not in src
 
 
 def test_vector_only_preamble_flags_set():

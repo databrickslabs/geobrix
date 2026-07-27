@@ -16,6 +16,36 @@
     "gbx_rst_bandmetadata": {
       "examples": "Examples:\n      > SELECT gbx_rst_bandmetadata(tile, 1) as band1_metadata FROM rasters;"
     },
+    "gbx_rst_bng_rasterize_agg": {
+      "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;"
+    },
+    "gbx_rst_bng_rastertogridavg": {
+      "examples": "Examples:\n      > SELECT path, gbx_rst_bng_rastertogridavg(tile, '1km') as bng_grid FROM rasters;"
+    },
+    "gbx_rst_bng_rastertogridcount": {
+      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridcount(tile, 2) as pixel_counts FROM rasters;"
+    },
+    "gbx_rst_bng_rastertogridmax": {
+      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as max_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridmax(tile, '1km')[0]) AS cell;"
+    },
+    "gbx_rst_bng_rastertogridmedian": {
+      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as median_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridmedian(tile, '1km')[0]) AS cell;"
+    },
+    "gbx_rst_bng_rastertogridmin": {
+      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridmin(tile, '1km')[0]) AS cell;"
+    },
+    "gbx_rst_bng_rastertogridstddev": {
+      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as stddev_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridstddev(tile, '1km')[0]) AS cell;"
+    },
+    "gbx_rst_bng_rastertogridsum": {
+      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridsum(tile, '1km')[0]) AS cell;"
+    },
+    "gbx_rst_bng_rastertogridvariance": {
+      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as variance_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridvariance(tile, '1km')[0]) AS cell;"
+    },
+    "gbx_rst_bng_tessellate": {
+      "examples": "Examples:\n      > SELECT r.path, g.tile FROM rasters r LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'covering') g AS tile;"
+    },
     "gbx_rst_boundingbox": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_boundingbox(tile) as bbox FROM rasters;"
     },
@@ -112,6 +142,15 @@
     "gbx_rst_h3_rastertogridmin": {
       "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridmin(tile, 7)[0]) AS cell;"
     },
+    "gbx_rst_h3_rastertogridstddev": {
+      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as stddev_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridstddev(tile, 7)[0]) AS cell;"
+    },
+    "gbx_rst_h3_rastertogridsum": {
+      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridsum(tile, 7)[0]) AS cell;"
+    },
+    "gbx_rst_h3_rastertogridvariance": {
+      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as variance_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridvariance(tile, 7)[0]) AS cell;"
+    },
     "gbx_rst_h3_tessellate": {
       "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;"
     },
@@ -187,6 +226,9 @@
     "gbx_rst_proximity": {
       "examples": "Examples:\n      > SELECT gbx_rst_proximity(tile, '', 'PIXEL', cast(100.0 as double)) AS dist FROM rasters;"
     },
+    "gbx_rst_quadbin_rasterize_agg": {
+      "examples": "Examples:\n      > SELECT region_id, gbx_rst_quadbin_rasterize_agg( cellid, burn_value, 4326, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM quadbin_cell_values GROUP BY region_id;"
+    },
     "gbx_rst_quadbin_rastertogridavg": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_quadbin_rastertogridavg(tile, 6) as quadbin_grid FROM rasters;"
     },
@@ -201,6 +243,18 @@
     },
     "gbx_rst_quadbin_rastertogridmin": {
       "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmin(tile, 7)[0]) AS cell;"
+    },
+    "gbx_rst_quadbin_rastertogridstddev": {
+      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as stddev_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridstddev(tile, 7)[0]) AS cell;"
+    },
+    "gbx_rst_quadbin_rastertogridsum": {
+      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridsum(tile, 7)[0]) AS cell;"
+    },
+    "gbx_rst_quadbin_rastertogridvariance": {
+      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as variance_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridvariance(tile, 7)[0]) AS cell;"
+    },
+    "gbx_rst_quadbin_tessellate": {
+      "examples": "Examples:\n      > SELECT r.path, g.tile FROM rasters r LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'covering') g AS tile;"
     },
     "gbx_rst_rasterize": {
       "examples": "Examples:\n      > SELECT gbx_rst_rasterize( unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'), 42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326 ) AS tile;"

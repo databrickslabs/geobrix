@@ -1,12 +1,17 @@
-"""Spark-free raster->discrete-global-grid aggregation (H3 + quadbin).
+"""Spark-free raster->discrete-global-grid aggregation (H3 + quadbin + BNG).
 
-Mirrors the heavyweight ``RST_{H3,Quadbin}_RasterToGrid`` family exactly:
+Mirrors the heavyweight ``RST_{H3,Quadbin,BNG}_RasterToGrid`` families exactly:
 
 * Per band, every valid pixel (non-zero mask) is mapped to a grid cell id by
   the pixel-centroid world coordinate (0.5-pixel offset through the
-  geotransform). The raster is interpreted as EPSG:4326 lon/lat -- no
-  reprojection (callers reproject upstream via ``rst_transform``).
+  geotransform). For H3/quadbin the raster is interpreted as EPSG:4326 lon/lat
+  -- no reprojection (callers reproject upstream via ``rst_transform``). BNG has
+  no lon/lat path, so the raster is warped to EPSG:27700 (nearest) up front and
+  pixels outside GB are dropped via ``pygx._bng.is_valid``.
 * Pixel values are accumulated per cell, then reduced by the chosen aggregate.
+* BNG cell math is the single source of truth in ``pygx._bng`` (no numpy codec);
+  H3/quadbin ids are ``int`` (Long) but BNG ids are rendered to ``str`` via
+  ``pygx._bng.format`` at the output boundary.
 
 Backed by the best-in-class libs ``h3`` (v4) and ``quadbin`` (CARTO v0).
 
@@ -21,10 +26,12 @@ pixels because ``h3.latlng_to_cell`` is C-backed and exposes no array API.
 import h3
 import numpy as np
 
+from databricks.labs.gbx.pygx import _bng
+
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = 20
 
-_AGGS = ("avg", "count", "min", "max", "median")
+_AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")
 
 # quadbin 64-bit cell layout constants (see quadbin.main / quadbin.utils).
 _QB_HEADER = np.uint64(0x4000000000000000)
@@ -46,8 +53,13 @@ def _validate_resolution(resolution: int, grid: str) -> None:
                 f"raster->quadbin: resolution must be in [0, {QUADBIN_MAX_RES}]; "
                 f"got {resolution}"
             )
+    elif grid == "bng":
+        # Delegated to pygx._bng.get_resolution: only integer indices +/-1..+/-6
+        # (or resolutionMap string keys, normalized upstream) are valid; raises
+        # on metres-as-Int and out-of-range indices.
+        _bng.get_resolution(resolution)
     else:
-        raise ValueError(f"unknown grid {grid!r}; expected 'h3' or 'quadbin'")
+        raise ValueError(f"unknown grid {grid!r}; expected 'h3', 'quadbin' or 'bng'")
 
 
 def _h3_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
@@ -57,6 +69,16 @@ def _h3_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
         for lo, la in zip(lon, lat)  # vectorscan: ok (h3 no array API)
     ]
     return np.array(cells, dtype="uint64")
+
+
+def _bng_cells(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
+    """Per-valid-pixel BNG cell ids (Long int64), fully vectorized.
+
+    ``e``/``n`` are EPSG:27700 eastings/northings (pixel centroids of the WARPED
+    raster). Delegates to ``pygx._bng.point_to_cell_id_vec`` -- the SAME shared
+    numpy core the scalar ``point_to_cell_id`` wraps, so cell ids are identical.
+    """
+    return _bng.point_to_cell_id_vec(e, n, resolution)
 
 
 def _quadbin_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
@@ -139,6 +161,20 @@ def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
     if agg == "avg":
         sums = np.bincount(inv, weights=vals, minlength=uniq.size)
         out = sums / counts
+    elif agg == "sum":
+        # Total of valid pixel values per cell -- the avg numerator (bincount
+        # weighted sum) WITHOUT dividing by counts. A cell is only emitted with
+        # >=1 valid pixel (sec 2.6), so sum is always well-defined.
+        out = np.bincount(inv, weights=vals, minlength=uniq.size)
+    elif agg in ("variance", "stddev"):
+        # Population (ddof=0), TWO-PASS (numerically stable; NOT E[x^2]-E[x]^2):
+        # pass 1 per-cell mean; pass 2 mean of squared deviations. A 1-pixel
+        # cell gives variance 0 (clean). stddev = sqrt(variance) so it tracks
+        # variance's cross-tier parity exactly.
+        means = np.bincount(inv, weights=vals, minlength=uniq.size) / counts
+        sq = (vals - means[inv]) ** 2
+        var = np.bincount(inv, weights=sq, minlength=uniq.size) / counts
+        out = var if agg == "variance" else np.sqrt(var)
     elif agg == "min":
         out = np.full(uniq.size, np.inf)
         np.minimum.at(out, inv, vals)
@@ -162,20 +198,25 @@ def raster_to_grid(ds, resolution: int, grid: str, agg: str) -> list:
 
     Args:
         ds:         An open rasterio ``DatasetReader``.
-        resolution: Grid resolution (H3 0..15; quadbin 0..20).
-        grid:       ``"h3"`` or ``"quadbin"``.
+        resolution: Grid resolution (H3 0..15; quadbin 0..20; BNG index
+                    +/-1..+/-6 or a resolutionMap string key e.g. ``"1km"``).
+        grid:       ``"h3"``, ``"quadbin"`` or ``"bng"``.
         agg:        One of ``"avg"``, ``"count"``, ``"min"``, ``"max"``,
-                    ``"median"``.
+                    ``"median"``, ``"sum"``, ``"variance"``, ``"stddev"``.
 
     Returns:
-        One list per band; each is a list of
-        ``{"cellID": int, "measure": float|int}`` (``int`` for ``count``).
+        One list per band; each is a list of ``{"cellID": id, "measure":
+        float|int}`` (``int`` for ``count``). ``cellID`` is an ``int`` (Long)
+        for H3/quadbin and a formatted BNG ``str`` (e.g. ``"TQ3080"``) for BNG.
     """
-    resolution = int(resolution)
     _validate_resolution(resolution, grid)
     if agg not in _AGGS:
         raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
 
+    if grid == "bng":
+        return _raster_to_bng(ds, _bng.get_resolution(resolution), agg)
+
+    resolution = int(resolution)
     encode = _h3_cells if grid == "h3" else _quadbin_cells
     gt = ds.transform.to_gdal()  # (c, a, b, f, d, e) == GDAL geotransform
 
@@ -204,3 +245,70 @@ def raster_to_grid(ds, resolution: int, grid: str, agg: str) -> list:
             ]
         )
     return out
+
+
+def _raster_to_bng(ds, resolution: int, agg: str) -> list:
+    """BNG raster->grid: warp to EPSG:27700, bin per pixel, render String ids.
+
+    Mirrors heavy ``RST_BNG_RasterToGrid``: BNG has no lon/lat input path, so the
+    raster is reprojected to EPSG:27700 (nearest-neighbour, so no interpolated
+    values corrupt the pixel statistics) unless it is already there; pixel
+    centroids are mapped to BNG cell ids via ``pygx._bng.point_to_cell_id``;
+    pixels whose cell falls outside GB are dropped via ``pygx._bng.is_valid``;
+    ids are rendered to the user-facing BNG ``str`` via ``pygx._bng.format`` at
+    the output boundary. Grouping stays Long-keyed (reuses ``_grouped_measures``).
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core import warp
+
+    # Reproject to EPSG:27700 (nearest) unless already there. epsg may be None
+    # for an undefined CRS -> warp (rasterio treats an unset src crs as an error
+    # anyway; matching heavy, we assume a georeferenced source).
+    already_bng = ds.crs is not None and ds.crs.to_epsg() == 27700
+
+    def _run(work_ds):
+        gt = work_ds.transform.to_gdal()
+        out = []
+        for bi in range(1, work_ds.count + 1):
+            band = work_ds.read(bi).astype("float64")
+            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+
+            ys, xs = np.nonzero(mask)  # valid pixels only
+            if ys.size == 0:
+                out.append([])
+                continue
+
+            x_off = xs + 0.5
+            y_off = ys + 0.5
+            e = gt[0] + x_off * gt[1] + y_off * gt[2]
+            n = gt[3] + x_off * gt[4] + y_off * gt[5]
+            vals = band[ys, xs]
+
+            cids = _bng_cells(e, n, resolution)
+            # Drop out-of-GB pixels (is_valid) BEFORE grouping so a cell is only
+            # emitted for >=1 valid, in-GB pixel (sec 2.6). Vectorized over the
+            # single-resolution batch.
+            keep = _bng.is_valid_vec(cids, resolution)
+            cids = cids[keep]
+            vals = vals[keep]
+            if cids.size == 0:
+                out.append([])
+                continue
+
+            uniq, measures = _grouped_measures(cids, vals, agg)
+            out.append(
+                [
+                    {"cellID": _bng.format(int(cid)), "measure": m}
+                    for cid, m in zip(
+                        uniq.tolist(), measures
+                    )  # vectorscan: ok (per-cell)
+                ]
+            )
+        return out
+
+    if already_bng:
+        return _run(ds)
+    warped_bytes = warp.reproject_to_srid(ds, 27700, resampling="nearest")
+    with MemoryFile(warped_bytes) as mf, mf.open() as work_ds:
+        return _run(work_ds)

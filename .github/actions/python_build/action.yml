@@ -114,16 +114,21 @@ runs:
       run: |
         cd python/geobrix
         python -m build
-        # Heavyweight must not test lightweight: the pyrx (lightweight, JAR-free)
-        # tests live in test/pyrx and need rasterio/shapely/pandas/pyarrow, which
-        # are NOT in requirements-ci.txt. They run in their own 'pyrx' CI job
-        # against requirements-pyrx-ci.txt, so exclude them here (otherwise
-        # collection fails with ModuleNotFoundError: No module named 'rasterio').
+        # Heavyweight must not test lightweight. The lightweight tiers (pyrx, pyvx,
+        # pygx, ds, pmtiles_light, stac, earthdata, vizx, sample) need
+        # rasterio/shapely/pandas/pyarrow etc. that are NOT in requirements-ci.txt;
+        # they run in their own 'pyrx' CI job against requirements-pyrx-ci.txt.
+        # test/conftest.py collect_ignore already skips these when rasterio is
+        # absent, but we ALSO pass --ignore explicitly so a light dir can never run
+        # in the heavy phase even if the env drifts (gains rasterio) or a caller
+        # invokes a light dir directly. This list MUST stay in sync with
+        # _LIGHT_TEST_DIRS in test/conftest.py.
         # pytest-cov is already locked in requirements-ci.txt; no extra install needed.
+        LIGHT_IGNORES="--ignore=test/pyrx --ignore=test/pyvx --ignore=test/pygx --ignore=test/ds --ignore=test/pmtiles_light --ignore=test/stac --ignore=test/earthdata --ignore=test/vizx --ignore=test/sample --ignore=test/bench"
         if [ "${{ inputs.enable_coverage }}" = "true" ]; then
-          pytest -m "not integration" --ignore=test/pyrx --ignore=test/pyvx --cov=src --cov-report=xml --cov-report=term --cov-config=pyproject.toml -q
+          pytest -m "not integration" $LIGHT_IGNORES --cov=src --cov-report=xml --cov-report=term --cov-config=pyproject.toml -q
         else
-          pytest -m "not integration" --ignore=test/pyrx --ignore=test/pyvx
+          pytest -m "not integration" $LIGHT_IGNORES
         fi
     - name: Copy python artifacts to GH Actions run
       shell: bash

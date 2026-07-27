@@ -214,7 +214,9 @@ object RST_TileXYZ extends WithExpressionInfo {
           // Inject format=GTiff into the intermediate so OperatorOptions.appendOptions
           // does not stamp PNG-specific flags on the warp step (we translate to PNG below).
           options ++ Map("format" -> "GTiff"),
-          command = s"gdalwarp -t_srs EPSG:3857 -te $xmin $ymin $xmax $ymax -ts $size $size -r $resampling"
+          // -dstalpha: GDAL appends a binary (0/255) alpha band derived from the source's
+          // valid-data mask (255=valid, 0=outside-footprint or NoData). warpedDs has N+1 bands.
+          command = s"gdalwarp -t_srs EPSG:3857 -te $xmin $ymin $xmax $ymax -ts $size $size -r $resampling -dstalpha"
         )
         try {
             val extension = format.toLowerCase(Locale.ROOT) match {
@@ -223,24 +225,114 @@ object RST_TileXYZ extends WithExpressionInfo {
                 case "webp" => "webp"
                 case other  => throw new IllegalArgumentException(s"rst_tilexyz: unknown format $other")
             }
-            val translatePath = s"/vsimem/tilexyz_out_$uuid.$extension"
-            // Inject the pre-resolved per-band -scale (empty => no rescale; today's behavior).
-            val translateOpts = warpedOpts ++ Map("format" -> format, "extension" -> extension) ++
-                (if (scaleFlags.isEmpty) Map.empty[String, String] else Map("scale" -> scaleFlags))
-            val (resDs, _) = GDALTranslate.executeTranslate(
-              translatePath,
-              warpedDs,
-              command = "gdal_translate",
-              translateOpts
-            )
-            Try(resDs.FlushCache())
-            Try(resDs.delete())
-            val bytes = gdal.GetMemFileBuffer(translatePath)
-            gdal.Unlink(translatePath)
-            if (bytes == null || bytes.isEmpty) transparentPng(size) else bytes
+            // Composite into display RGB(A): apply rescale to RGB bands, attach binary alpha.
+            // toDisplayRGBA returns a GDT_Byte MEM dataset ready to encode; release after use.
+            val rgbaDs = toDisplayRGBA(warpedDs, format, scaleFlags)
+            try {
+                val translatePath = s"/vsimem/tilexyz_out_$uuid.$extension"
+                // Rescale already applied inside toDisplayRGBA; pass no scale key to translate.
+                val translateOpts = warpedOpts ++ Map("format" -> format, "extension" -> extension)
+                val (resDs, _) = GDALTranslate.executeTranslate(
+                  translatePath, rgbaDs, command = "gdal_translate", translateOpts)
+                Try(resDs.FlushCache()); Try(resDs.delete())
+                val bytes = gdal.GetMemFileBuffer(translatePath)
+                gdal.Unlink(translatePath)
+                if (bytes == null || bytes.isEmpty) transparentPng(size) else bytes
+            } finally RasterDriver.releaseDataset(rgbaDs)
         } finally {
             RasterDriver.releaseDataset(warpedDs)
         }
+    }
+
+    /** Parse per-band (lo, hi) rescale ranges from the `-scale lo hi 0 255` flag string
+     *  produced by resolveScale. Returns a Seq with one (lo, hi) per source RGB band (in
+     *  order). When scaleFlags is empty (uint8 pass-through / "none"), returns Seq.empty. */
+    private def rescaleByteMap(scaleFlags: String): Seq[(Double, Double)] = {
+        if (scaleFlags == null || scaleFlags.trim.isEmpty) return Seq.empty
+        // Split on "-scale" prefix to get per-band segments; drop empty heads.
+        val segments = scaleFlags.trim.split("-scale").map(_.trim).filter(_.nonEmpty)
+        segments.map { seg =>
+            val parts = seg.split("\\s+")
+            // Each segment: "lo hi 0 255"
+            (parts(0).toDouble, parts(1).toDouble)
+        }
+    }
+
+    /** Build a display RGB(A) GDT_Byte MEM dataset from the warped tile, matching the
+     *  rio-tiler band mapping. `warpedDs` has the source bands plus a trailing binary
+     *  alpha band (from `-dstalpha`). Returns a GDT_Byte MEM dataset ready to encode.
+     *
+     *  Band mapping (rio-tiler parity), where N = source band count (warpedDs has N+1):
+     *    N==1 -> grey replicated to R=G=B; N==2 -> band1 grey R=G=B, band2 as alpha;
+     *    N==3 -> R,G,B; N==4 -> R,G,B + band4 alpha; N>=5 -> first 3 bands R,G,B.
+     *  Alpha for PNG/WEBP: the source's own alpha band (N in {2,4}) if present, else
+     *  the warp's trailing -dstalpha band. JPEG drops alpha (3-band RGB).
+     *  The rescale flags apply to RGB bands only (never alpha). */
+    private[web] def toDisplayRGBA(warpedDs: Dataset, format: String, scaleFlags: String): Dataset = {
+        val total = warpedDs.GetRasterCount        // = sourceBands + 1 (trailing -dstalpha)
+        val n = total - 1                           // source band count
+        val w = warpedDs.GetRasterXSize; val h = warpedDs.GetRasterYSize
+        val fmtU = format.toUpperCase(Locale.ROOT)
+        val wantAlpha = fmtU != "JPEG"
+        val outBands = if (wantAlpha) 4 else 3
+        val mem = gdal.GetDriverByName("MEM").Create("", w, h, outBands, gdalconstConstants.GDT_Byte)
+
+        // Band indices that become R, G, B and the alpha source band index (1-based).
+        val (rgbSrc, alphaSrc): (Seq[Int], Int) = n match {
+            case 1 => (Seq(1, 1, 1), total)     // grey -> RGB; alpha = trailing -dstalpha band
+            case 2 => (Seq(1, 1, 1), 2)         // band1 grey -> RGB; band2 IS alpha (rio-tiler)
+            case 3 => (Seq(1, 2, 3), total)     // RGB; alpha = trailing -dstalpha band
+            case 4 => (Seq(1, 2, 3), 4)         // RGB; band4 IS alpha
+            case _ => (Seq(1, 2, 3), total)     // >=5: first 3 -> RGB; alpha = trailing band
+        }
+
+        // Per-band (lo, hi) rescale ranges (ordering B from the plan: apply rescale here,
+        // not at the translate step, so alpha is never rescaled). For uint8 sources or
+        // "none" mode, scaleFlags is empty and values are copied verbatim.
+        val scalePairs = rescaleByteMap(scaleFlags)
+
+        // Read source band values as Float64 (handles uint16/float32 sources uniformly),
+        // optionally apply the per-band linear map, clamp, and write as Byte.
+        def copyBandRescaled(srcBandIdx: Int, dstBandIdx: Int, pairIdx: Int): Unit = {
+            val srcBand = warpedDs.GetRasterBand(srcBandIdx)
+            val dstBand = mem.GetRasterBand(dstBandIdx)
+            if (scalePairs.isEmpty) {
+                // Pass-through: source is already Byte (uint8 auto or "none" with Byte source).
+                val buf = Array.ofDim[Byte](w * h)
+                srcBand.ReadRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, buf)
+                dstBand.WriteRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, buf)
+            } else {
+                // Rescale: read as Float64, apply linear map, clamp, write as Byte.
+                val floatBuf = Array.ofDim[Double](w * h)
+                srcBand.ReadRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Float64, floatBuf)
+                val (lo, hi) = if (pairIdx < scalePairs.length) scalePairs(pairIdx)
+                               else scalePairs.last // fallback: reuse last band's range
+                val range = hi - lo
+                val byteBuf = floatBuf.map { v =>
+                    val scaled = if (range <= 0.0) 0.0 else (v - lo) / range * 255.0
+                    math.max(0, math.min(255, math.round(scaled).toInt)).toByte
+                }
+                dstBand.WriteRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, byteBuf)
+            }
+        }
+
+        def copyBandVerbatim(srcBandIdx: Int, dstBandIdx: Int): Unit = {
+            val buf = Array.ofDim[Byte](w * h)
+            warpedDs.GetRasterBand(srcBandIdx).ReadRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, buf)
+            mem.GetRasterBand(dstBandIdx).WriteRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, buf)
+        }
+
+        rgbSrc.zipWithIndex.foreach { case (srcIdx, i) => copyBandRescaled(srcIdx, i + 1, i) }
+        mem.GetRasterBand(1).SetColorInterpretation(gdalconstConstants.GCI_RedBand)
+        mem.GetRasterBand(2).SetColorInterpretation(gdalconstConstants.GCI_GreenBand)
+        mem.GetRasterBand(3).SetColorInterpretation(gdalconstConstants.GCI_BlueBand)
+        if (wantAlpha) {
+            copyBandVerbatim(alphaSrc, 4)
+            mem.GetRasterBand(4).SetColorInterpretation(gdalconstConstants.GCI_AlphaBand)
+        }
+        mem.SetGeoTransform(warpedDs.GetGeoTransform())
+        Option(warpedDs.GetProjection()).foreach(mem.SetProjection)
+        mem
     }
 
     /** Cheap intersection test against the dataset's web-mercator extent. We assume the

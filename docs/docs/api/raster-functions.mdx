@@ -1871,6 +1871,10 @@ Powered by **rio-tiler** + **morecantile**. Out-of-extent tiles return a transpa
 
 **Signature:** `rst_tilexyz(tile: Column, z: Column, x: Column, y: Column, format: Column, tileSize: Column, resampling: Column): Column` — Render a single web-mercator XYZ tile from a raster as encoded image bytes (e.g. PNG, JPEG, WebP) at the given tile coordinates and pixel size.
 
+:::note Display RGB(A) output (both tiers)
+The output is a display web-map tile, not the source's raw bands. **PNG and WebP** are **RGBA** (4-band); **JPEG** is **RGB** (3-band, no alpha). The alpha channel is a binary transparency mask derived from the source's valid-data footprint, so a pixel that is NoData — whether outside the raster or an internal hole — renders **transparent**, and both the lightweight and heavyweight tiers agree on which pixels are transparent. Band mapping matches the lightweight tier: a single-band source becomes greyscale RGB (`R=G=B`), three bands map to R, G, B, an existing fourth band is treated as alpha, and five-or-more-band sources use the first three bands as RGB. Non-8-bit sources are contrast-rescaled to 8-bit per the `rescale` argument (default `"auto"`; see the `rescale` note above). WebP alpha requires GDAL WebP-alpha support in the runtime; where absent, WebP falls back to RGB.
+:::
+
 **SQL:**
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tilexyz_sql_example" outputConstant="rst_tilexyz_sql_example_output" code={rasterxSqlCode} />
@@ -1883,7 +1887,7 @@ Powered by **rio-tiler** + **morecantile**. Out-of-extent tiles return a transpa
 Powered by **rio-tiler** + **morecantile**. Streams one XYZ tile row per intersecting tile via streaming UDTF. Bounded by `max_z <= 20` and at most 1,000,000 candidate tiles.
 :::
 
-**Signature:** `rst_xyzpyramid(tile: Column, minZoom: Column, maxZoom: Column): Column` — Generator: explode a raster into one row per intersecting `(z, x, y)` tile across a zoom range, producing PNG bytes per tile. Use `LATERAL VIEW` to materialize the rows; the output struct exposes `z`, `x`, `y`, and `bytes`.
+**Signature:** `rst_xyzpyramid(tile: Column, minZoom: Column, maxZoom: Column): Column` — Generator: explode a raster into one row per intersecting `(z, x, y)` tile across a zoom range, producing PNG bytes per tile. Use `LATERAL VIEW` to materialize the rows; the output struct exposes `z`, `x`, `y`, and `bytes`. Each tile is rendered by `rst_tilexyz`, so the per-tile PNG is display **RGBA** with the same band mapping and binary NoData alpha described above.
 
 **SQL:**
 

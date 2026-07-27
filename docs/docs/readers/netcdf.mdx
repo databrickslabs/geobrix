@@ -9,12 +9,44 @@ import netcdfExamples from '!!raw-loader!../../tests/python/readers/netcdf_gbx_r
 # NetCDF Reader
 
 Read CF-convention NetCDF into GeoBrix's existing schemas — no new downstream
-contracts. `netcdf_gbx` is the **lightweight** (`rasterio`/`netcdf4`-backed,
-JAR-free) reader; it is the initial NetCDF reader in GeoBrix (a writer and a
-heavyweight reader are planned follow-ups).
+contracts. GeoBrix ships **three** NetCDF readers:
 
-A NetCDF file is a bag of labelled N-D arrays, and only some layouts *are* maps.
-The reader has **two modes**, chosen by the `mode` option:
+- **`netcdf_gbx`** — the **lightweight** (`rasterio`/`netcdf4`-backed, JAR-free)
+  reader, with a `raster` and a `vector` mode. Runs on Serverless, standard
+  (shared), and ARM clusters.
+- **`netcdf_gdal`** — the **heavyweight** raster reader (RasterX): CF grid
+  variables → the shared `(source, tile)` schema, native GDAL on the JVM.
+- **`netcdf_ogr`** — the **heavyweight** vector reader (VectorX): native CF
+  Discrete Sampling Geometry (DSG) features → the shared vector schema.
+
+A NetCDF file is a bag of labelled N-D arrays, and only some layouts *are* maps,
+so the readers split along that grain: gridded variables go through the raster
+path (`netcdf_gbx` raster mode / `netcdf_gdal`), and feature/point data goes
+through the vector path (`netcdf_gbx` vector mode / `netcdf_ogr`).
+
+## Selecting variables — the unified contract
+
+All three readers share one rule: **`variable` / `variables` is an optional
+filter, not a required selector.**
+
+- A **bare `load`** (no `variable` / `variables`) processes **all readable
+  variables** — in raster mode, one `(source, tile)` row per grid variable; in
+  vector mode, all DSG / curvilinear features.
+- Passing `variable` (one) or `variables` (a comma-separated list) **filters** to
+  exactly those variables.
+
+The `source` column on the raster path is the GDAL subdataset selector,
+`NETCDF:"{path}":{var}`, which identifies the originating variable per row.
+
+:::note Behavior change
+Earlier `netcdf_gbx` required a `variable` / `variables` option — a bare load
+raised. It is now an optional filter, so a bare load returns every readable
+variable. Explicit-`variable` calls are unchanged.
+:::
+
+## `netcdf_gbx` — lightweight, two modes
+
+The lightweight reader has **two modes**, chosen by the `mode` option:
 
 - **`raster`** (default) — a **regular lat/lon or projected grid** is transcoded
   to the shared `(source, tile)` GeoTIFF schema, exactly like the other raster
@@ -24,22 +56,24 @@ The reader has **two modes**, chosen by the `mode` option:
   including a curvilinear/swath grid**, is emitted as **one point per cell**
   (cell-centre lon/lat + values). This reads swath products losslessly, with no
   regridding or interpolation choices baked in. Sentinel-5P TROPOMI CH4 (a
-  netCDF-4 swath) reads this way.
+  netCDF-4 swath) reads this way. Flattening a swath to per-cell points is a
+  `netcdf_gbx` vector-mode capability; the heavyweight `netcdf_ogr` reads native
+  DSG features only.
 
 :::note Honest by construction
 The reader never resamples and never applies quality thresholds. In vector mode
-every requested variable — including a quality flag such as Sentinel-5P
+every variable — including a quality flag such as Sentinel-5P
 `qa_value` — travels through as its own column, so **you** decide how to filter.
 Raw sensor-geometry products (no per-pixel lon/lat) are rejected with an
 actionable error rather than silently guessed at.
 :::
 
-## Options
+### Options
 
 | Option | Default | Description |
 |--------|---------|-------------|
 | `mode` | `"raster"` | `raster` (CF grid → tile) or `vector` (points / per-cell points). |
-| `variable` / `variables` | — (required) | NetCDF variable(s) to read. `variable` takes one; `variables` takes a comma-separated list (vector-mode attribute columns). |
+| `variable` / `variables` | — (all) | Optional filter. Absent → all readable variables. `variable` takes one; `variables` takes a comma-separated list (vector-mode attribute columns). |
 | `group` | — | HDF5 group path for grouped NetCDF-4 files (e.g. Sentinel-5P `"/PRODUCT"`). |
 | `bbox` / `bboxCrs` | — | Area-of-interest filter (`"minx,miny,maxx,maxy"`). |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches. |
@@ -51,7 +85,7 @@ Register the lightweight DataSources once per session:
   source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
   testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
 
-## Raster mode — CF grids → tiles
+### Raster mode — CF grids → tiles
 
 <CodeFromTest code={netcdfExamples} language="python" functionName="READ_RASTER"
   source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
@@ -62,18 +96,65 @@ The output is the standard `(source, tile)` schema — see
 (CF `grid_mapping`) grids are accepted in raster mode; a curvilinear/swath
 variable raises an error steering you to `mode=vector`.
 
-## Vector mode — points & swath → per-cell points
+### Vector mode — points & swath → per-cell points
 
 <CodeFromTest code={netcdfExamples} language="python" functionName="READ_VECTOR"
   source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
   testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
 
-Vector mode emits attribute columns (one per requested variable) followed by a
+Vector mode emits attribute columns (one per variable) followed by a
 `geom_0` WKB point column and `geom_0_srid` / `geom_0_srid_proj` string columns —
 the same shape as the other lightweight vector readers, so the GeoBrix built-in
 `gbx_st_*` functions, native Databricks ST, and H3 binning compose directly. A
 curvilinear/swath cell carries its own lon/lat, so each becomes an exact point;
 no target grid or resampling method is chosen for you.
+
+## `netcdf_gdal` — heavyweight raster (RasterX)
+
+`netcdf_gdal` is the heavyweight (Scala/JVM, native GDAL) raster reader. It reads
+the CF grid variables of a `.nc` file into the shared `(source, tile)` schema —
+**one row per grid variable** — so tessellation, band math, and tiling work
+unchanged. It is read-only. Requires a classic x86 cluster (JAR + GDAL init
+script); on Serverless / standard / ARM compute use lightweight `netcdf_gbx`
+raster mode instead — the two emit the same schema.
+
+```python
+# Bare load: one (source, tile) row per readable grid variable.
+df = spark.read.format("netcdf_gdal").load("/Volumes/main/geobrix_samples/netcdf/era5_sample.nc")
+df.show()
+
+# Optional filter: restrict to specific variables.
+df = (spark.read.format("netcdf_gdal")
+      .option("variables", "t2m,tp")
+      .load("/Volumes/main/geobrix_samples/netcdf/era5_sample.nc"))
+```
+
+Each row's `source` is the GDAL subdataset selector `NETCDF:"{path}":{var}`,
+identifying the originating variable; `tile` is the standard raster tile
+structure — see [Tile Structure](../api/tile-structure).
+
+## `netcdf_ogr` — heavyweight vector (VectorX)
+
+`netcdf_ogr` is the heavyweight (Scala/JVM, native OGR) vector reader. It
+surfaces a NetCDF file's native CF **Discrete Sampling Geometry (DSG)** features
+into the shared vector schema: attribute columns plus a `geom_0` WKB column and
+`geom_0_srid` / `geom_0_srid_proj` string columns, the same shape as the other
+vector readers. It is read-only.
+
+```python
+# Bare load: all DSG features. Optional variables= filters attribute columns.
+df = spark.read.format("netcdf_ogr").load("/Volumes/main/geobrix_samples/netcdf/dsg_stations.nc")
+df.show()
+```
+
+:::note DSG feature files only
+`netcdf_ogr` reads CF-DSG feature layers. A **grid-only** `.nc` (no DSG features)
+has no vector layers, so `netcdf_ogr` raises at schema inference rather than
+returning an empty DataFrame — read gridded rasters with `netcdf_gdal` (or
+`netcdf_gbx` raster mode). Flattening a swath to one point per cell is a
+`netcdf_gbx` **vector-mode** capability only; `netcdf_ogr` does not do that
+transcoding.
+:::
 
 ## Next Steps
 

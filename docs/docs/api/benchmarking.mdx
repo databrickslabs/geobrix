@@ -191,6 +191,39 @@ it is the trade for running where the heavyweight tier can't (Serverless, ARM, n
 init script). At scale the read still parallelizes across the cluster (~23 ms/tile here,
 spread over the workers).
 
+### NetCDF readers
+
+The NetCDF readers are benchmarked as a **same-corpus** throughput comparison: the
+lightweight `netcdf_gbx` reader and the heavyweight `netcdf_gdal` reader both enumerate
+the **same directory of `.nc` granules** (grid/raster mode, `filterRegex: .*\.nc$`) and
+count the rows — a fair heavy-vs-light read of identical input. Run it with
+`gbx:bench:cluster --netcdf-only --row-counts 1000`.
+
+The corpus is **real Sentinel-5P (TROPOMI) L2 CH4 granules**, staged separately from the
+benchmark. A helper stages them with `TropomiDownloader` in download-and-stop mode —
+querying Planetary Computer for granules over an area of interest and time window, then
+saving each as `{item_id}.nc` under `{CORPUS}/netcdf`:
+
+```python
+from databricks.labs.gbx.bench import readers
+# Needs a Planetary Computer token available at stage time. AOI + window are the
+# knobs; the default is a short window over a CH4 hotspot region.
+readers.stage_netcdf_corpus(spark, f"{CORPUS}/netcdf",
+                            bbox=[-104.5, 31.0, -101.5, 33.0],
+                            temporal="2021-01-01/2021-01-08")
+```
+
+Staging is **decoupled from the read** — the token is only needed once, at stage time; the
+benchmark itself just globs the staged pool. If the pool is empty or missing (no token, or
+staging not yet run), the NetCDF benchmark **skips cleanly** with a clear message rather
+than failing the run.
+
+> **Swath vs. grid:** S5P L2 CH4 granules are **swath** products, so this is a
+> **throughput** benchmark (how fast each tier reads real granules), *not* a cross-tier
+> bit-parity gate. Value-level parity between the tiers is checked separately against a
+> **gridded** fixture, where both readers produce a directly comparable regular grid — S5P
+> swaths are not used for the parity assertion.
+
 ### Tiled output (PMTiles writer)
 
 The PMTiles writer is benchmarked separately from the `rst_*` functions: it is a

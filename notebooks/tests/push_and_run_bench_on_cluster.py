@@ -290,6 +290,11 @@ def main() -> int:
     # --fanout-only: ONLY run the fanout benchmark, skip all fn benchmarks.
     benchmark_fanout = "--benchmark-fanout" in sys.argv
     fanout_only = "--fanout-only" in sys.argv
+    # --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx vs heavy
+    #   netcdf_gdal) over the same staged .nc pool at {CORPUS}/netcdf.
+    # --netcdf-only: ONLY run the NetCDF reader benchmark, skip all fn benchmarks.
+    benchmark_netcdf = "--benchmark-netcdf" in sys.argv
+    netcdf_only = "--netcdf-only" in sys.argv
     # --fanout-scale F: dial the synthetic fan-out size for each function (default 1.0 ->
     #   meaningful but ~couple minutes on ~20 workers). Larger = more output rows.
     fanout_scale = float(_arg("--fanout-scale", "1.0"))
@@ -353,6 +358,8 @@ def main() -> int:
             run_id = f"{run_id}-grid-custom"
         elif fanout_only:
             run_id = f"{run_id}-fanout"
+        elif netcdf_only:
+            run_id = f"{run_id}-netcdf"
     functions = _arg("--functions", "")
     sel = _arg("--set", "core")
 
@@ -521,6 +528,10 @@ def main() -> int:
         fanout_only=fanout_only,
         #  --fanout-scale F: dial the synthetic fan-out size (default 1.0).
         fanout_scale=fanout_scale,
+        #  --benchmark-netcdf: also run NetCDF reader benchmark (light netcdf_gbx vs heavy netcdf_gdal).
+        benchmark_netcdf=benchmark_netcdf,
+        #  --netcdf-only: ONLY run the NetCDF reader benchmark, skip fn benchmarks.
+        netcdf_only=netcdf_only,
     )
     if explain_only:
         # Plans are a spark-path concern only; never run the pure-core sections.
@@ -551,6 +562,9 @@ def main() -> int:
         cfg["modes"] = "spark-path"
     if fanout_only:
         # Fan-out UDTF benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if netcdf_only:
+        # NetCDF reader benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).
@@ -626,6 +640,7 @@ def main() -> int:
         or cfg.get("grid_bng_only")
         or cfg.get("grid_custom_only")
         or cfg.get("fanout_only")
+        or cfg.get("netcdf_only")
     )
     if (
         cfg["modes"] in ("spark-path", "both")

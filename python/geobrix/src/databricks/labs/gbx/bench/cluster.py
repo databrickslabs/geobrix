@@ -210,6 +210,13 @@ GRID_CUSTOM_ONLY = {grid_custom_only!r}
 # --fanout-only: ONLY run the fanout benchmark, skip all fn benchmarks.
 BENCHMARK_FANOUT = {benchmark_fanout!r}
 FANOUT_ONLY = {fanout_only!r}
+# --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx vs heavy
+# netcdf_gdal) over the same staged .nc granule pool at {{CORPUS}}/netcdf.
+# --netcdf-only: ONLY run the NetCDF reader benchmark, skip all fn benchmarks.
+# The corpus is staged separately (real S5P L2 CH4 granules via TropomiDownloader);
+# the bench SKIPS CLEANLY when the pool is empty/missing.
+BENCHMARK_NETCDF = {benchmark_netcdf!r}
+NETCDF_ONLY = {netcdf_only!r}
 # --fanout-scale: dial the synthetic fan-out size (default 1.0 -> meaningful but ~couple
 # minutes on ~20 workers). Larger = more output rows per function.
 FANOUT_SCALE = {fanout_scale}
@@ -647,6 +654,52 @@ if _reader_rows:
         _df.show(100, truncate=False)
     _md = results.summarize(_reader_rows)
     _show_md(f"reader benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_NETCDF = """# NetCDF reader benchmark: light netcdf_gbx vs heavy netcdf_gdal (same corpus, both on-cluster)
+# Same-corpus heavy-vs-light throughput over real Sentinel-5P L2 CH4 granules staged at
+# {CORPUS}/netcdf (download-and-stop via TropomiDownloader -- staged separately, decoupled from
+# read()). Both tiers enumerate the SAME .nc pool with filterRegex .*\\.nc$ (raster mode), so this
+# is a fair heavy-vs-light comparison. S5P swaths are a THROUGHPUT bench, NOT a bit-parity gate
+# (cross-tier parity uses a gridded fixture, not S5P swaths -- see docs/api/benchmarking.mdx).
+from databricks.labs.gbx.bench import readers as _rd
+import os as _os
+import glob as _glob
+_netcdf_dir = f"{CORPUS}/netcdf"
+# GUARD: the S5P corpus is staged separately (needs a Planetary Computer token at stage time).
+# When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
+_nc_files = _rd.list_corpus_files(_netcdf_dir, r".*\\.nc$") if _os.path.isdir(_netcdf_dir) else []
+if not _nc_files:
+    print(
+        f"NETCDF BENCH SKIPPED: no .nc granules under {_netcdf_dir}. "
+        f"Stage the corpus first via readers.stage_netcdf_corpus(spark, '{{CORPUS}}/netcdf', ...) "
+        f"(real S5P L2 CH4 granules -- needs a Planetary Computer token at stage time), then re-run "
+        f"with --benchmark-netcdf / --netcdf-only.",
+        flush=True,
+    )
+else:
+    print(f"NETCDF BENCH: {len(_nc_files)} .nc granule(s) under {_netcdf_dir}", flush=True)
+    _netcdf_rows = []
+    if LIGHTWEIGHT:
+        _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                                 api="lightweight", fmt="netcdf_gbx",
+                                 options={"filterRegex": r".*\\.nc$"}, where="cluster")
+        _sink([_r]); lw.append(_r); _netcdf_rows.append(_r)
+    if HEAVYWEIGHT:
+        _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                                 api="heavyweight", fmt="netcdf_gdal",
+                                 options={"filterRegex": r".*\\.nc$"}, where="cluster")
+        _sink([_r]); hw.append(_r); _netcdf_rows.append(_r)
+    if _netcdf_rows:
+        _df = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'reader' AND fn LIKE 'read_netcdf%'"
+        )
+        try:
+            display(_df)
+        except Exception:
+            _df.show(100, truncate=False)
+        _md = results.summarize(_netcdf_rows)
+        _show_md(f"netcdf reader benchmark -- {RUN_ID}", _md)
 """
 
 _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
@@ -2592,6 +2645,8 @@ def build_bench_notebook(cfg: dict) -> dict:
         benchmark_fanout=bool(cfg.get("benchmark_fanout")),
         fanout_only=bool(cfg.get("fanout_only")),
         fanout_scale=float(cfg.get("fanout_scale", 1.0)),
+        benchmark_netcdf=bool(cfg.get("benchmark_netcdf")),
+        netcdf_only=bool(cfg.get("netcdf_only")),
     )
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section
@@ -2626,6 +2681,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     grid_custom_only = bool(cfg.get("grid_custom_only"))
     benchmark_fanout = bool(cfg.get("benchmark_fanout"))
     fanout_only = bool(cfg.get("fanout_only"))
+    benchmark_netcdf = bool(cfg.get("benchmark_netcdf"))
+    netcdf_only = bool(cfg.get("netcdf_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
@@ -2661,6 +2718,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         and not grid_bng_only
         and not grid_custom_only
         and not fanout_only
+        and not netcdf_only
     ):
         if light and do_pure:
             cells.append(_cell(_CELL_LIGHT_PURE))
@@ -2672,6 +2730,8 @@ def build_bench_notebook(cfg: dict) -> dict:
             cells.append(_cell(_CELL_HEAVY_SPARK))
     if benchmark_readers or readers_only:
         cells.append(_cell(_CELL_READERS))
+    if benchmark_netcdf or netcdf_only:
+        cells.append(_cell(_CELL_NETCDF))
     if benchmark_pmtiles or pmtiles_only:
         cells.append(_cell(_CELL_PMTILES))
     if benchmark_vector or vector_only:

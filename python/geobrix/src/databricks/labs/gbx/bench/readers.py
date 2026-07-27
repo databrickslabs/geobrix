@@ -6415,13 +6415,82 @@ def run_fanout_udtf(
         )
 
 
+def list_corpus_files(corpus_dir: str, filter_regex: str = r".*\.tif$") -> List[str]:
+    """Return all files under corpus_dir whose basename matches ``filter_regex``.
+
+    The reader bench is format-parameterized: GeoTIFF pools filter on the default
+    ``.*\\.tif$`` while a NetCDF pool passes ``.*\\.nc$``. Mirrors the
+    ``filterRegex`` option honored by both the light (netcdf_gbx) and heavy
+    (netcdf_gdal / gdal) directory readers so the host-side listing and the
+    on-cluster reader see the SAME set of files. Recurses into subdirectories.
+    """
+    import glob
+    import re
+
+    pat = re.compile(filter_regex)
+    all_files = sorted(glob.glob(os.path.join(corpus_dir, "**", "*"), recursive=True))
+    return [
+        f for f in all_files if os.path.isfile(f) and pat.match(os.path.basename(f))
+    ]
+
+
 def _list_tifs(corpus_dir: str) -> List[str]:
-    """Return all *.tif / *.tiff paths under corpus_dir."""
+    """Return all *.tif / *.tiff paths under corpus_dir (GeoTIFF pure-local leg).
+
+    Preserves the original tif-then-tiff ordering exactly so the GeoTIFF bench is
+    byte-for-byte unchanged; NetCDF and other formats use ``list_corpus_files``.
+    """
     import glob
 
     tifs = sorted(glob.glob(os.path.join(corpus_dir, "**", "*.tif"), recursive=True))
     tifs += sorted(glob.glob(os.path.join(corpus_dir, "**", "*.tiff"), recursive=True))
     return tifs
+
+
+def stage_netcdf_corpus(
+    spark,
+    corpus_dir: str,
+    bbox: Optional[List[float]] = None,
+    temporal: Optional[str] = None,
+    partitions: Optional[int] = None,
+):
+    """Stage real Sentinel-5P L2 CH4 NetCDF granules into ``corpus_dir`` for the
+    reader bench (download-and-stop mode).
+
+    Bench-only helper -- NOT product code and NOT run at import time. The human
+    invokes it once (interactively / from a staging notebook) to populate the
+    parallel ``{CORPUS}/netcdf`` pool that the NetCDF reader-bench cell reads.
+    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool,
+    so this needs a Planetary Computer token available at stage time, while the
+    bench itself does not.
+
+    Granules land as ``{item_id}.nc`` (matching the ``.*\\.nc$`` filter the bench
+    passes to both tiers). Returns the download-manifest DataFrame. Prints the
+    resulting file count so a partial/empty stage is never silent.
+    """
+    from databricks.labs.gbx.sample.tropomi import TropomiDownloader
+
+    # Default AOI: a modest box over a CH4 hotspot region (Permian Basin) with a
+    # short window -- enough real swath granules for a throughput bench without
+    # pulling the whole archive. Override via bbox/temporal for other AOIs.
+    if bbox is None:
+        bbox = [-104.5, 31.0, -101.5, 33.0]
+    if temporal is None:
+        temporal = "2021-01-01/2021-01-08"
+    print(
+        f"stage_netcdf_corpus: downloading S5P L2 CH4 granules to {corpus_dir} "
+        f"(bbox={bbox}, temporal={temporal})",
+        flush=True,
+    )
+    manifest = TropomiDownloader().download(
+        bbox, corpus_dir, temporal=temporal, partitions=partitions, spark=spark
+    )
+    staged = list_corpus_files(corpus_dir, r".*\.nc$")
+    print(
+        f"stage_netcdf_corpus: {len(staged)} .nc granule(s) staged under {corpus_dir}",
+        flush=True,
+    )
+    return manifest
 
 
 def _print_summary(rows: List[ResultRow]) -> None:

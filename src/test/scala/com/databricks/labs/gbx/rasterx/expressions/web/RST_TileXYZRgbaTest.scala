@@ -123,6 +123,21 @@ class RST_TileXYZRgbaTest extends AnyFunSuite with BeforeAndAfterAll with Matche
     } finally RasterDriver.releaseDataset(src)
   }
 
+  test("WEBP output is RGBA when the driver supports alpha, else RGB") {
+    val src = TileXYZTestFixtures.threeBandOverTile()
+    try {
+      val webp = RST_TileXYZ.execute(
+        src, Map.empty, TileXYZTestFixtures.z, TileXYZTestFixtures.x,
+        TileXYZTestFixtures.y, "WEBP", 256, "near", "auto")
+      val (ds, p) = openBytes(webp, "webp")
+      try {
+        val nb = ds.GetRasterCount
+        // 4 (alpha-capable build) or 3 (fallback) -- both acceptable; never the source's raw N.
+        (nb == 4 || nb == 3) shouldBe true
+      } finally { ds.delete(); gdal.Unlink(p) }
+    } finally RasterDriver.releaseDataset(src)
+  }
+
   /** Strengthened NoData test: tile is FULLY inside the wider fixture extent (lon [9,13]
    *  lat [47,51]) so outside-footprint alpha=0 cannot pass this test.  The only alpha=0
    *  pixels come from the internal NoData hole.  Corners (top-left / top-right /

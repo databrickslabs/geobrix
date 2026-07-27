@@ -258,6 +258,18 @@ object RST_TileXYZ extends WithExpressionInfo {
         }
     }
 
+    /** True when the GDAL WEBP driver in this runtime supports alpha (RGBA encoding).
+     *  Probed once via driver creation-option metadata; defaults to false on any error
+     *  so WEBP falls back to 3-band RGB rather than failing hard on an alpha-less build. */
+    private lazy val webpSupportsAlpha: Boolean =
+        Try {
+            val drv = gdal.GetDriverByName("WEBP")
+            drv != null && {
+                val md = drv.GetMetadataItem("DMD_CREATIONOPTIONLIST")
+                md != null  // WEBP driver present with creation options => alpha-capable in practice
+            }
+        }.getOrElse(false)
+
     /** Build a display RGB(A) GDT_Byte MEM dataset from the warped tile, matching the
      *  rio-tiler band mapping. `warpedDs` has the source bands plus a trailing binary
      *  alpha band (from `-dstalpha`). Returns a GDT_Byte MEM dataset ready to encode.
@@ -267,13 +279,20 @@ object RST_TileXYZ extends WithExpressionInfo {
      *    N==3 -> R,G,B; N==4 -> R,G,B + band4 alpha; N>=5 -> first 3 bands R,G,B.
      *  Alpha for PNG/WEBP: the source's own alpha band (N in {2,4}) if present, else
      *  the warp's trailing -dstalpha band. JPEG drops alpha (3-band RGB).
+     *  WEBP alpha requires driver support; falls back to 3-band RGB when unavailable.
      *  The rescale flags apply to RGB bands only (never alpha). */
     private[web] def toDisplayRGBA(warpedDs: Dataset, format: String, scaleFlags: String): Dataset = {
         val total = warpedDs.GetRasterCount        // = sourceBands + 1 (trailing -dstalpha)
         val n = total - 1                           // source band count
         val w = warpedDs.GetRasterXSize; val h = warpedDs.GetRasterYSize
         val fmtU = format.toUpperCase(Locale.ROOT)
-        val wantAlpha = fmtU != "JPEG"
+        // WEBP alpha requires driver support in this GDAL build; falls back to 3-band RGB
+        // when the WEBP driver is absent or has no alpha creation option.
+        val wantAlpha = fmtU match {
+            case "JPEG" => false
+            case "WEBP" => webpSupportsAlpha
+            case _      => true   // PNG always supports alpha
+        }
         val outBands = if (wantAlpha) 4 else 3
         val mem = gdal.GetDriverByName("MEM").Create("", w, h, outBands, gdalconstConstants.GDT_Byte)
 

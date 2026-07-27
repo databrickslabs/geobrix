@@ -6461,7 +6461,7 @@ def stage_netcdf_corpus(
     invokes it once (interactively / from a staging notebook) to populate the
     parallel ``{CORPUS}/netcdf`` pool that the NetCDF reader-bench cell reads.
     Staging is DECOUPLED from ``read()``: the bench cell only globs the pool,
-    so this needs a Planetary Computer token available at stage time, while the
+    so the download happens at stage time only, while the
     bench itself does not.
 
     Granules land as ``{item_id}.nc`` (matching the ``.*\\.nc$`` filter the bench

@@ -36,6 +36,12 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
         // Executor-side enumeration: open each file, list SUBDATASETS, keep grid variables.
         val enumUDF = udf { (path: String) =>
             try {
+                // NodeFileManager.hconf is a JVM-static set only by init(); the driver-side
+                // init(exprConfig.hConf) above does NOT propagate to executor JVMs, so this
+                // UDF must init it here before readRemote (else readRemote hits a null hconf
+                // and the whole enumeration is silently swallowed -> zero rows). Mirrors
+                // RST_ExpressionUtil.init, which NetCDF_Reader calls on its own executor path.
+                NodeFileManager.init(exprConfig.hConf)
                 GDALManager.init(exprConfig)
                 val localPath = NodeFileManager.readRemote(path)
                 val ds = RasterDriver.read(localPath, Map.empty)
@@ -60,7 +66,16 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                 RasterDriver.releaseDataset(ds)
                 NodeFileManager.releaseRemote(path)
                 grids.map(v => (path, v)).toArray
-            } catch { case _: Throwable => Array.empty[(String, String)] }
+            } catch {
+                // A per-file enumeration failure must not silently vanish (a swallowed
+                // executor-side error here previously surfaced only as "zero rows"). Print
+                // the cause so a misconfigured file/driver is diagnosable, then skip the
+                // file (one bad granule should not fail the whole scan).
+                case t: Throwable =>
+                    println(s"netcdf_gdal: subdataset enumeration failed for $path: " +
+                        s"${t.getClass.getName}: ${t.getMessage}")
+                    Array.empty[(String, String)]
+            }
         }
 
         val pairs = files.toDF("path")

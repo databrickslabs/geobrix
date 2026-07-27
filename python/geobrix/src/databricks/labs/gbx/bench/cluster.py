@@ -666,14 +666,14 @@ from databricks.labs.gbx.bench import readers as _rd
 import os as _os
 import glob as _glob
 _netcdf_dir = f"{CORPUS}/netcdf"
-# GUARD: the S5P corpus is staged separately (needs a Planetary Computer token at stage time).
+# GUARD: the S5P corpus is staged separately (download-and-stop at stage time).
 # When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
 _nc_files = _rd.list_corpus_files(_netcdf_dir, r".*\\.nc$") if _os.path.isdir(_netcdf_dir) else []
 if not _nc_files:
     print(
         f"NETCDF BENCH SKIPPED: no .nc granules under {_netcdf_dir}. "
         f"Stage the corpus first via readers.stage_netcdf_corpus(spark, '{{CORPUS}}/netcdf', ...) "
-        f"(real S5P L2 CH4 granules -- needs a Planetary Computer token at stage time), then re-run "
+        f"(real S5P L2 CH4 granules from Planetary Computer, anonymous access), then re-run "
         f"with --benchmark-netcdf / --netcdf-only.",
         flush=True,
     )

@@ -206,17 +206,17 @@ saving each as `{item_id}.nc` under `{CORPUS}/netcdf`:
 
 ```python
 from databricks.labs.gbx.bench import readers
-# Needs a Planetary Computer token available at stage time. AOI + window are the
-# knobs; the default is a short window over a CH4 hotspot region.
+# S5P L2 CH4 is anonymously accessible on Planetary Computer (no token). AOI + window
+# are the knobs; the default is a short window over a CH4 hotspot region.
 readers.stage_netcdf_corpus(spark, f"{CORPUS}/netcdf",
                             bbox=[-104.5, 31.0, -101.5, 33.0],
                             temporal="2021-01-01/2021-01-08")
 ```
 
-Staging is **decoupled from the read** — the token is only needed once, at stage time; the
-benchmark itself just globs the staged pool. If the pool is empty or missing (no token, or
-staging not yet run), the NetCDF benchmark **skips cleanly** with a clear message rather
-than failing the run.
+Staging is **decoupled from the read** — the download happens once, at stage time; the
+benchmark itself just globs the staged pool. If the pool is empty or missing (staging not
+yet run), the NetCDF benchmark **skips cleanly** with a clear message rather than failing
+the run.
 
 > **Swath vs. grid:** S5P L2 CH4 granules are **swath** products, so this is a
 > **throughput** benchmark (how fast each tier reads real granules), *not* a cross-tier

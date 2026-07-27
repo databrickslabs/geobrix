@@ -90,4 +90,26 @@ object TileXYZTestFixtures {
    *  warp band becomes the alpha channel. */
   def fiveBandOverTile(): Dataset =
     makeGeoTiff(5, (b, px, py) => ((px + py + b * 17) % 200 + 20))
+
+  /** Narrow-range uint16 single-band fixture. Values are ramped across [8000, 12000]
+   *  (a window of only 4000 out of the [0, 65535] uint16 dtype range).
+   *
+   *  Without rescale, a naive full-dtype-range crush maps [8000,12000] -> [~31, ~46]
+   *  in uint8, giving a decoded spread of ~15 (visually crushed).  With "auto" rescale
+   *  the per-band min/max [8000,12000] is used as the linear scale, recovering the
+   *  full [0,255] dynamic range and a spread > 100 in the decoded output.
+   *
+   *  Placed over the same lon [10,12] / lat [48,50] extent as the other fixtures so
+   *  tile z=8 x=135 y=87 is data-carrying (proven by the existing test suite). */
+  def narrowUint16OverTile(): Dataset = {
+    val w = 64; val h = 64
+    val mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdalconstConstants.GDT_UInt16)
+    mem.SetGeoTransform(Array(10.0, 2.0 / w, 0.0, 50.0, 0.0, -2.0 / h))
+    mem.SetProjection(wgs84Wkt)
+    // Ramp values linearly from 8000 to 12000 across all pixels (row-major order).
+    val total = w * h
+    val buf = Array.tabulate(total)(i => (8000 + (4000.0 * i / (total - 1)).toInt))
+    mem.GetRasterBand(1).WriteRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Int32, buf)
+    mem
+  }
 }

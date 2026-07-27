@@ -157,6 +157,69 @@ class RST_TileXYZRgbaTest extends AnyFunSuite with BeforeAndAfterAll with Matche
     } finally RasterDriver.releaseDataset(src)
   }
 
+  /** JPEG contrast-rescale regression: a narrow-range uint16 source with "auto" rescale
+   *  must produce JPEG output whose R-band decoded value spread is > 100.
+   *
+   *  Without contrast rescale, a [8000,12000] uint16 crushed by full-dtype-range mapping
+   *  lands in [~31,~46] as uint8 -- spread ~15.  With "auto" rescale active in
+   *  `toDisplayRGBA` (applied to ALL formats since the RGBA convergence), the [8000,12000]
+   *  window is expanded to the full [0,255] range -- spread well above 100.
+   *
+   *  Excludes background (value=0) pixels from the spread computation to absorb JPEG's
+   *  lossy artifacts and the transparent fallback region at tile edges. The spread > 100
+   *  threshold is intentionally wide: the crushed case gives ~15, the rescaled case gives
+   *  ~200+, leaving ample margin for JPEG lossiness.
+   *
+   *  An optional PNG control on the same fixture (lossless) is included and must also
+   *  show spread > 100, providing a clean reference alongside the JPEG assertion. */
+  test("JPEG output from narrow-range uint16 source is contrast-rescaled (spread > 100)") {
+    val src = TileXYZTestFixtures.narrowUint16OverTile()
+    try {
+      val jpg = RST_TileXYZ.execute(
+        src, Map.empty, TileXYZTestFixtures.z, TileXYZTestFixtures.x,
+        TileXYZTestFixtures.y, "JPEG", 256, "near", "auto")
+      val (ds, p) = openBytes(jpg, "jpg")
+      try {
+        val w = ds.GetRasterXSize; val h = ds.GetRasterYSize
+        val buf = Array.ofDim[Byte](w * h)
+        ds.GetRasterBand(1).ReadRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, buf)
+        val vals = buf.map(_ & 0xff)
+        // Exclude background (0-valued) pixels to avoid JPEG chroma artefacts at tile edges.
+        val dataVals = vals.filter(_ > 0)
+        assert(dataVals.nonEmpty, "JPEG tile has no non-background pixels -- tile is empty")
+        val spread = dataVals.max - dataVals.min
+        // Print for observability so the CI log records the actual margin.
+        println(f"[JPEG rescale] spread=$spread (expected >100; crushed case ~15)")
+        assert(spread > 100,
+          s"JPEG contrast NOT rescaled: spread=$spread (crushed uint16->8bit gives ~15, " +
+          s"rescaled gives >200; got $spread -- toDisplayRGBA may not be applying rescale to JPEG)")
+      } finally { ds.delete(); gdal.Unlink(p) }
+
+      // PNG control on the same narrow-range fixture (lossless -- clean reference).
+      val srcPng = TileXYZTestFixtures.narrowUint16OverTile()
+      try {
+        val png = RST_TileXYZ.execute(
+          srcPng, Map.empty, TileXYZTestFixtures.z, TileXYZTestFixtures.x,
+          TileXYZTestFixtures.y, "PNG", 256, "near", "auto")
+        val (dsPng, pPng) = openBytes(png, "png")
+        try {
+          val w = dsPng.GetRasterXSize; val h = dsPng.GetRasterYSize
+          val buf = Array.ofDim[Byte](w * h)
+          dsPng.GetRasterBand(1).ReadRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, buf)
+          val aAlpha = Array.ofDim[Byte](w * h)
+          dsPng.GetRasterBand(4).ReadRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, aAlpha)
+          // Use opaque pixels (alpha=255) for PNG spread -- lossless and alpha-correct.
+          val opaqueVals = buf.zip(aAlpha).collect { case (v, a) if (a & 0xff) == 255 => v & 0xff }
+          assert(opaqueVals.nonEmpty, "PNG tile has no opaque pixels")
+          val pngSpread = opaqueVals.max - opaqueVals.min
+          println(f"[PNG rescale control] spread=$pngSpread (expected >100)")
+          assert(pngSpread > 100,
+            s"PNG control: contrast NOT rescaled: spread=$pngSpread")
+        } finally { dsPng.delete(); gdal.Unlink(pPng) }
+      } finally RasterDriver.releaseDataset(srcPng)
+    } finally RasterDriver.releaseDataset(src)
+  }
+
   /** Strengthened NoData test: tile is FULLY inside the wider fixture extent (lon [9,13]
    *  lat [47,51]) so outside-footprint alpha=0 cannot pass this test.  The only alpha=0
    *  pixels come from the internal NoData hole.  Corners (top-left / top-right /

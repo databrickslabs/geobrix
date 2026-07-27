@@ -33,12 +33,15 @@ import scala.util.Try
  *
  *  Defaults: `format = "PNG"`, `size = 256`, `resampling = "bilinear"`, `rescale = "auto"`.
  *
- *  The `rescale` parameter controls 8-bit display contrast for PNG output:
+ *  The `rescale` parameter controls 8-bit display contrast:
  *    - `"auto"` (default): uint8 source -> pass through unchanged; non-8-bit -> rescale
  *      to Byte using whole-dataset per-band min/max (computed once per source, no seams).
- *    - `"none"`: today's full-dtype-range mapping (raw crush behavior).
+ *    - `"none"`: full-dtype-range mapping (raw crush behavior).
  *    - `"min,max"` string (e.g. `"8000,12000"`): use exactly these bounds for all bands.
- *  Note: `rescale` currently affects PNG output only; JPEG/WEBP rescale is a future follow-up.
+ *  Applies to ALL output formats (PNG / JPEG / WEBP): the rescale is performed in
+ *  `toDisplayRGBA` on the RGB bands before encoding, so JPEG and WEBP get the same
+ *  contrast mapping as PNG (the earlier PNG-only limitation is gone as of the RGBA-output
+ *  convergence). The alpha band is never rescaled.
  */
 case class RST_TileXYZ(
     tileExpr: Expression,
@@ -132,7 +135,8 @@ object RST_TileXYZ extends WithExpressionInfo {
      *  rasters, heavy's min/max may include masked pixel values and can diverge slightly from
      *  light -- a known limitation. Fixtures for the parity gate are NoData-free.
      *
-     *  Affects PNG output only; JPEG/WEBP rescale is a future follow-up.
+     *  The resolved flags are applied (via `rescaleByteMap` in `toDisplayRGBA`) to the RGB
+     *  bands of every output format -- PNG, JPEG, and WEBP alike.
      */
     private[web] def resolveScale(ds: Dataset, rescale: String): String = {
         val mode = if (rescale == null) "auto" else rescale.trim

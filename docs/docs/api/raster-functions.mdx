@@ -2028,11 +2028,11 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close
 
 <Tier both/>
 
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem` color-relief; the gdaldem `default` color keyword is not supported and boundary interpolation may differ slightly from the heavyweight tier.
+:::note Cross-tier output differs (both tiers, by design)
+The two tiers use **different color interpolation engines**, so their pixel values are close but **not identical** and are not byte-comparable: the heavyweight tier calls GDAL `gdal.DEMProcessing` color-relief (GDAL's native C interpolation), while the lightweight (`pyrx`) tier is a **NumPy** reimplementation using per-channel `np.interp`. Two known differences on the lightweight tier: the `gdaldem` `default` color keyword is **not supported** (it is skipped; out-of-range elevations are clamped to the nearest color stop by `np.interp` instead), and boundary/edge interpolation may differ slightly. Both tiers emit an RGB or RGBA Byte tile (RGBA when any color-table entry carries an alpha column). Because the outputs diverge, this function is not cross-tier fingerprint-compared in benchmarks (measured `timing-only`); pick the tier by your pipeline (heavyweight for `gdaldem`-exact output, lightweight for the pure-Python/Serverless path).
 :::
 
-**Signature:** `rst_color_relief(tile: Column, colorTablePath: Column): Column` — Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGBA visualization tile. Special values `nv`, `default`, `0%`, and `100%` are honored.
+**Signature:** `rst_color_relief(tile: Column, colorTablePath: Column): Column` — Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored on both tiers; the `default` keyword is honored only on the heavyweight tier (see the tier note above).
 
 **SQL:**
 

@@ -26,11 +26,27 @@ RUN (Docker, needs the freshly-built JAR containing ``netcdf_gdal`` in
         --path python/geobrix/test/ds/test_netcdf_cross_tier.py \\
         --with-integration --log netcdf-parity.log
 
-The parity test SKIPS cleanly (never silently passes) when the JAR is absent or
-when the heavy reader yields no rows in the current environment; the skip reason
-is precise so a human knows it needs a Docker/cluster run to exercise. A
-separate, always-run assertion (``test_light_enumerates_coral_grid_variables``)
-guards the light reference variable set unconditionally.
+MUST BE INVOKED TARGETED AT THIS FILE'S OWN PATH (not a whole-``ds/``-dir run).
+PySpark reuses one JVM per process and ``getOrCreate()`` hands back whatever
+SparkSession the JVM already owns. In a whole-dir run an earlier ``ds`` test has
+already built a JAR-less session, so this module's ``spark_with_jar`` fixture
+returns that JAR-less session and the heavy ``netcdf_gdal`` format is
+unregistered -> the parity test SKIPS (does NOT gate). Run it on its own path so
+this module owns the first ``getOrCreate()`` and the JAR is on the classpath.
+
+SKIP vs FAIL contract (so a silent skip can never mask a real regression):
+  * LEGITIMATE SKIP -- only when the heavy format is genuinely unregistered
+    (``[DATA_SOURCE_NOT_FOUND]`` / ``ClassNotFoundException: netcdf_gdal...``),
+    i.e. no JAR on the classpath. A skip here means the gate DID NOT RUN and
+    needs a targeted Docker run with a freshly-built JAR.
+  * FAILURE (never a skip) -- if the heavy format resolves/loads but returns
+    zero rows on this known-non-empty gridded fixture (the filter dropped
+    everything), or raises any error other than the unregistered signal.
+
+A separate, always-run assertion (``test_light_enumerates_coral_grid_variables``)
+guards the light reference variable set unconditionally, and the parity test
+also pins the light tile's EPSG to its known value so a light-side CRS
+regression is caught even when the heavy tier reports no EPSG.
 """
 
 import logging
@@ -59,6 +75,11 @@ _CORAL = (
 # Light vs heavy never byte-equal; mirror bench/compare.py tolerances.
 REL_TOL = 1e-3
 ABS_TOL = 1e-3
+
+# The coral CF grid carries ``crs.epsg_code`` -> light ``_crs_string``/``_epsg_int``
+# yield EPSG:4326. Read from the light reader on the fixture, not guessed. This
+# pins the light side so a CRS regression is caught even when heavy reports None.
+CORAL_LIGHT_EPSG = 4326
 
 # JAR lives in python/geobrix/lib/ (parents[2] == .../python/geobrix). NOTE:
 # test_reader_parity.py uses parents[3] here, which resolves to python/lib and
@@ -150,13 +171,15 @@ def test_netcdf_gdal_matches_light_raster(spark_with_jar):
     same enumerated variable set + per-variable EPSG, geotransform, and cell
     values within tolerance.
 
-    Skips (never silently passes) if the heavy reader is unresolvable or yields
-    no rows in this environment -- exercise it in Docker with the JAR present or
-    on a cluster."""
+    SKIP only if the heavy format is genuinely unregistered (no JAR on the
+    classpath). If it resolves but returns zero rows on this known-non-empty
+    gridded fixture, that is a FAILURE (the filter dropped everything), not a
+    skip -- exactly the regression this gate exists to catch."""
     path = str(_CORAL)
 
-    # Heavy first: probe capability by actually loading. A registration failure
-    # or a zero-row result means the heavy tier is not exercisable here.
+    # Heavy first: probe capability by actually loading. Only an *unregistered
+    # format* is a legitimate skip; any other error, or a zero-row result on a
+    # known-non-empty fixture, must fail so a real filter regression cannot hide.
     try:
         heavy_rows = (
             spark_with_jar.read.format("netcdf_gdal")
@@ -164,17 +187,33 @@ def test_netcdf_gdal_matches_light_raster(spark_with_jar):
             .load(path)
             .collect()
         )
-    except Exception as exc:  # noqa: BLE001 - environment-dependent heavy reader
-        pytest.skip(
-            "heavy 'netcdf_gdal' reader unresolvable in this environment "
-            f"(JAR without netcdf_gdal, or GDAL init): {str(exc)[:160]}"
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - classify: unregistered => skip, else raise
+        msg = str(exc)
+        unregistered = (
+            "DATA_SOURCE_NOT_FOUND" in msg
+            or "netcdf_gdal.DefaultSource" in msg
+            or "Failed to find the data source" in msg
         )
-    if len(heavy_rows) == 0:
-        pytest.skip(
-            "heavy 'netcdf_gdal' reader produced 0 rows in this environment "
-            "(heavy GDAL subdataset enumeration does not run in local Docker); "
-            "run this parity comparison on a cluster where the heavy tier runs."
-        )
+        if unregistered:
+            pytest.skip(
+                "GATE DID NOT RUN: heavy 'netcdf_gdal' format is UNREGISTERED "
+                "(no geobrix JAR on this session's classpath -- e.g. a "
+                "whole-ds/-dir run reusing a JAR-less getOrCreate() session). "
+                "Re-run TARGETED at this file's path in Docker with a freshly "
+                f"built JAR to exercise the gate. Detail: {msg[:160]}"
+            )
+        # Registered but broke some other way -> a real defect, surface it.
+        raise
+    # Registered and loaded, but empty on a known-non-empty gridded fixture: the
+    # grid filter dropped every variable. That is the failure mode this gate
+    # guards -- do NOT skip it.
+    assert len(heavy_rows) > 0, (
+        "heavy 'netcdf_gdal' loaded but returned 0 rows on the coral fixture "
+        "(known to contain grid variables) -- the NetCDF_Batch grid filter "
+        "enumerated nothing. This is a filter regression, not an environment skip."
+    )
 
     light_rows = spark_with_jar.read.format("netcdf_gbx").load(path).collect()
 
@@ -198,7 +237,15 @@ def test_netcdf_gdal_matches_light_raster(spark_with_jar):
         # the pixels coincide. So: EPSGs must AGREE when both tiers report one;
         # a heavy None (GDAL couldn't map the CF authority) is tolerated.
         le, he = lm[v][0], hm[v][0]
-        if le is not None and he is not None:
+        # Pin the light side to its known EPSG so a light-side CRS regression is
+        # caught even when heavy reports None (the guarded compare below is
+        # vacuous on coral, where GDAL yields None). Read, not guessed:
+        # _crs_string on the coral fixture yields EPSG:4326 (see CORAL_LIGHT_EPSG).
+        assert (
+            le == CORAL_LIGHT_EPSG
+        ), f"{v}: light EPSG regressed light={le} expected={CORAL_LIGHT_EPSG}"
+        # And when heavy DOES report an EPSG, the two tiers must agree.
+        if he is not None:
             assert le == he, f"{v}: EPSG differs light={le} heavy={he}"
         # Geotransform: sub-pixel agreement, not bit-identity. Light derives the
         # pixel size/origin from the file's float32 lon/lat coordinate arrays

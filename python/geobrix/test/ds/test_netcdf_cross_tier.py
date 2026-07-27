@@ -151,6 +151,122 @@ def _by_var(rows):
     return out
 
 
+def _tile_values(rows):
+    """Read each row's band-1 into a numpy array keyed by the ``source`` variable.
+
+    Thin wrapper over ``_by_var`` that drops the CRS/geotransform metadata --
+    the scaled-grid parity test only compares decoded physical cell values.
+    Accepts an already-collected list of rows.
+    """
+    return {v: meta[2] for v, meta in _by_var(rows).items()}
+
+
+def _write_scaled_grid(path):
+    """A synthetic CF grid with packed int16 variables carrying
+    ``scale_factor``/``add_offset`` and a ``_FillValue``.
+
+    physical = raw * 0.01 + 250.0 for every non-fill cell. Both tiers must
+    return that decoded physical value: light via xarray ``mask_and_scale``,
+    heavy via the Task-2 ``applyScale`` (gdal_translate ``-unscale``) path.
+
+    TWO data variables are written on purpose. GDAL's netCDF driver only exposes
+    a ``SUBDATASETS`` metadata domain (which the heavy ``netcdf_gdal``
+    enumeration reads to discover variables) when the file has >1 data variable;
+    a single-variable file is opened as a plain single-band raster with NO
+    subdatasets, so heavy would enumerate zero grids and the gate could not run.
+    ``units`` (degrees_north/east) let GDAL derive the CF geotransform so the
+    Task-1 grid filter keeps both variables.
+    """
+    from netCDF4 import Dataset
+
+    with Dataset(path, "w") as ds:
+        ds.createDimension("lat", 4)
+        ds.createDimension("lon", 5)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lat.standard_name = "latitude"
+        lat.units = "degrees_north"
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lon.standard_name = "longitude"
+        lon.units = "degrees_east"
+        lat[:] = [50.0, 49.5, 49.0, 48.5]
+        lon[:] = [10.0, 10.5, 11.0, 11.5, 12.0]
+        v = ds.createVariable("t", "i2", ("lat", "lon"), fill_value=-32768)
+        v.scale_factor = 0.01
+        v.add_offset = 250.0
+        v[:] = np.arange(20, dtype="i2").reshape(4, 5)
+        m = ds.createVariable("m", "i2", ("lat", "lon"), fill_value=-32768)
+        m.scale_factor = 0.01
+        m.add_offset = 250.0
+        m[:] = np.arange(20, 40, dtype="i2").reshape(4, 5)
+
+
+@pytest.mark.integration
+def test_netcdf_gdal_applies_scale_matches_light(spark_with_jar, tmp_path):
+    """Scaled-grid value parity: heavy ``netcdf_gdal`` (Task-2 ``applyScale``)
+    decodes CF ``scale_factor``/``add_offset`` to the SAME physical values light
+    ``netcdf_gbx`` produces via xarray ``mask_and_scale``.
+
+    This is the correctness gate for the heavy unscaling path. SKIP only when the
+    heavy format is genuinely unregistered (no JAR on the classpath); any other
+    error, or a zero-row load on this known-non-empty scaled fixture, is a
+    FAILURE. If heavy values differ from light beyond tolerance the unscale path
+    is wrong -- fix Task 2, do NOT loosen the tolerance here."""
+    f = tmp_path / "scaled.nc"
+    _write_scaled_grid(str(f))
+    path = str(f)
+
+    # Heavy first: probe capability by actually loading. Only an *unregistered
+    # format* is a legitimate skip (mirrors test_netcdf_gdal_matches_light_raster).
+    try:
+        heavy_rows = (
+            spark_with_jar.read.format("netcdf_gdal")
+            .option("sizeInMB", "-1")
+            .load(path)
+            .collect()
+        )
+    except Exception as exc:  # noqa: BLE001 - classify: unregistered => skip
+        msg = str(exc)
+        unregistered = (
+            "DATA_SOURCE_NOT_FOUND" in msg
+            or "netcdf_gdal.DefaultSource" in msg
+            or "Failed to find the data source" in msg
+        )
+        if unregistered:
+            pytest.skip(
+                "GATE DID NOT RUN: heavy 'netcdf_gdal' format is UNREGISTERED "
+                "(no geobrix JAR on this session's classpath). Re-run TARGETED "
+                f"at this file's path in Docker with a fresh JAR. Detail: {msg[:160]}"
+            )
+        raise
+    assert len(heavy_rows) > 0, (
+        "heavy 'netcdf_gdal' loaded but returned 0 rows on the scaled fixture "
+        "(known to contain grid variables 't','m') -- enumerated nothing."
+    )
+
+    light_rows = spark_with_jar.read.format("netcdf_gbx").load(path).collect()
+
+    light = _tile_values(light_rows)
+    heavy = _tile_values(heavy_rows)
+    assert sorted(light) == sorted(heavy), (
+        f"variable-set mismatch: light={sorted(light)} heavy={sorted(heavy)}"
+    )
+    assert light, "no grid variables enumerated (both tiers empty)"
+    # Decoded physical values must agree per variable: raw*0.01+250 on both tiers.
+    for v in sorted(light):
+        np.testing.assert_allclose(
+            light[v],
+            heavy[v],
+            rtol=1e-4,
+            atol=1e-4,
+            equal_nan=True,
+            err_msg=(
+                f"{v}: scaled-grid physical values differ beyond tolerance -- "
+                "the heavy applyScale (unscale) path is wrong. Fix Task 2, do "
+                "NOT loosen here."
+            ),
+        )
+
+
 def test_light_enumerates_coral_grid_variables():
     """Always-run reference gate: light ``readable_variables`` on the coral
     fixture is exactly the two CF grid variables. This anchors the parity

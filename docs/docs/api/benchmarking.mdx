@@ -193,36 +193,50 @@ spread over the workers).
 
 ### NetCDF readers
 
-The NetCDF readers are benchmarked as a **same-corpus** throughput comparison: the
-lightweight `netcdf_gbx` reader and the heavyweight `netcdf_gdal` reader both enumerate
-the **same directory of `.nc` granules** (grid/raster mode, `filterRegex: .*\.nc$`) and
-count the rows — a fair heavy-vs-light read of identical input. Run it with
-`gbx:bench:cluster --netcdf-only --row-counts 1000`.
+The NetCDF reader benchmark has **two legs**, matching the two data shapes each reader supports:
 
-The corpus is **real Sentinel-5P (TROPOMI) L2 CH4 granules**, staged separately from the
-benchmark. A helper stages them with `TropomiDownloader` in download-and-stop mode —
-querying Planetary Computer for granules over an area of interest and time window, then
-saving each as `{item_id}.nc` under `{CORPUS}/netcdf`:
+- **Raster leg (heavy vs. light):** `netcdf_gdal` and `netcdf_gbx` (raster mode) are both
+  pointed at the **same directory of regular-grid `.nc` granules**, and the benchmark counts
+  how many `(source, tile)` rows each reader emits. `netcdf_gdal` enumerates only
+  georeferenced regular grids (a real CRS or a non-identity geotransform); swath files
+  produce zero rows from `netcdf_gdal` in raster mode. Both readers now decode CF
+  `scale_factor` / `add_offset` to physical values, so on a scaled regular-grid variable
+  the two tiers produce matching physical measurements (verified within 1e-4). Run with
+  `gbx:bench:cluster --netcdf-only --row-counts 1000`.
+
+- **Vector leg (light only):** `netcdf_gbx` in **vector mode** is pointed at a directory
+  of Sentinel-5P L2 CH4 swath granules. `netcdf_gdal` has no swath path — swaths enumerate
+  to nothing in its raster mode — so this leg measures light-only throughput: how fast
+  `netcdf_gbx` vector mode converts swath cells to per-cell points.
+
+Each leg is staged separately and independently from the benchmark run itself:
+
+**Raster corpus (NASA-NEX GDDP-CMIP6 regular grids):**
+
+```python
+from databricks.labs.gbx.bench import readers
+# NASA-NEX GDDP-CMIP6 regular 0.25-degree grids, anonymously accessible on Planetary Computer
+# (no token). AOI + window are the knobs; the default covers a US Southwest box.
+readers.stage_nasanex_corpus(spark, f"{CORPUS}/netcdf",
+                             bbox=[-104.5, 31.0, -101.5, 33.0],
+                             temporal="2021-01-01/2021-01-08",
+                             variables=("tas",))
+```
+
+**Vector (swath) corpus (Sentinel-5P L2 CH4):**
 
 ```python
 from databricks.labs.gbx.bench import readers
 # S5P L2 CH4 is anonymously accessible on Planetary Computer (no token). AOI + window
 # are the knobs; the default is a short window over a CH4 hotspot region.
-readers.stage_netcdf_corpus(spark, f"{CORPUS}/netcdf",
+readers.stage_netcdf_corpus(spark, f"{CORPUS}/netcdf-swath",
                             bbox=[-104.5, 31.0, -101.5, 33.0],
                             temporal="2021-01-01/2021-01-08")
 ```
 
 Staging is **decoupled from the read** — the download happens once, at stage time; the
-benchmark itself just globs the staged pool. If the pool is empty or missing (staging not
-yet run), the NetCDF benchmark **skips cleanly** with a clear message rather than failing
-the run.
-
-> **Swath vs. grid:** S5P L2 CH4 granules are **swath** products, so this is a
-> **throughput** benchmark (how fast each tier reads real granules), *not* a cross-tier
-> bit-parity gate. Value-level parity between the tiers is checked separately against a
-> **gridded** fixture, where both readers produce a directly comparable regular grid — S5P
-> swaths are not used for the parity assertion.
+benchmark itself just globs the staged pool. If a pool is empty or missing (staging not
+yet run), that leg **skips cleanly** with a clear message rather than failing the run.
 
 ### Tiled output (PMTiles writer)
 

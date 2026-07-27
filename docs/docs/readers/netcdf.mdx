@@ -133,25 +133,26 @@ Each row's `source` is the GDAL subdataset selector `NETCDF:"{path}":{var}`,
 identifying the originating variable; `tile` is the standard raster tile
 structure — see [Tile Structure](../api/tile-structure).
 
-:::note Raw values vs. decoded physical values
-`netcdf_gdal` returns GDAL's **raw stored** values: where a CF variable carries
-`scale_factor` / `add_offset`, GDAL exposes those as band metadata and does
-**not** apply them. The lightweight `netcdf_gbx` raster mode instead returns the
-**decoded physical** (scaled) values for such a variable. The two tiers agree on
-cell geometry, CRS, and on regular grids that carry no scale/offset, but they are
-**not** expected to be bit-identical on a scaled variable — heavyweight gives the
-stored integer, lightweight gives the physical measurement. Apply the band
-metadata yourself if you need physical units from the heavyweight path.
+:::note CF scale/offset decoding
+`netcdf_gdal` applies CF `scale_factor` / `add_offset` automatically, decoding
+stored integer values to physical floating-point measurements. This matches
+`netcdf_gbx` raster mode (which also decodes), so both tiers produce equivalent
+physical values on a scaled variable — the two are expected to agree within the
+numeric tolerance of the decode (verified within 1e-4 on regular grids). The decoded
+output type on the heavyweight path is `Float64`. On an unscaled variable (no
+`scale_factor` / `add_offset`), both tiers return the native stored type unchanged.
 :::
 
 :::note Regular/projected grids only
-`netcdf_gdal` is for CF **regular or projected** grids. Pointed at a
-curvilinear/swath `.nc`, GDAL surfaces the 2-D data variables as pixel-space
-subdatasets — a raster with no meaningful geolocation — so `netcdf_gdal` is not
-the right reader for swath data. For swath/curvilinear products use lightweight
-`netcdf_gbx` **vector mode** (one point per cell), or `netcdf_ogr` for native
-CF-DSG features. This mirrors the lightweight raster mode, which rejects a
-curvilinear/swath variable and steers you to vector mode.
+`netcdf_gdal` enumerates only subdatasets that are true **georeferenced regular
+or projected grids** — specifically, subdatasets with a real CRS or a non-identity
+geotransform. A swath product such as Sentinel-5P L2 (where geolocation lives in a
+separate lat/lon array, not in the geotransform) has neither, so it produces
+**zero rows** from `netcdf_gdal` in raster mode. This is the correct behavior:
+the reader filters out data it cannot meaningfully georeference as a raster.
+For swath/curvilinear products use lightweight `netcdf_gbx` **vector mode** (one
+point per cell, using the per-pixel lat/lon directly), or `netcdf_ogr` for native
+CF-DSG features.
 :::
 
 ## `netcdf_ogr` — heavyweight vector (VectorX)

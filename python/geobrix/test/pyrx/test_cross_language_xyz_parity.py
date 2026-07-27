@@ -451,11 +451,24 @@ def _make_uint16_with_nodata_hole(width=64, height=64, lo=8000, hi=12000, nodata
 
 
 def _decode_rgba(png_bytes):
-    """Decode to a full HxWx4 uint8 RGBA array (alpha as the 4th channel)."""
+    """Decode to a full HxWx4 uint8 RGBA array (alpha as the 4th channel).
+
+    Asserts that the raw image already carries alpha (mode RGBA or LA) before
+    any conversion, so `heavy.shape[2] == 4` is a real claim about the encoder
+    rather than a vacuous post-convert artifact.
+    """
     from PIL import Image
 
-    img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
-    return np.asarray(img)
+    img = Image.open(io.BytesIO(png_bytes))
+    assert img.mode in (
+        "RGBA",
+        "LA",
+    ), (
+        f"PNG was decoded as mode={img.mode!r}, not an alpha-carrying mode "
+        f"(RGBA or LA); the encoder did not emit alpha -- check the heavy tier's "
+        f"toDisplayRGBA wantAlpha path"
+    )
+    return np.asarray(img.convert("RGBA"))
 
 
 def test_light_vs_heavy_rgba_shape_and_alpha_parity(heavy_registered):

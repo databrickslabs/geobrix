@@ -84,4 +84,10 @@ object TileXYZTestFixtures {
    *  so N==4 alpha-preservation can be verified. */
   def fourBandOverTile(): Dataset =
     makeGeoTiff(4, (b, px, _) => if (b == 4) 255 else (px * b) % 200 + 20)
+
+  /** Five-band uint8 fixture. Exercises the N>=5 `case _` branch in toDisplayRGBA:
+   *  bands 1-3 become R/G/B, bands 4-5 are ignored, and the trailing -dstalpha
+   *  warp band becomes the alpha channel. */
+  def fiveBandOverTile(): Dataset =
+    makeGeoTiff(5, (b, px, py) => ((px + py + b * 17) % 200 + 20))
 }

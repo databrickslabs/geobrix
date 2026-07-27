@@ -123,6 +123,24 @@ class RST_TileXYZRgbaTest extends AnyFunSuite with BeforeAndAfterAll with Matche
     } finally RasterDriver.releaseDataset(src)
   }
 
+  /** N>=5 test: five-band source exercises the `case _ => (Seq(1,2,3), total)` branch.
+   *  The first three bands become R, G, B and the trailing -dstalpha band becomes alpha;
+   *  the extra bands (4 and 5) are ignored. Output must be 4-band RGBA. */
+  test("PNG output from a 5-band source is 4-band RGBA (N>=5 branch)") {
+    val src = TileXYZTestFixtures.fiveBandOverTile()
+    try {
+      val png = RST_TileXYZ.execute(
+        src, Map.empty, TileXYZTestFixtures.z, TileXYZTestFixtures.x,
+        TileXYZTestFixtures.y, "PNG", 256, "near", "auto")
+      val (ds, p) = openBytes(png, "png")
+      try ds.GetRasterCount shouldBe 4
+      finally { ds.delete(); gdal.Unlink(p) }
+    } finally RasterDriver.releaseDataset(src)
+  }
+
+  /** WEBP uses an outcome-driven alpha retry: RGBA is attempted first; if the encoder
+   *  rejects alpha (empty/null bytes returned) the encode is retried as 3-band RGB.
+   *  Both paths are valid; neither should produce the source's raw N bands. */
   test("WEBP output is RGBA when the driver supports alpha, else RGB") {
     val src = TileXYZTestFixtures.threeBandOverTile()
     try {
@@ -132,7 +150,8 @@ class RST_TileXYZRgbaTest extends AnyFunSuite with BeforeAndAfterAll with Matche
       val (ds, p) = openBytes(webp, "webp")
       try {
         val nb = ds.GetRasterCount
-        // 4 (alpha-capable build) or 3 (fallback) -- both acceptable; never the source's raw N.
+        // 4 (RGBA -- alpha-capable GDAL/libwebp build) or 3 (RGB fallback) -- both
+        // acceptable; never the source's raw N bands unchanged.
         (nb == 4 || nb == 3) shouldBe true
       } finally { ds.delete(); gdal.Unlink(p) }
     } finally RasterDriver.releaseDataset(src)

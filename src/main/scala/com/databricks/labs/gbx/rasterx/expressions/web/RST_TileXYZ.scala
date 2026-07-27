@@ -322,7 +322,7 @@ object RST_TileXYZ extends WithExpressionInfo {
             mem.GetRasterBand(dstBandIdx).WriteRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Byte, buf)
         }
 
-        rgbSrc.zipWithIndex.foreach { case (srcIdx, i) => copyBandRescaled(srcIdx, i + 1, i) }
+        rgbSrc.zipWithIndex.foreach { case (srcIdx, i) => copyBandRescaled(srcIdx, i + 1, srcIdx - 1) }
         mem.GetRasterBand(1).SetColorInterpretation(gdalconstConstants.GCI_RedBand)
         mem.GetRasterBand(2).SetColorInterpretation(gdalconstConstants.GCI_GreenBand)
         mem.GetRasterBand(3).SetColorInterpretation(gdalconstConstants.GCI_BlueBand)

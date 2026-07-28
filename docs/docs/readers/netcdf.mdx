@@ -188,9 +188,9 @@ JAR-free and runs on Serverless, standard, and ARM clusters.
 ### Raster mode (default)
 
 Each `(source, tile)` row is written as one CF grid `.nc` file with `lat` and `lon`
-coordinate variables, a `_FillValue` for NoData pixels, and — when the tile CRS is
-non-EPSG:4326 — a `crs` grid-mapping variable that stores the projection as a WKT
-attribute.
+coordinate variables, a `_FillValue` for NoData pixels, and — when the tile CRS
+resolves to an EPSG code other than 4326 — a `crs` grid-mapping variable carrying
+that code in its `spatial_epsg` attribute (which the reader recovers on re-read).
 
 ```python
 # One CF grid .nc per (source, tile) row.
@@ -250,8 +250,10 @@ packed storage format, apply the encoding transform manually before writing.
 **Geographic (lon/lat) grids on the raster path.** The raster writer targets
 EPSG:4326 geographic grids. Tiles in a projected CRS (for example EPSG:3857 or
 EPSG:27700) should be reprojected to EPSG:4326 with `gbx_rst_transform` before
-writing. When the tile CRS is non-EPSG:4326, the projection is stored in the `crs`
-WKT attribute, but the `lat`/`lon` coordinate variables are always written in degrees.
+writing: the `lat`/`lon` coordinate variables are always written in degrees, and a
+non-4326 EPSG is recorded only as a `spatial_epsg` code on the `crs` grid-mapping
+variable — the coordinate values themselves are not reprojected, so a projected tile
+would be mislabeled as degrees.
 
 :::
 

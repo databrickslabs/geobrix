@@ -11,7 +11,7 @@ The **lightweight (pyrx / pyvx) tier** is a pure-Python/PySpark implementation t
 
 The lightweight tier is seeing **increasing investment** precisely because of that reach. Functions that run on Serverless and ARM expand the audience that can use GeoBrix without infrastructure friction; that is the direction the product is moving, and the lightweight tier is how GeoBrix gets there now.
 
-This page explains *how* the lightweight tier reaches functional and performance parity with the heavyweight JVM tier. The key is choosing the right Spark execution shape per function: fan-out generators use streaming UDTFs, aggregators use grouped-aggregate Arrow UDFs, and per-tile transforms use Arrow scalar UDFs. Underneath each shape, vectorized Python libraries (NumPy, SciPy, rasterio, rio-tiler, xarray-spatial, shapely, mapbox-vector-tile) do the compute.
+This page explains *how* the lightweight tier reaches functional and performance parity with the heavyweight JVM tier. The key is choosing the right Spark execution shape per function: fan-out generators use streaming UDTFs, aggregators use grouped-aggregate Arrow UDFs, and per-tile transforms use Spark Python (per-row) UDFs. Underneath each shape, vectorized Python libraries (NumPy, SciPy, rasterio, rio-tiler, xarray-spatial, shapely, mapbox-vector-tile) do the compute.
 
 For measured timing and output-consistency numbers, see **[Benchmarking](./benchmarking)**.
 
@@ -53,7 +53,8 @@ The compute underneath each UDF shape comes from best-in-class Python libraries 
 | **NumPy** | Band math (spectral indices, map algebra, thresholding), array ops |
 | **SciPy** | Focal filtering (`rst_filter`, `rst_convolve`); Delaunay triangulation + barycentric interpolation for the TIN functions (`st_triangulate`, `st_interpolateelevation*`) |
 | **rio-tiler** | XYZ / web-tile output (`rst_tilexyz`, `rst_xyzpyramid`) |
-| **xarray-spatial** | Terrain analysis (slope, hillshade, aspect, tri, tpi, roughness, viewshed) |
+| **NumPy** (Horn 3×3) | Terrain analysis (slope, aspect, hillshade, tri, tpi, roughness) |
+| **xarray-spatial** | Viewshed |
 | **shapely** | WKB geometry handling (clip, polygonize, rasterize, grid aggregation); TIN geometry parse and legacy-struct decode to WKB (`st_legacyaswkb`) |
 | **pyogrio** | Vector reader I/O (Arrow-native columnar batches — OGR-free) |
 | **mapbox-vector-tile** | MVT protobuf encode / decode (`st_asmvt`, `st_asmvt_pyramid`) |
@@ -385,8 +386,8 @@ Each UDF shape delegates compute to a focused Python module in `pyrx/core/` or `
 | `pyrx/core/combine.py` | rasterio + NumPy | `rst_merge`, `rst_combineavg`, `rst_frombands`, `rst_band`, `rst_separatebands` |
 | `pyrx/core/bandmath.py` | NumPy | `rst_ndvi`, `rst_ndwi`, `rst_nbr`, `rst_savi`, `rst_evi`, `rst_index`, `rst_mapalgebra`, `rst_threshold`, `rst_derivedband` |
 | `pyrx/core/focal.py` | SciPy + NumPy | `rst_filter`, `rst_convolve` |
-| `pyrx/core/terrain.py` | xarray-spatial | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness`, `rst_color_relief`, `rst_viewshed` |
-| `pyrx/core/analysis.py` | rasterio + shapely | `rst_proximity`, `rst_contour`, `rst_sample` |
+| `pyrx/core/terrain.py` | NumPy (Horn 3×3) | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness`, `rst_color_relief` |
+| `pyrx/core/analysis.py` | rasterio + shapely + xarray-spatial | `rst_proximity`, `rst_contour`, `rst_sample`, `rst_viewshed` |
 | `pyrx/core/tiles.py` | rasterio + rio-tiler | `rst_retile`, `rst_tooverlappingtiles`, `rst_maketiles`, `rst_tilexyz`, `rst_xyzpyramid` |
 | `pyrx/core/grid.py` | rasterio + shapely + h3/quadbin | `rst_h3_tessellate`, discrete-grid rastertogrid (UDTF path) |
 | `pyrx/core/bridge.py` | rasterio + shapely | `rst_rasterize`, `rst_gridfrompoints`, `rst_dtmfromgeoms` |

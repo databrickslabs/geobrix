@@ -73,6 +73,8 @@ The reverse — re-registering a few **heavy** functions over a lightweight sess
 | Function coverage | Full raster set | Full raster set — every `rst_*` function, including the BNG/quadbin raster-grid functions |
 | Readers / Writers | `gtiff_gdal`, `gdal`, OGR readers | `raster_gbx` / `gtiff_gbx` native Python DataSource V2 reader + writer (no JAR); vector OGR readers still heavy-only |
 
+The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-distributed): see how much of the rasterio/GDAL surface is already distributed — and what stays heavyweight-only for now.
+
 ## How to choose
 
 **Start with Lightweight (pyrx).** It installs as a single wheel (`%pip` or cluster library) with no GDAL and no JAR, runs everywhere — serverless, standard/shared clusters, ARM, and Lakeflow declarative pipelines — and covers the full raster set: every `rst_*` function, including the BNG and quadbin raster-grid functions. For most raster work it is the recommended default.

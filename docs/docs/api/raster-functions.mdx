@@ -21,6 +21,10 @@ RasterX functions run in two execution tiers — **lightweight** (pure-Python `p
 
 Complete reference for all RasterX functions with detailed descriptions, parameters, return values, and examples.
 
+:::tip Built on rasterio
+RasterX's lightweight tier is, in large part, **distributed rasterio** + a best-of-breed raster stack. See [Rasterio Distributed](./rasterio-distributed) for the coverage matrix and honest gaps.
+:::
+
 ## Overview
 
 RasterX is GeoBrix's raster data processing package, providing comprehensive tools for working with raster datasets such as satellite imagery, elevation models, and other gridded spatial data. It is a refactor and improvement of Mosaic raster functions, extended in v0.4.0 with terrain analysis, spectral indices, vector-raster bridging, web-mercator tile output, and quadbin grid aggregations. Since the Databricks product does not (yet) support anything built-in specifically for raster processing, RasterX provides a gap-filling capability for raster operations on the Databricks platform.

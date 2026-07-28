@@ -80,7 +80,7 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/netcdf', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
           ],
         },
         {

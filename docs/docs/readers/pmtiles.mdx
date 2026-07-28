@@ -1,0 +1,106 @@
+---
+sidebar_position: 8
+sidebar_label: PMTiles
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import pmtilesRead from '!!raw-loader!../../tests/python/readers/pmtiles_gbx_read_examples.py';
+
+# PMTiles Reader
+
+The **lightweight** `pmtiles_gbx` reader produces a tile pyramid as
+`(z, x, y, bytes)` rows. It has two sources, chosen by the `source` option:
+
+- **`source="raster"`** — build an XYZ (slippy-map) tile **mosaic pyramid** from a
+  directory of Cloud-Optimized GeoTIFFs / rasters. Each slippy tile in the
+  area of interest is rendered (one composited PNG per `(z, x, y)`) across the
+  cluster.
+- **`source="archive"`** — read tiles back **out of an existing `.pmtiles`
+  archive**, one row per stored tile.
+
+Both sources emit the **same `(z, x, y, bytes)` schema** — which is exactly the
+input schema the [PMTiles writer](../writers/pmtiles) expects — so a read feeds
+straight into a write with no reshaping.
+
+:::note Lightweight-only read path
+`pmtiles_gbx` is a pure-Python DataSource V2 reader: **no JAR, no init script**,
+and it runs on Serverless, standard (shared), and ARM clusters. The
+`beta-release-notes` note that PMTiles "read is not yet supported" refers to the
+**heavyweight** `spark.read.format("pmtiles")` path — the lightweight
+`pmtiles_gbx` reader documented here **is** a supported read path.
+:::
+
+Register the lightweight DataSources once per session:
+
+<CodeFromTest code={pmtilesRead} language="python" functionName="REGISTER"
+  source="docs/tests/python/readers/pmtiles_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_pmtiles_gbx_read_examples.py" />
+
+## Output schema
+
+Both sources produce the same four columns — identical to the
+[PMTiles writer](../writers/pmtiles#schema) input:
+
+```
+root
+ |-- z: integer (zoom level, not null)
+ |-- x: integer (slippy tile column, not null)
+ |-- y: integer (slippy tile row, not null)
+ |-- bytes: binary (tile payload — a rendered PNG for source="raster",
+ |                  the stored tile bytes verbatim for source="archive")
+```
+
+## `source="raster"` — mosaic pyramid from rasters
+
+Point the reader at a directory of rasters and an area of interest; it enumerates
+the slippy tiles across the zoom range, attaches only the sources that intersect
+each tile, and renders one tile per `(z, x, y)` with `rio-tiler`.
+
+<CodeFromTest code={pmtilesRead} language="python" functionName="READ_RASTER"
+  source="docs/tests/python/readers/pmtiles_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_pmtiles_gbx_read_examples.py" />
+
+Because the output is already the writer's input schema, packaging the pyramid
+into a `.pmtiles` archive is a direct hand-off:
+
+<CodeFromTest code={pmtilesRead} language="python" functionName="WRITE_BACK"
+  source="docs/tests/python/readers/pmtiles_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_pmtiles_gbx_read_examples.py" />
+
+### Options — `source="raster"`
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `path` (`.load(...)`) | — (required) | Directory of source rasters. |
+| `bbox` | source union | Area of interest as `"minx,miny,maxx,maxy"` in WGS84. Absent → the combined bounds of all sources. |
+| `minZoom` / `maxZoom` | `"0"` / `"0"` | Inclusive slippy-map zoom range to render. |
+| `tileFormat` | `"png"` | Rendered tile encoding. |
+| `tilesPerPartition` | `"64"` | Tiles per Spark partition (fan-out granularity). |
+| `filterRegex` | `".*\.tif$"` | Keep only source files whose path matches. |
+| `pixelSelection` | `"first"` | Mosaic pixel-selection method. Only `"first"` is supported in v1; any other value raises. |
+
+An AOI (or `bbox`) that intersects zero tiles for the requested zoom range logs a
+warning and returns an **empty** DataFrame with the standard schema — not an error.
+
+## `source="archive"` — read an existing `.pmtiles`
+
+Read the tiles stored in a `.pmtiles` file back into a DataFrame, one row per
+tile. The tile `bytes` are returned verbatim (whatever encoding the archive
+stores — PNG/JPEG/WebP/MVT).
+
+<CodeFromTest code={pmtilesRead} language="python" functionName="READ_ARCHIVE"
+  source="docs/tests/python/readers/pmtiles_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_pmtiles_gbx_read_examples.py" />
+
+### Options — `source="archive"`
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `path` (`.load(...)`) | — (required) | The `.pmtiles` archive to read. |
+| `tilesPerPartition` | `"2048"` | Tiles per Spark partition. |
+
+## Next Steps
+
+- [PMTiles Writer](../writers/pmtiles) — package `(z, x, y, bytes)` rows into archives.
+- [VizX — PMTiles viewer](../api/vizx-pmtiles) — inspect a `.pmtiles` archive in a notebook.
+- [Helios notebooks](../notebooks/helios) — end-to-end tiling to PMTiles over a San Francisco AOI.

@@ -48,6 +48,7 @@ An unrecognized format raises `ValueError`.
 |--------|-------------|-------------|
 | [Raster Reader](./raster) | `raster_gbx` | Pure-Python catch-all raster reader (no JAR; DataSource V2) |
 | [GeoTIFF Reader](./geotiff) | `gtiff_gbx` | Pure-Python GeoTIFF reader (preset `driver="GTiff"`) |
+| [PMTiles Reader](./pmtiles) | `pmtiles_gbx` | Pure-Python PMTiles reader — mosaic pyramid from rasters (`source="raster"`) or tiles from an archive (`source="archive"`) |
 | [Vector Reader](./vector) | `vector_gbx` | Pure-Python catch-all vector reader (pyogrio; same OGR schema) |
 | [Shapefile Reader](./shapefile) | `shapefile_gbx` | Pure-Python Shapefile reader (preset OGR driver) |
 | [GeoJSON Reader](./geojson) | `geojson_gbx` | Pure-Python GeoJSON reader (preset OGR driver) |

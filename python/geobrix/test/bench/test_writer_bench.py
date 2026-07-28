@@ -136,3 +136,85 @@ def test_run_format_write_merge_netcdf(spark, tmp_path):
     assert "tas.nc" in ncs and "pr.nc" in ncs  # parts retained across iterations
     merged = os.path.basename(out) + ".nc"
     assert merged in ncs, f"expected merged {merged!r} in {ncs}"
+
+
+def _stage_vector_nc_corpus(spark, src_dir, n=6, parts=3):
+    """Stage a CF-DSG point .nc corpus (>=1 .nc part) via the vector writer, so the
+    bench merge leg has real swath-shaped parts to read back with mode=vector."""
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    schema = StructType(
+        [
+            StructField("methane_mixing_ratio_bias_corrected", FloatType(), True),
+            StructField("qa_value", FloatType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            float(i % 2),
+            bytes(shapely.to_wkb(shapely.Point(10.0 + i * 0.1, 50.0 + i * 0.1))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(n)
+    ]
+    df = spark.createDataFrame(pts, schema).repartition(parts)
+    df.write.format("netcdf_gbx").option("mode", "vector").mode("overwrite").save(
+        str(src_dir)
+    )
+
+
+def test_run_format_write_merge_netcdf_vector(spark, tmp_path):
+    """VECTOR merge leg (mirrors the cluster swath leg that errored).
+
+    The single options dict flows mode=vector to BOTH the read and the untimed
+    setup-parts write; the seed must land CF-DSG .nc parts so the timed merge has
+    files to fold (regression for 'no .nc files to merge under .../netcdf-swath-out-merge').
+    """
+    import os
+
+    src_dir = tmp_path / "vin"
+    _stage_vector_nc_corpus(spark, src_dir, n=6, parts=3)
+    out = str(tmp_path / "vout")
+    r = readers.run_format_write(
+        spark,
+        str(src_dir),
+        out,
+        "t",
+        warmup=1,
+        measured=2,
+        write_api="lightweight",
+        read_fmt="netcdf_gbx",
+        write_fmt="netcdf_gbx",
+        options={
+            "mode": "vector",
+            "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+            "filterRegex": r".*\.nc$",
+            "merge": "true",
+            "keepParts": "true",
+        },
+        label="merge",
+        where="venv",
+    )
+    assert r.status == "ok", r.note
+    assert r.rows == 6  # six point rows read from the CF-DSG corpus
+    assert r.note == "netcdf_gbx write of 6 tiles [merge]"
+    # keepParts=true -> a single merged .nc exists alongside the retained parts.
+    merged = os.path.basename(out) + ".nc"
+    ncs = sorted(f for f in os.listdir(out) if f.endswith(".nc"))
+    assert merged in ncs, f"expected merged {merged!r} in {ncs}"
+    assert len(ncs) >= 2, f"parts must survive keepParts=true, got {ncs}"

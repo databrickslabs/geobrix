@@ -499,6 +499,21 @@ def run_format_write(
             for k, v in _setup_opts.items():
                 sw = sw.option(k, str(v))
             sw.save(out_path)
+            # Verify the seed actually landed parts: the timed merge folds the .nc
+            # files already on disk, so a seed that wrote nothing would surface as a
+            # cryptic "no .nc files to merge" from the timed job. Fail loud here with
+            # the setup context instead (a stale wheel without this seed path, or a
+            # writer that dropped no files, is the usual cause).
+            import glob as _glob
+
+            _seeded = _glob.glob(os.path.join(out_path, "*.nc"))
+            if not _seeded:
+                raise ValueError(
+                    f"merge setup-parts write produced no .nc files under {out_path} "
+                    f"(write_fmt={write_fmt}, setup_opts={_setup_opts}); the timed merge "
+                    f"would have nothing to fold. Check the writer staged parts (and that "
+                    f"the deployed wheel includes the merge-setup path)."
+                )
         except Exception as e:  # noqa: BLE001
             return ResultRow(
                 run_id=run_id,

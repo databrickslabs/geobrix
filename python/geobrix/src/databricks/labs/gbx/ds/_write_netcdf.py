@@ -70,16 +70,22 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
             # -> lat values are descending (south) as index increases.
             lon = np.array([transform.c + transform.a * (i + 0.5) for i in range(w)])
             lat = np.array([transform.f + transform.e * (j + 0.5) for j in range(h)])
-            # variable name: varNameCol override -> source selector -> "data"
+            # variable name: varNameCol takes precedence as an explicit override,
+            # then source selector, then "data".
             var: Optional[str] = None
             if self.var_name_col and row[self.var_name_col]:
                 var = os.path.basename(str(row[self.var_name_col]))
             var = var or _var_from_source(source) or "data"
-            # filename: nameCol (basename) -> var name (if from source) -> uuid
+            # filename: nameCol (basename) -> resolved var name -> uuid fallback.
+            # varNameCol also drives the stem when no nameCol is set, for consistency.
             if self.name_col and row[self.name_col]:
                 stem = os.path.basename(str(row[self.name_col]))
             else:
-                stem = _var_from_source(source) or uuid.uuid4().hex[:12]
+                stem = (
+                    var
+                    if (self.var_name_col or _var_from_source(source))
+                    else uuid.uuid4().hex[:12]
+                )
 
             tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
             tmp.close()
@@ -90,6 +96,10 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                     nc.createDimension("lon", w)
                     vlat = nc.createVariable("lat", "f8", ("lat",))
                     vlat.standard_name = "latitude"
+                    # This writer targets GEOGRAPHIC (lon/lat degrees) grids — the
+                    # round-trip contract of the netcdf_gbx reader. Callers with
+                    # projected-CRS tiles should reproject to EPSG:4326 before writing
+                    # (projected coords would be mislabeled as degrees here).
                     vlat.units = "degrees_north"
                     vlat[:] = lat
                     vlon = nc.createVariable("lon", "f8", ("lon",))
@@ -99,6 +109,8 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                     kw = {} if nodata is None else {"fill_value": nodata}
                     dv = nc.createVariable(var, arr.dtype.str[1:], ("lat", "lon"), **kw)
                     if epsg and epsg != 4326:
+                        # Preserve the source EPSG via a CF grid_mapping variable so
+                        # _netcdf._crs_string can recover it on re-read (reads spatial_epsg).
                         crs_var = nc.createVariable("crs", "i4")
                         crs_var.grid_mapping_name = "latitude_longitude"
                         crs_var.spatial_epsg = int(epsg)

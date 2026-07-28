@@ -78,7 +78,13 @@ def test_raster_write_nameCol(spark, tmp_path):
 
 
 def test_raster_write_non4326_crs(spark, tmp_path):
-    """Write a grid encoded with EPSG:27700; re-read and confirm CRS is preserved."""
+    """Writer emits a crs variable with spatial_epsg when source tile CRS != 4326.
+
+    The netcdf_gbx reader only classifies geographic grids, so a projected-CRS tile
+    cannot round-trip through the reader. Instead, we assert directly on the written
+    .nc that the crs variable exists and carries the correct spatial_epsg attribute,
+    which _netcdf._crs_string reads back on re-open.
+    """
     from rasterio.crs import CRS
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
@@ -134,12 +140,49 @@ def test_raster_write_non4326_crs(spark, tmp_path):
     df = spark.createDataFrame(rows, schema=outer_schema)
     outdir = tmp_path / "out_27700"
     df.write.format("netcdf_gbx").mode("overwrite").save(str(outdir))
-    # Re-read and check EPSG via rasterio
     nc_files = list(outdir.glob("*.nc"))
     assert len(nc_files) == 1
-    # The written .nc should be re-readable by the netcdf_gbx reader
-    re = spark.read.format("netcdf_gbx").load(str(outdir)).collect()
-    assert len(re) == 1
+    # Assert the crs variable exists and spatial_epsg == 27700.
+    # _netcdf._crs_string reads getattr(v, "spatial_epsg", None) to recover the EPSG.
+    with Dataset(str(nc_files[0]), "r") as nc:
+        assert (
+            "crs" in nc.variables
+        ), "Expected a 'crs' grid_mapping variable for non-4326 CRS"
+        crs_var = nc.variables["crs"]
+        assert hasattr(
+            crs_var, "spatial_epsg"
+        ), "crs variable must carry spatial_epsg attribute"
+        assert int(crs_var.spatial_epsg) == 27700
+        # Pixels must also match exactly.
+        data_vars = [v for v in nc.variables if v not in ("lat", "lon", "crs")]
+        assert len(data_vars) == 1
+        np.testing.assert_array_equal(
+            np.array(nc.variables[data_vars[0]][:]), arr_27700
+        )
+
+
+def test_raster_write_varNameCol(spark, tmp_path):
+    """varNameCol overrides the output variable name (and drives the stem filename)."""
+    src = tmp_path / "in.nc"
+    _write_regular_grid(str(src))
+    outdir = tmp_path / "out"
+    spark.dataSource.register(NetcdfGbxDataSource)
+    from pyspark.sql import functions as F
+
+    df = spark.read.format("netcdf_gbx").load(str(src))
+    # Override source so it carries no variable selector, forcing varNameCol to drive both.
+    df = df.withColumn("source", F.lit("no_selector_here"))
+    df.write.format("netcdf_gbx").option("varNameCol", "source").mode("overwrite").save(
+        str(outdir)
+    )
+    nc_files = list(outdir.glob("*.nc"))
+    assert len(nc_files) == 1
+    # varNameCol value "no_selector_here" drives both variable name and stem.
+    assert nc_files[0].name == "no_selector_here.nc"
+    with Dataset(str(nc_files[0]), "r") as nc:
+        assert (
+            "no_selector_here" in nc.variables
+        ), f"Expected variable 'no_selector_here', got {list(nc.variables)}"
 
 
 def test_raster_write_nodata_preserved(spark, tmp_path):

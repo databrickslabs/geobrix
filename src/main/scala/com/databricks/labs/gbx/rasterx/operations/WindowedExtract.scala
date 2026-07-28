@@ -191,7 +191,15 @@ private[rasterx] object WindowedExtract {
         // packed values to physical Float64 (raw*scale+offset) with its own per-dtype/nodata
         // handling; -unscale also drops the scale/offset tags, so they are NOT re-applied on any
         // downstream re-read.
-        val unscale = if (options.getOrElse("unscale", "false").toBoolean) " -unscale -ot Float64" else ""
+        // When unscaling, also pass -a_nodata nan so GDAL writes actual IEEE NaN at every pixel whose
+        // raw value equals the source _FillValue / nodata. Without this, gdal.Translate keeps the raw
+        // packed integer (e.g. -32768) as the float64 output value even though it has already set the
+        // output nodata declaration to that sentinel -- the pixel is "nodata" in metadata but not NaN
+        // in the byte buffer. Light (xarray mask_and_scale=True) returns NaN for fill cells, so heavy
+        // must also materialise NaN for cross-tier assert_allclose(equal_nan=True) to pass.
+        // -a_nodata nan is safe on files with no fill cells: the nodata declaration just moves to NaN
+        // but no pixel value changes (integer inputs never decode to NaN via raw*scale+offset).
+        val unscale = if (options.getOrElse("unscale", "false").toBoolean) " -unscale -ot Float64 -a_nodata nan" else ""
         GDALTranslate.executeTranslate(
           rasterPath,
           ds,

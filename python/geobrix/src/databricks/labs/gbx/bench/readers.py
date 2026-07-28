@@ -273,6 +273,11 @@ def run_format_read(
         # so the netcdf raster leg can pass size_mib=-1 to BOTH tiers -- one tile per
         # grid variable -- giving the heavy reader the same one-tile-per-var granularity
         # as light (a fair heavy-vs-light comparison).
+        # NOTE (re-baseline): the existing GeoTIFF reader leg calls fmt="gdal" without an
+        # explicit size_mib, so it now inherits the default (16) and tiles at ~16 MB where
+        # it previously read whole-image. This aligns it with the light raster_gbx leg
+        # (already 16) -- fairer -- but GeoTIFF heavy reader-bench numbers are NOT
+        # comparable across this change.
         if fmt in ("raster_gbx", "netcdf_gdal", "gdal", "gtiff_gdal"):
             reader = reader.option("sizeInMB", str(size_mib))
         df = reader.load(path)

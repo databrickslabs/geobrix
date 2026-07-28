@@ -13,7 +13,8 @@ from __future__ import annotations
 
 from typing import Optional, Sequence, Tuple
 
-PLANETARY_COMPUTER = "https://planetarycomputer.microsoft.com/api/stac/v1"
+from databricks.labs.gbx.stac import PLANETARY_COMPUTER  # canonical STAC catalog root
+
 # Verified against the PC collection: regular 0.25-degree global grids, anonymous access.
 _NEX_COLLECTION = "nasa-nex-gddp-cmip6"
 _NEX_DATETIME = "1950-01-01/2100-12-31"

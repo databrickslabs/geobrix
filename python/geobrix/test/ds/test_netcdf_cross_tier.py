@@ -247,9 +247,9 @@ def test_netcdf_gdal_applies_scale_matches_light(spark_with_jar, tmp_path):
 
     light = _tile_values(light_rows)
     heavy = _tile_values(heavy_rows)
-    assert sorted(light) == sorted(heavy), (
-        f"variable-set mismatch: light={sorted(light)} heavy={sorted(heavy)}"
-    )
+    assert sorted(light) == sorted(
+        heavy
+    ), f"variable-set mismatch: light={sorted(light)} heavy={sorted(heavy)}"
     assert light, "no grid variables enumerated (both tiers empty)"
     # Decoded physical values must agree per variable: raw*0.01+250 on both tiers.
     for v in sorted(light):

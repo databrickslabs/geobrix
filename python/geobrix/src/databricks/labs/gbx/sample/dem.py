@@ -21,7 +21,8 @@ from typing import TYPE_CHECKING, Optional, Sequence, Union
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
 
-PLANETARY_COMPUTER = "https://planetarycomputer.microsoft.com/api/stac/v1"
+from databricks.labs.gbx.stac import PLANETARY_COMPUTER  # canonical STAC catalog root
+
 DEM_COLLECTION = "3dep-seamless"
 # 3DEP-seamless exposes its DEM raster under the "data" asset (not "image").
 _DEM_ASSET = "data"

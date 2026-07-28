@@ -63,13 +63,19 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                         val sub = gdal.Open(s"""NETCDF:"$localPath":$v""", GA_ReadOnly)
                         if (sub == null) false
                         else {
-                            val bigEnough = sub.GetRasterXSize > 1 && sub.GetRasterYSize > 1 && sub.GetRasterCount >= 1
-                            val hasCrs = { val p = sub.GetProjectionRef; p != null && p.nonEmpty }
-                            val gt = new Array[Double](6); sub.GetGeoTransform(gt)
-                            val identity = gt(0) == 0.0 && gt(1) == 1.0 && gt(2) == 0.0 &&
-                                           gt(3) == 0.0 && gt(4) == 0.0 && gt(5) == 1.0
-                            val ok = bigEnough && (hasCrs || !identity)
-                            sub.delete(); ok
+                            // Release the probe dataset in finally: if any GDAL JNI accessor throws
+                            // between Open and delete, the handle must not leak (executors process
+                            // many files/subdatasets per JVM).
+                            try {
+                                val bigEnough = sub.GetRasterXSize > 1 && sub.GetRasterYSize > 1 && sub.GetRasterCount >= 1
+                                val hasCrs = { val p = sub.GetProjectionRef; p != null && p.nonEmpty }
+                                val gt = new Array[Double](6); sub.GetGeoTransform(gt)
+                                val identity = gt(0) == 0.0 && gt(1) == 1.0 && gt(2) == 0.0 &&
+                                               gt(3) == 0.0 && gt(4) == 0.0 && gt(5) == 1.0
+                                bigEnough && (hasCrs || !identity)
+                            } finally {
+                                sub.delete()
+                            }
                         }
                     } catch { case _: Throwable => false }
                 }

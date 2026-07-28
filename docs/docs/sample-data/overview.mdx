@@ -135,3 +135,19 @@ Sample Data subpages (same order as sidebar):
 - [Vector Data](./vector-data) — Per-dataset download scripts (NYC Taxi Zones, Boroughs, London Postcodes, Neighborhoods, Parks, Subway, GeoPackage, FileGDB, London Boroughs)
 - [Raster Data](./raster-data) — Sentinel-2 (NYC & London), SRTM elevation, HRRR weather (GRIB2)
 - [Additional](./additional) — Synthetic data and alternative data sources (NYC Open Data, STAC, USGS, Ordnance Survey)
+
+## Bring-Your-Own-AOI Downloaders
+
+Beyond the curated NYC/London bundles, GeoBrix ships downloader clients that fetch data for
+**any bounding-box area of interest** and stage it into a Unity Catalog Volume — used by the
+[notebook example series](../examples/overview#notebook-series).
+
+| Downloader | Source | Data |
+|---|---|---|
+| [Overture Maps](./overture-downloader) | Overture Maps (GeoParquet) | Buildings, transportation, places, base, divisions — all themes, AOI-filtered. |
+| [NAIP Aerial Imagery](./naip-downloader) | Planetary Computer STAC | 1 m four-band (RGB + NIR) US aerial photography. |
+| [3DEP (DEM)](./dem-downloader) | Planetary Computer STAC | USGS 3DEP seamless bare-earth elevation (10 m / 30 m). |
+| [Sentinel-5P TROPOMI](./tropomi-downloader) | Planetary Computer STAC | Sentinel-5P TROPOMI L2 methane (CH₄) swath granules (NetCDF). |
+| [NASA-NEX GDDP-CMIP6](./nasanex-downloader) | Planetary Computer STAC | Downscaled climate-projection granules on a 0.25° grid (NetCDF-4). |
+| [EMIT Methane](./emit-downloader) | NASA LP DAAC | NASA EMIT L2B methane enhancement + plume products (60 m COG/GeoJSON). |
+| [TX RRC Wells](./wells-downloader) | TX RRC ArcGIS FeatureServer | Texas well surface-hole locations with operator/lease/field attributes. |

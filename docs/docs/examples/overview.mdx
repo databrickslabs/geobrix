@@ -7,7 +7,25 @@ import examplesOverview from '!!raw-loader!../../tests/python/examples/overview.
 
 # Examples Overview
 
-This section provides practical examples of using GeoBrix for common geospatial workflows.
+This section provides practical examples of using GeoBrix for common geospatial workflows — short copy-paste snippets below, plus end-to-end **notebook series** and **app** examples.
+
+## Notebook Series
+
+End-to-end, runnable notebook walkthroughs. Each links to the notebook source on GitHub.
+
+| Series | What it covers |
+|---|---|
+| [EO Series](../notebooks/eo-series) | STAC discovery → band download → gridded (H3) raster tables → multi-band stacking, with Sentinel-2 over Alaska. |
+| [Clipping — xView](../notebooks/xview) | Load high-resolution aerial GeoTIFFs and clip rasters per labeled object from the xView dataset. |
+| [H3 Rasterize](../notebooks/h3-rasterize) | Convert polygon isobands (elevation contours) into a pixel-aligned, multi-band H3 raster stack. |
+| [Helios — Tiling to PMTiles](../notebooks/helios) | Four-notebook San Francisco series: vector, raster basemap, terrain scoring, and a sharded PMTiles mosaic. |
+| [Vapor-Eyes — Permian Methane](../notebooks/vapor-eyes) | Screen a satellite methane signal over the Permian Basin down to the leaking operator. |
+
+## Apps
+
+| App | What it does |
+|---|---|
+| [Genie Map](./genie-map) | Databricks App (React + kepler.gl) that turns Vapor-Eyes methane gold data into an interactive map you can query by natural language. |
 
 ## Quick Examples
 

@@ -24,6 +24,7 @@ const sidebars = {
       type: 'category',
       label: 'Examples',
       collapsed: true,
+      link: { type: 'doc', id: 'examples/overview' },
       items: [
         {
           type: 'category',
@@ -61,6 +62,7 @@ const sidebars = {
         'sample-data/naip-downloader',
         'sample-data/dem-downloader',
         'sample-data/tropomi-downloader',
+        'sample-data/nasanex-downloader',
         'sample-data/emit-downloader',
         'sample-data/wells-downloader',
       ],
@@ -69,6 +71,7 @@ const sidebars = {
       type: 'category',
       label: 'Readers & Writers',
       collapsed: true,
+      link: { type: 'doc', id: 'readers-writers' },
       items: [
         {
           type: 'category',

@@ -21,15 +21,13 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
     private val isLocal = partition.filePath.startsWith("/") &&
         !partition.filePath.startsWith("/Volumes/") && !partition.filePath.startsWith("/dbfs/")
     private val localPath = if (isLocal) partition.filePath else NodeFileManager.readRemote(partition.filePath)
-    // Empty subdatasetName is the whole-file sentinel (single-variable .nc with NO SUBDATASETS
-    // domain — NetCDF_Batch emits one partition for the whole file). Open the staged file
-    // directly; a NETCDF:"file": selector with no trailing variable would be malformed.
-    private val wholeFile = partition.subdatasetName == null || partition.subdatasetName.trim.isEmpty
-    private val selector = if (wholeFile) localPath else s"""NETCDF:"$localPath":${partition.subdatasetName}"""
+    // subdatasetName is always a real variable name — either a subdataset variable (multi-var
+    // file) or the recovered NETCDF_VARNAME of a single-var file (no SUBDATASETS domain).
+    // GDAL accepts the NETCDF:"file":var selector for both, so there is one code path.
+    private val selector = s"""NETCDF:"$localPath":${partition.subdatasetName}"""
 
     // A subdataset selector is not a filesystem path, so open it directly via gdal.Open —
     // RasterDriver.read would treat the NETCDF:"..." string as a remote path and try to stage it.
-    // The whole-file case also opens directly (selector is the plain local path).
     private val ds = {
         val opened = gdal.Open(selector, GA_ReadOnly)
         if (opened == null) {
@@ -44,11 +42,7 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
     RST_ExpressionUtil.addCleanupListener(tilesIter)
     private val hconf = partition.expressionConfig.hConf
     // The result-facing source keeps the ORIGINAL (remote) path, not the local staging copy.
-    // Whole-file case: use the bare original file path (no NETCDF:"...": wrapper) — it stays
-    // a valid, re-openable path, whereas a variable-less selector would not parse.
-    private val srcSelector =
-        if (wholeFile) partition.filePath
-        else s"""NETCDF:"${partition.filePath}":${partition.subdatasetName}"""
+    private val srcSelector = s"""NETCDF:"${partition.filePath}":${partition.subdatasetName}"""
 
     override def next(): Boolean = tilesIter.hasNext
 

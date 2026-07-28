@@ -67,9 +67,10 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
     }
 
     // Single-variable grids have NO SUBDATASETS domain — GDAL opens them as a plain raster.
-    // NetCDF_Batch falls back to one whole-file partition (empty subdatasetName sentinel), and
-    // NetCDF_Reader opens the file directly. Regression for netcdf_gdal reading 0 rows from
-    // single-variable NASA-NEX/CMIP6-style files while light netcdf_gbx read them fine.
+    // NetCDF_Batch falls back to one whole-file partition, recovering the real variable name
+    // from band 1's NETCDF_VARNAME so it behaves like any (file, var) partition. Regression for
+    // netcdf_gdal reading 0 rows from single-variable NASA-NEX/CMIP6-style files while light
+    // netcdf_gbx read them fine.
     test("netcdf_gdal reads a single-variable grid with no SUBDATASETS domain") {
         import com.databricks.labs.gbx.rasterx.functions._
         rasterx.functions.register(spark)
@@ -77,10 +78,26 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
         val df = spark.read.format("netcdf_gdal").option("sizeInMB", "-1")
             .option("filterRegex", ".*tas_singlevar\\.nc$").load(ncDir)
         val rows = df.select("source").collect()
-        // Exactly one whole-file partition; at least one tile read.
         rows.length should be >= 1
-        // Whole-file source is the bare original path (re-openable), not a NETCDF:"...": selector.
-        all(rows.map(_.getString(0))) should endWith("tas_singlevar.nc")
+        // Source is selector-consistent with light netcdf_gbx: NETCDF:"file":var, ending in :tas.
+        all(rows.map(_.getString(0))) should startWith("NETCDF:")
+        all(rows.map(_.getString(0))) should endWith(":tas")
+    }
+
+    test("netcdf_gdal variables filter matches the recovered single-var name") {
+        import com.databricks.labs.gbx.rasterx.functions._
+        rasterx.functions.register(spark)
+        val ncDir = this.getClass.getResource("/binary/netcdf-singlevar/").toString
+        // The recovered NETCDF_VARNAME ("tas") is filterable like any subdataset variable.
+        val hit = spark.read.format("netcdf_gdal").option("sizeInMB", "-1")
+            .option("filterRegex", ".*tas_singlevar\\.nc$")
+            .option("variables", "tas").load(ncDir)
+        hit.count() should be >= 1L
+        // A bogus variable name filters the single-var partition out entirely.
+        val miss = spark.read.format("netcdf_gdal").option("sizeInMB", "-1")
+            .option("filterRegex", ".*tas_singlevar\\.nc$")
+            .option("variable", "no_such_variable_xyz").load(ncDir)
+        miss.count() shouldBe 0L
     }
 
     // applyScale is an OPT-IN flag threaded only by NetCDF_Reader. This regression proves it

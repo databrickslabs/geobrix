@@ -88,13 +88,21 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                     } catch { case _: Throwable => false }
                 }
                 // Single-variable files have NO SUBDATASETS domain: GDAL opens them as a plain
-                // raster (grids is empty). Fall back to emitting ONE partition for the WHOLE FILE
-                // if the directly-opened dataset is itself a georeferenced grid. The empty
-                // subdatasetName is the sentinel telling NetCDF_Reader to open the file directly
-                // rather than build a (malformed) NETCDF:"file": selector with no variable.
+                // raster (grids is empty). Fall back to ONE partition for the WHOLE FILE if the
+                // directly-opened dataset is itself a georeferenced grid. Recover the real
+                // variable name from band 1's NETCDF_VARNAME metadata (GDAL's netCDF driver
+                // populates it on a directly-opened single-var file) so the (path, var) pair is
+                // indistinguishable from a subdataset pair: the `variables` filter matches it,
+                // and NetCDF_Reader opens NETCDF:"file":var like any other partition. Fall back
+                // to "Band1" only if the driver somehow omits it.
+                def wholeFileVarName: String = {
+                    val b = ds.GetRasterBand(1)
+                    val n = if (b != null) b.GetMetadataItem("NETCDF_VARNAME") else null
+                    if (n != null && n.nonEmpty) n else "Band1"
+                }
                 val partitionsForFile: Array[(String, String)] =
                     if (grids.nonEmpty) grids.map(v => (path, v)).toArray
-                    else if (isGeorefGrid(ds)) Array((path, ""))
+                    else if (isGeorefGrid(ds)) Array((path, wholeFileVarName))
                     else Array.empty[(String, String)]
                 RasterDriver.releaseDataset(ds)
                 NodeFileManager.releaseRemote(path)

@@ -159,14 +159,12 @@ The test asserts `np.allclose` between the rasterio-computed NDVI array and the 
 
 Everything in the matrix above. Every `rst_*` function runs in both the lightweight (`pyrx`) and heavyweight (`rasterx`) tiers.
 
-### Heavyweight-only for now (parity tracked)
+### Heavyweight differences (minor)
 
-A small number of capabilities run only in the heavyweight tier for now:
+A small number of capabilities run only in the heavyweight tier:
 
-- **OGR vector readers** (`*_ogr` data sources — `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`, `netcdf_ogr`). Lightweight vector reading uses [pyogrio](https://pyogrio.readthedocs.io/) via the `pyvx` readers, but the named `*_ogr` reader variants are not yet exposed as lightweight data sources. Parity tracked.
-- **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes: `mode='constrained'` (constrained Delaunay, the default) works in both tiers; `mode='conforming'` (Steiner-point conforming Delaunay) requires a C-level refinement library not available in the lightweight stack and raises in `pyrx` with an informative message. Parity tracked.
-- **Advanced PMTiles writer options.** The `gbx_pmtiles_agg` aggregate function is available in both tiers. Advanced DataSource-level `pmtiles_gbx` writer options (multi-part, spatial index tuning) are heavyweight-only for now. Parity tracked.
-- **SQL default-argument convenience.** SQL calls that rely on overloaded registered signatures with more default arguments work in the heavyweight tier. `pyrx` functions accept keyword arguments in Python; the SQL registration exposes the same signatures. Parity tracked.
+- **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes: `mode='constrained'` (constrained Delaunay, the default) works in both tiers; `mode='conforming'` (Steiner-point conforming Delaunay) requires a C-level refinement library not available in the lightweight stack and raises in `pyrx` with an informative message.
+- **Advanced PMTiles writer options.** The `gbx_pmtiles_agg` aggregate function is available in both tiers. Advanced DataSource-level `pmtiles_gbx` writer options (multi-part, spatial index tuning) are heavyweight-only.
 
 See [Execution Tiers](./execution-tiers) for how to choose and switch between tiers.
 

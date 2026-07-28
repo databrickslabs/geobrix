@@ -110,6 +110,7 @@ const sidebars = {
           collapsed: true,
           link: { type: 'doc', id: 'api/raster-functions' },
           items: [
+            'api/rasterio-distributed',
             'api/h3-raster-tessellation',
           ],
         },

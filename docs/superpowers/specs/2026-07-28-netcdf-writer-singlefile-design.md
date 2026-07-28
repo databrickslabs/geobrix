@@ -42,11 +42,44 @@ grid is **explicitly out of scope** — that is already served upstream by `gbx_
 
 ## 3. Design
 
-### 3.1 Option
+### 3.1 Options
 
-`.option("singleFile", "true")` on both writer modes. Default `false` → current parts behavior,
-byte-for-byte unchanged (non-breaking). Read in `NetcdfGbxDataSource.writer` / the writer
-constructors from `self.options`.
+Four writer options (all read from `self.options` in the writer constructors; all default to the
+current behavior → non-breaking):
+
+- **`singleFile`** (default `false`) — write ONE `.nc` instead of sharded parts, via the two-phase
+  scratch/merge pattern (§3.2 vector, §3.3 raster).
+- **`merge`** (default `false`) — **post-hoc directory merge.** `.write.format("netcdf_gbx")
+  .option("merge","true").save("<dir>")` merges the `.nc` files ALREADY IN `<dir>` into one file,
+  WITHOUT re-running the source DataFrame. Mechanism: DataSource V2 `write(iterator)` is pull-based —
+  when `merge=true`, `write()` returns immediately WITHOUT consuming the iterator, so upstream
+  read/transcode never advances (no re-work; Spark still schedules cheap no-op tasks per partition,
+  but no file I/O). `commit()` on the driver then reads `<dir>/*.nc` and merges them using the SAME
+  merge core as `singleFile`'s commit (vector concat on `obs`; raster distinct-same-grid-var merge,
+  error→`rst_merge_agg`). This serves the "I already ran parts-mode, it took minutes, just combine the
+  output" case. `merge` implies single output; if BOTH `merge` and `singleFile` are set, `merge` wins
+  (directory-merge, no fresh write).
+  - **Overwrite interaction (REQUIRED):** the writer's `overwrite` mode globs+deletes `*.nc` in the dir
+    at construct time. In `merge` mode this MUST be suppressed (read-then-replace, never
+    clear-then-read) or it deletes the very parts to merge. Enforce + test.
+  - **`keepParts`** (default `false`) — after a SUCCESSFUL merge, the source `part-*.nc` files are
+    deleted (consolidate-in-place). `keepParts=true` retains them alongside the merged file. This is
+    ORTHOGONAL to Spark's `mode` (which governs the merged output vs. a pre-existing target, not
+    intermediate-part retention) — hence a dedicated option, not `append`/`overwrite`.
+  - **DATA-SAFETY ORDERING (REQUIRED — never lose the parts to a failed merge):** the part files are
+    the expensive-to-produce inputs; they must NOT be deleted until the merged output is proven
+    durable. Strict sequence when `keepParts=false`: (1) merge into a driver-local temp `.nc`;
+    (2) VALIDATE the temp — reopens cleanly via `netCDF4.Dataset` AND its `obs`/data-var element count
+    equals the summed input count (catch a truncated/corrupt merge); (3) `shutil.copyfile` temp →
+    target; (4) VERIFY the target exists and its byte size equals the temp's (catch a partial FUSE
+    copy); (5) ONLY THEN delete the part files. If ANY step (1–4) fails → raise and leave EVERY part
+    intact; the delete never runs on an error path. `abort` never deletes source parts either. So a
+    failed/partial merge always leaves the user's parts recoverable.
+- **`fileName`** (default derived) — the output file name (stem) for `singleFile`/`merge` output.
+  Resolved via `_resolve_single_file_output(path, fileName, "nc")` (its 3-case contract). Falls back to
+  `nameCol`'s value, then the directory name, as today.
+- **`partPrefix`** (default `"part"`) — the filename stem for parts-mode files: `<partPrefix>-<uuid>.nc`
+  (currently hardcoded `part-`). Lets users label shards (e.g. `partPrefix="s5p"` → `s5p-<uuid>.nc`).
 
 ### 3.2 Vector `singleFile` (concat points → one CF-DSG `.nc`)
 
@@ -86,6 +119,29 @@ Two-phase:
 does NOT mosaic multiple spatial-window tiles of one variable — that is `gbx_rst_merge_agg`'s job,
 applied UPSTREAM (`tiles → rst_merge_agg → write`). The error message and docs state this.
 
+### 3.3a `merge` — post-hoc directory merge (no re-run) + filename options
+
+- **`write(iterator)`:** when `merge=true`, return IMMEDIATELY without consuming `iterator` (so the
+  source DataFrame's read/transcode never advances). Return an empty commit message.
+- **`commit(messages)`:** on the driver, glob `<path>/*.nc` (the existing parts, EXCLUDING the
+  `_scratch` container and any prior merged output at the resolved `fileName`), and merge them with the
+  SAME core as `singleFile`'s commit — vector: concat on `obs` (open each `.nc`, read its points,
+  append); raster: decode each `.nc`'s grid var(s), apply the grid-compat gate + distinct-var merge
+  (same error→`rst_merge_agg` on incompatible/window-tile duplicate). Mode dispatch (raster vs vector)
+  follows the writer's `mode` option as usual. Write to driver-local temp → validate → copy → verify →
+  (delete parts unless `keepParts`), per the DATA-SAFETY ORDERING above.
+- **Overwrite suppression:** in `merge` mode the constructor must NOT run the `overwrite` glob-delete
+  (that would delete the inputs). Skip it when `merge=true`.
+- **Empty dir:** no `.nc` files under `path` → raise a clear `ValueError` (nothing to merge), do not
+  write an empty output.
+- **`fileName` / `partPrefix`:** `fileName` sets the single/merge output stem (via
+  `_resolve_single_file_output`); `partPrefix` replaces the hardcoded `part-` stem in parts-mode
+  (`<partPrefix>-<uuid>.nc`). Both apply to raster and vector.
+- **DRY:** factor the vector-concat and raster-grid-merge cores into helpers shared by BOTH the
+  `singleFile` commit (merging `_scratch` fragments) and the `merge` commit (merging existing `.nc`
+  files). The only difference is the INPUT source (feather fragments vs `.nc` files on disk) — the
+  merge/validate/copy/verify/delete tail is identical.
+
 ### 3.4 Docs — call out the mosaic pattern
 
 `docs/docs/readers/netcdf.mdx` writer section: document `singleFile` on both modes (default parts,
@@ -109,14 +165,30 @@ Also note the single-file memory tradeoff (driver-funneled; scatter is safer at 
   different windows + `singleFile=true` → errors with the `rst_merge_agg` mosaic pointer.
 - **Memory/streaming:** vector commit streams fragments (assert it doesn't require all points resident
   — a structural check / large-ish fixture).
+- **`merge` round-trip (vector + raster):** write parts-mode to a dir (multiple `.nc`), THEN a second
+  `.write.format("netcdf_gbx").option("merge","true").save(<same dir>)` → assert ONE merged `.nc`,
+  parts deleted (default), re-read matches the original data. Assert the merge did NOT re-run the source
+  (e.g. point `merge` at a dir but pass a DIFFERENT/empty DataFrame — the output must reflect the DIR's
+  files, not the DataFrame).
+- **`merge` incompatible + empty:** raster merge of incompatible-grid `.nc` files → `ValueError` →
+  `rst_merge_agg` pointer; merge of an empty dir → clear `ValueError` (nothing to merge).
+- **`keepParts` + DATA SAFETY (critical):** `merge` with `keepParts=true` → merged file AND parts both
+  present. And a **failure-path test:** force the merge to fail (e.g. incompatible grids, or a
+  monkeypatched validate) with `keepParts=false` → assert the parts are STILL present (never deleted on
+  error) and no partial merged output is left as if valid.
+- **`fileName` / `partPrefix`:** `fileName` sets the single/merge output name; `partPrefix` changes the
+  parts stem (`<partPrefix>-<uuid>.nc`). Assert both.
 - **Serverless-safety:** no `spark.conf.set`/`_jvm`/`.rdd` in the new paths.
 - Tests extend `python/geobrix/test/ds/test_netcdf_writer.py`.
 
 ## 5. Surfaces to update
 
-- `python/geobrix/src/databricks/labs/gbx/ds/_write_netcdf.py` — `singleFile` branch in both writers
-  (two-phase: fragment on `write`, merge on `commit`); a fragment commit-message; reuse `_scratch`.
-- `python/geobrix/src/databricks/labs/gbx/ds/netcdf.py` — pass `singleFile` through `writer()`.
+- `python/geobrix/src/databricks/labs/gbx/ds/_write_netcdf.py` — `singleFile` + `merge` branches in
+  both writers (two-phase: fragment on `write`, merge on `commit`; `merge` skips the iterator + globs
+  the dir); shared vector-concat / raster-grid-merge core helpers; `keepParts` data-safe delete
+  (validate→copy→verify→delete); `fileName`/`partPrefix` naming; suppress overwrite-clear in `merge`.
+- `python/geobrix/src/databricks/labs/gbx/ds/netcdf.py` — options flow through `writer()` (they ride
+  `self.options`; confirm no signature change needed).
 - `python/geobrix/test/ds/test_netcdf_writer.py` — the tests above.
 - `docs/docs/readers/netcdf.mdx` — `singleFile` on both modes + the `rst_merge_agg` mosaic pointer +
   memory tradeoff; `docs/docs/beta-release-notes.mdx` — the new option.

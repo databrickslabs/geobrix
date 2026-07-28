@@ -18,6 +18,8 @@ from typing import Iterator, List, Optional
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
+from databricks.labs.gbx.ds import _scratch
+
 
 @dataclass
 class NetcdfCommitMessage(WriterCommitMessage):
@@ -596,7 +598,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                     frags.append(m.frag_path)
                 frags.extend(m.paths)
         if not frags:
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)
             return None
 
         target = _resolve_single_file_output(self.path, self.file_name, ".nc")
@@ -611,7 +613,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 os.unlink(tmp.name)
         finally:
             # Scratch fragments are always disposable (they are not user parts).
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)
         return None
 
     def _commit_merge(self) -> None:
@@ -662,7 +664,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                     except OSError:
                         pass
         if self.scratch_dir:
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)
 
 
 class NetcdfVectorGbxWriter(DataSourceWriter):
@@ -904,7 +906,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         ]
         if not frags:
             # All partitions were empty.
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)
             return None
 
         target = _resolve_single_file_output(self.path, self.file_name, ".nc")
@@ -935,7 +937,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             finally:
                 os.unlink(tmp.name)
         finally:
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)
         return None
 
     def _commit_merge(self) -> None:
@@ -989,4 +991,4 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                     except OSError:
                         pass
         if self.scratch_dir:
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)

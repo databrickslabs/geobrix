@@ -38,6 +38,43 @@ def test_new_scratch_dir_does_not_create(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# remove_scratch_dir (subdir removal + empty-container pruning)
+# --------------------------------------------------------------------------- #
+def test_remove_scratch_dir_prunes_empty_container(tmp_path):
+    """A committed singleFile write must leave NO .gbx_scratch behind."""
+    sub = _scratch.new_scratch_dir(str(tmp_path))
+    os.makedirs(sub, exist_ok=True)
+    with open(os.path.join(sub, "frag.arrow"), "w") as f:
+        f.write("x")
+    container = os.path.join(str(tmp_path), _scratch.SCRATCH_CONTAINER)
+    assert os.path.isdir(container)
+
+    _scratch.remove_scratch_dir(sub)
+
+    assert not os.path.exists(sub)  # per-write subdir gone
+    assert not os.path.exists(container)  # empty container pruned, no stray dir
+
+
+def test_remove_scratch_dir_keeps_container_with_live_sibling(tmp_path):
+    """A concurrent in-flight write's subdir must keep the container alive."""
+    a = _scratch.new_scratch_dir(str(tmp_path))
+    b = _scratch.new_scratch_dir(str(tmp_path))
+    for d in (a, b):
+        os.makedirs(d, exist_ok=True)
+    container = os.path.join(str(tmp_path), _scratch.SCRATCH_CONTAINER)
+
+    _scratch.remove_scratch_dir(a)  # commit one write
+
+    assert not os.path.exists(a)  # this write's subdir gone
+    assert os.path.exists(b)  # concurrent write untouched
+    assert os.path.isdir(container)  # container kept (not empty)
+
+
+def test_remove_scratch_dir_empty_path_is_noop(tmp_path):
+    _scratch.remove_scratch_dir("")  # parts mode passes "" -- must not raise
+
+
+# --------------------------------------------------------------------------- #
 # gc_stale_scratch
 # --------------------------------------------------------------------------- #
 def _mk(container: str, name: str, age_seconds: float) -> str:

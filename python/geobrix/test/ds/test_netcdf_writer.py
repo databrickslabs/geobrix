@@ -529,6 +529,8 @@ def test_vector_write_singlefile_one_nc(spark, tmp_path):
     )
     ncs = [f for f in os.listdir(str(out)) if f.endswith(".nc")]
     assert len(ncs) == 1, f"expected ONE .nc, got {ncs}"
+    # A committed singleFile write must leave NO scratch container behind.
+    assert ".gbx_scratch" not in os.listdir(str(out))
     re = (
         spark.read.format("netcdf_gbx")
         .option("mode", "vector")

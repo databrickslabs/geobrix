@@ -9,7 +9,7 @@ import rioDist from '!!raw-loader!../../tests/python/api/rasterio_distributed_ex
 
 # Rasterio Distributed
 
-[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, rio-cogeo, scipy, xarray-spatial, scikit-image, shapely, pyproj, h3, quadbin — run as Spark Python UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally are called inside each Spark Python UDF, once per tile, on every executor in parallel. No JAR, no init script, no native GDAL install separate from rasterio's bundled GDAL.
+[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, rio-cogeo, scipy, xarray-spatial, scikit-image, shapely, pyproj, h3, quadbin — run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR, no init script, no native GDAL install separate from rasterio's bundled GDAL.
 
 If you already know `rasterio`, you already understand what `pyrx` does. The coverage matrix below maps the surface, and the side-by-sides show each operation in rasterio next to its distributed `pyrx` form.
 
@@ -191,7 +191,7 @@ Rasterio's bundled GDAL also has a narrower driver set than the heavyweight cust
 
 The `pyrx` tier distributes rasterio and NumPy compute over Spark via three mechanisms, none of which require the Spark JVM internals:
 
-- **Spark Python UDFs** (per-tile functions): each scalar `rst_*` function is a plain `@f.udf(TILE_SCHEMA)` Python UDF — it receives a tile struct, calls rasterio/NumPy on the tile's bytes, and returns the transformed bytes. Data crosses the JVM↔Python boundary via serialization once per row.
+- **Arrow scalar UDFs** (per-tile functions): each scalar `rst_*` function invoked via the Python Column API is a `@pandas_udf` (`tile_scalar_udf` / `tile_scalar_udf2` in `pyrx/_udf.py`) — it receives a batch of tiles' raster bytes as a Pandas Series, calls rasterio/NumPy once per tile within the batch, and returns transformed bytes. The Arrow batch crosses the JVM↔Python boundary **once per batch**, not once per row. The same functions are also registered as plain `@f.udf` for SQL use (so `DESCRIBE FUNCTION` and SQL calls work), but the Python Column API always routes through the `pandas_udf` path.
 - **Grouped-aggregate pandas UDFs** (merges and combineavg): `rst_merge_agg`, `rst_combineavg_agg`, and similar grouped aggregators use `@pandas_udf(BinaryType())` — Spark 4 auto-detects the grouped-aggregate eval type. Each receives all tiles in a group as a Pandas Series and merges them in one Python call.
 - **Streaming UDTFs** (fan-out): `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`, `rst_maketiles`, `rst_retile`, `rst_xyzpyramid` use `@udtf` to yield one output row per chip or tile without materializing the full output in memory first.
 

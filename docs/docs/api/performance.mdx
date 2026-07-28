@@ -11,7 +11,7 @@ The **lightweight (pyrx / pyvx) tier** is a pure-Python/PySpark implementation t
 
 The lightweight tier is seeing **increasing investment** precisely because of that reach. Functions that run on Serverless and ARM expand the audience that can use GeoBrix without infrastructure friction; that is the direction the product is moving, and the lightweight tier is how GeoBrix gets there now.
 
-This page explains *how* the lightweight tier reaches functional and performance parity with the heavyweight JVM tier. The key is choosing the right Spark execution shape per function: fan-out generators use streaming UDTFs, aggregators use grouped-aggregate Arrow UDFs, and per-tile transforms use Spark Python (per-row) UDFs. Underneath each shape, vectorized Python libraries (NumPy, SciPy, rasterio, rio-tiler, xarray-spatial, shapely, mapbox-vector-tile) do the compute.
+This page explains *how* the lightweight tier reaches functional and performance parity with the heavyweight JVM tier. The key is choosing the right Spark execution shape per function: fan-out generators use streaming UDTFs, aggregators use grouped-aggregate Arrow UDFs, and per-tile transforms use Arrow scalar UDFs. Underneath each shape, vectorized Python libraries (NumPy, SciPy, rasterio, rio-tiler, xarray-spatial, shapely, mapbox-vector-tile) do the compute.
 
 For measured timing and output-consistency numbers, see **[Benchmarking](./benchmarking)**.
 

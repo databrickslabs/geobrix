@@ -120,8 +120,14 @@ Also note the single-file memory tradeoff (driver-funneled; scatter is safer at 
 - `python/geobrix/test/ds/test_netcdf_writer.py` — the tests above.
 - `docs/docs/readers/netcdf.mdx` — `singleFile` on both modes + the `rst_merge_agg` mosaic pointer +
   memory tradeoff; `docs/docs/beta-release-notes.mdx` — the new option.
-- Bench: OPTIONAL — the writer bench could gain a `singleFile` variant later; not required this cycle
-  (the parts-mode writer bench already exists). Note it as a possible follow-up.
+- Bench: add a `singleFile` variant to the writer bench. The existing `_CELL_NETCDF_WRITER` legs
+  (raster + vector) run parts-mode (default); add a parallel measured leg per mode with
+  `options={... "singleFile": "true"}` so the results table carries BOTH shapes (parts vs single) for
+  raster and vector — a real parts-vs-single throughput comparison. Reuse `run_format_write` (the
+  single `options` dict flows `singleFile` to the writer). Distinguish the rows via `fn`/`note`
+  (e.g. append a `-single` suffix or a note tag) so parts and single don't collide in the store.
+  Guard/skip-clean + row-count>0 as the other legs. Reflect in `benchmarking.mdx`
+  (`bench-changes-update-docs`).
 
 ## 6. Risks
 

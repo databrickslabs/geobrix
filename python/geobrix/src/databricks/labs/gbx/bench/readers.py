@@ -403,9 +403,23 @@ def run_format_write(
     Reads the input directory once via ``read_fmt`` (same reader for both tiers so
     write cost is isolated), caches it, then times repeated ``write.format(write_fmt)``
     calls. Returns a single ResultRow (mode="spark-path", category="writer").
+
+    **Merge shape (post-hoc directory merge).** When ``options["merge"] == "true"``,
+    the timed write is a *post-hoc* merge: it folds the ``.nc`` files ALREADY on disk
+    in ``out_path`` into one, WITHOUT re-running the DataFrame. That needs the output
+    dir pre-populated with parts, so this function first does a ONE-SHOT UNTIMED setup
+    write of the read ``df`` to ``out_path`` in plain PARTS mode (a copy of ``options``
+    with ``merge``/``singleFile``/``keepParts`` stripped). The timed ``_job`` then runs
+    the caller's ``options`` verbatim (with ``merge=true``); the caller passes
+    ``keepParts=true`` so the parts survive across warmup+measured iterations (a merge
+    that deleted parts on iteration 1 would find an empty dir on iteration 2 and error).
     """
     env = capture_env(where)
     _note_suffix = f" [{label}]" if label else ""
+    # Merge shape is inferred from the options dict (no new positional param, so all
+    # existing callers are unchanged): merge=true means the timed write folds on-disk
+    # parts and must be seeded with a one-shot untimed parts write before timing.
+    _merge_mode = bool(options) and str(options.get("merge", "")).lower() == "true"
 
     # Register light DS (always needed for raster_gbx reader/writer).
     from databricks.labs.gbx.ds.register import register
@@ -470,6 +484,51 @@ def run_format_write(
             output_fingerprint="",
             **env,
         )
+
+    # Merge shape: seed the output dir with PARTS once (untimed) so the timed merge
+    # has files to fold. Strip the merge/singleFile/keepParts flags so this setup
+    # write is a plain parts write; overwrite so a stale dir can't taint the merge.
+    if _merge_mode:
+        try:
+            _setup_opts = {
+                k: v
+                for k, v in options.items()
+                if k not in ("merge", "singleFile", "keepParts")
+            }
+            sw = df.write.format(write_fmt).mode("overwrite")
+            for k, v in _setup_opts.items():
+                sw = sw.option(k, str(v))
+            sw.save(out_path)
+        except Exception as e:  # noqa: BLE001
+            return ResultRow(
+                run_id=run_id,
+                api=write_api,
+                fn="raster_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                iter_total_wall_clock_s=0.0,
+                avg_wall_clock_s=0.0,
+                per_tile_avg_s=0.0,
+                per_tile_avg_ms=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="error",
+                note=f"merge setup-parts write failed: {str(e)[-400:]}",
+                output_fingerprint="",
+                **env,
+            )
 
     def _job():
         w = df.write.format(write_fmt).mode(mode)

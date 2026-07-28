@@ -778,17 +778,28 @@ else:
 _CELL_NETCDF_WRITER = """# NetCDF WRITER benchmark: light netcdf_gbx write throughput (raster + vector legs, on-cluster)
 # LIGHT-ONLY: there is NO heavy NetCDF writer (netcdf_gdal is read-only here), so this is a
 # throughput measurement of the light netcdf_gbx writer, NOT a heavy-vs-light comparison -- the
-# same shape as the S5P vector reader leg. Reuses the reader-cycle corpora:
-#   RASTER leg  -> read {CORPUS}/netcdf       (regular grids) -> write {CORPUS}/netcdf-out
-#   VECTOR leg  -> read {CORPUS}/netcdf-swath (S5P swaths)    -> write {CORPUS}/netcdf-swath-out
+# same shape as the S5P vector reader leg. Each mode runs THREE write shapes:
+#   parts  (default): one .nc per row (raster) / per partition (vector)
+#   single (singleFile=true): two-phase scratch+driver-merge into ONE .nc
+#   merge  (merge=true keepParts=true): POST-HOC fold of the .nc parts ALREADY on disk
+# Corpora:
+#   RASTER leg  -> read {CORPUS}/netcdf-distinct (DISTINCT-variable SINGLE-grid corpus)
+#                  -> write {CORPUS}/netcdf-out{,-single,-merge}
+#   VECTOR leg  -> read {CORPUS}/netcdf-swath    (S5P swaths)
+#                  -> write {CORPUS}/netcdf-swath-out{,-single,-merge}
+# The RASTER corpus is distinct-variable single-grid on purpose: single+merge REQUIRE
+# distinct data vars sharing one grid (they correctly ERROR on duplicate variable names),
+# so the 33-same-variable NASA-NEX raster reader corpus would make single+merge fail by
+# design. All three raster legs read the SAME distinct-var input for a fair comparison.
 # run_format_write reads the input once via read_fmt, caches it, then times the write.format(
 # write_fmt).save(...) call. It applies the SAME `options` dict to BOTH the reader and the writer,
 # so mode=vector on the vector leg dispatches the vector reader (point rows) AND the vector writer.
+# For the merge legs it also does a ONE-SHOT untimed parts write to seed the dir (see readers.py).
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
 _ncw_rows = []
-# --- RASTER writer leg ---
-_ncw_in = f"{CORPUS}/netcdf"
+# --- RASTER writer leg (distinct-variable single-grid corpus: parts/single/merge comparison) ---
+_ncw_in = f"{CORPUS}/netcdf-distinct"
 _ncw_files = _rd.list_corpus_files(_ncw_in, r".*\\.nc$") if _os.path.isdir(_ncw_in) else []
 if not LIGHTWEIGHT:
     # Light-only leg: there is no heavy netcdf writer, so nothing to run when --heavyweight-only.
@@ -816,6 +827,14 @@ else:
                                write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
                                mode="overwrite", options={"filterRegex": r".*\\.nc$", "singleFile": "true"},
                                label="singleFile", where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # merge variant: POST-HOC fold of the parts already on disk (distinct out-dir + label).
+    # keepParts=true is REQUIRED so parts survive across warmup+measured iters (run_format_write
+    # seeds the dir with a one-shot untimed parts write before timing the merge).
+    _wr = _rd.run_format_write(spark, _ncw_in, f"{CORPUS}/netcdf-out-merge", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"filterRegex": r".*\\.nc$", "merge": "true", "keepParts": "true"},
+                               label="merge", where="cluster")
     _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
 # --- VECTOR (swath) writer leg: mode=vector on read AND write ---
 _ncw_sw_in = f"{CORPUS}/netcdf-swath"
@@ -850,6 +869,15 @@ else:
                                                           "variables": "methane_mixing_ratio_bias_corrected,qa_value",
                                                           "filterRegex": r".*\\.nc$", "singleFile": "true"},
                                label="singleFile", where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # merge variant: POST-HOC fold of the CF-DSG .nc parts already on disk (distinct out-dir).
+    # keepParts=true keeps parts across warmup+measured iters; run_format_write seeds the dir first.
+    _wr = _rd.run_format_write(spark, _ncw_sw_in, f"{CORPUS}/netcdf-swath-out-merge", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"mode": "vector", "group": "/PRODUCT",
+                                                          "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                                          "filterRegex": r".*\\.nc$", "merge": "true", "keepParts": "true"},
+                               label="merge", where="cluster")
     _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
 if _ncw_rows:
     _df = spark.sql(

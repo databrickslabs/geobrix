@@ -253,11 +253,21 @@ tier. The writer benchmark has **two legs** matching the two write modes:
   Spark partition is written as one CF DSG `.nc` file. The leg measures whole-job
   wall-clock. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
 
-Each mode runs **twice** — once writing one `.nc` file per row/partition (the default
-"parts" shape) and once with `singleFile=true`, which merges the fragments into a single
-`.nc` on the driver. The two shapes are recorded as distinct rows (the singleFile leg is
-tagged `[singleFile]` in its note and written to a separate output directory) so a run
-carries a real parts-vs-single throughput comparison.
+Each mode runs **three times**, once per write shape:
+
+- **parts** (default) — one `.nc` file per row (raster) or per partition (vector).
+- **singleFile** (`singleFile=true`) — the partition fragments are merged into a single
+  `.nc` on the driver via a two-phase scratch-then-merge.
+- **merge** (`merge=true keepParts=true`) — a *post-hoc* fold of the `.nc` parts already
+  on disk into one file, without re-running the DataFrame; the bench seeds the output
+  directory with a one-shot parts write before timing the merge, and `keepParts=true`
+  retains the parts so the merge stays idempotent across warmup and measured iterations.
+
+The three shapes are recorded as distinct rows (each leg is tagged in its note —
+`[singleFile]` and `[merge]` — and written to a separate output directory) so a run
+carries a real parts-vs-single-vs-merge throughput comparison. The raster legs read a
+distinct-variable single-grid corpus so the singleFile and merge shapes can fold several
+data variables that share one grid into one CF `.nc`.
 
 Each leg is staged from the same corpora as the corresponding reader leg (see
 [NetCDF readers](#netcdf-readers) above). If a corpus pool is absent, that writer leg

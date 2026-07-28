@@ -51,8 +51,9 @@ def test_benchmark_netcdf_writer_cell_present_and_wired():
     # Same format both sides of the write (light netcdf_gbx read + write).
     assert 'read_fmt="netcdf_gbx"' in src
     assert 'write_fmt="netcdf_gbx"' in src
-    # Both legs' inputs + outputs.
-    assert 'f"{CORPUS}/netcdf"' in src
+    # Both legs' inputs + outputs. RASTER now reads a distinct-variable single-grid
+    # corpus (so parts/single/merge share one input and single+merge can fold vars).
+    assert 'f"{CORPUS}/netcdf-distinct"' in src
     assert 'f"{CORPUS}/netcdf-out"' in src
     assert 'f"{CORPUS}/netcdf-swath"' in src
     assert 'f"{CORPUS}/netcdf-swath-out"' in src
@@ -78,6 +79,27 @@ def test_netcdf_writer_emits_singlefile_legs():
     # Rows are distinguishable in the store via a label tag on both single legs.
     assert 'label="singleFile"' in src
     assert src.count('label="singleFile"') == 2
+
+
+def test_netcdf_writer_emits_merge_legs():
+    """Each mode (raster, vector) also runs a THIRD post-hoc merge measured leg."""
+    nb = cl.build_bench_notebook(_cfg(benchmark_netcdf_writer=True))
+    src = _src(nb)
+    # merge write options flow to the writer on the merge legs; keepParts=true is
+    # REQUIRED so the on-disk parts survive across warmup+measured iterations.
+    assert '"merge": "true"' in src or '"merge":"true"' in src
+    assert '"keepParts": "true"' in src or '"keepParts":"true"' in src
+    # Distinct out-dirs so mode=overwrite doesn't clobber the parts/single dirs.
+    assert 'f"{CORPUS}/netcdf-out-merge"' in src
+    assert 'f"{CORPUS}/netcdf-swath-out-merge"' in src
+    # Rows are distinguishable in the store via a "merge" label on both merge legs.
+    assert 'label="merge"' in src
+    assert src.count('label="merge"') == 2
+    # RASTER legs read a distinct-variable single-grid corpus (parts/single/merge
+    # need distinct vars sharing one grid; the same-variable NASA-NEX corpus would
+    # make single+merge fail by design). Repointed from {CORPUS}/netcdf.
+    assert 'f"{CORPUS}/netcdf-distinct"' in src
+    assert 'f"{CORPUS}/netcdf"' not in src
 
 
 def test_netcdf_writer_light_only_no_heavy_leg():

@@ -673,3 +673,338 @@ def test_raster_write_singlefile_duplicate_var_errors(spark, tmp_path):
             .save(str(out))
         )
     assert "rst_merge_agg" in str(e.value)
+
+
+def test_raster_write_singlefile_non4326_and_fillvalue(spark, tmp_path):
+    """RASTER singleFile: two DISTINCT vars on the SAME non-4326 grid merge into
+    one .nc that carries the projected EPSG (crs.spatial_epsg) AND preserves the
+    per-var _FillValue from the source tile NoData."""
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    tas_bytes, tas_arr = _grid_tile_bytes(
+        4, 3, epsg=27700, origin=(530000.0, 180500.0), res=500.0
+    )
+    pr_bytes, pr_arr = _grid_tile_bytes(
+        4, 3, epsg=27700, origin=(530000.0, 180500.0), res=500.0
+    )
+    df = _raster_df(
+        spark,
+        [('NETCDF:"f":tas', tas_bytes), ('NETCDF:"f":pr', pr_bytes)],
+    ).coalesce(1)
+    out = tmp_path / "rout_single_27700"
+    (
+        df.write.format("netcdf_gbx")
+        .option("singleFile", "true")
+        .mode("overwrite")
+        .save(str(out))
+    )
+    ncs = [f for f in os.listdir(str(out)) if f.endswith(".nc")]
+    assert len(ncs) == 1, f"expected ONE .nc, got {ncs}"
+    with Dataset(os.path.join(str(out), ncs[0])) as nc:
+        assert "crs" in nc.variables
+        assert int(nc.variables["crs"].spatial_epsg) == 27700
+        assert "tas" in nc.variables and "pr" in nc.variables
+        # _FillValue must survive the singleFile merge for the data vars.
+        assert float(nc.variables["tas"].getncattr("_FillValue")) == pytest.approx(
+            -9999.0
+        )
+        assert float(nc.variables["pr"].getncattr("_FillValue")) == pytest.approx(
+            -9999.0
+        )
+        np.testing.assert_array_equal(np.array(nc.variables["tas"][:]), tas_arr)
+
+
+# ---------------------------------------------------------------------------
+# Vector singleFile nullable-attribute coverage
+# ---------------------------------------------------------------------------
+
+
+def test_vector_singlefile_nullable_attrs(spark, tmp_path):
+    """Nullable attribute columns round-trip through the singleFile merge path.
+
+    Same policy as parts-mode: float None -> NaN fill, int None -> CF sentinel.
+    """
+    import math
+    import os
+
+    import netCDF4
+    import numpy.ma as ma
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        DoubleType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("qa_int", IntegerType(), True),
+            StructField("ch4_dbl", DoubleType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    rows = [
+        (
+            10,
+            1.5,
+            bytes(shapely.to_wkb(shapely.Point(10.0, 50.0))),
+            "4326",
+            "EPSG:4326",
+        ),
+        (
+            None,
+            None,
+            bytes(shapely.to_wkb(shapely.Point(11.0, 51.0))),
+            "4326",
+            "EPSG:4326",
+        ),
+        (
+            20,
+            3.5,
+            bytes(shapely.to_wkb(shapely.Point(12.0, 52.0))),
+            "4326",
+            "EPSG:4326",
+        ),
+    ]
+    df = spark.createDataFrame(rows, schema).repartition(2)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    out = tmp_path / "vnull_single"
+    (
+        df.write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("singleFile", "true")
+        .mode("overwrite")
+        .save(str(out))
+    )
+    ncs = [f for f in os.listdir(str(out)) if f.endswith(".nc")]
+    assert len(ncs) == 1, f"expected ONE .nc, got {ncs}"
+    with netCDF4.Dataset(os.path.join(str(out), ncs[0]), "r") as nc:
+        assert nc.dimensions["obs"].size == 3
+        qa = nc.variables["qa_int"][:]
+        ch4 = nc.variables["ch4_dbl"][:]
+        int_fill = int(nc.variables["qa_int"]._FillValue)
+    # exactly one masked int + one masked float (the null row).
+    assert int(ma.count_masked(qa)) == 1
+    assert int_fill == netCDF4.default_fillvals["i4"]
+    good_ints = sorted(int(v) for v in qa.compressed())
+    assert good_ints == [10, 20]
+    good_floats = sorted(float(v) for v in ch4.compressed())
+    assert good_floats == [pytest.approx(1.5), pytest.approx(3.5)]
+    assert int(ma.count_masked(ch4)) == 1 or any(
+        math.isnan(float(x)) for x in np.array(ch4.data)
+    )
+
+
+# ---------------------------------------------------------------------------
+# merge / keepParts / fileName / partPrefix
+# ---------------------------------------------------------------------------
+
+
+def _vector_schema():
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    return StructType(
+        [
+            StructField("ch4", FloatType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+
+
+def _vector_points(n):
+    import shapely
+
+    return [
+        (
+            float(i),
+            bytes(shapely.to_wkb(shapely.Point(10.0 + i, 50.0 + i))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(n)
+    ]
+
+
+def test_vector_merge_dir_no_rerun(spark, tmp_path):
+    """Write parts-mode, then merge the dir passing a DIFFERENT DataFrame.
+
+    The merge must ignore the passed DataFrame (no re-run), fold the on-disk
+    parts into ONE .nc, and delete the parts (keepParts default false).
+    """
+    import os
+
+    import shapely
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    schema = _vector_schema()
+    df = spark.createDataFrame(_vector_points(6), schema).repartition(3)
+    outdir = tmp_path / "vmerge"
+    df.write.format("netcdf_gbx").option("mode", "vector").mode("overwrite").save(
+        str(outdir)
+    )
+    parts_before = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
+    assert len(parts_before) >= 1
+
+    # DIFFERENT DataFrame: a single sentinel point that must NOT appear on merge.
+    sentinel = [
+        (999.0, bytes(shapely.to_wkb(shapely.Point(99.0, 99.0))), "4326", "EPSG:4326")
+    ]
+    other = spark.createDataFrame(sentinel, schema)
+    (
+        other.write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("merge", "true")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    ncs = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
+    assert len(ncs) == 1, f"expected ONE merged .nc, got {ncs}"
+
+    re = (
+        spark.read.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("variables", "ch4")
+        .load(str(outdir))
+        .orderBy("ch4")
+        .collect()
+    )
+    vals = sorted(float(r["ch4"]) for r in re)
+    assert vals == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    assert 999.0 not in vals  # proves the DataFrame was ignored
+
+
+def test_merge_keepParts_true(spark, tmp_path):
+    """keepParts=true keeps BOTH the merged file and the source parts."""
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    schema = _vector_schema()
+    df = spark.createDataFrame(_vector_points(6), schema).repartition(3)
+    outdir = tmp_path / "vkeep"
+    df.write.format("netcdf_gbx").option("mode", "vector").mode("overwrite").save(
+        str(outdir)
+    )
+    parts_before = sorted(f for f in os.listdir(str(outdir)) if f.endswith(".nc"))
+    assert len(parts_before) >= 1
+
+    df2 = spark.createDataFrame(_vector_points(1), schema)
+    (
+        df2.write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("merge", "true")
+        .option("keepParts", "true")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    # merged output named after the dir (case 2 of _resolve_single_file_output).
+    assert (outdir / "vkeep.nc").exists()
+    parts_after = sorted(
+        f for f in os.listdir(str(outdir)) if f.endswith(".nc") and f != "vkeep.nc"
+    )
+    assert parts_after == parts_before  # parts survived
+
+
+def test_merge_failure_preserves_parts(spark, tmp_path):
+    """A failed merge (incompatible raster grids) leaves ALL parts intact and
+    writes no valid-looking partial output, even with keepParts=false."""
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    tas_bytes, _ = _grid_tile_bytes(4, 3)
+    pr_bytes, _ = _grid_tile_bytes(5, 6)  # incompatible grid
+    df = _raster_df(
+        spark,
+        [('NETCDF:"f":tas', tas_bytes), ('NETCDF:"f":pr', pr_bytes)],
+    )
+    outdir = tmp_path / "rmerge_fail"
+    df.write.format("netcdf_gbx").mode("overwrite").save(str(outdir))
+    parts_before = sorted(f for f in os.listdir(str(outdir)) if f.endswith(".nc"))
+    assert set(parts_before) == {"tas.nc", "pr.nc"}
+
+    dummy, _ = _grid_tile_bytes(4, 3)
+    df2 = _raster_df(spark, [('NETCDF:"f":ignored', dummy)])
+    with pytest.raises(Exception) as e:
+        (
+            df2.write.format("netcdf_gbx")
+            .option("merge", "true")
+            .mode("overwrite")
+            .save(str(outdir))
+        )
+    assert "rst_merge_agg" in str(e.value)
+    parts_after = sorted(f for f in os.listdir(str(outdir)) if f.endswith(".nc"))
+    assert parts_after == parts_before  # nothing lost
+    assert not (outdir / "rmerge_fail.nc").exists()  # no partial output
+
+
+def test_merge_empty_dir_errors(spark, tmp_path):
+    """merge on a directory with no .nc files raises a clear ValueError."""
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "empty_merge"
+    os.makedirs(str(outdir), exist_ok=True)
+    dummy, _ = _grid_tile_bytes(4, 3)
+    df = _raster_df(spark, [('NETCDF:"f":x', dummy)])
+    with pytest.raises(Exception) as e:
+        (
+            df.write.format("netcdf_gbx")
+            .option("merge", "true")
+            .mode("overwrite")
+            .save(str(outdir))
+        )
+    msg = str(e.value).lower()
+    assert "merge" in msg and "no .nc" in msg
+
+
+def test_partPrefix(spark, tmp_path):
+    """partPrefix controls the parts-mode filename stem (<partPrefix>-<uuid>.nc)."""
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    schema = _vector_schema()
+    df = spark.createDataFrame(_vector_points(3), schema).coalesce(1)
+    outdir = tmp_path / "vprefix"
+    (
+        df.write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("partPrefix", "myshard")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    ncs = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
+    assert len(ncs) == 1
+    assert ncs[0].startswith("myshard-"), ncs
+
+
+def test_fileName_singlefile(spark, tmp_path):
+    """fileName names the singleFile merged output."""
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    schema = _vector_schema()
+    df = spark.createDataFrame(_vector_points(5), schema).repartition(3)
+    outdir = tmp_path / "vfname"
+    (
+        df.write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("singleFile", "true")
+        .option("fileName", "combined")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    ncs = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
+    assert ncs == ["combined.nc"], ncs

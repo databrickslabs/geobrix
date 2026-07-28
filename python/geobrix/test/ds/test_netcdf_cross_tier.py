@@ -81,6 +81,12 @@ ABS_TOL = 1e-3
 # pins the light side so a CRS regression is caught even when heavy reports None.
 CORAL_LIGHT_EPSG = 4326
 
+# Row/column index of the synthetic _FillValue cell in the scaled-grid fixture
+# (lat=50.0, lon=10.0 -- the top-left pixel). Both tiers must decode it as NaN,
+# not as the decoded sentinel (-32768 * 0.01 + 250.0 = -77.68). Referenced by
+# _write_scaled_grid and test_netcdf_gdal_applies_scale_matches_light.
+_FILL_ROW, _FILL_COL = 0, 0
+
 # JAR lives in python/geobrix/lib/ (parents[2] == .../python/geobrix). NOTE:
 # test_reader_parity.py uses parents[3] here, which resolves to python/lib and
 # never matches -- so that precedent test always skips its JAR check. This one
@@ -193,7 +199,15 @@ def _write_scaled_grid(path):
         v = ds.createVariable("t", "i2", ("lat", "lon"), fill_value=-32768)
         v.scale_factor = 0.01
         v.add_offset = 250.0
-        v[:] = np.arange(20, dtype="i2").reshape(4, 5)
+        raw_t = np.arange(20, dtype="i2").reshape(4, 5)
+        # Set [_FILL_ROW, _FILL_COL] to the raw _FillValue so that both tiers
+        # must decode it as NaN (not as the numeric sentinel -77.68).
+        raw_t[_FILL_ROW, _FILL_COL] = np.int16(-32768)
+        # Use a masked array so netCDF4 writes the fill value into the raw bytes
+        # rather than storing -32768 as an ordinary packed integer.
+        mask = np.zeros((4, 5), dtype=bool)
+        mask[_FILL_ROW, _FILL_COL] = True
+        v[:] = np.ma.MaskedArray(raw_t, mask=mask)
         m = ds.createVariable("m", "i2", ("lat", "lon"), fill_value=-32768)
         m.scale_factor = 0.01
         m.add_offset = 250.0
@@ -264,6 +278,26 @@ def test_netcdf_gdal_applies_scale_matches_light(spark_with_jar, tmp_path):
                 "the heavy applyScale (unscale) path is wrong. Fix Task 2, do "
                 "NOT loosen here."
             ),
+        )
+
+    # _FillValue parity: variable 't' row 0, col 0 was written as the raw fill
+    # (-32768). Light decodes it as NaN (xarray mask_and_scale); heavy MUST also
+    # yield NaN (not the numeric sentinel -77.68 = -32768*0.01+250). The
+    # assert_allclose loop above already covers this via equal_nan=True, but we
+    # add an EXPLICIT assertion so the intent is unambiguous and a future
+    # tolerance change cannot silently soften this invariant.
+    if "t" in light and "t" in heavy:
+        light_fill_cell = float(light["t"][_FILL_ROW, _FILL_COL])
+        heavy_fill_cell = float(heavy["t"][_FILL_ROW, _FILL_COL])
+        assert np.isnan(light_fill_cell), (
+            f"light fill cell at ({_FILL_ROW},{_FILL_COL}) should be NaN "
+            f"but is {light_fill_cell!r} -- fixture or light reader regression."
+        )
+        assert np.isnan(heavy_fill_cell), (
+            f"heavy fill cell at ({_FILL_ROW},{_FILL_COL}) should be NaN "
+            f"but is {heavy_fill_cell!r} -- heavy applyScale path maps the raw "
+            "_FillValue to the decoded sentinel instead of NaN. "
+            "Fix heavy (WindowedExtract applyScale), do NOT soften here."
         )
 
 

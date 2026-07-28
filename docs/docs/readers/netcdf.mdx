@@ -232,6 +232,80 @@ CF fill: an integer `_FillValue` sentinel for integer columns, `NaN` for float c
 | `mode` | `"raster"` | `raster` (tile → CF grid) or `vector` (points → CF DSG). |
 | `nameCol` | — | Column whose value supplies the output filename stem per row. Absent → the stem is derived from the `source` column value. |
 | `varNameCol` | — | **Raster mode only.** Column whose value supplies the NetCDF variable name per row. Absent → the name is parsed from the `source` subdataset selector (the segment after the last `:`), or `"data"` if the source is unparseable. |
+| `singleFile` | `"false"` | Write **one** `.nc` instead of sharded parts. Vector → all points concatenated into one CF-DSG file; raster → distinct variables sharing one grid merged into one CF grid file. See [Single-file & directory merge](#single-file--directory-merge). |
+| `merge` | `"false"` | Post-hoc: merge the `.nc` files **already present** in the output directory into one file, without re-running the source DataFrame. Implies single output and wins over `singleFile` if both are set. |
+| `keepParts` | `"false"` | Only meaningful with `singleFile` / `merge`. When `false` (default), the source part files are deleted after the merged output is validated and durably written; when `true`, the parts are kept alongside the merged file. A failed or partial merge always leaves every part intact. |
+| `fileName` | — (derived) | Output filename stem for `singleFile` / `merge` output. Absent → derived. |
+| `partPrefix` | `"part"` | Filename stem for sharded parts-mode files (`<partPrefix>-<uuid>.nc`) — label your shards. |
+
+### Single-file & directory merge
+
+By default the writer shards output into one `.nc` per row (raster) or per Spark
+partition (vector) — safe at any scale. To consolidate into **one** `.nc`, opt in
+with `singleFile`, or merge already-written parts after the fact with `merge`.
+
+```python
+# One CF file for the whole DataFrame (vector: all points concatenated as CF-DSG;
+# raster: distinct variables sharing one grid merged into one CF grid).
+(df.write
+   .format("netcdf_gbx")
+   .option("singleFile", "true")
+   .option("fileName", "combined")     # optional output stem
+   .save("/Volumes/main/geobrix_samples/netcdf/output-single"))
+
+# Post-hoc: merge the .nc files ALREADY in a directory, without re-running df.
+(spark.range(1).write               # any DataFrame; the source rows are ignored
+   .format("netcdf_gbx")
+   .option("merge", "true")
+   .save("/Volumes/main/geobrix_samples/netcdf/output"))   # merges what's there
+```
+
+- **Vector `singleFile`** concatenates all points across partitions into one CF
+  Discrete Sampling Geometry file (`featureType="point"`).
+- **Raster `singleFile`** merges tiles carrying **distinct** variables that share
+  **one** grid into a single CF grid file: multiple data variables over shared
+  `lat`/`lon` coordinate variables, each with its own `_FillValue`, plus a shared
+  `crs` grid-mapping variable for non-4326 grids. It deliberately does **not**
+  mosaic many spatial-window tiles of one variable — if two tiles have incompatible
+  grids **or** the same variable name, the writer raises a clear error.
+- **`merge`** runs the same merge core on the `.nc` files already in the output
+  directory, so the "I already wrote sharded parts, now just combine them" case
+  needs no recompute. Merging an empty directory raises. `merge` implies single
+  output and wins over `singleFile` when both are set.
+- **`keepParts`** (default `false`) controls the source parts. After a successful,
+  validated, durably-written merge the parts are deleted (consolidate-in-place);
+  set `keepParts="true"` to keep them. Parts are **never** deleted until the merged
+  output is validated and verified on disk — a failed or partial merge always leaves
+  every part intact.
+
+:::note Mosaic window-tiles upstream, then write one file
+The raster `singleFile` / `merge` path merges **distinct variables on a shared
+grid**, not many spatial-window tiles of a single variable. To combine window-tiles
+of **one** variable into a single grid, mosaic them with `gbx_rst_merge_agg` (or
+`gbx_rst_merge`) **before** the writer:
+
+```sql
+-- Mosaic window-tiles of one variable upstream, THEN write one file.
+SELECT gbx_rst_merge_agg(tile) AS tile
+FROM tiles
+GROUP BY source
+```
+
+then write the mosaicked DataFrame:
+
+```python
+(mosaicked_df.write
+   .format("netcdf_gbx")
+   .option("singleFile", "true")
+   .save("/Volumes/main/geobrix_samples/netcdf/output-single"))
+```
+:::
+
+:::note Single-file memory tradeoff
+The single-file merge is funneled through the driver, so sharded parts (the default)
+are safer at very large scale. Reach for `singleFile` / `merge` when the combined
+output comfortably fits in driver memory; otherwise keep the default sharded parts.
+:::
 
 ### Round-trip
 

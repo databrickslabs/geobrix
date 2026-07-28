@@ -755,9 +755,13 @@ elif not LIGHTWEIGHT:
 else:
     print(f"NETCDF SWATH BENCH (light-only): {len(_swath_files)} .nc swath granule(s) under {_swath_dir}", flush=True)
     _swath_rows = []
+    # S5P L2 stores its fields under the /PRODUCT HDF5 group; without group+variables the reader
+    # opens the (empty) root group and yields zero rows. Match TropomiDownloader.read's options.
     _r = _rd.run_format_read(spark, _swath_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                              api="lightweight", fmt="netcdf_gbx",
-                             options={"mode": "vector", "filterRegex": r".*\\.nc$"}, where="cluster")
+                             options={"mode": "vector", "group": "/PRODUCT",
+                                      "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                      "filterRegex": r".*\\.nc$"}, where="cluster")
     _sink([_r]); lw.append(_r); _swath_rows.append(_r)
     if _swath_rows:
         _df = spark.sql(
@@ -824,9 +828,13 @@ elif not _ncw_sw_files:
     )
 else:
     print(f"NETCDF WRITER SWATH BENCH (light-only): {len(_ncw_sw_files)} .nc swath granule(s) under {_ncw_sw_in}", flush=True)
+    # S5P fields live under the /PRODUCT group; pass group+variables so the read yields point rows
+    # (the single options dict flows to BOTH the read and the vector write). Match TropomiDownloader.
     _wr = _rd.run_format_write(spark, _ncw_sw_in, f"{CORPUS}/netcdf-swath-out", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
                                write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
-                               mode="overwrite", options={"mode": "vector", "filterRegex": r".*\\.nc$"}, where="cluster")
+                               mode="overwrite", options={"mode": "vector", "group": "/PRODUCT",
+                                                          "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                                          "filterRegex": r".*\\.nc$"}, where="cluster")
     _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
 if _ncw_rows:
     _df = spark.sql(

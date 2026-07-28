@@ -41,20 +41,28 @@ vector_keep = {VECTOR_KEEP}
 out = {{}}
 
 # --- RASTER: NASA-NEX regular grids (one tas item per model, historical 2014) ---
+# The raster dir MUST hold NASA-NEX regular grids, not S5P swaths. A prior run left
+# S5P_* swath files here (which read as 0 rows in raster mode), and a bare file-count
+# guard then skipped the real NASA-NEX download. Purge any non-NASA-NEX (.e.g S5P_*)
+# files first, and only count NASA-NEX grids toward the "already staged" guard.
 os.makedirs(raster_dir, exist_ok=True)
-existing = sorted(f for f in os.listdir(raster_dir) if f.endswith(".nc"))
-if len(existing) >= raster_keep:
-    out["raster_staged"] = "already present: %d" % len(existing)
+for f in list(os.listdir(raster_dir)):
+    if f.endswith(".nc") and f.startswith("S5P_"):
+        os.remove(os.path.join(raster_dir, f))
+grids = sorted(f for f in os.listdir(raster_dir) if f.endswith(".nc") and not f.startswith("S5P_"))
+if len(grids) >= raster_keep:
+    out["raster_staged"] = "already present: %d" % len(grids)
 else:
     try:
         _rd.stage_nasanex_corpus(spark, raster_dir, temporal="2014-01-01/2014-01-02", variables=("tas",))
     except Exception as e:
         out["raster_stage_err"] = f"{{type(e).__name__}}: {{e}}"
-    files = sorted(f for f in os.listdir(raster_dir) if f.endswith(".nc"))
+    files = sorted(f for f in os.listdir(raster_dir) if f.endswith(".nc") and not f.startswith("S5P_"))
     # trim to raster_keep for a bounded bench read
     for f in files[raster_keep:]:
         os.remove(os.path.join(raster_dir, f))
     out["raster_staged"] = len([f for f in os.listdir(raster_dir) if f.endswith(".nc")])
+out["raster_sample_names"] = sorted(f for f in os.listdir(raster_dir) if f.endswith(".nc"))[:3]
 
 # --- VECTOR: S5P swath subset ---
 os.makedirs(swath_dir, exist_ok=True)

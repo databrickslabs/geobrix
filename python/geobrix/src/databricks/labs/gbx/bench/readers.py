@@ -304,6 +304,12 @@ def run_format_read(
         _note = (
             f"{fmt} -> {ingest_table}" if ingest_table else f"{fmt} over {_src_name}"
         )
+        # A 0-row read is not a valid throughput measurement (wrong corpus/options: e.g.
+        # swaths in a raster dir, or a missing group/variables option). Mark it so it is
+        # visible in the results table instead of masquerading as a clean "ok".
+        _status = "ok" if actual_rows > 0 else "empty"
+        if actual_rows == 0:
+            _note = f"{_note} -- READ 0 ROWS (check corpus/options)"
         return ResultRow(
             run_id=run_id,
             api=api,
@@ -330,7 +336,7 @@ def run_format_read(
                 (actual_rows / (ms / 1000.0)) if (ms and actual_rows) else 0.0
             ),
             peak_rss_mb=peak_rss_mb(),
-            status="ok",
+            status=_status,
             note=_note,
             output_fingerprint="",
             **env,
@@ -418,6 +424,15 @@ def run_format_write(
         df = reader.load(input_path)
         df = df.cache()
         n = int(df.count())
+        if n == 0:
+            # A 0-row read is never a valid write measurement -- fail loud rather than
+            # timing an empty write and reporting a meaningless "ok" (the input corpus
+            # or read options are wrong: e.g. swaths in a raster dir, or a missing
+            # group/variables option). Raising routes to the error ResultRow below.
+            raise ValueError(
+                f"{read_fmt} read of {input_path} returned 0 rows "
+                f"(options={options}); nothing to write -- check the corpus/options."
+            )
     except Exception as e:  # noqa: BLE001
         return ResultRow(
             run_id=run_id,

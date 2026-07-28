@@ -177,6 +177,51 @@ git commit -F /tmp/sf-task2.txt   # "feat(netcdf): raster writer singleFile merg
 
 ---
 
+### Task 2b: `merge` + `keepParts` + `fileName` + `partPrefix`
+
+Add the post-hoc directory-merge option and the filename controls, refactoring the singleFile merge cores into helpers reused by both `singleFile` (fragments) and `merge` (existing `.nc` files).
+
+**Files:**
+- Modify: `python/geobrix/src/databricks/labs/gbx/ds/_write_netcdf.py` (both writers)
+- Test: `python/geobrix/test/ds/test_netcdf_writer.py`
+
+**Interfaces:**
+- Consumes: the vector-concat and raster-grid-merge cores from Tasks 1–2 (factor them into module-level helpers taking an iterable of "point-batch" / "grid-fragment" inputs, so both a list of `_scratch` feather fragments AND a list of on-disk `.nc` files feed the same merge). `_resolve_single_file_output(path, fileName, "nc")`.
+- Produces: `merge` (default false), `keepParts` (default false), `fileName` (single/merge output stem), `partPrefix` (default "part") honored in both writers.
+
+- [ ] **Step 1: Write failing tests**
+
+Add to `test_netcdf_writer.py` (vector + raster):
+- `test_vector_merge_dir_no_rerun`: write parts-mode to a dir; then `.write.format("netcdf_gbx").option("mode","vector").option("merge","true").save(<same dir>)` passing a DIFFERENT tiny/empty DataFrame → assert ONE merged `.nc`, parts gone (default), re-read == the ORIGINAL parts' data (proves the DataFrame was ignored, the dir was merged).
+- `test_merge_keepParts_true`: same but `keepParts=true` → merged file AND parts present.
+- `test_merge_failure_preserves_parts`: force a merge failure with `keepParts=false` (e.g. raster incompatible grids in the dir, or monkeypatch the validate step) → assert parts STILL present + no valid-looking partial output.
+- `test_merge_empty_dir_errors`: merge a dir with no `.nc` → clear `ValueError`.
+- `test_partPrefix` (parts-mode filenames `myshard-*.nc`) and `test_fileName_singlefile` (singleFile output named as given).
+
+- [ ] **Step 2: Run to verify failure**
+
+Run: `bash scripts/commands/gbx-test-python.sh --path python/geobrix/test/ds/test_netcdf_writer.py -k "merge or partPrefix or fileName" --log nc-merge.log`
+Expected: FAIL — options unrecognized.
+
+- [ ] **Step 3: Implement**
+
+- Refactor Tasks 1–2 singleFile commit bodies into shared helpers: `_merge_vector_points(inputs, out_temp, ...)` and `_merge_raster_grids(inputs, out_temp, ...)` where `inputs` is an iterable yielding point-batches / grid-fragments regardless of source (feather fragment OR `.nc` file). singleFile passes `_scratch` fragments; `merge` passes `glob(<path>/*.nc)` (excluding `.gbx_scratch` + the resolved output name).
+- `merge` in `write(iterator)`: return immediately WITHOUT iterating (no re-run); empty commit message.
+- `merge` in `commit`: glob the dir; empty → `ValueError`. Merge via the shared core → driver-local temp. **DATA-SAFETY ORDER:** validate temp (reopen + element-count == summed inputs) → `shutil.copyfile` to target → verify target size == temp → only then, if not `keepParts`, delete the part files. Any failure → raise, leave parts intact.
+- Constructor: when `merge=true`, DO NOT run the overwrite glob-delete.
+- `fileName` → `_resolve_single_file_output`; `partPrefix` → parts-mode stem (`<partPrefix>-<uuid>.nc`, default "part").
+
+- [ ] **Step 4: Run to green + Serverless grep + lint + commit**
+
+Run the full `test_netcdf_writer.py` (all singleFile + merge + parts tests green). Serverless grep. Lint.
+```bash
+git add python/geobrix/src/databricks/labs/gbx/ds/_write_netcdf.py \
+        python/geobrix/test/ds/test_netcdf_writer.py
+git commit -F /tmp/sf-task2b.txt   # "feat(netcdf): writer merge/keepParts/fileName/partPrefix (data-safe dir merge)"
+```
+
+---
+
 ### Task 3: Writer-bench `singleFile` variant
 
 **Files:**

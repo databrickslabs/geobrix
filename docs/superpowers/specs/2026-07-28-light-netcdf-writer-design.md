@@ -118,6 +118,53 @@ one encode per partition. This matches every existing light writer and is the pe
 - **Serverless-safety guard:** grep the new module for `spark.conf.set`/`_jvm`/`.rdd` (must be absent).
 - Tests live in `test/ds/test_netcdf_writer.py` (existing light test dir — no CI plumbing change).
 
+## 4a. Benchmarking
+
+Two benchmark obligations this cycle — the writer's own throughput, and closing the reader
+parity-claim gap the final review flagged.
+
+### 4a.1 Writer throughput bench (netcdf_gbx writer)
+
+Reuse the existing writer-bench harness `readers.run_format_write(spark, input_path, out_path,
+..., read_fmt=..., write_fmt=..., mode="overwrite")` — it reads the input once (isolating read
+cost), caches, then times repeated `write.format(write_fmt).save()`. There is **no heavy NetCDF
+writer** (heavy has no `_gbx` writer), so this is a **light-only throughput** number (a
+scaling/perf measure), not a heavy-vs-light comparison — the same shape as the S5P vector reader
+leg.
+
+- **Raster writer leg:** `read_fmt="netcdf_gbx"` (raster) over the NASA-NEX regular-grid corpus
+  (`{CORPUS}/netcdf`, already staged for the reader bench) → `write_fmt="netcdf_gbx"` (raster,
+  mode="overwrite") to a `{CORPUS}/netcdf-out` scratch dir. Measures grid-tile → CF `.nc` encode
+  throughput.
+- **Vector writer leg:** `read_fmt="netcdf_gbx"` mode=vector over the S5P swath corpus
+  (`{CORPUS}/netcdf-swath`) → `write_fmt="netcdf_gbx"` mode=vector to `{CORPUS}/netcdf-swath-out`.
+  Measures points → CF-DSG encode throughput (one `.nc` per partition).
+- **Harness change:** add a `--benchmark-netcdf-writer` / `--netcdf-writer-only` cell to
+  `bench/cluster.py` (mirror the existing `_CELL_NETCDF` split), passing `mode`/`options` through
+  to `run_format_write`. Guard: skip cleanly if the input corpus is empty. Log granule/row counts
+  (no silent truncation). Per `bench-changes-update-docs`, reflect the writer bench in
+  `benchmarking.mdx`.
+- **Discipline** (`benchmarking-preflight-discipline`): bounded corpus, stamped worker count,
+  `summary.md` link at end (`bench-run-give-summary-link`).
+
+### 4a.2 Reader parity defense — verify "equivalent physical values" on a `_FillValue` cell
+
+The final whole-branch review flagged that the reader's cross-tier parity claim ("heavy and light
+produce equivalent physical values on a scaled grid") is only tested on **valid** cells — the
+scaled-grid fixture has no cell equal to `_FillValue`, and on fill cells light masks to NaN while
+heavy (`-unscale`) decodes the raw fill to a number. During the writer-bench cluster runs (cluster
+up, heavy JAR loaded), **extend the reader cross-tier parity test with a `_FillValue`-bearing
+cell** and assert heavy and light agree on fill handling:
+
+- Add a fill cell to the scaled-grid fixture (`_write_scaled_grid` in `test_netcdf_cross_tier.py`):
+  set at least one pixel to the raw `_FillValue`.
+- Assert cross-tier fill agreement. **If they diverge** (light → NaN, heavy → decoded sentinel),
+  that is a **real heavy-reader fix**, not a doc softening: make `netcdf_gdal`'s applyScale path map
+  the unscaled `_FillValue` to NaN nodata (so masked cells stay masked, matching light's
+  `mask_and_scale`). Only if the fix is out of scope do we fall back to scoping the doc claim — but
+  the intent is to DEFEND the claim by making it true, verified on-cluster.
+- This runs on the same cluster as the writer bench (efficient use of the warm cluster + JAR).
+
 ## 5. Surfaces to update
 
 - Create `python/geobrix/src/databricks/labs/gbx/ds/_write_netcdf.py` (both writers + helpers).
@@ -126,6 +173,12 @@ one encode per partition. This matches every existing light writer and is the pe
 - Docs: `docs/docs/readers/netcdf.mdx` (or a writers page) — document the `netcdf_gbx` writer, both
   modes, options (`mode`, `nameCol`, `varNameCol`), the round-trip, and the vector one-file-per-
   partition shape. Release-note the new writer in `docs/docs/beta-release-notes.mdx`.
+- Bench: `bench/cluster.py` (+ `bench/readers.py` if a helper is needed) — a
+  `--benchmark-netcdf-writer` / `--netcdf-writer-only` cell wiring `run_format_write` for the raster
+  and vector writer legs (§4a.1); `docs/docs/api/benchmarking.mdx` documents it.
+- Reader parity test: `python/geobrix/test/ds/test_netcdf_cross_tier.py` — add the `_FillValue`-cell
+  case (§4a.2); if the heavy fix is needed, `WindowedExtract`/the applyScale path maps unscaled fill
+  → NaN.
 - Wheel: rebuild + restage after the light package change (`whl-change-rebuild-and-stage`).
 
 ## 6. Risks

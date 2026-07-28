@@ -1,4 +1,4 @@
-"""Executes the 'Rasterio, Distributed' doc examples and asserts the rasterio side
+"""Executes the 'Rasterio Distributed' doc examples and asserts the rasterio side
 and the pyrx side AGREE on synthesized rasters (Docker; api suite).
 
 NDVI: np.allclose on the float32 output arrays.

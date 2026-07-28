@@ -61,6 +61,8 @@ The reverse — re-registering a few **heavy** functions over a lightweight sess
 
 ## Tradeoffs
 
+The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-distributed): see how much of the rasterio/GDAL surface is already distributed — and what stays heavyweight-only for now.
+
 | Aspect | Heavyweight (rasterx) | Lightweight (pyrx) |
 |---|---|---|
 | Install | Init script + JAR | Volume-staged wheel (`%pip` or cluster library) |
@@ -72,8 +74,6 @@ The reverse — re-registering a few **heavy** functions over a lightweight sess
 | SQL default arguments | Supported | Pass all arguments explicitly |
 | Function coverage | Full raster set | Full raster set — every `rst_*` function, including the BNG/quadbin raster-grid functions |
 | Readers / Writers | `gtiff_gdal`, `gdal`, OGR readers | `raster_gbx` / `gtiff_gbx` native Python DataSource V2 reader + writer (no JAR); vector OGR readers still heavy-only |
-
-The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-distributed): see how much of the rasterio/GDAL surface is already distributed — and what stays heavyweight-only for now.
 
 ## How to choose
 

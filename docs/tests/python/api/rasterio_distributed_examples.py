@@ -1,4 +1,4 @@
-"""'Rasterio, Distributed' page examples — single source of truth.
+"""'Rasterio Distributed' page examples — single source of truth.
 
 Code shown in docs/docs/api/rasterio-distributed.mdx is imported from here.
 Each flagship op is shown as a familiar single-node rasterio snippet next to the

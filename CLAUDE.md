@@ -4,7 +4,7 @@ This file is the entry point for any Claude (or Cursor) session in this repo. Us
 
 ## Project
 
-**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3 LTS or 18 LTS). Current version **0.4.2** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/beta-release-notes.mdx` for breaking changes.
+**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3 LTS or 18 LTS). Current version **0.4.3** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/beta-release-notes.mdx` for breaking changes.
 
 Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
 

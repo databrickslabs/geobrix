@@ -5,7 +5,7 @@ from databricks.labs.gbx.bench import cluster as cl
 
 def _cfg(**kw):
     base = dict(
-        wheel="/Volumes/c/s/v/geobrix-0.4.2-py3-none-any.whl",
+        wheel="/Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl",
         corpus="/Volumes/c/s/v/bench-corpus",
         out_dir="/Volumes/c/s/v/bench-out/run1",
         table="main.default.bench_results",

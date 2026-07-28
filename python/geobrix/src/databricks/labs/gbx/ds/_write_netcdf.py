@@ -87,12 +87,20 @@ def _publish_merged(tmp_path: str, target: str, expected_count: int, count_fn) -
         )
     # (3) copy temp -> target (FUSE-safe: content only, no chmod).
     shutil.copyfile(tmp_path, target)
-    # (4) verify target exists + byte size matches.
+    # (4) verify target exists + byte size matches. On any verify failure, remove
+    # the partial target (best-effort) BEFORE raising so a truncated FUSE copy
+    # does not leave a corrupt-but-valid-looking output; source parts stay intact
+    # because the caller only deletes them AFTER this returns cleanly.
     if not os.path.exists(target):
         raise ValueError(
             f"netcdf_gbx merge: target {target} missing after copy; parts intact."
         )
     if os.path.getsize(target) != os.path.getsize(tmp_path):
+        if os.path.exists(target):
+            try:
+                os.remove(target)
+            except OSError:
+                pass
         raise ValueError(
             f"netcdf_gbx merge: target {target} size mismatch after copy; parts intact."
         )
@@ -395,19 +403,25 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
         from databricks.labs.gbx.ds._listing import to_local_path
         from databricks.labs.gbx.ds.writer import assert_write_schema
 
-        assert_write_schema(schema)  # exact (source, tile)
+        self.merge = str(options.get("merge", "false")).lower() == "true"
+        # merge IGNORES the DataFrame rows (it folds the .nc files already on
+        # disk), so a non-conforming DataFrame is legal on the merge path — skip
+        # the (source, tile) schema gate there. See docs/readers/netcdf.mdx.
+        if not self.merge:
+            assert_write_schema(schema)  # exact (source, tile)
         self.path = to_local_path(options.get("path"))
         self.overwrite = overwrite
         self.name_col = options.get("nameCol")
         self.var_name_col = options.get("varNameCol")
         self.single_file = str(options.get("singleFile", "false")).lower() == "true"
-        self.merge = str(options.get("merge", "false")).lower() == "true"
         self.keep_parts = str(options.get("keepParts", "false")).lower() == "true"
         self.file_name = options.get("fileName")
         self.part_prefix = options.get("partPrefix") or "part"
         # merge wins over singleFile if both are set.
         if self.merge:
             self.single_file = False
+        # NOTE: self.merge is parsed FIRST (above) so the schema gate can be
+        # skipped on the merge path.
         # Use self.path (scheme stripped), NOT the raw path: a dbfs:/file:-qualified
         # path makes os.path.isdir(path) False, silently skipping overwrite cleanup.
         # In merge mode the directory's .nc files ARE the inputs, so the overwrite
@@ -668,8 +682,12 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
     def __init__(self, options: dict, schema: StructType, overwrite: bool):
         from databricks.labs.gbx.ds._listing import to_local_path
 
+        self.merge = str(options.get("merge", "false")).lower() == "true"
         names = [f.name for f in schema.fields]
-        if "geom_0" not in names or "geom_0_srid" not in names:
+        # merge IGNORES the DataFrame rows (it folds the CF-DSG .nc files already
+        # on disk), so a non-conforming DataFrame is legal on the merge path —
+        # skip the geom_0 schema gate there. See docs/readers/netcdf.mdx.
+        if not self.merge and ("geom_0" not in names or "geom_0_srid" not in names):
             raise ValueError(
                 "netcdf_gbx vector writer requires the vector schema "
                 "(attributes + geom_0 + geom_0_srid[+ geom_0_srid_proj]); got "
@@ -679,7 +697,6 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         self.overwrite = overwrite
         self.name_col = options.get("nameCol")
         self.single_file = str(options.get("singleFile", "false")).lower() == "true"
-        self.merge = str(options.get("merge", "false")).lower() == "true"
         self.keep_parts = str(options.get("keepParts", "false")).lower() == "true"
         self.file_name = options.get("fileName")
         self.part_prefix = options.get("partPrefix") or "part"

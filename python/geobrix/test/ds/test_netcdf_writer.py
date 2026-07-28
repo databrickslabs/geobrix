@@ -1008,3 +1008,137 @@ def test_fileName_singlefile(spark, tmp_path):
     )
     ncs = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
     assert ncs == ["combined.nc"], ncs
+
+
+# ---------------------------------------------------------------------------
+# merge accepts ANY DataFrame (schema validation must not run on the merge path)
+# ---------------------------------------------------------------------------
+
+
+def test_raster_merge_accepts_nonconforming_df(spark, tmp_path):
+    """merge=true must accept a DataFrame that is NOT the (source, tile) schema.
+
+    Locks the docs claim (`spark.range(1)...merge=true` — "any DataFrame; the
+    source rows are ignored"). The merge folds the on-disk .nc parts; it never
+    reads the DataFrame columns, so schema validation must be skipped.
+    """
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    # Two DISTINCT vars on the SAME grid -> parts that CAN merge.
+    tas_bytes, tas_arr = _grid_tile_bytes(4, 3)
+    pr_bytes, pr_arr = _grid_tile_bytes(4, 3)
+    df = _raster_df(
+        spark,
+        [('NETCDF:"f":tas', tas_bytes), ('NETCDF:"f":pr', pr_bytes)],
+    )
+    outdir = tmp_path / "rmerge_nonconf"
+    df.write.format("netcdf_gbx").mode("overwrite").save(str(outdir))
+    parts_before = sorted(f for f in os.listdir(str(outdir)) if f.endswith(".nc"))
+    assert set(parts_before) == {"tas.nc", "pr.nc"}
+
+    # spark.range(1) has only an 'id' column: NOT the raster (source, tile) schema.
+    (
+        spark.range(1)
+        .write.format("netcdf_gbx")
+        .option("merge", "true")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    ncs = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
+    assert len(ncs) == 1, f"expected ONE merged .nc, got {ncs}"
+    with Dataset(os.path.join(str(outdir), ncs[0])) as nc:
+        assert "tas" in nc.variables and "pr" in nc.variables
+        np.testing.assert_array_equal(np.array(nc.variables["tas"][:]), tas_arr)
+        np.testing.assert_array_equal(np.array(nc.variables["pr"][:]), pr_arr)
+
+
+def test_vector_merge_accepts_nonconforming_df(spark, tmp_path):
+    """Vector merge=true must accept a DataFrame missing the geom_0 columns.
+
+    The merge reads the on-disk CF-DSG .nc parts, not the DataFrame, so the
+    geom_0/geom_0_srid schema check must be skipped on the merge path.
+    """
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    schema = _vector_schema()
+    df = spark.createDataFrame(_vector_points(6), schema).repartition(3)
+    outdir = tmp_path / "vmerge_nonconf"
+    df.write.format("netcdf_gbx").option("mode", "vector").mode("overwrite").save(
+        str(outdir)
+    )
+    parts_before = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
+    assert len(parts_before) >= 1
+
+    # spark.range(1): single 'id' column, no geom_0 -> non-conforming for vector.
+    (
+        spark.range(1)
+        .write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("merge", "true")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    ncs = [f for f in os.listdir(str(outdir)) if f.endswith(".nc")]
+    assert len(ncs) == 1, f"expected ONE merged .nc, got {ncs}"
+    re = (
+        spark.read.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("variables", "ch4")
+        .load(str(outdir))
+        .orderBy("ch4")
+        .collect()
+    )
+    vals = sorted(float(r["ch4"]) for r in re)
+    assert vals == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+
+
+def test_publish_merged_verify_failure_removes_partial_target(tmp_path, monkeypatch):
+    """A post-copy verify failure leaves NO partial target .nc on disk.
+
+    Focused unit test on ``_publish_merged`` (the writer's ``commit`` runs in a
+    separate Spark Python worker, so an in-process monkeypatch cannot reach it).
+    Force ``shutil.copyfile`` to truncate the copied target so the byte-size
+    verify fails AFTER the copy, then assert the corrupt target is removed and
+    the raise still fires (so a caller with real parts would keep them intact).
+    """
+    import os
+    import shutil as _shutil
+
+    import numpy as np
+    from netCDF4 import Dataset
+
+    from databricks.labs.gbx.ds import _write_netcdf
+
+    # Build a minimal valid CF grid at tmp_path (what the merge core would emit).
+    tmp_nc = str(tmp_path / "merged_tmp.nc")
+    with Dataset(tmp_nc, "w") as nc:
+        nc.createDimension("lat", 3)
+        nc.createDimension("lon", 4)
+        nc.createVariable("lat", "f8", ("lat",))[:] = [2.0, 1.0, 0.0]
+        nc.createVariable("lon", "f8", ("lon",))[:] = [0.0, 1.0, 2.0, 3.0]
+        nc.createVariable("data", "f4", ("lat", "lon"))[:] = np.arange(
+            12, dtype="float32"
+        ).reshape(3, 4)
+
+    target = str(tmp_path / "target.nc")
+
+    real_copyfile = _shutil.copyfile
+
+    def truncating_copyfile(src, dst, *a, **k):
+        real_copyfile(src, dst, *a, **k)
+        # Truncate the copied target so the post-copy byte-size verify fails.
+        with open(dst, "r+b") as fh:
+            fh.truncate(0)
+        return dst
+
+    monkeypatch.setattr(_write_netcdf.shutil, "copyfile", truncating_copyfile)
+
+    with pytest.raises(ValueError) as e:
+        _write_netcdf._publish_merged(
+            tmp_nc, target, 1, _write_netcdf._count_raster_data_vars
+        )
+    assert "size mismatch" in str(e.value)
+    # No partial-but-valid-looking target left behind.
+    assert not os.path.exists(target)

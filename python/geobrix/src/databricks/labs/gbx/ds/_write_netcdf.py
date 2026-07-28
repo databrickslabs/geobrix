@@ -12,7 +12,7 @@ import os
 import shutil
 import tempfile
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
@@ -21,7 +21,10 @@ from pyspark.sql.types import StructType
 
 @dataclass
 class NetcdfCommitMessage(WriterCommitMessage):
-    paths: List[str]
+    paths: List[str] = field(default_factory=list)
+    # singleFile mode: path of this partition's feather fragment in scratch.
+    # Empty string means the partition was empty (no rows).
+    frag_path: str = ""
 
 
 def _var_from_source(source: Optional[str]) -> Optional[str]:
@@ -141,7 +144,12 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
 
 
 class NetcdfVectorGbxWriter(DataSourceWriter):
-    """Write a Spark partition's point rows to one CF DSG .nc (featureType='point').
+    """Write point rows to CF DSG .nc (featureType='point').
+
+    Default (singleFile=false): one ``part-<uuid>.nc`` per Spark partition.
+    singleFile=true: two-phase — executors write feather fragments to a shared
+    scratch dir; the driver merges them into ONE .nc with an UNLIMITED obs
+    dimension, streaming fragment by fragment to bound driver memory.
 
     Inverts the netcdf_gbx vector reader: consumes the dynamic vector schema
     (attribute columns + geom_0 WKB + geom_0_srid + geom_0_srid_proj) and
@@ -162,6 +170,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         self.path = to_local_path(options.get("path"))
         self.overwrite = overwrite
         self.name_col = options.get("nameCol")
+        self.single_file = str(options.get("singleFile", "false")).lower() == "true"
         # Exclude geom columns AND the nameCol: nameCol is file-naming metadata
         # only and must not be written as a netCDF4 data variable (it may be
         # a StringType, which netCDF4 cannot assign to a numeric variable).
@@ -176,12 +185,93 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                     os.remove(stale)
                 except OSError:
                     pass
+        # singleFile mode: set up a per-write scratch dir for feather fragments.
+        if self.single_file:
+            from databricks.labs.gbx.ds import _scratch
+
+            self.scratch_dir = _scratch.new_scratch_dir(self.path)
+        else:
+            self.scratch_dir = ""
+
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _np_dtype(dt) -> str:
+        from pyspark.sql.types import DoubleType, FloatType, IntegerType, LongType
+
+        if isinstance(dt, IntegerType):
+            return "i4"
+        if isinstance(dt, LongType):
+            return "i8"
+        if isinstance(dt, FloatType):
+            return "f4"
+        if isinstance(dt, DoubleType):
+            return "f8"
+        return "f8"
+
+    @staticmethod
+    def _is_float_dtype(d: str) -> bool:
+        return d in ("f4", "f8")
+
+    def _write_nc(
+        self,
+        tmp_path: str,
+        lons: list,
+        lats: list,
+        attrs: dict,
+        srids: set,
+        *,
+        unlimited_obs: bool = False,
+    ) -> None:
+        """Write lon/lat/attrs to a CF DSG point .nc at ``tmp_path``."""
+        import netCDF4 as _nc4
+        import numpy as np
+        from netCDF4 import Dataset
+
+        nc = Dataset(tmp_path, "w")
+        try:
+            nc.featureType = "point"
+            n = len(lons)
+            if unlimited_obs:
+                nc.createDimension("obs", None)  # UNLIMITED
+            else:
+                nc.createDimension("obs", n)
+            vlat = nc.createVariable("latitude", "f8", ("obs",))
+            vlat.standard_name = "latitude"
+            vlat.units = "degrees_north"
+            vlat[:] = np.array(lats)
+            vlon = nc.createVariable("longitude", "f8", ("obs",))
+            vlon.standard_name = "longitude"
+            vlon.units = "degrees_east"
+            vlon[:] = np.array(lons)
+            if len(srids) == 1 and next(iter(srids)) not in ("4326", None):
+                crs = nc.createVariable("crs", "i4")
+                crs.spatial_epsg = int(next(iter(srids)))
+            for c in self.attr_cols:
+                d = self._np_dtype(self.dtypes[c])
+                vals = attrs[c]
+                if self._is_float_dtype(d):
+                    arr = np.array(
+                        [v if v is not None else np.nan for v in vals], dtype=d
+                    )
+                    dv = nc.createVariable(c, d, ("obs",), fill_value=np.nan)
+                else:
+                    fv = _nc4.default_fillvals[d]
+                    arr = np.array([v if v is not None else fv for v in vals], dtype=d)
+                    dv = nc.createVariable(c, d, ("obs",), fill_value=fv)
+                dv.coordinates = "latitude longitude"
+                dv[:] = arr
+        finally:
+            nc.close()
+
+    # ------------------------------------------------------------------
+    # DataSourceWriter API
+    # ------------------------------------------------------------------
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
-        import numpy as np
         import shapely
-        from netCDF4 import Dataset
-        from pyspark.sql.types import DoubleType, FloatType, IntegerType, LongType
 
         os.makedirs(self.path, exist_ok=True)
         lons: list = []
@@ -199,70 +289,54 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                 srids.add(str(row["geom_0_srid"]))
             for c in self.attr_cols:
                 attrs[c].append(row[c])
+
         if not lons:
-            return NetcdfCommitMessage(paths=[])  # empty partition -> no file
+            # Empty partition: return a no-op message regardless of mode.
+            return NetcdfCommitMessage(paths=[], frag_path="")
 
-        def _np_dtype(col: str) -> str:
-            dt = self.dtypes[col]
-            if isinstance(dt, IntegerType):
-                return "i4"
-            if isinstance(dt, LongType):
-                return "i8"
-            if isinstance(dt, FloatType):
-                return "f4"
-            if isinstance(dt, DoubleType):
-                return "f8"
-            return "f8"
+        if self.single_file:
+            # --- two-phase: write feather fragment into scratch ---
+            import pyarrow as pa
+            import pyarrow.feather as feather
+            from pyspark.sql.pandas.types import to_arrow_type
 
-        def _is_float_dtype(d: str) -> bool:
-            return d in ("f4", "f8")
+            os.makedirs(self.scratch_dir, exist_ok=True)
+            # Build Arrow table: longitude, latitude, then each attr col.
+            # Carry the resolved srid in table metadata so commit() can reconcile.
+            resolved_srid = (
+                next(iter(srids))
+                if len(srids) == 1
+                else ("4326" if not srids else "mixed")
+            )
+            cols_data = {"longitude": lons, "latitude": lats}
+            for c in self.attr_cols:
+                cols_data[c] = attrs[c]
 
+            # Build Arrow schema: lon/lat as f8, attr cols typed from Spark schema.
+            arrow_fields = [
+                pa.field("longitude", pa.float64()),
+                pa.field("latitude", pa.float64()),
+            ]
+            for c in self.attr_cols:
+                arrow_fields.append(pa.field(c, to_arrow_type(self.dtypes[c])))
+            arr_schema = pa.schema(
+                arrow_fields,
+                metadata={"srid": resolved_srid},
+            )
+            arrays = [pa.array(cols_data[f.name]) for f in arrow_fields]
+            tbl = pa.table(
+                dict(zip([f.name for f in arrow_fields], arrays)), schema=arr_schema
+            )
+            frag = os.path.join(self.scratch_dir, f"frag-{uuid.uuid4().hex}.arrow")
+            feather.write_feather(tbl, frag)
+            return NetcdfCommitMessage(paths=[], frag_path=frag)
+
+        # --- default (parts) mode: write one part-*.nc ---
         stem = name or f"part-{uuid.uuid4().hex[:8]}"
         tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
         tmp.close()
         try:
-            nc = Dataset(tmp.name, "w")
-            try:
-                nc.featureType = "point"
-                n = len(lons)
-                nc.createDimension("obs", n)
-                vlat = nc.createVariable("latitude", "f8", ("obs",))
-                vlat.standard_name = "latitude"
-                vlat.units = "degrees_north"
-                vlat[:] = np.array(lats)
-                vlon = nc.createVariable("longitude", "f8", ("obs",))
-                vlon.standard_name = "longitude"
-                vlon.units = "degrees_east"
-                vlon[:] = np.array(lons)
-                if len(srids) == 1 and next(iter(srids)) not in ("4326", None):
-                    crs = nc.createVariable("crs", "i4")
-                    crs.spatial_epsg = int(next(iter(srids)))
-                import netCDF4 as _nc4
-
-                for c in self.attr_cols:
-                    d = _np_dtype(c)
-                    vals = attrs[c]
-                    if _is_float_dtype(d):
-                        # Float columns: represent None as NaN; use NaN as
-                        # _FillValue so CF-aware readers see it as missing data.
-                        arr = np.array(
-                            [v if v is not None else np.nan for v in vals],
-                            dtype=d,
-                        )
-                        dv = nc.createVariable(c, d, ("obs",), fill_value=np.nan)
-                    else:
-                        # Integer columns cannot hold NaN. Use the CF-standard
-                        # integer fill sentinel (netCDF4.default_fillvals) so
-                        # masked cells are represented idiomatically.
-                        fv = _nc4.default_fillvals[d]
-                        arr = np.array(
-                            [v if v is not None else fv for v in vals], dtype=d
-                        )
-                        dv = nc.createVariable(c, d, ("obs",), fill_value=fv)
-                    dv.coordinates = "latitude longitude"
-                    dv[:] = arr
-            finally:
-                nc.close()
+            self._write_nc(tmp.name, lons, lats, attrs, srids)
             out = os.path.join(self.path, f"{stem}.nc")
             # shutil.copyfile is FUSE-safe: no chmod (copy2 sets perms, FUSE
             # rejects); no cross-device rename (os.rename fails on FUSE).
@@ -272,6 +346,100 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         return NetcdfCommitMessage(paths=[out])
 
     def commit(self, messages: list) -> None:
+        if not self.single_file:
+            return None  # parts mode: executors already wrote the files
+
+        # singleFile mode: merge all feather fragments into one CF-DSG .nc.
+        import netCDF4 as _nc4
+        import numpy as np
+        import pyarrow.feather as feather
+
+        from databricks.labs.gbx.ds.vector import _resolve_single_file_output
+
+        frags = [
+            m.frag_path
+            for m in messages
+            if isinstance(m, NetcdfCommitMessage) and m.frag_path
+        ]
+        if not frags:
+            # All partitions were empty.
+            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            return None
+
+        # Resolve target path (single .nc file).
+        # _resolve_single_file_output expects ext WITH a leading dot.
+        name_col_val = None  # nameCol not threaded through singleFile merge
+        target = _resolve_single_file_output(self.path, name_col_val, ".nc")
+
+        # Reconcile srid across fragments: use the first non-4326/non-mixed srid.
+        srids: set = set()
+        for frag in frags:
+            tbl = feather.read_table(frag, columns=[])  # schema only
+            s = (tbl.schema.metadata or {}).get(b"srid", b"4326").decode()
+            if s not in ("4326", "mixed", ""):
+                srids.add(s)
+        resolved_srid = next(iter(srids)) if len(srids) == 1 else "4326"
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
+        tmp.close()
+        try:
+            nc = _nc4.Dataset(tmp.name, "w")
+            try:
+                nc.featureType = "point"
+                nc.createDimension("obs", None)  # UNLIMITED
+                vlat = nc.createVariable("latitude", "f8", ("obs",))
+                vlat.standard_name = "latitude"
+                vlat.units = "degrees_north"
+                vlon = nc.createVariable("longitude", "f8", ("obs",))
+                vlon.standard_name = "longitude"
+                vlon.units = "degrees_east"
+                if resolved_srid not in ("4326", "mixed", ""):
+                    crs_var = nc.createVariable("crs", "i4")
+                    crs_var.spatial_epsg = int(resolved_srid)
+                # Create data vars with fill values.
+                data_vars = {}
+                for c in self.attr_cols:
+                    d = self._np_dtype(self.dtypes[c])
+                    if self._is_float_dtype(d):
+                        dv = nc.createVariable(c, d, ("obs",), fill_value=np.nan)
+                    else:
+                        fv = _nc4.default_fillvals[d]
+                        dv = nc.createVariable(c, d, ("obs",), fill_value=fv)
+                    dv.coordinates = "latitude longitude"
+                    data_vars[c] = dv
+
+                # Stream fragments one at a time: append rows to UNLIMITED obs.
+                start = 0
+                for frag in frags:
+                    tbl = feather.read_table(frag)
+                    k = tbl.num_rows
+                    if k == 0:
+                        continue
+                    vlat[start : start + k] = tbl.column("latitude").to_pylist()
+                    vlon[start : start + k] = tbl.column("longitude").to_pylist()
+                    for c in self.attr_cols:
+                        if c not in tbl.schema.names:
+                            continue
+                        d = self._np_dtype(self.dtypes[c])
+                        vals = tbl.column(c).to_pylist()
+                        if self._is_float_dtype(d):
+                            arr = np.array(
+                                [v if v is not None else np.nan for v in vals], dtype=d
+                            )
+                        else:
+                            fv = _nc4.default_fillvals[d]
+                            arr = np.array(
+                                [v if v is not None else fv for v in vals], dtype=d
+                            )
+                        data_vars[c][start : start + k] = arr
+                    start += k
+            finally:
+                nc.close()
+            # FUSE-safe copy: content only, no chmod.
+            shutil.copyfile(tmp.name, target)
+        finally:
+            os.unlink(tmp.name)
+        shutil.rmtree(self.scratch_dir, ignore_errors=True)
         return None
 
     def abort(self, messages: list) -> None:
@@ -282,3 +450,10 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                         os.remove(p)
                     except OSError:
                         pass
+                if msg.frag_path:
+                    try:
+                        os.remove(msg.frag_path)
+                    except OSError:
+                        pass
+        if self.scratch_dir:
+            shutil.rmtree(self.scratch_dir, ignore_errors=True)

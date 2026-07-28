@@ -478,3 +478,65 @@ def test_vector_write_nullable_attrs(spark, tmp_path):
     assert float(ch4[2]) == pytest.approx(3.5)
     # Null float cell is masked (NaN fill); underlying data is NaN.
     assert ma.is_masked(ch4[1]) or math.isnan(float(ch4.data[1]))
+
+
+# ---------------------------------------------------------------------------
+# singleFile mode tests
+# ---------------------------------------------------------------------------
+
+
+def test_vector_write_singlefile_one_nc(spark, tmp_path):
+    import os
+
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("ch4", FloatType(), True),
+            StructField("qa_value", IntegerType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            i % 2,
+            bytes(shapely.to_wkb(shapely.Point(10.0 + i * 0.1, 50.0 + i * 0.1))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(12)
+    ]
+    df = spark.createDataFrame(pts, schema).repartition(4)  # multiple partitions
+    spark.dataSource.register(NetcdfGbxDataSource)
+    out = tmp_path / "vout_single"
+    (
+        df.write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("singleFile", "true")
+        .mode("overwrite")
+        .save(str(out))
+    )
+    ncs = [f for f in os.listdir(str(out)) if f.endswith(".nc")]
+    assert len(ncs) == 1, f"expected ONE .nc, got {ncs}"
+    re = (
+        spark.read.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("variables", "ch4,qa_value")
+        .load(str(out))
+        .orderBy("ch4")
+        .collect()
+    )
+    assert len(re) == 12
+    pt0 = shapely.from_wkb(bytes(re[0]["geom_0"]))
+    assert pt0.x == pytest.approx(10.0) and pt0.y == pytest.approx(50.0)

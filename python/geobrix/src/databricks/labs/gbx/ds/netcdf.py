@@ -95,3 +95,25 @@ class NetcdfGbxDataSource(DataSource):
         raise ValueError(
             f"netcdf_gbx: unknown mode={mode!r} (use 'raster' or 'vector')."
         )
+
+    def writer(self, schema: StructType, overwrite: bool):
+        mode = self._mode()
+        if mode == "raster":
+            from databricks.labs.gbx.ds._write_netcdf import NetcdfRasterGbxWriter
+
+            if not self.options.get("path"):
+                raise ValueError(
+                    "netcdf_gbx writer requires an output path (.save(path))."
+                )
+            return NetcdfRasterGbxWriter(self.options, schema, overwrite)
+        if mode == "vector":
+            from databricks.labs.gbx.ds._write_netcdf import NetcdfVectorGbxWriter
+
+            if not self.options.get("path"):
+                raise ValueError(
+                    "netcdf_gbx writer requires an output path (.save(path))."
+                )
+            return NetcdfVectorGbxWriter(self.options, schema, overwrite)
+        raise ValueError(
+            f"netcdf_gbx: unknown mode={mode!r} (use 'raster' or 'vector')."
+        )

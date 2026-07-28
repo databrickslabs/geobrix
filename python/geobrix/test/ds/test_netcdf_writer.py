@@ -540,3 +540,136 @@ def test_vector_write_singlefile_one_nc(spark, tmp_path):
     assert len(re) == 12
     pt0 = shapely.from_wkb(bytes(re[0]["geom_0"]))
     assert pt0.x == pytest.approx(10.0) and pt0.y == pytest.approx(50.0)
+
+
+# ---------------------------------------------------------------------------
+# Raster singleFile mode tests (merge distinct same-grid vars -> one CF .nc)
+# ---------------------------------------------------------------------------
+
+
+def _grid_tile_bytes(width, height, *, epsg=4326, origin=(10.0, 50.0), res=0.5):
+    """Build an in-memory north-up GeoTIFF tile and return its bytes."""
+    from rasterio.crs import CRS
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    transform = from_origin(origin[0], origin[1], res, res)
+    arr = np.arange(width * height, dtype="float32").reshape(height, width)
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="float32",
+        crs=CRS.from_epsg(epsg),
+        transform=transform,
+        nodata=-9999.0,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(arr, 1)
+        return mf.read(), arr
+
+
+def _raster_df(spark, rows):
+    """Build a (source, tile) DataFrame from (source, tile_bytes) pairs."""
+    from pyspark.sql import Row
+    from pyspark.sql.types import (
+        BinaryType,
+        LongType,
+        MapType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    tile_schema = StructType(
+        [
+            StructField("cellid", LongType(), True),
+            StructField("raster", BinaryType(), True),
+            StructField("metadata", MapType(StringType(), StringType()), True),
+        ]
+    )
+    outer_schema = StructType(
+        [
+            StructField("source", StringType(), True),
+            StructField("tile", tile_schema, True),
+        ]
+    )
+    spark_rows = [
+        Row(
+            source=src,
+            tile=Row(cellid=0, raster=bytearray(tb), metadata={}),
+        )
+        for src, tb in rows
+    ]
+    return spark.createDataFrame(spark_rows, schema=outer_schema)
+
+
+def test_raster_write_singlefile_multivar(spark, tmp_path):
+    """Two DISTINCT vars (tas, pr) on the SAME grid -> one .nc with both."""
+    import os
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    tas_bytes, tas_arr = _grid_tile_bytes(4, 3)
+    pr_bytes, pr_arr = _grid_tile_bytes(4, 3)
+    df = _raster_df(
+        spark,
+        [('NETCDF:"f":tas', tas_bytes), ('NETCDF:"f":pr', pr_bytes)],
+    ).coalesce(1)
+    out = tmp_path / "rout_single"
+    (
+        df.write.format("netcdf_gbx")
+        .option("singleFile", "true")
+        .mode("overwrite")
+        .save(str(out))
+    )
+    ncs = [f for f in os.listdir(str(out)) if f.endswith(".nc")]
+    assert len(ncs) == 1, f"expected ONE .nc, got {ncs}"
+    with Dataset(os.path.join(str(out), ncs[0])) as nc:
+        assert "tas" in nc.variables and "pr" in nc.variables
+        assert nc.variables["tas"].dimensions == ("lat", "lon")
+        assert nc.variables["pr"].dimensions == ("lat", "lon")
+        assert "lat" in nc.variables and "lon" in nc.variables
+        np.testing.assert_array_equal(np.array(nc.variables["tas"][:]), tas_arr)
+        np.testing.assert_array_equal(np.array(nc.variables["pr"][:]), pr_arr)
+
+
+def test_raster_write_singlefile_incompatible_grid_errors(spark, tmp_path):
+    """Two vars on DIFFERENT grids + singleFile -> ValueError -> rst_merge_agg."""
+    spark.dataSource.register(NetcdfGbxDataSource)
+    tas_bytes, _ = _grid_tile_bytes(4, 3)
+    pr_bytes, _ = _grid_tile_bytes(5, 6)  # different grid size
+    df = _raster_df(
+        spark,
+        [('NETCDF:"f":tas', tas_bytes), ('NETCDF:"f":pr', pr_bytes)],
+    ).coalesce(1)
+    out = tmp_path / "rout_incompat"
+    with pytest.raises(Exception) as e:
+        (
+            df.write.format("netcdf_gbx")
+            .option("singleFile", "true")
+            .mode("overwrite")
+            .save(str(out))
+        )
+    assert "rst_merge_agg" in str(e.value)
+
+
+def test_raster_write_singlefile_duplicate_var_errors(spark, tmp_path):
+    """Two window-tiles of the SAME var + same grid + singleFile -> ValueError."""
+    spark.dataSource.register(NetcdfGbxDataSource)
+    a_bytes, _ = _grid_tile_bytes(4, 3)
+    b_bytes, _ = _grid_tile_bytes(4, 3)
+    df = _raster_df(
+        spark,
+        [('NETCDF:"f":tas', a_bytes), ('NETCDF:"f":tas', b_bytes)],
+    ).coalesce(1)
+    out = tmp_path / "rout_dup"
+    with pytest.raises(Exception) as e:
+        (
+            df.write.format("netcdf_gbx")
+            .option("singleFile", "true")
+            .mode("overwrite")
+            .save(str(out))
+        )
+    assert "rst_merge_agg" in str(e.value)

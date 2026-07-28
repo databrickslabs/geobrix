@@ -44,6 +44,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
         self.overwrite = overwrite
         self.name_col = options.get("nameCol")
         self.var_name_col = options.get("varNameCol")
+        self.single_file = str(options.get("singleFile", "false")).lower() == "true"
         # Use self.path (scheme stripped), NOT the raw path: a dbfs:/file:-qualified
         # path makes os.path.isdir(path) False, silently skipping overwrite cleanup.
         if overwrite and os.path.isdir(self.path):
@@ -52,11 +53,28 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                     os.remove(stale)
                 except OSError:
                     pass
+        # singleFile mode: per-write scratch dir for grid fragments.
+        if self.single_file:
+            from databricks.labs.gbx.ds import _scratch
+
+            self.scratch_dir = _scratch.new_scratch_dir(self.path)
+        else:
+            self.scratch_dir = ""
+
+    def _resolve_var(self, row, source) -> str:
+        """Resolve the variable name: varNameCol override -> source selector -> data."""
+        var: Optional[str] = None
+        if self.var_name_col and row[self.var_name_col]:
+            var = os.path.basename(str(row[self.var_name_col]))
+        return var or _var_from_source(source) or "data"
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
         import numpy as np
         from netCDF4 import Dataset
         from rasterio.io import MemoryFile
+
+        if self.single_file:
+            return self._write_single(iterator)
 
         os.makedirs(self.path, exist_ok=True)
         written: List[str] = []
@@ -130,7 +148,186 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 os.unlink(tmp.name)
         return NetcdfCommitMessage(paths=written)
 
+    # ------------------------------------------------------------------
+    # singleFile mode (two-phase: executor fragment -> driver merge)
+    # ------------------------------------------------------------------
+
+    def _write_single(self, iterator: Iterator) -> WriterCommitMessage:
+        """Per (source, tile) row, decode the tile and write a feather fragment
+        into scratch capturing {varname, array, width, height, transform, crs, nodata}.
+
+        The 2-D array is flattened to one feather column; grid metadata rides in
+        the table schema metadata so commit() can reopen and run the grid gate.
+        """
+        import numpy as np
+        import pyarrow as pa
+        import pyarrow.feather as feather
+        from rasterio.io import MemoryFile
+
+        os.makedirs(self.scratch_dir, exist_ok=True)
+        frags: List[str] = []
+        for row in iterator:
+            source = row["source"]
+            raster_bytes = bytes(row["tile"]["raster"])
+            with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+                arr = ds.read(1)
+                transform = ds.transform
+                epsg = ds.crs.to_epsg() if ds.crs else None
+                nodata = ds.nodata
+            h, w = int(arr.shape[-2]), int(arr.shape[-1])
+            var = self._resolve_var(row, source)
+            flat = np.asarray(arr).reshape(-1)
+            # transform is an affine.Affine: (a, b, c, d, e, f) via [:6]
+            t = tuple(float(x) for x in tuple(transform)[:6])
+            meta = {
+                b"varname": var.encode(),
+                b"width": str(w).encode(),
+                b"height": str(h).encode(),
+                b"dtype": arr.dtype.str.encode(),
+                b"transform": ",".join(repr(x) for x in t).encode(),
+                b"crs_epsg": (b"" if epsg is None else str(int(epsg)).encode()),
+                b"nodata": (b"" if nodata is None else repr(float(nodata)).encode()),
+            }
+            tbl = pa.table(
+                {"value": pa.array(flat)},
+                metadata=meta,
+            )
+            frag = os.path.join(self.scratch_dir, f"frag-{uuid.uuid4().hex}.arrow")
+            feather.write_feather(tbl, frag)
+            frags.append(frag)
+        # One partition may yield several tiles; return the first frag plus any
+        # extras. NetcdfCommitMessage carries a single frag_path, so stash extras
+        # in paths (they are scratch fragment paths here, not final outputs).
+        if not frags:
+            return NetcdfCommitMessage(paths=[], frag_path="")
+        return NetcdfCommitMessage(paths=frags[1:], frag_path=frags[0])
+
+    def _commit_single(self, messages: list) -> None:
+        import numpy as np
+        from netCDF4 import Dataset
+
+        from databricks.labs.gbx.ds.vector import _resolve_single_file_output
+
+        # Collect ALL fragment paths (frag_path + any extras in paths).
+        frags: List[str] = []
+        for m in messages:
+            if isinstance(m, NetcdfCommitMessage):
+                if m.frag_path:
+                    frags.append(m.frag_path)
+                frags.extend(m.paths)
+        if not frags:
+            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            return None
+
+        import pyarrow.feather as feather
+
+        # --- Grid-compatibility gate ---
+        fragments = (
+            []
+        )  # list of (varname, width, height, dtype, transform, epsg, nodata)
+        for frag in frags:
+            tbl = feather.read_table(frag, columns=[])  # schema/metadata only
+            md = tbl.schema.metadata or {}
+            varname = md.get(b"varname", b"data").decode()
+            width = int(md.get(b"width", b"0"))
+            height = int(md.get(b"height", b"0"))
+            dtype = md.get(b"dtype", b"<f4").decode()
+            transform = tuple(
+                float(x) for x in md.get(b"transform", b"").decode().split(",")
+            )
+            epsg_raw = md.get(b"crs_epsg", b"").decode()
+            epsg = int(epsg_raw) if epsg_raw else None
+            nodata_raw = md.get(b"nodata", b"").decode()
+            nodata = float(nodata_raw) if nodata_raw else None
+            fragments.append(
+                (frag, varname, width, height, dtype, transform, epsg, nodata)
+            )
+
+        merge_pointer = (
+            "to mosaic window-tiles of one variable into a single grid, use "
+            "gbx_rst_merge_agg / gbx_rst_merge before writing."
+        )
+        ref = fragments[0]
+        _, _, ref_w, ref_h, _, ref_t, ref_epsg, _ = ref
+        seen_vars = set()
+        for _, varname, width, height, _, transform, epsg, _ in fragments:
+            if (width, height) != (ref_w, ref_h):
+                shutil.rmtree(self.scratch_dir, ignore_errors=True)
+                raise ValueError(
+                    f"netcdf_gbx singleFile: tiles have incompatible grids "
+                    f"(sizes {(ref_w, ref_h)} vs {(width, height)}); {merge_pointer}"
+                )
+            if epsg != ref_epsg:
+                shutil.rmtree(self.scratch_dir, ignore_errors=True)
+                raise ValueError(
+                    f"netcdf_gbx singleFile: tiles have incompatible grids "
+                    f"(CRS EPSG {ref_epsg} vs {epsg}); {merge_pointer}"
+                )
+            if not np.allclose(
+                np.array(transform), np.array(ref_t), rtol=1e-9, atol=0.0
+            ):
+                shutil.rmtree(self.scratch_dir, ignore_errors=True)
+                raise ValueError(
+                    f"netcdf_gbx singleFile: tiles have incompatible grids "
+                    f"(geotransform {ref_t} vs {transform}); {merge_pointer}"
+                )
+            if varname in seen_vars:
+                shutil.rmtree(self.scratch_dir, ignore_errors=True)
+                raise ValueError(
+                    f"netcdf_gbx singleFile: duplicate variable {varname!r} across "
+                    f"tiles (window-tiles are a mosaic, not a multi-variable merge); "
+                    f"{merge_pointer}"
+                )
+            seen_vars.add(varname)
+
+        # --- Compatible + distinct varnames: write ONE CF grid .nc ---
+        # Shared lat/lon derived from the common (north-up) transform.
+        a, b, c, d, e, f = ref_t
+        lon = np.array([c + a * (i + 0.5) for i in range(ref_w)])
+        lat = np.array([f + e * (j + 0.5) for j in range(ref_h)])
+
+        target = _resolve_single_file_output(self.path, None, ".nc")
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
+        tmp.close()
+        try:
+            nc = Dataset(tmp.name, "w")
+            try:
+                nc.createDimension("lat", ref_h)
+                nc.createDimension("lon", ref_w)
+                vlat = nc.createVariable("lat", "f8", ("lat",))
+                vlat.standard_name = "latitude"
+                vlat.units = "degrees_north"
+                vlat[:] = lat
+                vlon = nc.createVariable("lon", "f8", ("lon",))
+                vlon.standard_name = "longitude"
+                vlon.units = "degrees_east"
+                vlon[:] = lon
+                if ref_epsg and ref_epsg != 4326:
+                    crs_var = nc.createVariable("crs", "i4")
+                    crs_var.grid_mapping_name = "latitude_longitude"
+                    crs_var.spatial_epsg = int(ref_epsg)
+                for frag, varname, width, height, dtype, _, epsg, nodata in fragments:
+                    tbl = feather.read_table(frag)
+                    arr = np.array(
+                        tbl.column("value").to_pylist(), dtype=dtype
+                    ).reshape(height, width)
+                    kw = {} if nodata is None else {"fill_value": nodata}
+                    dv = nc.createVariable(varname, dtype[1:], ("lat", "lon"), **kw)
+                    if ref_epsg and ref_epsg != 4326:
+                        dv.grid_mapping = "crs"
+                    dv[:] = arr
+            finally:
+                nc.close()
+            shutil.copyfile(tmp.name, target)
+        finally:
+            os.unlink(tmp.name)
+        shutil.rmtree(self.scratch_dir, ignore_errors=True)
+        return None
+
     def commit(self, messages: list) -> None:
+        if self.single_file:
+            return self._commit_single(messages)
         return None
 
     def abort(self, messages: list) -> None:
@@ -141,6 +338,13 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                         os.remove(p)
                     except OSError:
                         pass
+                if msg.frag_path:
+                    try:
+                        os.remove(msg.frag_path)
+                    except OSError:
+                        pass
+        if self.scratch_dir:
+            shutil.rmtree(self.scratch_dir, ignore_errors=True)
 
 
 class NetcdfVectorGbxWriter(DataSourceWriter):

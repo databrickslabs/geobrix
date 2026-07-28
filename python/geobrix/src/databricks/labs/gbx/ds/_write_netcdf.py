@@ -138,3 +138,124 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                         os.remove(p)
                     except OSError:
                         pass
+
+
+class NetcdfVectorGbxWriter(DataSourceWriter):
+    """Write a Spark partition's point rows to one CF DSG .nc (featureType='point').
+
+    Inverts the netcdf_gbx vector reader: consumes the dynamic vector schema
+    (attribute columns + geom_0 WKB + geom_0_srid + geom_0_srid_proj) and
+    writes latitude/longitude coord vars plus one data var per attribute column.
+    Serverless-safe: no spark.conf/_jvm/.rdd/cache/persist.
+    """
+
+    def __init__(self, options: dict, schema: StructType, overwrite: bool):
+        from databricks.labs.gbx.ds._listing import to_local_path
+
+        names = [f.name for f in schema.fields]
+        if "geom_0" not in names or "geom_0_srid" not in names:
+            raise ValueError(
+                "netcdf_gbx vector writer requires the vector schema "
+                "(attributes + geom_0 + geom_0_srid[+ geom_0_srid_proj]); got "
+                f"{names}"
+            )
+        self.path = to_local_path(options.get("path"))
+        self.overwrite = overwrite
+        self.name_col = options.get("nameCol")
+        # Exclude geom columns AND the nameCol: nameCol is file-naming metadata
+        # only and must not be written as a netCDF4 data variable (it may be
+        # a StringType, which netCDF4 cannot assign to a numeric variable).
+        excluded = {n for n in names if n.startswith("geom_0")}
+        if self.name_col:
+            excluded.add(self.name_col)
+        self.attr_cols = [n for n in names if n not in excluded]
+        self.dtypes = {f.name: f.dataType for f in schema.fields}
+        if overwrite and os.path.isdir(self.path):
+            for stale in glob.glob(os.path.join(self.path, "*.nc")):
+                try:
+                    os.remove(stale)
+                except OSError:
+                    pass
+
+    def write(self, iterator: Iterator) -> WriterCommitMessage:
+        import numpy as np
+        import shapely
+        from netCDF4 import Dataset
+        from pyspark.sql.types import DoubleType, FloatType, IntegerType, LongType
+
+        os.makedirs(self.path, exist_ok=True)
+        lons: list = []
+        lats: list = []
+        attrs = {c: [] for c in self.attr_cols}
+        srids: set = set()
+        name = None
+        for row in iterator:
+            if name is None and self.name_col and row[self.name_col]:
+                name = os.path.basename(str(row[self.name_col]))
+            pt = shapely.from_wkb(bytes(row["geom_0"]))
+            lons.append(pt.x)
+            lats.append(pt.y)
+            if row["geom_0_srid"] is not None:
+                srids.add(str(row["geom_0_srid"]))
+            for c in self.attr_cols:
+                attrs[c].append(row[c])
+        if not lons:
+            return NetcdfCommitMessage(paths=[])  # empty partition -> no file
+
+        def _np_dtype(col: str) -> str:
+            dt = self.dtypes[col]
+            if isinstance(dt, IntegerType):
+                return "i4"
+            if isinstance(dt, LongType):
+                return "i8"
+            if isinstance(dt, FloatType):
+                return "f4"
+            if isinstance(dt, DoubleType):
+                return "f8"
+            return "f8"
+
+        stem = name or f"part-{uuid.uuid4().hex[:8]}"
+        tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
+        tmp.close()
+        try:
+            nc = Dataset(tmp.name, "w")
+            try:
+                nc.featureType = "point"
+                n = len(lons)
+                nc.createDimension("obs", n)
+                vlat = nc.createVariable("latitude", "f8", ("obs",))
+                vlat.standard_name = "latitude"
+                vlat.units = "degrees_north"
+                vlat[:] = np.array(lats)
+                vlon = nc.createVariable("longitude", "f8", ("obs",))
+                vlon.standard_name = "longitude"
+                vlon.units = "degrees_east"
+                vlon[:] = np.array(lons)
+                if len(srids) == 1 and next(iter(srids)) not in ("4326", None):
+                    crs = nc.createVariable("crs", "i4")
+                    crs.spatial_epsg = int(next(iter(srids)))
+                for c in self.attr_cols:
+                    dv = nc.createVariable(c, _np_dtype(c), ("obs",))
+                    dv.coordinates = "latitude longitude"
+                    dv[:] = np.array(attrs[c])
+            finally:
+                nc.close()
+            out = os.path.join(self.path, f"{stem}.nc")
+            # shutil.copyfile is FUSE-safe: no chmod (copy2 sets perms, FUSE
+            # rejects); no cross-device rename (os.rename fails on FUSE).
+            shutil.copyfile(tmp.name, out)
+        finally:
+            os.unlink(tmp.name)
+        return NetcdfCommitMessage(paths=[out])
+
+    def commit(self, messages: list) -> None:
+        return None
+
+    def abort(self, messages: list) -> None:
+        for msg in messages:
+            if isinstance(msg, NetcdfCommitMessage):
+                for p in msg.paths:
+                    try:
+                        os.remove(p)
+                    except OSError:
+                        pass

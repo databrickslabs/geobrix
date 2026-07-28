@@ -201,3 +201,186 @@ def test_raster_write_nodata_preserved(spark, tmp_path):
         assert len(var_names) == 1
         fv = nc.variables[var_names[0]].getncattr("_FillValue")
         assert float(fv) == pytest.approx(-9999.0)
+
+
+# ---------------------------------------------------------------------------
+# Vector writer tests
+# ---------------------------------------------------------------------------
+
+
+def test_vector_write_roundtrip(spark, tmp_path):
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("ch4", FloatType(), True),
+            StructField("qa_value", IntegerType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            i % 2,
+            bytes(shapely.to_wkb(shapely.Point(10.0 + i * 0.1, 50.0 + i * 0.1))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(5)
+    ]
+    df = spark.createDataFrame(pts, schema)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "vout"
+    (
+        df.write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    re = (
+        spark.read.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("variables", "ch4,qa_value")
+        .load(str(outdir))
+        .orderBy("ch4")
+        .collect()
+    )
+    assert len(re) == 5
+    pt0 = shapely.from_wkb(bytes(re[0]["geom_0"]))
+    assert pt0.x == pytest.approx(10.0) and pt0.y == pytest.approx(50.0)
+    assert re[1]["qa_value"] == 1
+
+
+def test_vector_write_featuretype_and_obs(spark, tmp_path):
+    """Output .nc has featureType='point' global attr and obs dim of correct size."""
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("temp", FloatType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            bytes(shapely.to_wkb(shapely.Point(5.0 + i, 45.0 + i))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(3)
+    ]
+    df = spark.createDataFrame(pts, schema)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "vft"
+    # coalesce(1): force a single partition so there is exactly 1 output .nc.
+    (
+        df.coalesce(1)
+        .write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    nc_files = list(outdir.glob("*.nc"))
+    assert len(nc_files) == 1
+    with Dataset(str(nc_files[0]), "r") as nc:
+        assert nc.featureType == "point"
+        assert "obs" in nc.dimensions
+        assert nc.dimensions["obs"].size == 3
+
+
+def test_vector_write_empty_partition_no_file(tmp_path):
+    """Empty iterator -> no file written and paths=[]."""
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    from databricks.labs.gbx.ds._write_netcdf import NetcdfVectorGbxWriter
+
+    schema = StructType(
+        [
+            StructField("val", FloatType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    outdir = str(tmp_path / "empty_out")
+    writer = NetcdfVectorGbxWriter({"path": outdir}, schema, overwrite=False)
+    msg = writer.write(iter([]))
+    assert msg.paths == []
+    import os
+
+    assert not os.path.exists(outdir) or not list(
+        __import__("glob").glob(os.path.join(outdir, "*.nc"))
+    )
+
+
+def test_vector_write_nameCol(spark, tmp_path):
+    """nameCol drives the output filename."""
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("val", FloatType(), True),
+            StructField("filename", StringType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            "my_sensor_data",
+            bytes(shapely.to_wkb(shapely.Point(10.0 + i, 50.0 + i))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(2)
+    ]
+    df = spark.createDataFrame(pts, schema)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "named"
+    # coalesce(1): single partition so nameCol from first row drives the one file.
+    (
+        df.coalesce(1)
+        .write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("nameCol", "filename")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    nc_files = list(outdir.glob("*.nc"))
+    assert len(nc_files) == 1
+    assert nc_files[0].name == "my_sensor_data.nc"

@@ -810,6 +810,13 @@ else:
                                write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
                                mode="overwrite", options={"filterRegex": r".*\\.nc$"}, where="cluster")
     _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # singleFile variant: same corpus, distinct out-dir + label so the parts vs single
+    # rows are a real comparison in the store (label -> note "... [singleFile]").
+    _wr = _rd.run_format_write(spark, _ncw_in, f"{CORPUS}/netcdf-out-single", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"filterRegex": r".*\\.nc$", "singleFile": "true"},
+                               label="singleFile", where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
 # --- VECTOR (swath) writer leg: mode=vector on read AND write ---
 _ncw_sw_in = f"{CORPUS}/netcdf-swath"
 _ncw_sw_files = _rd.list_corpus_files(_ncw_sw_in, r".*\\.nc$") if _os.path.isdir(_ncw_sw_in) else []
@@ -835,6 +842,14 @@ else:
                                mode="overwrite", options={"mode": "vector", "group": "/PRODUCT",
                                                           "variables": "methane_mixing_ratio_bias_corrected,qa_value",
                                                           "filterRegex": r".*\\.nc$"}, where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # singleFile variant: distinct out-dir + label so parts vs single don't collide/clobber.
+    _wr = _rd.run_format_write(spark, _ncw_sw_in, f"{CORPUS}/netcdf-swath-out-single", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"mode": "vector", "group": "/PRODUCT",
+                                                          "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                                          "filterRegex": r".*\\.nc$", "singleFile": "true"},
+                               label="singleFile", where="cluster")
     _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
 if _ncw_rows:
     _df = spark.sql(

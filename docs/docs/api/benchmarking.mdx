@@ -253,6 +253,12 @@ tier. The writer benchmark has **two legs** matching the two write modes:
   Spark partition is written as one CF DSG `.nc` file. The leg measures whole-job
   wall-clock. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
 
+Each mode runs **twice** — once writing one `.nc` file per row/partition (the default
+"parts" shape) and once with `singleFile=true`, which merges the fragments into a single
+`.nc` on the driver. The two shapes are recorded as distinct rows (the singleFile leg is
+tagged `[singleFile]` in its note and written to a separate output directory) so a run
+carries a real parts-vs-single throughput comparison.
+
 Each leg is staged from the same corpora as the corresponding reader leg (see
 [NetCDF readers](#netcdf-readers) above). If a corpus pool is absent, that writer leg
 skips cleanly with a clear message rather than failing the run.

@@ -66,6 +66,20 @@ def test_benchmark_netcdf_writer_cell_present_and_wired():
     assert len(_section_cells(nb)) == 4
 
 
+def test_netcdf_writer_emits_singlefile_legs():
+    """Each mode (raster, vector) also runs a parallel singleFile measured leg."""
+    nb = cl.build_bench_notebook(_cfg(benchmark_netcdf_writer=True))
+    src = _src(nb)
+    # singleFile write option flows to the writer on the single legs.
+    assert '"singleFile": "true"' in src or '"singleFile":"true"' in src
+    # Distinct out-dirs so mode=overwrite doesn't clobber the parts-leg output.
+    assert 'f"{CORPUS}/netcdf-out-single"' in src
+    assert 'f"{CORPUS}/netcdf-swath-out-single"' in src
+    # Rows are distinguishable in the store via a label tag on both single legs.
+    assert 'label="singleFile"' in src
+    assert src.count('label="singleFile"') == 2
+
+
 def test_netcdf_writer_light_only_no_heavy_leg():
     nb = cl.build_bench_notebook(_cfg(netcdf_writer_only=True))
     src = _src(nb)

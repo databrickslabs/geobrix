@@ -386,6 +386,7 @@ def run_format_write(
     write_fmt: str = "gtiff_gbx",
     mode: str = "overwrite",
     options: Optional[Dict[str, str]] = None,
+    label: str = "",
     where: str = "venv",
 ) -> "ResultRow":
     """Time spark.write.format(write_fmt).save(out_path) on a pre-read input DataFrame.
@@ -394,11 +395,17 @@ def run_format_write(
     "overwrite"; the heavy gtiff_gdal writer is append-only ("overwrite" raises
     UNSUPPORTED_FEATURE truncate), so pass mode="append" for it.
 
+    ``label`` (default "") distinguishes otherwise-identical legs in the store: when
+    non-empty it is appended to the success ResultRow's ``note`` as " [<label>]" so a
+    parts leg and a singleFile leg (same fn+fmt) don't collide. Empty label leaves the
+    note byte-for-byte unchanged.
+
     Reads the input directory once via ``read_fmt`` (same reader for both tiers so
     write cost is isolated), caches it, then times repeated ``write.format(write_fmt)``
     calls. Returns a single ResultRow (mode="spark-path", category="writer").
     """
     env = capture_env(where)
+    _note_suffix = f" [{label}]" if label else ""
 
     # Register light DS (always needed for raster_gbx reader/writer).
     from databricks.labs.gbx.ds.register import register
@@ -499,7 +506,7 @@ def run_format_write(
             throughput_rows_s=0.0,
             peak_rss_mb=peak_rss_mb(),
             status="ok",
-            note=f"{write_fmt} write of {n} tiles",
+            note=f"{write_fmt} write of {n} tiles{_note_suffix}",
             output_fingerprint="",
             **env,
         )

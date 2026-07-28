@@ -31,6 +31,8 @@ Options:
   --pmtiles-only        Run ONLY the PMTiles benchmark (no fn benchmarks)
   --benchmark-vector    Also run vector reader benchmark (light *_gbx vs heavy *_ogr)
   --vector-only         Run ONLY the vector reader benchmark (no fn benchmarks)
+  --benchmark-netcdf    Also run NetCDF reader benchmark (light netcdf_gbx vs heavy netcdf_gdal)
+  --netcdf-only         Run ONLY the NetCDF reader benchmark (no fn benchmarks)
   --no-wait             Submit without blocking on completion
   --help, -h            Show help
 

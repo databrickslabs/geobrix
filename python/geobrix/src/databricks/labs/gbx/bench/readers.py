@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from databricks.labs.gbx.bench.results import ResultRow
 from databricks.labs.gbx.bench.runner import capture_env, peak_rss_mb, time_iters
@@ -252,7 +252,10 @@ def run_format_read(
         from databricks.labs.gbx.ds.register import register
 
         register(spark)
-    elif fmt == "gdal":
+    elif fmt in ("gdal", "gtiff_gdal", "netcdf_gdal"):
+        # Heavy raster readers need the GDAL drivers initialised (registered via the
+        # synchronized GDALManager guard inside rasterx.register). netcdf_gdal is the
+        # heavy leg of the NetCDF raster bench; gtiff_gdal/gdal are the GeoTIFF readers.
         try:
             from databricks.labs.gbx.rasterx import functions as _rx
 
@@ -265,7 +268,17 @@ def run_format_read(
         if options:
             for k, v in options.items():
                 reader = reader.option(k, str(v))
-        if fmt == "raster_gbx":
+        # sizeInMB is honored by the light raster reader (raster_gbx) AND the heavy
+        # raster readers (netcdf_gdal / gdal / gtiff_gdal). Broadened beyond raster_gbx
+        # so the netcdf raster leg can pass size_mib=-1 to BOTH tiers -- one tile per
+        # grid variable -- giving the heavy reader the same one-tile-per-var granularity
+        # as light (a fair heavy-vs-light comparison).
+        # NOTE (re-baseline): the existing GeoTIFF reader leg calls fmt="gdal" without an
+        # explicit size_mib, so it now inherits the default (16) and tiles at ~16 MB where
+        # it previously read whole-image. This aligns it with the light raster_gbx leg
+        # (already 16) -- fairer -- but GeoTIFF heavy reader-bench numbers are NOT
+        # comparable across this change.
+        if fmt in ("raster_gbx", "netcdf_gdal", "gdal", "gtiff_gdal"):
             reader = reader.option("sizeInMB", str(size_mib))
         df = reader.load(path)
         if ingest_table:
@@ -291,6 +304,12 @@ def run_format_read(
         _note = (
             f"{fmt} -> {ingest_table}" if ingest_table else f"{fmt} over {_src_name}"
         )
+        # A 0-row read is not a valid throughput measurement (wrong corpus/options: e.g.
+        # swaths in a raster dir, or a missing group/variables option). Mark it so it is
+        # visible in the results table instead of masquerading as a clean "ok".
+        _status = "ok" if actual_rows > 0 else "empty"
+        if actual_rows == 0:
+            _note = f"{_note} -- READ 0 ROWS (check corpus/options)"
         return ResultRow(
             run_id=run_id,
             api=api,
@@ -317,7 +336,7 @@ def run_format_read(
                 (actual_rows / (ms / 1000.0)) if (ms and actual_rows) else 0.0
             ),
             peak_rss_mb=peak_rss_mb(),
-            status="ok",
+            status=_status,
             note=_note,
             output_fingerprint="",
             **env,
@@ -367,6 +386,7 @@ def run_format_write(
     write_fmt: str = "gtiff_gbx",
     mode: str = "overwrite",
     options: Optional[Dict[str, str]] = None,
+    label: str = "",
     where: str = "venv",
 ) -> "ResultRow":
     """Time spark.write.format(write_fmt).save(out_path) on a pre-read input DataFrame.
@@ -375,11 +395,31 @@ def run_format_write(
     "overwrite"; the heavy gtiff_gdal writer is append-only ("overwrite" raises
     UNSUPPORTED_FEATURE truncate), so pass mode="append" for it.
 
+    ``label`` (default "") distinguishes otherwise-identical legs in the store: when
+    non-empty it is appended to the success ResultRow's ``note`` as " [<label>]" so a
+    parts leg and a singleFile leg (same fn+fmt) don't collide. Empty label leaves the
+    note byte-for-byte unchanged.
+
     Reads the input directory once via ``read_fmt`` (same reader for both tiers so
     write cost is isolated), caches it, then times repeated ``write.format(write_fmt)``
     calls. Returns a single ResultRow (mode="spark-path", category="writer").
+
+    **Merge shape (post-hoc directory merge).** When ``options["merge"] == "true"``,
+    the timed write is a *post-hoc* merge: it folds the ``.nc`` files ALREADY on disk
+    in ``out_path`` into one, WITHOUT re-running the DataFrame. That needs the output
+    dir pre-populated with parts, so this function first does a ONE-SHOT UNTIMED setup
+    write of the read ``df`` to ``out_path`` in plain PARTS mode (a copy of ``options``
+    with ``merge``/``singleFile``/``keepParts`` stripped). The timed ``_job`` then runs
+    the caller's ``options`` verbatim (with ``merge=true``); the caller passes
+    ``keepParts=true`` so the parts survive across warmup+measured iterations (a merge
+    that deleted parts on iteration 1 would find an empty dir on iteration 2 and error).
     """
     env = capture_env(where)
+    _note_suffix = f" [{label}]" if label else ""
+    # Merge shape is inferred from the options dict (no new positional param, so all
+    # existing callers are unchanged): merge=true means the timed write folds on-disk
+    # parts and must be seeded with a one-shot untimed parts write before timing.
+    _merge_mode = bool(options) and str(options.get("merge", "")).lower() == "true"
 
     # Register light DS (always needed for raster_gbx reader/writer).
     from databricks.labs.gbx.ds.register import register
@@ -405,6 +445,15 @@ def run_format_write(
         df = reader.load(input_path)
         df = df.cache()
         n = int(df.count())
+        if n == 0:
+            # A 0-row read is never a valid write measurement -- fail loud rather than
+            # timing an empty write and reporting a meaningless "ok" (the input corpus
+            # or read options are wrong: e.g. swaths in a raster dir, or a missing
+            # group/variables option). Raising routes to the error ResultRow below.
+            raise ValueError(
+                f"{read_fmt} read of {input_path} returned 0 rows "
+                f"(options={options}); nothing to write -- check the corpus/options."
+            )
     except Exception as e:  # noqa: BLE001
         return ResultRow(
             run_id=run_id,
@@ -435,6 +484,66 @@ def run_format_write(
             output_fingerprint="",
             **env,
         )
+
+    # Merge shape: seed the output dir with PARTS once (untimed) so the timed merge
+    # has files to fold. Strip the merge/singleFile/keepParts flags so this setup
+    # write is a plain parts write; overwrite so a stale dir can't taint the merge.
+    if _merge_mode:
+        try:
+            _setup_opts = {
+                k: v
+                for k, v in options.items()
+                if k not in ("merge", "singleFile", "keepParts")
+            }
+            sw = df.write.format(write_fmt).mode("overwrite")
+            for k, v in _setup_opts.items():
+                sw = sw.option(k, str(v))
+            sw.save(out_path)
+            # Verify the seed actually landed parts: the timed merge folds the .nc
+            # files already on disk, so a seed that wrote nothing would surface as a
+            # cryptic "no .nc files to merge" from the timed job. Fail loud here with
+            # the setup context instead (a stale wheel without this seed path, or a
+            # writer that dropped no files, is the usual cause).
+            import glob as _glob
+
+            _seeded = _glob.glob(os.path.join(out_path, "*.nc"))
+            if not _seeded:
+                raise ValueError(
+                    f"merge setup-parts write produced no .nc files under {out_path} "
+                    f"(write_fmt={write_fmt}, setup_opts={_setup_opts}); the timed merge "
+                    f"would have nothing to fold. Check the writer staged parts (and that "
+                    f"the deployed wheel includes the merge-setup path)."
+                )
+        except Exception as e:  # noqa: BLE001
+            return ResultRow(
+                run_id=run_id,
+                api=write_api,
+                fn="raster_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                iter_total_wall_clock_s=0.0,
+                avg_wall_clock_s=0.0,
+                per_tile_avg_s=0.0,
+                per_tile_avg_ms=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="error",
+                note=f"merge setup-parts write failed: {str(e)[-400:]}",
+                output_fingerprint="",
+                **env,
+            )
 
     def _job():
         w = df.write.format(write_fmt).mode(mode)
@@ -471,7 +580,7 @@ def run_format_write(
             throughput_rows_s=0.0,
             peak_rss_mb=peak_rss_mb(),
             status="ok",
-            note=f"{write_fmt} write of {n} tiles",
+            note=f"{write_fmt} write of {n} tiles{_note_suffix}",
             output_fingerprint="",
             **env,
         )
@@ -6415,13 +6524,155 @@ def run_fanout_udtf(
         )
 
 
+def list_corpus_files(corpus_dir: str, filter_regex: str = r".*\.tif$") -> List[str]:
+    """Return all files under corpus_dir whose basename matches ``filter_regex``.
+
+    The reader bench is format-parameterized: GeoTIFF pools filter on the default
+    ``.*\\.tif$`` while a NetCDF pool passes ``.*\\.nc$``. Mirrors the
+    ``filterRegex`` option honored by both the light (netcdf_gbx) and heavy
+    (netcdf_gdal / gdal) directory readers so the host-side listing and the
+    on-cluster reader see the SAME set of files. Recurses into subdirectories.
+    """
+    import glob
+    import re
+
+    pat = re.compile(filter_regex)
+    all_files = sorted(glob.glob(os.path.join(corpus_dir, "**", "*"), recursive=True))
+    return [
+        f for f in all_files if os.path.isfile(f) and pat.match(os.path.basename(f))
+    ]
+
+
 def _list_tifs(corpus_dir: str) -> List[str]:
-    """Return all *.tif / *.tiff paths under corpus_dir."""
+    """Return all *.tif / *.tiff paths under corpus_dir (GeoTIFF pure-local leg).
+
+    Preserves the original tif-then-tiff ordering exactly so the GeoTIFF bench is
+    byte-for-byte unchanged; NetCDF and other formats use ``list_corpus_files``.
+    """
     import glob
 
     tifs = sorted(glob.glob(os.path.join(corpus_dir, "**", "*.tif"), recursive=True))
     tifs += sorted(glob.glob(os.path.join(corpus_dir, "**", "*.tiff"), recursive=True))
     return tifs
+
+
+def stage_netcdf_corpus(
+    spark,
+    corpus_dir: str,
+    bbox: Optional[List[float]] = None,
+    temporal: Optional[str] = None,
+    partitions: Optional[int] = None,
+):
+    """Stage real Sentinel-5P L2 CH4 NetCDF granules into ``corpus_dir`` for the
+    NetCDF VECTOR (swath) reader bench (download-and-stop mode).
+
+    Bench-only helper -- NOT product code and NOT run at import time. The human
+    invokes it once (interactively / from a staging notebook) to populate the
+    ``{CORPUS}/netcdf-swath`` pool that the NetCDF reader-bench VECTOR leg reads.
+    S5P L2 granules are SWATHS (irregular per-pixel lat/lon), so they are read in
+    the light ``netcdf_gbx`` VECTOR mode -- there is no heavy swath path, so this
+    leg is a light-only throughput measurement, not a heavy-vs-light comparison.
+    (The heavy-vs-light RASTER leg uses regular-grid NASA-NEX granules staged by
+    ``stage_nasanex_corpus`` into ``{CORPUS}/netcdf``.)
+
+    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool, so
+    the download happens at stage time only, while the bench itself does not.
+
+    Granules land as ``{item_id}.nc`` (matching the ``.*\\.nc$`` filter the bench
+    passes). Returns the download-manifest DataFrame. Prints the resulting file
+    count so a partial/empty stage is never silent.
+    """
+    from databricks.labs.gbx.sample.tropomi import TropomiDownloader
+
+    # Default AOI: a modest box over a CH4 hotspot region (Permian Basin) with a
+    # short window -- enough real swath granules for a throughput bench without
+    # pulling the whole archive. Override via bbox/temporal for other AOIs.
+    if bbox is None:
+        bbox = [-104.5, 31.0, -101.5, 33.0]
+    if temporal is None:
+        temporal = "2021-01-01/2021-01-08"
+    print(
+        f"stage_netcdf_corpus: downloading S5P L2 CH4 swath granules to {corpus_dir} "
+        f"(bbox={bbox}, temporal={temporal})",
+        flush=True,
+    )
+    manifest = TropomiDownloader().download(
+        bbox, corpus_dir, temporal=temporal, partitions=partitions, spark=spark
+    )
+    # StacClient.download returns a LAZY DataFrame (spark.range + a per-index fetch
+    # UDF); it must be MATERIALIZED with an action or NOTHING downloads. Force it
+    # (and surface how many assets the fetch reported valid) BEFORE globbing the dir.
+    valid = manifest.filter(manifest["is_out_file_valid"]).count()
+    staged = list_corpus_files(corpus_dir, r".*\.nc$")
+    print(
+        f"stage_netcdf_corpus: {len(staged)} .nc swath granule(s) staged under "
+        f"{corpus_dir} ({valid} valid per manifest)",
+        flush=True,
+    )
+    return manifest
+
+
+def stage_nasanex_corpus(
+    spark,
+    corpus_dir: str,
+    bbox: Optional[List[float]] = None,
+    temporal: Optional[str] = None,
+    variables: Tuple[str, ...] = ("tas",),
+    partitions: Optional[int] = None,
+):
+    """Stage real NASA-NEX GDDP-CMIP6 regular-grid NetCDF granules into
+    ``corpus_dir`` for the NetCDF RASTER reader bench (download-and-stop mode).
+
+    Bench-only helper -- NOT product code and NOT run at import time. The human
+    invokes it once (interactively / from a staging notebook) to populate the
+    ``{CORPUS}/netcdf`` pool that the NetCDF reader-bench RASTER leg reads.
+    NASA-NEX GDDP-CMIP6 granules are regular 0.25-degree lat/lon global grids, so
+    BOTH the heavy ``netcdf_gdal`` and the light ``netcdf_gbx`` (raster mode)
+    readers can enumerate them -- a fair heavy-vs-light comparison. (The S5P swath
+    VECTOR leg is staged separately by ``stage_netcdf_corpus`` into
+    ``{CORPUS}/netcdf-swath``.)
+
+    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool, so
+    the download happens at stage time only, while the bench itself does not.
+
+    Granules land as ``{item_id}_{asset_name}.nc`` (one file per climate variable
+    per item; matching the ``.*\\.nc$`` filter the bench passes). Returns the
+    download-manifest DataFrame. Prints the resulting file count so a partial or
+    empty stage is never silent.
+    """
+    from databricks.labs.gbx.sample.nasanex import NasaNexDownloader
+
+    # Default AOI: a modest box over the US Southwest with a short window -- enough
+    # real regular-grid granules for a throughput bench without pulling the whole
+    # archive. Override via bbox/temporal/variables for other AOIs.
+    if bbox is None:
+        bbox = [-104.5, 31.0, -101.5, 33.0]
+    if temporal is None:
+        temporal = "2021-01-01/2021-01-08"
+    print(
+        f"stage_nasanex_corpus: downloading NASA-NEX GDDP-CMIP6 grid granules to "
+        f"{corpus_dir} (bbox={bbox}, temporal={temporal}, variables={variables})",
+        flush=True,
+    )
+    manifest = NasaNexDownloader().download(
+        bbox,
+        corpus_dir,
+        temporal=temporal,
+        variables=variables,
+        partitions=partitions,
+        spark=spark,
+    )
+    # StacClient.download returns a LAZY DataFrame (spark.range + a per-index fetch
+    # UDF); it must be MATERIALIZED with an action or NOTHING downloads. Force it
+    # (and surface how many assets the fetch reported valid) BEFORE globbing the dir.
+    valid = manifest.filter(manifest["is_out_file_valid"]).count()
+    staged = list_corpus_files(corpus_dir, r".*\.nc$")
+    print(
+        f"stage_nasanex_corpus: {len(staged)} .nc grid granule(s) staged under "
+        f"{corpus_dir} ({valid} valid per manifest)",
+        flush=True,
+    )
+    return manifest
 
 
 def _print_summary(rows: List[ResultRow]) -> None:

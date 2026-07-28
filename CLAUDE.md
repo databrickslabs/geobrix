@@ -35,8 +35,8 @@ Three API packages, each with its own SQL prefix:
 Each package exposes `functions` with `register(spark)` to install SQL UDFs. Shared primitives (`expressions`, `ds`, `util`) live under `com.databricks.labs.gbx`. Spark data source registrations are in `src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.
 
 **Readers** are namespace-suffixed:
-- Raster (GDAL): `gdal`, `gtiff_gdal`
-- Vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`
+- Raster (GDAL): `gdal`, `gtiff_gdal`, `netcdf_gdal`
+- Vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`, `netcdf_ogr`
 
 Named readers extend generic readers and preset driver options via `dsExtraMap`. Pattern: `<format>_<engine>`. Generic readers (`ogr`, `gdal`) remain clean for flexibility.
 

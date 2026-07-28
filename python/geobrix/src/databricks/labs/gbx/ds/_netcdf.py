@@ -118,16 +118,32 @@ def _crs_string(ds) -> str:
         v = ds[name]
         epsg = getattr(v, "epsg_code", None) or getattr(v, "spatial_epsg", None)
         if epsg is not None:
-            return f"EPSG:{int(epsg)}"
+            code = _epsg_int(epsg)
+            if code is not None:
+                return f"EPSG:{code}"
     # Default: geographic lon/lat.
     return "EPSG:4326"
+
+
+def _epsg_int(epsg) -> Optional[int]:
+    """Coerce a CF grid_mapping EPSG attribute to an int code.
+
+    The attribute is stored inconsistently across producers: a bare int
+    (``4326``), a numeric string (``"4326"``), or an authority string
+    (``"EPSG:4326"``, ``"epsg:4326"``). Extract the trailing digit run; return
+    None if no code is present so the caller falls back to EPSG:4326.
+    """
+    import re
+
+    m = re.search(r"(\d+)\s*$", str(epsg))
+    return int(m.group(1)) if m else None
 
 
 def array_2d(ds, variable: str) -> "object":
     """The variable's 2-D slice as a north-up numpy array (lat descending)."""
     import numpy as np
 
-    da = ds[variable]
+    da = _decoded_or_raw(ds, variable)
     # Squeeze any leading dims (e.g. time): take the first index until 2-D.
     while da.ndim > 2:
         da = da.isel({da.dims[0]: 0})
@@ -138,6 +154,37 @@ def array_2d(ds, variable: str) -> "object":
     if latdim in da.dims and float(latvals[0]) < float(latvals[-1]):
         da = da.isel({latdim: slice(None, None, -1)})
     return np.asarray(da.values)
+
+
+def _decoded_or_raw(ds, variable: str) -> "object":
+    """Return the variable's DataArray, materializing its values.
+
+    Normally the ``mask_and_scale``-decoded array. But some CF integer variables
+    (e.g. NOAA coral ``bleaching_alert_area``: uint8 with ``valid_min/max`` and a
+    fill of 251) trip xarray's masking decode with "cannot convert float NaN to
+    integer". For those we fall back to the RAW (undecoded) values -- which is
+    also what the heavy GDAL reader emits (fill kept as its integer sentinel, no
+    NaN promotion), so it is the parity-correct behavior. The reopen is targeted
+    (only on decode failure) using the variable's own source-file encoding.
+    """
+    import xarray as xr
+
+    da = ds[variable]
+    try:
+        # Force the lazy decode now so a masking failure is caught here.
+        da.values  # noqa: B018 - intentional materialization to trigger decode
+        return da
+    except ValueError:
+        src = da.encoding.get("source") or ds.encoding.get("source")
+        if not src:
+            raise
+        raw = xr.open_dataset(
+            src, engine="netcdf4", decode_coords="all", mask_and_scale=False
+        )
+        try:
+            return raw[variable].load()
+        finally:
+            raw.close()
 
 
 def nodata_of(ds, variable: str) -> Optional[float]:
@@ -176,6 +223,28 @@ def point_arrays(
     for name in variables:
         attrs[name] = np.asarray(ds[name].values).ravel()
     return lon_flat, lat_flat, attrs, "4326"
+
+
+def readable_variables(ds, mode: str) -> List[str]:
+    """Data variables readable in `mode` ('raster' -> GRID; 'vector' -> POINTS/CURVILINEAR).
+
+    Iterates ds.data_vars only: with open_dataset's decode_coords="all", lat/lon,
+    grid-mapping, and bounds coordinate variables are xarray coords, not data_vars,
+    so they are never surfaced as readable fields.
+    """
+    keep = {GRID} if mode == "raster" else {POINTS, CURVILINEAR}
+    return [name for name in list(ds.data_vars) if classify(ds, name) in keep]
+
+
+def select_variables(ds, options: Dict[str, str], mode: str) -> List[str]:
+    """Auto-enumerate all readable variables, narrowed by an optional variable filter."""
+    readable = readable_variables(ds, mode)
+    raw = options.get("variables") or options.get("variable")
+    if not raw:
+        return readable
+    requested = [v.strip() for v in str(raw).split(",") if v.strip()]
+    readable_set = set(readable)
+    return [v for v in requested if v in readable_set]
 
 
 def np_to_spark(dtype) -> "object":

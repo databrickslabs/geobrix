@@ -1,0 +1,188 @@
+---
+sidebar_position: 9
+sidebar_label: NetCDF
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import netcdfWrite from '!!raw-loader!../../tests/python/writers/netcdf_gbx_write_examples.py';
+
+# NetCDF Writer
+
+Write CF-convention NetCDF (`.nc`) — the inverse of the
+[`netcdf_gbx` reader](../readers/netcdf). `df.write.format("netcdf_gbx")` writes
+raster tile DataFrames as CF grids (the default raster mode) or point DataFrames
+as CF Discrete Sampling Geometry (DSG) files (vector mode).
+
+`netcdf_gbx` is **light-only**: there is **no heavyweight NetCDF writer**. Unlike
+GeoTIFF or the catch-all raster writer (which ship in both tiers), NetCDF writing
+is the pure-Python (`netcdf4`-backed, JAR-free) writer only — it runs on
+**Serverless, standard (shared), ARM, and classic** compute. This mirrors the
+read side, where the swath-flattening vector leg is a lightweight-only capability.
+
+:::note Register first
+The lightweight Python DataSources are **not** auto-registered — call
+`register(spark)` once per session before using the `netcdf_gbx` writer.
+
+<CodeFromTest code={netcdfWrite} language="python" functionName="REGISTER"
+  source="docs/tests/python/writers/netcdf_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_netcdf_gbx_write_examples.py" />
+:::
+
+## Schema
+
+The writer consumes whichever schema its mode expects:
+
+- **Raster mode** — the shared `(source, tile)` raster schema (exactly what the
+  raster readers emit). Each row is one CF grid.
+- **Vector mode** — the lightweight vector schema: attribute columns plus a
+  `geom_0` WKB point column and `geom_0_srid` (`+ geom_0_srid_proj`) CRS-companion
+  columns. `geom_0*` are geometry/CRS metadata and are **not** written as data
+  variables; every other column becomes a per-observation data variable. A frame
+  that does not use the `geom_0` convention can point the writer at its own columns
+  with `geomCol` / `sridCol` / `projCol` (see [Options](#options)). Vector output is
+  point-only (CF-DSG `featureType="point"`).
+
+**Output:** the writer shards by default — one `.nc` per row (raster) or per Spark
+partition (vector) — which is safe at any scale. Opt in to a single consolidated
+`.nc` with `singleFile`, or fold already-written parts with `merge`.
+
+:::note Save modes
+`.mode("overwrite")` clears the target directory's `.nc` files before writing;
+`.mode("append")` writes new shards alongside existing ones (parts mode). With
+`singleFile`, both modes write the resolved single file fresh from the current
+DataFrame — `append` does **not** fold rows into a pre-existing single file. To
+combine already-written `.nc` files without recomputing, use `merge` (which ignores
+the DataFrame rows and requires `.mode("append")` since it never deletes its inputs).
+:::
+
+## Raster mode (default)
+
+Each `(source, tile)` row is written as one CF grid `.nc` with `lat` and `lon`
+coordinate variables, a `_FillValue` for NoData pixels, and — when the tile CRS
+resolves to an EPSG code other than 4326 — a `crs` grid-mapping variable carrying
+that code in its `spatial_epsg` attribute (which the reader recovers on re-read).
+
+<CodeFromTest code={netcdfWrite} language="python" functionName="WRITE_RASTER"
+  source="docs/tests/python/writers/netcdf_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_netcdf_gbx_write_examples.py" />
+
+The variable name is resolved as `varNameCol` (explicit override) → the `source`
+subdataset selector (`NETCDF:"{path}":{var}` → the segment after the last `:`) →
+`"data"`. The filename stem is `nameCol` when set, otherwise the resolved variable
+name, falling back to `<partPrefix>-<uuid>`.
+
+## Vector mode
+
+Vector mode writes the DataFrame's attribute columns plus lon/lat as a CF Discrete
+Sampling Geometry file (`featureType="point"`) — one `.nc` per Spark partition. Null
+attribute cells are written as CF fill: an integer `_FillValue` sentinel for integer
+columns, `NaN` for float columns.
+
+<CodeFromTest code={netcdfWrite} language="python" functionName="WRITE_VECTOR"
+  source="docs/tests/python/writers/netcdf_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_netcdf_gbx_write_examples.py" />
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mode` | `"raster"` | `raster` (tile → CF grid) or `vector` (points → CF DSG). |
+| `nameCol` | — | Column whose value supplies the output filename stem per row/part. Absent (raster) → the stem is derived from the `source` value; absent (vector) → the part uses `<partPrefix>-<uuid>`. |
+| `varNameCol` | — | **Raster mode only.** Column whose value supplies the NetCDF variable name per row. Absent → parsed from the `source` subdataset selector (segment after the last `:`), or `"data"` if unparseable. |
+| `singleFile` | `"false"` | Write **one** `.nc` instead of sharded parts. Vector → all points concatenated into one CF-DSG file; raster → distinct variables sharing one grid merged into one CF grid file. See [Single-file & directory merge](#single-file--directory-merge). |
+| `merge` | `"false"` | Post-hoc: merge the `.nc` files **already present** in the output directory into one file, without re-running the source DataFrame. Implies single output and wins over `singleFile` if both are set. |
+| `keepParts` | `"false"` | Only meaningful with `singleFile` / `merge`. When `false` (default), the source part files are deleted after the merged output is validated and durably written; when `true`, the parts are kept alongside the merged file. A failed or partial merge always leaves every part intact. |
+| `fileName` | — (derived) | Output filename stem for `singleFile` / `merge` output. Absent → derived. |
+| `partPrefix` | `"part"` | Filename stem for sharded parts-mode files (`<partPrefix>-<uuid>.nc`) — label your shards. |
+| `geomCol` | auto-detected from the `*_srid` column | **Vector mode only.** Override the geometry (WKB point) column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). |
+| `sridCol` | `<geomCol>_srid` | **Vector mode only.** Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown), recorded as `spatial_epsg` on the `crs` grid-mapping variable for non-4326 points. |
+| `projCol` | `<geomCol>_srid_proj` | **Vector mode only.** Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |
+
+## Single-file & directory merge
+
+By default the writer shards output into one `.nc` per row (raster) or per Spark
+partition (vector) — safe at any scale. To consolidate into **one** `.nc`, opt in
+with `singleFile`, or merge already-written parts after the fact with `merge`.
+
+<CodeFromTest code={netcdfWrite} language="python" functionName="WRITE_SINGLEFILE"
+  source="docs/tests/python/writers/netcdf_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_netcdf_gbx_write_examples.py" />
+
+<CodeFromTest code={netcdfWrite} language="python" functionName="WRITE_MERGE"
+  source="docs/tests/python/writers/netcdf_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_netcdf_gbx_write_examples.py" />
+
+- **Vector `singleFile`** concatenates all points across partitions into one CF
+  Discrete Sampling Geometry file (`featureType="point"`), streaming fragment by
+  fragment through an UNLIMITED `obs` dimension to bound driver memory.
+- **Raster `singleFile`** merges tiles carrying **distinct** variables that share
+  **one** grid into a single CF grid file: multiple data variables over shared
+  `lat`/`lon` coordinate variables, each with its own `_FillValue`, plus a shared
+  `crs` grid-mapping variable for non-4326 grids. It deliberately does **not**
+  mosaic many spatial-window tiles of one variable — if two tiles have incompatible
+  grids **or** the same variable name, the writer raises a clear error pointing at
+  `gbx_rst_merge_agg`.
+- **`merge`** runs the same merge core on the `.nc` files already in the output
+  directory, so the "I already wrote sharded parts, now just combine them" case
+  needs no recompute. Merging an empty directory raises. `merge` implies single
+  output and wins over `singleFile` when both are set.
+- **`keepParts`** (default `false`) controls the source parts. After a successful,
+  validated, durably-written merge the parts are deleted (consolidate-in-place);
+  set `keepParts="true"` to keep them. Parts are **never** deleted until the merged
+  output is validated and verified on disk — a failed or partial merge always leaves
+  every part intact.
+
+:::note Mosaic window-tiles upstream, then write one file
+The raster `singleFile` / `merge` path merges **distinct variables on a shared
+grid**, not many spatial-window tiles of a single variable. To combine window-tiles
+of **one** variable into a single grid, mosaic them with `gbx_rst_merge_agg` (or
+`gbx_rst_merge`) **before** the writer:
+
+```sql
+-- Mosaic window-tiles of one variable upstream, THEN write one file.
+SELECT gbx_rst_merge_agg(tile) AS tile
+FROM tiles
+GROUP BY source
+```
+
+then write the mosaicked DataFrame with `singleFile="true"`.
+:::
+
+:::note Single-file memory tradeoff
+The single-file merge is funneled through the driver, so sharded parts (the default)
+are safer at very large scale. Reach for `singleFile` / `merge` when the combined
+output comfortably fits in driver memory; otherwise keep the default sharded parts.
+:::
+
+## Round-trip
+
+Reading a `.nc` file with `netcdf_gbx` raster mode and writing it back with
+`netcdf_gbx` raster mode reproduces the physical values, CRS, and NoData mask.
+Reading with `netcdf_gbx` vector mode and writing back preserves lon/lat coordinates
+and attribute columns.
+
+:::note Limitations
+
+**Decoded physical values only.** The writer outputs the values it receives — after
+any CF `scale_factor` / `add_offset` decoding the reader applied — as floating-point
+data. It does not re-pack values to compressed integers. To reproduce a source file's
+packed storage format, apply the encoding transform manually before writing.
+
+**Geographic (lon/lat) grids on the raster path.** The raster writer targets
+EPSG:4326 geographic grids. Tiles in a projected CRS (for example EPSG:3857 or
+EPSG:27700) should be reprojected to EPSG:4326 with `gbx_rst_transform` before
+writing: the `lat`/`lon` coordinate variables are always written in degrees, and a
+non-4326 EPSG is recorded only as a `spatial_epsg` code on the `crs` grid-mapping
+variable — the coordinate values themselves are not reprojected, so a projected tile
+would be mislabeled as degrees.
+
+:::
+
+## Next Steps
+
+- [NetCDF Reader](../readers/netcdf) — the corresponding read paths (raster, vector, heavyweight).
+- [GeoTIFF Writer](./geotiff) — for COG/GeoTIFF raster output.
+- [Writers Overview](./overview) — all writer formats and the tier split.
+- [Raster Functions](../api/raster-functions) — tessellation, band math, tiling, `gbx_rst_merge_agg`.

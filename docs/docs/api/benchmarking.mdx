@@ -191,6 +191,88 @@ it is the trade for running where the heavyweight tier can't (Serverless, ARM, n
 init script). At scale the read still parallelizes across the cluster (~23 ms/tile here,
 spread over the workers).
 
+### NetCDF readers
+
+The NetCDF reader benchmark has **two legs**, matching the two data shapes each reader supports:
+
+- **Raster leg (heavy vs. light):** `netcdf_gdal` and `netcdf_gbx` (raster mode) are both
+  pointed at the **same directory of regular-grid `.nc` granules**, and the benchmark counts
+  how many `(source, tile)` rows each reader emits. `netcdf_gdal` enumerates only
+  georeferenced regular grids (a real CRS or a non-identity geotransform); swath files
+  produce zero rows from `netcdf_gdal` in raster mode. Both readers now decode CF
+  `scale_factor` / `add_offset` to physical values, so on a scaled regular-grid variable
+  the two tiers produce matching physical measurements (verified within 1e-4). Run with
+  `gbx:bench:cluster --netcdf-only --row-counts 1000`.
+
+- **Vector leg (light only):** `netcdf_gbx` in **vector mode** is pointed at a directory
+  of Sentinel-5P L2 CH4 swath granules. `netcdf_gdal` has no swath path — swaths enumerate
+  to nothing in its raster mode — so this leg measures light-only throughput: how fast
+  `netcdf_gbx` vector mode converts swath cells to per-cell points.
+
+Each leg is staged separately and independently from the benchmark run itself:
+
+**Raster corpus (NASA-NEX GDDP-CMIP6 regular grids):**
+
+```python
+from databricks.labs.gbx.bench import readers
+# NASA-NEX GDDP-CMIP6 regular 0.25-degree grids, anonymously accessible on Planetary Computer
+# (no token). AOI + window are the knobs; the default covers a US Southwest box.
+readers.stage_nasanex_corpus(spark, f"{CORPUS}/netcdf",
+                             bbox=[-104.5, 31.0, -101.5, 33.0],
+                             temporal="2021-01-01/2021-01-08",
+                             variables=("tas",))
+```
+
+**Vector (swath) corpus (Sentinel-5P L2 CH4):**
+
+```python
+from databricks.labs.gbx.bench import readers
+# S5P L2 CH4 is anonymously accessible on Planetary Computer (no token). AOI + window
+# are the knobs; the default is a short window over a CH4 hotspot region.
+readers.stage_netcdf_corpus(spark, f"{CORPUS}/netcdf-swath",
+                            bbox=[-104.5, 31.0, -101.5, 33.0],
+                            temporal="2021-01-01/2021-01-08")
+```
+
+Staging is **decoupled from the read** — the download happens once, at stage time; the
+benchmark itself just globs the staged pool. If a pool is empty or missing (staging not
+yet run), that leg **skips cleanly** with a clear message rather than failing the run.
+
+### NetCDF writer
+
+The `netcdf_gbx` writer is **lightweight-only** — there is no heavyweight NetCDF writer
+tier. The writer benchmark has **two legs** matching the two write modes:
+
+- **Raster leg:** `netcdf_gbx` raster mode is pointed at the same regular-grid corpus
+  used by the reader raster leg (NASA-NEX GDDP-CMIP6 granules). Each `(source, tile)`
+  row is written as one CF grid `.nc` file. The leg measures whole-job wall-clock over
+  1,000 rows. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
+
+- **Vector leg:** `netcdf_gbx` vector mode is pointed at a Sentinel-5P swath-derived
+  points corpus (one point per ground pixel, emitted by the reader vector leg). Each
+  Spark partition is written as one CF DSG `.nc` file. The leg measures whole-job
+  wall-clock. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
+
+Each mode runs **three times**, once per write shape:
+
+- **parts** (default) — one `.nc` file per row (raster) or per partition (vector).
+- **singleFile** (`singleFile=true`) — the partition fragments are merged into a single
+  `.nc` on the driver via a two-phase scratch-then-merge.
+- **merge** (`merge=true keepParts=true`) — a *post-hoc* fold of the `.nc` parts already
+  on disk into one file, without re-running the DataFrame; the bench seeds the output
+  directory with a one-shot parts write before timing the merge, and `keepParts=true`
+  retains the parts so the merge stays idempotent across warmup and measured iterations.
+
+The three shapes are recorded as distinct rows (each leg is tagged in its note —
+`[singleFile]` and `[merge]` — and written to a separate output directory) so a run
+carries a real parts-vs-single-vs-merge throughput comparison. The raster legs read a
+distinct-variable single-grid corpus so the singleFile and merge shapes can fold several
+data variables that share one grid into one CF `.nc`.
+
+Each leg is staged from the same corpora as the corresponding reader leg (see
+[NetCDF readers](#netcdf-readers) above). If a corpus pool is absent, that writer leg
+skips cleanly with a clear message rather than failing the run.
+
 ### Tiled output (PMTiles writer)
 
 The PMTiles writer is benchmarked separately from the `rst_*` functions: it is a

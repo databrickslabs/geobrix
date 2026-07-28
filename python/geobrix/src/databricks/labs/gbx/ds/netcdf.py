@@ -12,7 +12,7 @@ Spark-config mutation or JVM-bridge access).
 
 from __future__ import annotations
 
-from typing import Dict, Iterator, List, Tuple
+from typing import Dict, Iterator, Tuple
 
 from pyspark.sql.datasource import DataSource, DataSourceReader
 from pyspark.sql.types import StructType
@@ -21,73 +21,47 @@ from databricks.labs.gbx.ds import _encode, _netcdf
 from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
 
 
-def _requested_variables(options: Dict[str, str]) -> List[str]:
-    raw = options.get("variables") or options.get("variable")
-    if not raw:
-        raise ValueError(
-            "netcdf_gbx requires a 'variable' (or 'variables') option naming the "
-            "NetCDF variable(s) to read."
-        )
-    return [v.strip() for v in str(raw).split(",") if v.strip()]
-
-
 class NetcdfRasterReader(RasterGbxReader):
-    """Raster mode: transcode a CF grid variable to a GeoTIFF tile."""
+    """Raster mode: transcode each CF grid variable to a GeoTIFF tile (one row per variable)."""
 
     def __init__(self, options: Dict[str, str]):
         super().__init__(options)  # path/sizeInMB/filterRegex/bbox/bboxCrs
-        self.variables = _requested_variables(options)
+        self.options = dict(options)
         self.group = options.get("group")
 
     def read(self, partition: "_FilePartition") -> Iterator[Tuple]:
         from rasterio.io import MemoryFile
 
-        from databricks.labs.gbx.ds import _listing
-
-        source = _listing.to_spark_uri(partition.file_path)
-        var = self.variables[0]  # raster mode reads a single variable per tile
         with _netcdf.open_dataset(partition.file_path, self.group) as ds:
-            kind = _netcdf.classify(ds, var)
-            if kind == _netcdf.CURVILINEAR:
-                raise ValueError(
-                    f"netcdf_gbx: variable '{var}' in {partition.file_path} is "
-                    f"curvilinear/swath (2-D lat/lon); read it with "
-                    f"option('mode','vector') to get per-cell points."
+            variables = _netcdf.select_variables(ds, self.options, "raster")
+            for var in variables:
+                transform, crs = _netcdf.grid_transform_crs(ds, var)
+                arr = _netcdf.array_2d(ds, var)
+                nodata = _netcdf.nodata_of(ds, var)
+                source = f'NETCDF:"{partition.file_path}":{var}'
+                h, w = arr.shape[-2], arr.shape[-1]
+                profile = dict(
+                    driver="GTiff",
+                    width=w,
+                    height=h,
+                    count=1,
+                    dtype=str(arr.dtype),
+                    crs=crs,
+                    transform=transform,
                 )
-            if kind != _netcdf.GRID:
-                raise ValueError(
-                    f"netcdf_gbx: variable '{var}' is not a regular grid "
-                    f"({kind}); raster mode supports CF regular/projected grids only."
-                )
-            transform, crs = _netcdf.grid_transform_crs(ds, var)
-            arr = _netcdf.array_2d(ds, var)
-            nodata = _netcdf.nodata_of(ds, var)
-
-        h, w = arr.shape[-2], arr.shape[-1]
-        profile = dict(
-            driver="GTiff",
-            width=w,
-            height=h,
-            count=1,
-            dtype=str(arr.dtype),
-            crs=crs,
-            transform=transform,
-        )
-        if nodata is not None:
-            profile["nodata"] = nodata
-        # Build an in-memory rasterio dataset, then reuse the shared encode_tile so
-        # the 11-key metadata + GTiff re-encode stay DRY with the other readers.
-        with MemoryFile() as mf:
-            with mf.open(**profile) as out:
-                out.write(arr.astype(profile["dtype"]), 1)
-            with mf.open() as rds:
-                cellid, raster_bytes, meta = _encode.encode_tile(
-                    rds,
-                    window=(0, 0, w, h),
-                    source_path=partition.file_path,
-                    all_parents="",
-                )
-        yield (source, (cellid, raster_bytes, meta))
+                if nodata is not None:
+                    profile["nodata"] = nodata
+                with MemoryFile() as mf:
+                    with mf.open(**profile) as out:
+                        out.write(arr.astype(profile["dtype"]), 1)
+                    with mf.open() as rds:
+                        cellid, raster_bytes, meta = _encode.encode_tile(
+                            rds,
+                            window=(0, 0, w, h),
+                            source_path=partition.file_path,
+                            all_parents="",
+                        )
+                yield (source, (cellid, raster_bytes, meta))
 
 
 class NetcdfGbxDataSource(DataSource):
@@ -118,6 +92,28 @@ class NetcdfGbxDataSource(DataSource):
             from databricks.labs.gbx.ds._netcdf_vector import NetcdfVectorReader
 
             return NetcdfVectorReader(self.options)
+        raise ValueError(
+            f"netcdf_gbx: unknown mode={mode!r} (use 'raster' or 'vector')."
+        )
+
+    def writer(self, schema: StructType, overwrite: bool):
+        mode = self._mode()
+        if mode == "raster":
+            from databricks.labs.gbx.ds._write_netcdf import NetcdfRasterGbxWriter
+
+            if not self.options.get("path"):
+                raise ValueError(
+                    "netcdf_gbx writer requires an output path (.save(path))."
+                )
+            return NetcdfRasterGbxWriter(self.options, schema, overwrite)
+        if mode == "vector":
+            from databricks.labs.gbx.ds._write_netcdf import NetcdfVectorGbxWriter
+
+            if not self.options.get("path"):
+                raise ValueError(
+                    "netcdf_gbx writer requires an output path (.save(path))."
+                )
+            return NetcdfVectorGbxWriter(self.options, schema, overwrite)
         raise ValueError(
             f"netcdf_gbx: unknown mode={mode!r} (use 'raster' or 'vector')."
         )

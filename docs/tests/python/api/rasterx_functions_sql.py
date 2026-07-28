@@ -1113,11 +1113,11 @@ LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12) g AS tile;
 
 
 rst_quadbin_tessellate_sql_example_output = """
-+----+--------------+
-|path|tile          |
-+----+--------------+
-|... |<raster chip> |
-+----+--------------+"""
++----+----------------------------------------------+
+|path|tile                                          |
++----+----------------------------------------------+
+|... |{null, <raster bytes>, {driver -> GTiff, ...}}|
++----+----------------------------------------------+"""
 
 
 def rst_bng_tessellate_sql_example():
@@ -1143,11 +1143,11 @@ LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km') g AS tile;
 
 
 rst_bng_tessellate_sql_example_output = """
-+----+--------------+
-|path|tile          |
-+----+--------------+
-|... |<raster chip> |
-+----+--------------+"""
++----+----------------------------------------------+
+|path|tile                                          |
++----+----------------------------------------------+
+|... |{null, <raster bytes>, {driver -> GTiff, ...}}|
++----+----------------------------------------------+"""
 
 
 def rst_h3_rastertogridavg_sql_example():
@@ -1527,11 +1527,11 @@ LATERAL VIEW explode(gbx_rst_bng_rastertogridavg(tile, '1km')[0]) AS cell;
 
 
 rst_bng_rastertogridavg_sql_example_output = """
-+----+-------------------+
-|path|bng_grid           |
-+----+-------------------+
-|... |[[{TQ38SW, 0.42}]] |
-+----+-------------------+
++----+------------------+
+|path|bng_grid          |
++----+------------------+
+|... |[[{TQ38SW, 0.42}]]|
++----+------------------+
 
 +----+--------+---------+
 |path|bng_cell|avg_value|
@@ -1551,11 +1551,11 @@ FROM rasters;
 
 
 rst_bng_rastertogridcount_sql_example_output = """
-+-------------------+
-|pixel_counts       |
-+-------------------+
-|[[{TQ38, 1024}]]   |
-+-------------------+
++----------------+
+|pixel_counts    |
++----------------+
+|[[{TQ38, 1024}]]|
++----------------+
 """
 
 

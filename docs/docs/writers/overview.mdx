@@ -187,6 +187,7 @@ An unrecognized format raises `ValueError`.
 | [GeoJSONL Writer](./geojsonl) | `geojsonl_gbx` / `geojsonl_ogr` | Multi-file newline-delimited GeoJSONL — one shard per partition, no driver merge. Available in **both** tiers. |
 | [GeoPackage Writer](./geopackage) | `gpkg_gbx` | Pure-Python GeoPackage writer (OGR driver: `GPKG`). |
 | [GeoDatabase Writer](./filegdb) | `file_gdb_gbx` | **Hybrid** File Geodatabase writer (OGR driver: `OpenFileGDB`) — requires the native GDAL libraries (e.g. as provided by the heavyweight tier), not pure-Python. |
+| [NetCDF Writer](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF writer — CF grids (raster) or CF-DSG points (vector), with `singleFile` / `merge` consolidation. Light-only (no heavyweight NetCDF writer). |
 
 See the [Raster Writer](./raster) page for full usage, options, and the `nameCol` / `ext` controls.
 

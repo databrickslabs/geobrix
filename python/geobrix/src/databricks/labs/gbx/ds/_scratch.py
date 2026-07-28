@@ -55,6 +55,27 @@ def new_scratch_dir(parent: str) -> str:
     return os.path.join(parent, SCRATCH_CONTAINER, uuid.uuid4().hex)
 
 
+def remove_scratch_dir(scratch_dir: str) -> None:
+    """Remove a per-write scratch subdir AND prune the now-empty container.
+
+    ``shutil.rmtree(scratch_dir)`` alone leaves the parent ``.gbx_scratch``
+    container behind as an empty hidden directory in the output location (a
+    singleFile write's output dir ends up with a stray ``.gbx_scratch/``). This
+    also drops the container via ``os.rmdir`` — which only succeeds when the
+    container is empty, so a concurrent in-flight write's sibling subdir keeps
+    the container alive and untouched. Best-effort and never raises.
+    """
+    if not scratch_dir:
+        return
+    shutil.rmtree(scratch_dir, ignore_errors=True)
+    container = os.path.dirname(scratch_dir)
+    if os.path.basename(container) == SCRATCH_CONTAINER:
+        try:
+            os.rmdir(container)  # only removes it if now empty (no live siblings)
+        except OSError:
+            pass  # not empty (concurrent write) or already gone -- leave it
+
+
 def gc_stale_scratch(parent: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS) -> None:
     """Best-effort: remove scratch subdirs under ``<parent>/.gbx_scratch`` whose
     mtime is older than ``ttl_seconds``.

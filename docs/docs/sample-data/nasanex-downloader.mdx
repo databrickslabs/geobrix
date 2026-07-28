@@ -1,0 +1,54 @@
+---
+sidebar_position: 9
+title: NASA-NEX GDDP-CMIP6 Downloader
+---
+
+## NASA-NEX GDDP-CMIP6 Downloader
+
+`NasaNexDownloader` fetches **NASA-NEX GDDP-CMIP6** downscaled climate-projection granules for any bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API and stages the NetCDF-4 granules into a Unity Catalog Volume.
+
+NASA-NEX GDDP-CMIP6 provides daily downscaled climate variables (temperature, precipitation, humidity, radiation, …) on a **regular 0.25° global lat/lon grid**, one file per climate model, scenario, and year. Because these are true georeferenced grids — not swaths — they pair with the [NetCDF reader](../readers/netcdf)'s **raster mode**, and can be read by both the lightweight `netcdf_gbx` and the heavyweight `netcdf_gdal` readers.
+
+:::note Prerequisites
+- GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
+- Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
+- `pystac-client` and `planetary-computer` packages installed: `%pip install pystac-client planetary-computer`
+- No authentication required — NASA-NEX GDDP-CMIP6 is public on Planetary Computer
+:::
+
+---
+
+## How It Works
+
+`NasaNexDownloader` follows the same **discover → download → read** pattern as the other Planetary Computer downloaders, staging regular-grid NetCDF granules:
+
+1. **`discover(bbox, temporal=None, variables=("tas",))`** — driver-side STAC search against the `nasa-nex-gddp-cmip6` collection. Returns one row per matching granule: `item_id`, `asset_name`, `item_bbox`, `href`. In this collection the **asset name is the climate-variable id** (`tas`, `pr`, `tasmax`, `hurs`, …), so `variables` selects which variables to stage. A granule spans one model/scenario/year; narrow the set with a `temporal` STAC-style `"start/end"` string.
+
+2. **`download(bbox, out_dir, temporal=None, variables=("tas",), ...)`** — re-runs the STAC search, then fans out the granule fetch as parallel Spark tasks via `StacClient.download()`, saving each file as `{item_id}_{asset_name}.nc` (one file per climate variable per item). Regular-grid granules are fetched whole and existence/size-validated; the AOI clip happens on read. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+
+3. **`read(out_dir)`** — loads the staged `.nc` granules through the `netcdf_gbx` reader in **raster mode**: one `(source, tile)` row per grid variable, with the source path preserved so multiple variables stay distinguishable.
+
+---
+
+## Example
+
+```python
+from databricks.labs.gbx.sample import NasaNexDownloader, download_nasanex_aoi
+
+# US Southwest AOI, a short window, the near-surface air-temperature variable.
+bbox = [-104.5, 31.0, -101.5, 33.0]
+out_dir = "/Volumes/main/geobrix_samples/nasanex"
+
+# One-shot convenience wrapper.
+manifest = download_nasanex_aoi(spark, bbox, out_dir,
+                                temporal="2014-01-01/2014-01-02",
+                                variables=("tas",))
+manifest.select("item_id", "asset_name", "out_file_sz", "is_out_file_valid").show()
+
+# Or drive the downloader directly, then read the staged grids as raster tiles.
+dl = NasaNexDownloader()
+dl.download(bbox, out_dir, temporal="2014-01-01/2014-01-02", variables=("tas", "pr"), spark=spark)
+grids = dl.read(out_dir)   # (source, tile) rows, raster mode
+```
+
+Each granule is a full-year daily global grid (hundreds of MB); bound the corpus with `variables` and a short `temporal` window when staging for interactive work.

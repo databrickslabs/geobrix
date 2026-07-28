@@ -683,18 +683,29 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
 
     def __init__(self, options: dict, schema: StructType, overwrite: bool):
         from databricks.labs.gbx.ds._listing import to_local_path
+        from databricks.labs.gbx.ds.vector import _writer_col_roles
 
         self.merge = str(options.get("merge", "false")).lower() == "true"
         names = [f.name for f in schema.fields]
+        # Column-role overrides (parity with the shared vector writers). Default
+        # to the `geom_0` / `geom_0_srid` / `geom_0_srid_proj` convention.
+        self.geom_col = options.get("geomCol")
+        self.srid_col = options.get("sridCol")
+        self.proj_col = options.get("projCol")
         # merge IGNORES the DataFrame rows (it folds the CF-DSG .nc files already
         # on disk), so a non-conforming DataFrame is legal on the merge path —
-        # skip the geom_0 schema gate there. See docs/readers/netcdf.mdx.
-        if not self.merge and ("geom_0" not in names or "geom_0_srid" not in names):
-            raise ValueError(
-                "netcdf_gbx vector writer requires the vector schema "
-                "(attributes + geom_0 + geom_0_srid[+ geom_0_srid_proj]); got "
-                f"{names}"
-            )
+        # skip the schema gate (role resolution) there. See docs/readers/netcdf.mdx.
+        if not self.merge:
+            (
+                self.geom_col_resolved,
+                self.srid_col_resolved,
+                self.proj_col_resolved,
+                _helper_attrs,
+            ) = _writer_col_roles(schema, self.geom_col, self.srid_col, self.proj_col)
+        else:
+            self.geom_col_resolved = self.geom_col or "geom_0"
+            self.srid_col_resolved = self.srid_col or "geom_0_srid"
+            self.proj_col_resolved = self.proj_col or "geom_0_srid_proj"
         self.path = to_local_path(options.get("path"))
         self.overwrite = overwrite
         self.name_col = options.get("nameCol")
@@ -705,10 +716,17 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         # merge wins over singleFile if both are set.
         if self.merge:
             self.single_file = False
-        # Exclude geom columns AND the nameCol: nameCol is file-naming metadata
-        # only and must not be written as a netCDF4 data variable (it may be
-        # a StringType, which netCDF4 cannot assign to a numeric variable).
-        excluded = {n for n in names if n.startswith("geom_0")}
+        # Exclude the resolved geom/srid/proj columns AND the nameCol: geom/CRS
+        # columns are metadata (written as coords / the crs grid-mapping var), and
+        # nameCol is file-naming metadata only — none may be written as a netCDF4
+        # data variable (nameCol may be StringType, which netCDF4 cannot assign to
+        # a numeric variable). The helper's attr_cols already drops geom/srid/proj;
+        # additionally drop nameCol here.
+        excluded = {
+            self.geom_col_resolved,
+            self.srid_col_resolved,
+            self.proj_col_resolved,
+        }
         if self.name_col:
             excluded.add(self.name_col)
         self.attr_cols = [n for n in names if n not in excluded]
@@ -823,11 +841,11 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         for row in iterator:
             if name is None and self.name_col and row[self.name_col]:
                 name = os.path.basename(str(row[self.name_col]))
-            pt = shapely.from_wkb(bytes(row["geom_0"]))
+            pt = shapely.from_wkb(bytes(row[self.geom_col_resolved]))
             lons.append(pt.x)
             lats.append(pt.y)
-            if row["geom_0_srid"] is not None:
-                srids.add(str(row["geom_0_srid"]))
+            if row[self.srid_col_resolved] is not None:
+                srids.add(str(row[self.srid_col_resolved]))
             for c in self.attr_cols:
                 attrs[c].append(row[c])
 

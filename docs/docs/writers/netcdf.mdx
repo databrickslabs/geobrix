@@ -39,7 +39,10 @@ The writer consumes whichever schema its mode expects:
 - **Vector mode** — the lightweight vector schema: attribute columns plus a
   `geom_0` WKB point column and `geom_0_srid` (`+ geom_0_srid_proj`) CRS-companion
   columns. `geom_0*` are geometry/CRS metadata and are **not** written as data
-  variables; every other column becomes a per-observation data variable.
+  variables; every other column becomes a per-observation data variable. A frame
+  that does not use the `geom_0` convention can point the writer at its own columns
+  with `geomCol` / `sridCol` / `projCol` (see [Options](#options)). Vector output is
+  point-only (CF-DSG `featureType="point"`).
 
 **Output:** the writer shards by default — one `.nc` per row (raster) or per Spark
 partition (vector) — which is safe at any scale. Opt in to a single consolidated
@@ -93,6 +96,9 @@ columns, `NaN` for float columns.
 | `keepParts` | `"false"` | Only meaningful with `singleFile` / `merge`. When `false` (default), the source part files are deleted after the merged output is validated and durably written; when `true`, the parts are kept alongside the merged file. A failed or partial merge always leaves every part intact. |
 | `fileName` | — (derived) | Output filename stem for `singleFile` / `merge` output. Absent → derived. |
 | `partPrefix` | `"part"` | Filename stem for sharded parts-mode files (`<partPrefix>-<uuid>.nc`) — label your shards. |
+| `geomCol` | auto-detected from the `*_srid` column | **Vector mode only.** Override the geometry (WKB point) column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). |
+| `sridCol` | `<geomCol>_srid` | **Vector mode only.** Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown), recorded as `spatial_epsg` on the `crs` grid-mapping variable for non-4326 points. |
+| `projCol` | `<geomCol>_srid_proj` | **Vector mode only.** Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |
 
 ## Single-file & directory merge
 

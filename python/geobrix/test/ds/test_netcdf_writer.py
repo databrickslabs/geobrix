@@ -481,6 +481,179 @@ def test_vector_write_nullable_attrs(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# geomCol / sridCol / projCol column-override tests
+# ---------------------------------------------------------------------------
+
+
+def test_vector_write_custom_geomcol(spark, tmp_path):
+    """A frame whose geometry columns are NOT `geom_0*` writes with `geomCol`.
+
+    The geometry pair is `shape` / `shape_srid` / `shape_srid_proj`; without the
+    `geomCol` override the writer would fail to find `geom_0` (RED before fix).
+    """
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("ch4", FloatType(), True),
+            StructField("qa_value", IntegerType(), True),
+            StructField("shape", BinaryType(), True),
+            StructField("shape_srid", StringType(), True),
+            StructField("shape_srid_proj", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            i % 2,
+            bytes(shapely.to_wkb(shapely.Point(10.0 + i * 0.1, 50.0 + i * 0.1))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(5)
+    ]
+    df = spark.createDataFrame(pts, schema)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "vout_geomcol"
+    (
+        df.coalesce(1)
+        .write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("geomCol", "shape")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    nc_files = list(outdir.glob("*.nc"))
+    assert len(nc_files) == 1
+    with Dataset(str(nc_files[0]), "r") as nc:
+        assert nc.featureType == "point"
+        assert nc.dimensions["obs"].size == 5
+        # shape* are geometry/CRS metadata, NOT data variables.
+        assert "shape" not in nc.variables
+        assert "shape_srid" not in nc.variables
+        assert "shape_srid_proj" not in nc.variables
+        # attributes ARE written as data variables.
+        assert "ch4" in nc.variables
+        assert "qa_value" in nc.variables
+        lons = nc.variables["longitude"][:]
+        lats = nc.variables["latitude"][:]
+    assert float(lons[0]) == pytest.approx(10.0)
+    assert float(lats[0]) == pytest.approx(50.0)
+
+
+def test_vector_write_custom_sridcol_projcol(spark, tmp_path):
+    """`sridCol` / `projCol` overrides resolve the CRS from non-default names.
+
+    A non-4326 SRID supplied via the custom `sridCol` shows up as `spatial_epsg`
+    on the `crs` grid-mapping variable.
+    """
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("ch4", FloatType(), True),
+            StructField("shape", BinaryType(), True),
+            StructField("epsg", StringType(), True),
+            StructField("proj4", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            bytes(shapely.to_wkb(shapely.Point(530000.0 + i, 180000.0 + i))),
+            "27700",
+            "+proj=tmerc +datum=OSGB36",
+        )
+        for i in range(3)
+    ]
+    df = spark.createDataFrame(pts, schema)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "vout_sridcol"
+    (
+        df.coalesce(1)
+        .write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .option("geomCol", "shape")
+        .option("sridCol", "epsg")
+        .option("projCol", "proj4")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    nc_files = list(outdir.glob("*.nc"))
+    assert len(nc_files) == 1
+    with Dataset(str(nc_files[0]), "r") as nc:
+        assert nc.dimensions["obs"].size == 3
+        assert "crs" in nc.variables
+        assert int(nc.variables["crs"].spatial_epsg) == 27700
+        # epsg/proj4 are CRS metadata, NOT data variables.
+        assert "epsg" not in nc.variables
+        assert "proj4" not in nc.variables
+        assert "ch4" in nc.variables
+
+
+def test_vector_write_default_still_works(spark, tmp_path):
+    """Regression: the default `geom_0` convention (no options) is unchanged."""
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        FloatType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("ch4", FloatType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    pts = [
+        (
+            float(i),
+            bytes(shapely.to_wkb(shapely.Point(10.0 + i, 50.0 + i))),
+            "4326",
+            "EPSG:4326",
+        )
+        for i in range(3)
+    ]
+    df = spark.createDataFrame(pts, schema)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "vout_default"
+    (
+        df.coalesce(1)
+        .write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    nc_files = list(outdir.glob("*.nc"))
+    assert len(nc_files) == 1
+    with Dataset(str(nc_files[0]), "r") as nc:
+        assert nc.dimensions["obs"].size == 3
+        assert "ch4" in nc.variables
+        assert "geom_0" not in nc.variables
+        assert "geom_0_srid" not in nc.variables
+
+
+# ---------------------------------------------------------------------------
 # singleFile mode tests
 # ---------------------------------------------------------------------------
 

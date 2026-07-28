@@ -2,7 +2,8 @@
 
 Raster mode: (source, tile) grid tiles -> CF grid NetCDF, one .nc per row.
 Serverless-safe: write(iterator) + netCDF4 encode to worker-local temp then
-shutil.copyfile to the FUSE path. No spark.conf/_jvm/.rdd.
+shutil.copyfile to the FUSE path. No Spark-config mutation or JVM/low-level
+partition APIs.
 """
 
 from __future__ import annotations
@@ -678,7 +679,8 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
     Inverts the netcdf_gbx vector reader: consumes the dynamic vector schema
     (attribute columns + geom_0 WKB + geom_0_srid + geom_0_srid_proj) and
     writes latitude/longitude coord vars plus one data var per attribute column.
-    Serverless-safe: no spark.conf/_jvm/.rdd/cache/persist.
+    Serverless-safe: no Spark-config mutation, JVM access, low-level partition
+    APIs, or caching.
     """
 
     def __init__(self, options: dict, schema: StructType, overwrite: bool):

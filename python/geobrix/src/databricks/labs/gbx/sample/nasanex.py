@@ -6,7 +6,8 @@ asset download via StacClient.download(). NASA-NEX GDDP-CMIP6 granules are regul
 reader in RASTER mode.
 
 ONLINE-ONLY (pystac-client + planetary-computer). Injection seam: _stac_client.
-Serverless-safe: no spark.conf.set, _jvm, .rdd, cache, or persist.
+Serverless-safe: no Spark-config mutation, JVM access, low-level partition
+APIs, or caching.
 """
 
 from __future__ import annotations

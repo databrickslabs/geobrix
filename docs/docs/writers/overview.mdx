@@ -135,7 +135,7 @@ unexpectedly" crash. If you hit that:
 Note: **[high-memory Serverless](https://docs.databricks.com/aws/en/compute/serverless/dependencies#use-high-memory-serverless-compute)** ("High: 32 GB") raises the notebook **REPL** memory but **not** the Spark Python-worker memory the writer assembles in, so it does **not** extend this ceiling — prefer a classic cluster or the sharded writers. The write itself is correct at scale (it completes on a classic cluster); this is a memory ceiling, not a writer limit.
 :::
 
-<Tabs groupId="gbx-tier" queryString="tier">
+<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight (pyrx)">
 
 The lightweight tier ships native Python DataSource V2 writers — no JAR, no init script.

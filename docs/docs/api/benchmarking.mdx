@@ -238,6 +238,25 @@ Staging is **decoupled from the read** — the download happens once, at stage t
 benchmark itself just globs the staged pool. If a pool is empty or missing (staging not
 yet run), that leg **skips cleanly** with a clear message rather than failing the run.
 
+### NetCDF writer
+
+The `netcdf_gbx` writer is **lightweight-only** — there is no heavyweight NetCDF writer
+tier. The writer benchmark has **two legs** matching the two write modes:
+
+- **Raster leg:** `netcdf_gbx` raster mode is pointed at the same regular-grid corpus
+  used by the reader raster leg (NASA-NEX GDDP-CMIP6 granules). Each `(source, tile)`
+  row is written as one CF grid `.nc` file. The leg measures whole-job wall-clock over
+  1,000 rows. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
+
+- **Vector leg:** `netcdf_gbx` vector mode is pointed at a Sentinel-5P swath-derived
+  points corpus (one point per ground pixel, emitted by the reader vector leg). Each
+  Spark partition is written as one CF DSG `.nc` file. The leg measures whole-job
+  wall-clock. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
+
+Each leg is staged from the same corpora as the corresponding reader leg (see
+[NetCDF readers](#netcdf-readers) above). If a corpus pool is absent, that writer leg
+skips cleanly with a clear message rather than failing the run.
+
 ### Tiled output (PMTiles writer)
 
 The PMTiles writer is benchmarked separately from the `rst_*` functions: it is a

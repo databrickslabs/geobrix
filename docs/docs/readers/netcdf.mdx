@@ -178,6 +178,83 @@ returning an empty DataFrame — read gridded rasters with `netcdf_gdal` (or
 transcoding.
 :::
 
+## `netcdf_gbx` writer
+
+`netcdf_gbx` is also the **lightweight writer** — the inverse of the reader.
+`df.write.format("netcdf_gbx")` writes CF-compliant `.nc` files from raster tile
+DataFrames (the default raster mode) or from point DataFrames (vector mode). It is
+JAR-free and runs on Serverless, standard, and ARM clusters.
+
+### Raster mode (default)
+
+Each `(source, tile)` row is written as one CF grid `.nc` file with `lat` and `lon`
+coordinate variables, a `_FillValue` for NoData pixels, and — when the tile CRS is
+non-EPSG:4326 — a `crs` grid-mapping variable that stores the projection as a WKT
+attribute.
+
+```python
+# One CF grid .nc per (source, tile) row.
+(df.write
+   .format("netcdf_gbx")
+   .save("/Volumes/main/geobrix_samples/netcdf/output"))
+
+# Supply an explicit output filename stem from a column.
+(df.write
+   .format("netcdf_gbx")
+   .option("nameCol", "file_stem")
+   .save("/Volumes/main/geobrix_samples/netcdf/output"))
+
+# Override the NetCDF variable name per row.
+(df.write
+   .format("netcdf_gbx")
+   .option("varNameCol", "var_name")
+   .save("/Volumes/main/geobrix_samples/netcdf/output"))
+```
+
+### Vector mode
+
+```python
+# CF DSG point files — one .nc per Spark partition.
+(df.write
+   .format("netcdf_gbx")
+   .option("mode", "vector")
+   .save("/Volumes/main/geobrix_samples/netcdf/output-points"))
+```
+
+Vector mode writes the DataFrame's attribute columns plus lon/lat as a CF Discrete
+Sampling Geometry file (`featureType="point"`). Null attribute cells are written as
+CF fill: an integer `_FillValue` sentinel for integer columns, `NaN` for float columns.
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `mode` | `"raster"` | `raster` (tile → CF grid) or `vector` (points → CF DSG). |
+| `nameCol` | — | Column whose value supplies the output filename stem per row. Absent → the stem is derived from the `source` column value. |
+| `varNameCol` | — | **Raster mode only.** Column whose value supplies the NetCDF variable name per row. Absent → the name is parsed from the `source` subdataset selector (the segment after the last `:`), or `"data"` if the source is unparseable. |
+
+### Round-trip
+
+Reading a `.nc` file with `netcdf_gbx` raster mode and writing it back with
+`netcdf_gbx` raster mode reproduces the physical values, CRS, and NoData mask.
+Reading with `netcdf_gbx` vector mode and writing back preserves lon/lat coordinates
+and attribute columns.
+
+:::note Limitations
+
+**Decoded physical values only.** The writer outputs the values it receives — after
+any CF `scale_factor` / `add_offset` decoding the reader applied — as floating-point
+data. It does not re-pack values to compressed integers. To reproduce a source file's
+packed storage format, apply the encoding transform manually before writing.
+
+**Geographic (lon/lat) grids on the raster path.** The raster writer targets
+EPSG:4326 geographic grids. Tiles in a projected CRS (for example EPSG:3857 or
+EPSG:27700) should be reprojected to EPSG:4326 with `gbx_rst_transform` before
+writing. When the tile CRS is non-EPSG:4326, the projection is stored in the `crs`
+WKT attribute, but the `lat`/`lon` coordinate variables are always written in degrees.
+
+:::
+
 ## Next Steps
 
 - [GeoTIFF Reader](./geotiff) — for COG/GeoTIFF rasters (e.g. Sentinel-2, EMIT CH4).

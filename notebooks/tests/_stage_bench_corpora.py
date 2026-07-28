@@ -21,11 +21,16 @@ def _nb() -> bytes:
     # Cell 1: install the geobrix wheel (not pre-installed on the bench cluster) so
     # databricks.labs.gbx.bench.readers (+ NasaNexDownloader) import. Two-step per the
     # wheel-notebook-install pattern; restartPython MUST end its own cell.
+    # The NASA-NEX download fans out via StacClient on EXECUTORS, whose _items UDF
+    # imports pystac_client — that lives in the [stac] extra, NOT [light]. Install
+    # both extras (and pystac-client/planetary-computer explicitly) so the executor
+    # env has them; notebook-scoped %pip propagates to executors on a cluster.
     pip = (
         "%pip install --force-reinstall --no-deps "
         "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.2-py3-none-any.whl\n"
         "%pip install "
         "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.2-py3-none-any.whl[light]\n"
+        "%pip install pystac-client planetary-computer\n"
         "dbutils.library.restartPython()"
     )
     src = f'''

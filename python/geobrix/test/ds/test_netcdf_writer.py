@@ -241,8 +241,10 @@ def test_vector_write_roundtrip(spark, tmp_path):
     df = spark.createDataFrame(pts, schema)
     spark.dataSource.register(NetcdfGbxDataSource)
     outdir = tmp_path / "vout"
+    # coalesce(1): single partition -> single .nc, deterministic round-trip.
     (
-        df.write.format("netcdf_gbx")
+        df.coalesce(1)
+        .write.format("netcdf_gbx")
         .option("mode", "vector")
         .mode("overwrite")
         .save(str(outdir))
@@ -384,3 +386,95 @@ def test_vector_write_nameCol(spark, tmp_path):
     nc_files = list(outdir.glob("*.nc"))
     assert len(nc_files) == 1
     assert nc_files[0].name == "my_sensor_data.nc"
+
+
+def test_vector_write_nullable_attrs(spark, tmp_path):
+    """Nullable attribute columns (None rows) write and round-trip without crash.
+
+    Policy:
+    - FloatType/DoubleType: None -> NaN fill (_FillValue=NaN); non-null values
+      survive exactly.
+    - IntegerType/LongType: None -> netCDF4.default_fillvals sentinel
+      (_FillValue=<int fill>); non-null values survive exactly.
+    """
+    import math
+
+    import netCDF4
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        DoubleType,
+        IntegerType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    schema = StructType(
+        [
+            StructField("qa_int", IntegerType(), True),
+            StructField("ch4_dbl", DoubleType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    # row 0: qa_int=10, ch4_dbl=1.5
+    # row 1: qa_int=None, ch4_dbl=None  (the null row)
+    # row 2: qa_int=20, ch4_dbl=3.5
+    rows = [
+        (
+            10,
+            1.5,
+            bytes(shapely.to_wkb(shapely.Point(10.0, 50.0))),
+            "4326",
+            "EPSG:4326",
+        ),
+        (
+            None,
+            None,
+            bytes(shapely.to_wkb(shapely.Point(11.0, 51.0))),
+            "4326",
+            "EPSG:4326",
+        ),
+        (
+            20,
+            3.5,
+            bytes(shapely.to_wkb(shapely.Point(12.0, 52.0))),
+            "4326",
+            "EPSG:4326",
+        ),
+    ]
+    df = spark.createDataFrame(rows, schema)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    outdir = tmp_path / "nullable_out"
+    # coalesce(1): single partition so all 3 rows land in one .nc.
+    (
+        df.coalesce(1)
+        .write.format("netcdf_gbx")
+        .option("mode", "vector")
+        .mode("overwrite")
+        .save(str(outdir))
+    )
+    nc_files = list(outdir.glob("*.nc"))
+    assert len(nc_files) == 1
+
+    with netCDF4.Dataset(str(nc_files[0]), "r") as nc:
+        qa = nc.variables["qa_int"][:]  # MaskedArray
+        ch4 = nc.variables["ch4_dbl"][:]  # MaskedArray
+        int_fill = int(nc.variables["qa_int"]._FillValue)
+
+    import numpy.ma as ma
+
+    # Non-null int values survive exactly.
+    assert int(qa[0]) == 10
+    assert int(qa[2]) == 20
+    # Null int cell is masked (CF fill sentinel); underlying fill value matches.
+    assert ma.is_masked(qa[1])
+    assert int_fill == netCDF4.default_fillvals["i4"]
+
+    # Non-null float values survive exactly.
+    assert float(ch4[0]) == pytest.approx(1.5)
+    assert float(ch4[2]) == pytest.approx(3.5)
+    # Null float cell is masked (NaN fill); underlying data is NaN.
+    assert ma.is_masked(ch4[1]) or math.isnan(float(ch4.data[1]))

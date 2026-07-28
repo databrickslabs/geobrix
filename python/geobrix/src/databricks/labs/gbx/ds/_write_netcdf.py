@@ -214,6 +214,9 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                 return "f8"
             return "f8"
 
+        def _is_float_dtype(d: str) -> bool:
+            return d in ("f4", "f8")
+
         stem = name or f"part-{uuid.uuid4().hex[:8]}"
         tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
         tmp.close()
@@ -234,10 +237,30 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                 if len(srids) == 1 and next(iter(srids)) not in ("4326", None):
                     crs = nc.createVariable("crs", "i4")
                     crs.spatial_epsg = int(next(iter(srids)))
+                import netCDF4 as _nc4
+
                 for c in self.attr_cols:
-                    dv = nc.createVariable(c, _np_dtype(c), ("obs",))
+                    d = _np_dtype(c)
+                    vals = attrs[c]
+                    if _is_float_dtype(d):
+                        # Float columns: represent None as NaN; use NaN as
+                        # _FillValue so CF-aware readers see it as missing data.
+                        arr = np.array(
+                            [v if v is not None else np.nan for v in vals],
+                            dtype=d,
+                        )
+                        dv = nc.createVariable(c, d, ("obs",), fill_value=np.nan)
+                    else:
+                        # Integer columns cannot hold NaN. Use the CF-standard
+                        # integer fill sentinel (netCDF4.default_fillvals) so
+                        # masked cells are represented idiomatically.
+                        fv = _nc4.default_fillvals[d]
+                        arr = np.array(
+                            [v if v is not None else fv for v in vals], dtype=d
+                        )
+                        dv = nc.createVariable(c, d, ("obs",), fill_value=fv)
                     dv.coordinates = "latitude longitude"
-                    dv[:] = np.array(attrs[c])
+                    dv[:] = arr
             finally:
                 nc.close()
             out = os.path.join(self.path, f"{stem}.nc")

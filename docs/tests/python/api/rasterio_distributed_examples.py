@@ -78,24 +78,70 @@ def _one_tile_df(spark, src_path):
 # ---------------------------------------------------------------------------
 
 def warp_both(spark, src_path):
-    """Return (rasterio_epsg, pyrx_srid) after reprojecting the raster to EPSG:3857.
+    """Reproject the raster to EPSG:3857 on both sides; return a result dict.
 
-    rasterio_epsg is always 3857 (the target we asked for); pyrx_srid is what
-    rst_srid reports on the transformed tile — they must match.
+    rasterio side: ``calculate_default_transform`` computes the target grid
+    (width, height, affine transform) — real warp math, not a constant.
+
+    pyrx side: ``rst_transform("tile", 3857)`` runs the distributed Arrow UDF;
+    the result tile is read back via MemoryFile to extract its CRS (EPSG),
+    pixel dimensions, and geographic bounds.
+
+    Dict keys:
+        rio_epsg (int): always 3857 — the CRS rasterio was asked to target.
+        rio_w, rio_h (int): target grid dimensions from calculate_default_transform.
+        rio_bounds (tuple): (west, south, east, north) in EPSG:3857 metres.
+        pyrx_epsg (int): EPSG reported by the transformed tile's CRS.
+        pyrx_w, pyrx_h (int): pixel dimensions of the transformed tile.
+        pyrx_bounds (tuple): (left, bottom, right, top) of the transformed tile.
     """
     import rasterio
+    from rasterio.warp import calculate_default_transform
+    from rasterio.transform import array_bounds
+    from rasterio.io import MemoryFile
+    from pyspark.sql import functions as F
     import databricks.labs.gbx.pyrx.functions as rx
 
     _register(spark)
-    # rasterio side: the target CRS we would write out
-    with rasterio.open(src_path) as src:
-        pass  # just confirm it opens; CRS after warp is always the target
-    rio_epsg = rasterio.crs.CRS.from_epsg(3857).to_epsg()
 
-    # pyrx side: transform via distributed UDF and read the SRID back
-    df = _one_tile_df(spark, src_path).withColumn("tile", rx.rst_transform("tile", 3857))
-    pyrx_srid = df.select(rx.rst_srid("tile").alias("srid")).first()["srid"]
-    return (rio_epsg, pyrx_srid)
+    # rasterio side: compute the target grid for an EPSG:3857 reprojection.
+    # calculate_default_transform does real warp math — this is the same function
+    # a single-node pipeline would call before writing the output file.
+    with rasterio.open(src_path) as src:
+        t, rio_w, rio_h = calculate_default_transform(
+            src.crs, "EPSG:3857", src.width, src.height, *src.bounds
+        )
+    rio_epsg = 3857
+    # Convert the affine transform + dimensions to geographic bounds (W, S, E, N).
+    rio_bounds = array_bounds(rio_h, rio_w, t)
+
+    # pyrx side: distributed Arrow UDF; collect the result tile in one Spark action
+    df = (
+        _one_tile_df(spark, src_path)
+        .withColumn("tile", rx.rst_transform("tile", 3857))
+    )
+    tile_bytes = bytes(
+        df.select(F.col("tile.raster").alias("r")).first()["r"]
+    )
+
+    # Read the reprojected tile back to extract CRS, dimensions, and bounds.
+    with MemoryFile(tile_bytes) as mf, mf.open() as ds:
+        pyrx_epsg = ds.crs.to_epsg()
+        pyrx_w = ds.width
+        pyrx_h = ds.height
+        b = ds.bounds
+        pyrx_bounds = (b.left, b.bottom, b.right, b.top)
+
+    return {
+        "rio_epsg": rio_epsg,
+        "rio_w": rio_w,
+        "rio_h": rio_h,
+        "rio_bounds": rio_bounds,
+        "pyrx_epsg": pyrx_epsg,
+        "pyrx_w": pyrx_w,
+        "pyrx_h": pyrx_h,
+        "pyrx_bounds": pyrx_bounds,
+    }
 
 
 def ndvi_both(spark, src_path):

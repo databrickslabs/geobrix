@@ -2,7 +2,7 @@
 and the pyrx side AGREE on synthesized rasters (Docker; api suite).
 
 NDVI: np.allclose on the float32 output arrays.
-Warp: both sides report EPSG:3857 after reprojecting.
+Warp: both sides report EPSG:3857 AND agree on reprojected geographic bounds (1 % tol).
 
 Clip equivalence is not separately asserted here — the clip snippet pair
 (CLIP_RASTERIO / CLIP_PYRX) appears on the docs page as illustrative code; the
@@ -15,7 +15,6 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import pytest
 import rasterio
 from rasterio.transform import from_bounds
 
@@ -49,12 +48,46 @@ def _write_rgbnir(path, px=32):
 
 
 def test_warp_agrees(spark, tmp_path):
-    """Both sides report EPSG:3857 after reprojecting."""
+    """Both sides agree on CRS and geographic bounds after reprojecting to EPSG:3857.
+
+    rasterio side: ``calculate_default_transform`` does real warp math to derive
+    the target grid (width, height, affine) — this is the same call a single-node
+    pipeline would make before writing the reprojected file.
+
+    pyrx side: ``rst_transform("tile", 3857)`` runs the distributed Arrow UDF and
+    the result tile is read back to extract CRS, dimensions, and bounds.
+
+    Assertions:
+    (a) Both sides report EPSG:3857.
+    (b) The reprojected bounds agree within 1 % of the rasterio extent in each axis
+        (pixel-grid choices can differ by a pixel; bounds should track closely).
+    """
     p = str(tmp_path / "in.tif")
     _write_rgbnir(p)
-    rio_epsg, pyrx_srid = ex.warp_both(spark, p)
-    assert rio_epsg == 3857, f"rasterio target CRS EPSG was {rio_epsg}"
-    assert pyrx_srid == 3857, f"pyrx rst_srid returned {pyrx_srid} after rst_transform"
+    r = ex.warp_both(spark, p)
+
+    # (a) CRS agreement
+    assert r["rio_epsg"] == 3857, f"rasterio target CRS EPSG was {r['rio_epsg']}"
+    assert r["pyrx_epsg"] == 3857, (
+        f"pyrx CRS after rst_transform: {r['pyrx_epsg']}"
+    )
+
+    # (b) Bounds agreement — each axis within 1 % of the rasterio extent.
+    rio_b = r["rio_bounds"]   # (west, south, east, north) in EPSG:3857 metres
+    pyrx_b = r["pyrx_bounds"]
+    rio_width_m = abs(rio_b[2] - rio_b[0])
+    rio_height_m = abs(rio_b[3] - rio_b[1])
+    tol_m = 0.01  # 1 % tolerance factor
+    for label, rio_val, pyrx_val, scale in [
+        ("west",  rio_b[0], pyrx_b[0], rio_width_m),
+        ("east",  rio_b[2], pyrx_b[2], rio_width_m),
+        ("south", rio_b[1], pyrx_b[1], rio_height_m),
+        ("north", rio_b[3], pyrx_b[3], rio_height_m),
+    ]:
+        assert abs(rio_val - pyrx_val) <= tol_m * scale, (
+            f"bounds[{label}] diverged: rasterio={rio_val:.2f}m pyrx={pyrx_val:.2f}m "
+            f"(diff={abs(rio_val - pyrx_val):.2f}m, tol={tol_m * scale:.2f}m)"
+        )
 
 
 def test_ndvi_agrees(spark, tmp_path):

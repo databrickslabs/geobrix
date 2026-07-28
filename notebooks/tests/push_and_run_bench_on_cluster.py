@@ -295,6 +295,12 @@ def main() -> int:
     # --netcdf-only: ONLY run the NetCDF reader benchmark, skip all fn benchmarks.
     benchmark_netcdf = "--benchmark-netcdf" in sys.argv
     netcdf_only = "--netcdf-only" in sys.argv
+    # --benchmark-netcdf-writer: also run the NetCDF WRITER benchmark (light netcdf_gbx write
+    #   throughput, raster + vector legs) reusing {CORPUS}/netcdf + {CORPUS}/netcdf-swath.
+    # --netcdf-writer-only: ONLY run the NetCDF writer benchmark, skip all fn benchmarks.
+    # LIGHT-ONLY: there is no heavy NetCDF writer.
+    benchmark_netcdf_writer = "--benchmark-netcdf-writer" in sys.argv
+    netcdf_writer_only = "--netcdf-writer-only" in sys.argv
     # --fanout-scale F: dial the synthetic fan-out size for each function (default 1.0 ->
     #   meaningful but ~couple minutes on ~20 workers). Larger = more output rows.
     fanout_scale = float(_arg("--fanout-scale", "1.0"))
@@ -360,6 +366,8 @@ def main() -> int:
             run_id = f"{run_id}-fanout"
         elif netcdf_only:
             run_id = f"{run_id}-netcdf"
+        elif netcdf_writer_only:
+            run_id = f"{run_id}-netcdf-writer"
     functions = _arg("--functions", "")
     sel = _arg("--set", "core")
 
@@ -532,6 +540,10 @@ def main() -> int:
         benchmark_netcdf=benchmark_netcdf,
         #  --netcdf-only: ONLY run the NetCDF reader benchmark, skip fn benchmarks.
         netcdf_only=netcdf_only,
+        #  --benchmark-netcdf-writer: also run NetCDF WRITER benchmark (light-only throughput).
+        benchmark_netcdf_writer=benchmark_netcdf_writer,
+        #  --netcdf-writer-only: ONLY run the NetCDF writer benchmark, skip fn benchmarks.
+        netcdf_writer_only=netcdf_writer_only,
     )
     if explain_only:
         # Plans are a spark-path concern only; never run the pure-core sections.
@@ -565,6 +577,9 @@ def main() -> int:
         cfg["modes"] = "spark-path"
     if netcdf_only:
         # NetCDF reader benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if netcdf_writer_only:
+        # NetCDF writer benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).

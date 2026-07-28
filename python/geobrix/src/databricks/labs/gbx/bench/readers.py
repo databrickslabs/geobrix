@@ -6599,10 +6599,14 @@ def stage_netcdf_corpus(
     manifest = TropomiDownloader().download(
         bbox, corpus_dir, temporal=temporal, partitions=partitions, spark=spark
     )
+    # StacClient.download returns a LAZY DataFrame (spark.range + a per-index fetch
+    # UDF); it must be MATERIALIZED with an action or NOTHING downloads. Force it
+    # (and surface how many assets the fetch reported valid) BEFORE globbing the dir.
+    valid = manifest.filter(manifest["is_out_file_valid"]).count()
     staged = list_corpus_files(corpus_dir, r".*\.nc$")
     print(
         f"stage_netcdf_corpus: {len(staged)} .nc swath granule(s) staged under "
-        f"{corpus_dir}",
+        f"{corpus_dir} ({valid} valid per manifest)",
         flush=True,
     )
     return manifest
@@ -6658,10 +6662,14 @@ def stage_nasanex_corpus(
         partitions=partitions,
         spark=spark,
     )
+    # StacClient.download returns a LAZY DataFrame (spark.range + a per-index fetch
+    # UDF); it must be MATERIALIZED with an action or NOTHING downloads. Force it
+    # (and surface how many assets the fetch reported valid) BEFORE globbing the dir.
+    valid = manifest.filter(manifest["is_out_file_valid"]).count()
     staged = list_corpus_files(corpus_dir, r".*\.nc$")
     print(
         f"stage_nasanex_corpus: {len(staged)} .nc grid granule(s) staged under "
-        f"{corpus_dir}",
+        f"{corpus_dir} ({valid} valid per manifest)",
         flush=True,
     )
     return manifest

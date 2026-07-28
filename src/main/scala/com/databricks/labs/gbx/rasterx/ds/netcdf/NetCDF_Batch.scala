@@ -45,6 +45,13 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                 GDALManager.init(exprConfig)
                 val localPath = NodeFileManager.readRemote(path)
                 val ds = RasterDriver.read(localPath, Map.empty)
+                // Release ds + the staged local copy on EVERY exit path (success or a
+                // GDAL accessor throwing mid-enumeration). Executors process many
+                // granules per JVM, so leaking a Dataset/staged file per bad granule
+                // accumulates; the outer catch below only logs+skips, it must not be
+                // the sole cleanup site. Guard covers subdatasetsMap/isGeorefGrid/
+                // wholeFileVarName throwing after the open.
+                try {
                 // Shared "is this a true georeferenced raster grid?" probe, applied both to
                 // subdataset selectors AND (below) to the file opened directly. A grid must be
                 // bigger than 1x1 with >=1 band AND carry real georeferencing: a non-empty CRS
@@ -104,9 +111,11 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                     if (grids.nonEmpty) grids.map(v => (path, v)).toArray
                     else if (isGeorefGrid(ds)) Array((path, wholeFileVarName))
                     else Array.empty[(String, String)]
-                RasterDriver.releaseDataset(ds)
-                NodeFileManager.releaseRemote(path)
                 partitionsForFile
+                } finally {
+                    RasterDriver.releaseDataset(ds)
+                    NodeFileManager.releaseRemote(path)
+                }
             } catch {
                 // A per-file enumeration failure must not silently vanish (a swallowed
                 // executor-side error here previously surfaced only as "zero rows"). Print

@@ -13,6 +13,8 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx.pyrx.core import cog as _cog
+
 CELLID_FRESH = -1  # GDAL_Reader.scala:30 writes -1L for un-tessellated tiles
 
 
@@ -22,8 +24,25 @@ def encode_tile(
     source_path: str,
     all_parents: str,
     compression: str = "DEFLATE",
+    tile_format: str = "gtiff",
+    cog_blocksize: int = 512,
+    cog_overview_resampling: str = "AVERAGE",
 ) -> Tuple[int, bytes, Dict[str, str]]:
-    """Read one window, re-encode it as an in-memory GTiff, return (cellid, bytes, metadata)."""
+    """Read one window, re-encode it as an in-memory GTiff or COG, return (cellid, bytes, metadata).
+
+    Args:
+        ds:                    Open rasterio DatasetReader.
+        window:                (col_off, row_off, win_w, win_h) pixel window.
+        source_path:           Original source file path (for metadata).
+        all_parents:           Semicolon-delimited parent chain (for metadata).
+        compression:           GTiff/COG compression (default ``"DEFLATE"``).
+        tile_format:           ``"gtiff"`` (default, plain windowed GTiff) or
+                               ``"cog"`` (opt-in COG with overviews via
+                               ``analysis.cog_convert``).
+        cog_blocksize:         Internal tile size for COG output (default 512).
+        cog_overview_resampling: Overview resampling algorithm for COG (default
+                               ``"AVERAGE"``).
+    """
     col_off, row_off, win_w, win_h = window
     rio_window = Window(col_off, row_off, win_w, win_h)
     data = ds.read(window=rio_window)
@@ -42,6 +61,13 @@ def encode_tile(
             out.write(data)
         raster_bytes = mf.read()
 
+    if str(tile_format).lower() == "cog":
+        from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+
+        with MemoryFile(raster_bytes) as cmf, cmf.open() as cds:
+            raster_bytes = cog_convert(cds, compression, cog_blocksize,
+                                       cog_overview_resampling)
+
     metadata = {
         "path": f"/vsimem/light_{os.path.basename(source_path)}_{col_off}_{row_off}.tif",
         "sourcePath": source_path,
@@ -55,6 +81,7 @@ def encode_tile(
         "isZipped": "false",
         "isSubset": "false",
     }
+    metadata = _cog.stamp_format_metadata(raster_bytes, metadata)
     return CELLID_FRESH, raster_bytes, metadata
 
 
@@ -91,4 +118,5 @@ def passthrough_tile(
         "isZipped": "false",
         "isSubset": "false",
     }
+    metadata = _cog.stamp_format_metadata(raster_bytes, metadata)
     return CELLID_FRESH, raster_bytes, metadata

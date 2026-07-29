@@ -57,7 +57,7 @@ def test_read_single_file_yields_one_row(spark, tmp_path):
     row = rows[0]
     assert row["source"] == str(f)
     assert row["tile"]["cellid"] == -1
-    assert set(row["tile"]["metadata"].keys()) == EXPECTED_METADATA_KEYS
+    assert EXPECTED_METADATA_KEYS <= set(row["tile"]["metadata"].keys())
     with MemoryFile(bytes(row["tile"]["raster"])) as mf, mf.open() as out:
         arr = out.read(1)
     np.testing.assert_allclose(
@@ -140,7 +140,7 @@ def test_whole_file_gtiff_is_passthrough(spark, tmp_path):
         bytes(tile["raster"]) == raw
     ), "whole-file GTiff should pass through unchanged"
     assert tile["cellid"] == -1
-    assert set(tile["metadata"].keys()) == EXPECTED_METADATA_KEYS
+    assert EXPECTED_METADATA_KEYS <= set(tile["metadata"].keys())
     with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as out:
         arr = out.read(1)
     np.testing.assert_allclose(

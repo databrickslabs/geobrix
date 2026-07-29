@@ -38,4 +38,8 @@ class GTiffGbxDataSource(RasterGbxDataSource):
             name_col=self.options.get("nameCol"),
             ext=self.options.get("ext", "tif"),
             force_driver="GTiff",
+            cog=str(self.options.get("cog", "false")).lower() == "true",
+            cog_blocksize=int(self.options.get("cogBlockSize", "512")),
+            cog_overview_resampling=self.options.get("cogOverviewResampling", "AVERAGE"),
+            cog_compression=self.options.get("cogCompression", "DEFLATE"),
         )

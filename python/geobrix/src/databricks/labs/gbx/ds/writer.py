@@ -56,6 +56,10 @@ class RasterGbxWriter(DataSourceWriter):
         name_col: Optional[str] = None,
         ext: str = "tif",
         force_driver: Optional[str] = None,
+        cog: bool = False,
+        cog_blocksize: int = 512,
+        cog_overview_resampling: str = "AVERAGE",
+        cog_compression: str = "DEFLATE",
     ):
         assert_write_schema(schema)
         if name_col and name_col not in [f.name for f in schema.fields]:
@@ -72,6 +76,10 @@ class RasterGbxWriter(DataSourceWriter):
         self.name_col = name_col
         self.ext = ext
         self.force_driver = force_driver
+        self.cog = cog
+        self.cog_blocksize = cog_blocksize
+        self.cog_overview_resampling = cog_overview_resampling
+        self.cog_compression = cog_compression
         # Use self.path (scheme stripped), NOT the raw path: a dbfs:/file:-qualified
         # path makes os.path.isdir(path) False, which would silently skip the
         # overwrite cleanup and leave stale tiles from a prior write mixed in.
@@ -90,6 +98,22 @@ class RasterGbxWriter(DataSourceWriter):
             cellid = tile["cellid"]
             raster_bytes = bytes(tile["raster"])
             metadata = dict(tile["metadata"] or {})
+            if self.cog:
+                from databricks.labs.gbx.pyrx.core import cog as _cog
+                from databricks.labs.gbx.pyrx.core import analysis as _analysis
+                from rasterio.io import MemoryFile
+
+                info = _cog.detect_cog(metadata, raster_bytes)
+                if not info.is_cog:
+                    with MemoryFile(raster_bytes) as mf:
+                        with mf.open() as ds:
+                            raster_bytes = _analysis.cog_convert(
+                                ds,
+                                self.cog_compression,
+                                self.cog_blocksize,
+                                self.cog_overview_resampling,
+                            )
+                    metadata = _cog.stamp_format_metadata(raster_bytes, metadata)
             if self.name_col:
                 raw_name = row[self.name_col]
                 name = os.path.basename(str(raw_name)) if raw_name is not None else ""

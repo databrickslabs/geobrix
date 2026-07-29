@@ -194,7 +194,7 @@ class PMTilesGbxWriter(DataSourceWriter):
             else:
                 self._assemble_sharded(entries)
         finally:
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)
 
     def _tile_type(self, sample: bytes) -> TileType:
         return self.tile_type_override or sniff_tile_type(sample)
@@ -254,5 +254,5 @@ class PMTilesGbxWriter(DataSourceWriter):
             _CATALOGS[self.catalog_kind]().write(shard_infos, tileset)
 
     def abort(self, messages: List[Optional[WriterCommitMessage]]) -> None:
-        shutil.rmtree(self.scratch_dir, ignore_errors=True)
+        _scratch.remove_scratch_dir(self.scratch_dir)
         self._clear_target()

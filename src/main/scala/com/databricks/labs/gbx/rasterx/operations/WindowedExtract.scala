@@ -39,6 +39,15 @@ private[rasterx] object WindowedExtract {
         xOffset: Int,
         yOffset: Int
     ): (Dataset, Map[String, String]) = {
+        // Opt-in CF scale/offset decode (only NetCDF_Reader sets applyScale=true). When a band
+        // carries non-identity scale_factor/add_offset, decode to physical Float64 via the proven
+        // gdal_translate -unscale path, matching the light netcdf_gbx reader (xarray
+        // mask_and_scale=True). Default OFF => every other raster reader is byte-for-byte unchanged.
+        val applyScale = options.getOrElse("applyScale", "false").toBoolean
+        if (applyScale && hasNonIdentityScale(ds)) {
+            return fallback(ds, options + ("unscale" -> "true"), xStart, yStart, xOffset, yOffset)
+        }
+
         if (!simpleEnough(ds)) {
             return fallback(ds, options, xStart, yStart, xOffset, yOffset)
         }
@@ -178,12 +187,40 @@ private[rasterx] object WindowedExtract {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val extension = GDAL.getExtension(ds.GetDriver.getShortName)
         val rasterPath = s"/vsimem/retile_$uuid.$extension"
+        // When the caller opts in (NetCDF applyScale), append -unscale -ot Float64 so GDAL decodes
+        // packed values to physical Float64 (raw*scale+offset) with its own per-dtype/nodata
+        // handling; -unscale also drops the scale/offset tags, so they are NOT re-applied on any
+        // downstream re-read.
+        // When unscaling, also pass -a_nodata nan so GDAL writes actual IEEE NaN at every pixel whose
+        // raw value equals the source _FillValue / nodata. Without this, gdal.Translate keeps the raw
+        // packed integer (e.g. -32768) as the float64 output value even though it has already set the
+        // output nodata declaration to that sentinel -- the pixel is "nodata" in metadata but not NaN
+        // in the byte buffer. Light (xarray mask_and_scale=True) returns NaN for fill cells, so heavy
+        // must also materialise NaN for cross-tier assert_allclose(equal_nan=True) to pass.
+        // -a_nodata nan is safe on files with no fill cells: the nodata declaration just moves to NaN
+        // but no pixel value changes (integer inputs never decode to NaN via raw*scale+offset).
+        val unscale = if (options.getOrElse("unscale", "false").toBoolean) " -unscale -ot Float64 -a_nodata nan" else ""
         GDALTranslate.executeTranslate(
           rasterPath,
           ds,
-          command = s"gdal_translate -srcwin $xStart $yStart $xOffset $yOffset",
+          command = s"gdal_translate -srcwin $xStart $yStart $xOffset $yOffset$unscale",
           options
         )
+    }
+
+    /**
+      * True when any band carries a non-identity CF scale_factor/add_offset (`GetScale != 1.0` or
+      * `GetOffset != 0.0`). Used to gate the opt-in applyScale unscale path — an all-identity raster
+      * needs no decode and stays on the raw fast path.
+      */
+    private def hasNonIdentityScale(ds: Dataset): Boolean = {
+        val n = ds.getRasterCount
+        (1 to n).exists { b =>
+            val sb = ds.GetRasterBand(b)
+            val s = new Array[java.lang.Double](1); sb.GetScale(s)
+            val o = new Array[java.lang.Double](1); sb.GetOffset(o)
+            (s(0) != null && s(0).doubleValue() != 1.0) || (o(0) != null && o(0).doubleValue() != 0.0)
+        }
     }
 
 }

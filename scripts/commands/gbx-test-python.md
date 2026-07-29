@@ -11,6 +11,7 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 ## Options
 
 - `--path <path>` - Run specific test file or directory
+- `-k <expr>` - Pytest keyword filter (e.g. `"merge or fileName"`)
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
 - `--with-integration` - Include `@pytest.mark.integration` tests (network downloads, slow). Excluded by default.
 - `--markers <expr>` - Override marker filter with a custom pytest expression (e.g. `"not slow"`). Disables the default `not integration` filter.

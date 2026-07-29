@@ -126,3 +126,44 @@ def test_np_to_spark_types():
     assert isinstance(_netcdf.np_to_spark(np.dtype("float32")), FloatType)
     assert isinstance(_netcdf.np_to_spark(np.dtype("float64")), DoubleType)
     assert isinstance(_netcdf.np_to_spark(np.dtype("int32")), IntegerType)
+
+
+# --- readable_variables / select_variables -----------------------------------
+
+
+def _grid_two_vars(path):
+    with Dataset(path, "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        for name in ("ch4", "co"):
+            v = ds.createVariable(name, "f4", ("lat", "lon"), fill_value=-9999.0)
+            v[:] = np.arange(12, dtype="float32").reshape(3, 4)
+
+
+def test_readable_variables_raster_enumerates_all_grids(tmp_path):
+    f = tmp_path / "g.nc"
+    _grid_two_vars(str(f))
+    with _netcdf.open_dataset(str(f), None) as ds:
+        assert sorted(_netcdf.readable_variables(ds, "raster")) == ["ch4", "co"]
+        # coordinate variables are never returned
+        assert "lat" not in _netcdf.readable_variables(ds, "raster")
+
+
+def test_select_variables_absent_option_returns_all(tmp_path):
+    f = tmp_path / "g.nc"
+    _grid_two_vars(str(f))
+    with _netcdf.open_dataset(str(f), None) as ds:
+        assert sorted(_netcdf.select_variables(ds, {}, "raster")) == ["ch4", "co"]
+
+
+def test_select_variables_filters_to_named(tmp_path):
+    f = tmp_path / "g.nc"
+    _grid_two_vars(str(f))
+    with _netcdf.open_dataset(str(f), None) as ds:
+        assert _netcdf.select_variables(ds, {"variable": "co"}, "raster") == ["co"]

@@ -15,6 +15,7 @@ from databricks.labs.gbx.bench import synth as _synth
 from databricks.labs.gbx.bench.fingerprint import (
     fingerprint_collection,
     fingerprint_dggs_grid,
+    fingerprint_dggs_grid_str,
     fingerprint_output,
     fingerprint_vector,
 )
@@ -224,6 +225,9 @@ def _fingerprint_for(fs, out):
     kind = getattr(fs, "fingerprint_kind", "auto")
     if kind == "dggs_grid":
         return fingerprint_dggs_grid(out)
+    if kind == "dggs_grid_str":
+        # BNG: STRING cell ids (OS grid refs), not Longs -- no signed-int64 fold.
+        return fingerprint_dggs_grid_str(out)
     if kind == "vector":
         return fingerprint_vector(out)
     if kind == "collection":
@@ -249,12 +253,27 @@ def run_pure_core(
     # Loaded lazily-once: geometry-input fns read the tile's GeometrySet from the
     # geometry corpus written alongside corpus.json (write-once-read-both).
     geom_corpus = _load_geometry_corpus(root)
+    _leg_fns = [f for f in fnspecs if "pure-core" in f.modes]
+    _leg_n = len(_leg_fns)
+    print(f"[bench] lightweight pure-core: {_leg_n} fn(s) to run")
     out: List[ResultRow] = []
+    _leg_i = 0
     for fs in fnspecs:
         if "pure-core" not in fs.modes:
             continue
+        _leg_i += 1
         _mark = len(out)
-        for te in corpus.size_sweep:
+        # Tile routing: a gb_tile fn (the BNG raster->grid / tessellate fns, which
+        # reproject to EPSG:27700 and drop out-of-GB pixels) benches ONLY the
+        # Great-Britain-overlapping tile (role "bng_gb") so it bins REAL cells;
+        # every other fn benches the ordinary sweep tiles and SKIPS the GB tile, so
+        # its tile selection is unchanged. Fall back to the full sweep if the corpus
+        # predates the GB tile (older corpora carry no role="bng_gb" entry).
+        _want_gb = getattr(fs, "gb_tile", False)
+        _tiles = [te for te in corpus.size_sweep if (te.role == "bng_gb") == _want_gb]
+        if _want_gb and not _tiles:
+            _tiles = list(corpus.size_sweep)  # older corpus: no GB tile -> full sweep
+        for te in _tiles:
             if te.bands < getattr(fs, "min_bands", 1):
                 out.append(
                     ResultRow(
@@ -384,6 +403,23 @@ def run_pure_core(
                 sink(out[_mark:])
             except Exception:  # noqa: BLE001 — a sink failure must never abort timing
                 pass
+        # Per-function progress line: emitted outside the timed region so it adds no
+        # timing bias.  Pick the representative "ok" row (best-available tile); fall back
+        # to the first row of any status if none are ok.
+        try:
+            _fn_rows = out[_mark:]
+            _ok_rows = [r for r in _fn_rows if r.status == "ok"]
+            _rep = _ok_rows[0] if _ok_rows else (_fn_rows[0] if _fn_rows else None)
+            if _rep is not None:
+                _ms_str = f"{_rep.iter_median_s * 1000:.1f}ms"
+                print(
+                    f"[{_leg_i}/{_leg_n}] {fs.name}  lightweight pure-core"
+                    f"  {_ms_str}  {_rep.status}"
+                )
+            else:
+                print(f"[{_leg_i}/{_leg_n}] {fs.name}  lightweight pure-core  -  error")
+        except Exception:  # noqa: BLE001 — progress print must never abort the leg
+            pass
     return out
 
 
@@ -554,6 +590,44 @@ def _h3_aggregate_df(spark, fs):
     return spark.createDataFrame(rows, schema=schema)
 
 
+def _grid_aggregate_df(spark, fs):
+    """Build the (cellid, value DOUBLE) DataFrame for a quadbin/BNG rasterize agg.
+
+    The quadbin/BNG grid aggregators stream (cellid, value) rows from a fixed
+    deterministic cell set (the SAME recipe the Scala BenchDispatch generates, so
+    both tiers burn an identical cell set) and use the 2-arg auto-derive overload
+    (the grid is derived from the cell set, not passed explicitly like H3). Unlike
+    ``_h3_aggregate_df`` the cellid dtype varies by grid:
+      - quadbin: LONG cell ids (``spec.quadbin_rasterize_cells``).
+      - BNG:     STRING OS grid reference ids (``spec.bng_rasterize_cells``).
+    ``value`` is NULL on every row -> presence-mask burn (1.0). Returns a df with
+    columns (cellid, value DOUBLE).
+    """
+    from pyspark.sql.types import (
+        DoubleType,
+        LongType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    if fs.name == "rst_bng_rasterize_agg":
+        cells = _spec.bng_rasterize_cells()  # STRING ids
+        cid_type = StringType()
+        rows = [(str(c), None) for c in cells]
+    else:  # rst_quadbin_rasterize_agg: LONG ids
+        cells = _spec.quadbin_rasterize_cells()
+        cid_type = LongType()
+        rows = [(int(c), None) for c in cells]
+    schema = StructType(
+        [
+            StructField("cellid", cid_type, False),
+            StructField("value", DoubleType(), True),
+        ]
+    )
+    return spark.createDataFrame(rows, schema=schema)
+
+
 def _emit_explain(label: str, df, explain_dir: str = "") -> None:
     """Print a DataFrame's formatted physical plan under a labeled header and, when
     explain_dir is set, also persist it to {explain_dir}/{label}.explain.txt so a run's
@@ -616,13 +690,17 @@ def _build_agg_group_df(spark, root, corpus, fs, kind):
     for rst_frombands_agg (its per-row ascending-sort key); ``extent`` is the
     per-group (xmin..height, srid) constants for geometry aggregators, else None.
     h3_aggregate streams (cellid, value) rows from the fixed deterministic cell set
-    (the explicit grid rides in fs.args, so no extent).
+    (the explicit grid rides in fs.args, so no extent). grid_aggregate (quadbin /
+    BNG) streams (cellid, value) rows and auto-derives the grid from the cell set,
+    so likewise no extent.
     """
     if kind == "tile_aggregate":
         group_df, has_band_index = _tile_aggregate_df(spark, root, corpus, fs)
         return group_df, has_band_index, None
     if kind == "h3_aggregate":
         return _h3_aggregate_df(spark, fs), False, None
+    if kind == "grid_aggregate":
+        return _grid_aggregate_df(spark, fs), False, None
     group_df, extent = _geometry_aggregate_df(spark, root, corpus, fs)
     return group_df, False, extent
 
@@ -669,8 +747,10 @@ def _run_aggregate(
             if has_band_index:
                 return fs.col_fn(df["tile"], fs.args, df["band_index"])
             return fs.col_fn(df["tile"], fs.args)
-        if kind == "h3_aggregate":
-            # h3 aggregate: (cellid, value, args); the explicit grid rides in args.
+        if kind in ("h3_aggregate", "grid_aggregate"):
+            # h3/grid aggregate: (cellid, value, args). h3 passes an explicit grid
+            # in args; quadbin/BNG (grid_aggregate) auto-derive the grid from the
+            # streamed cell set, so args is empty -- both take the same 3-arg col_fn.
             return fs.col_fn(df["cellid"], df["value"], fs.args)
         # geometry aggregate: (geom_wkb, value, extent_tuple, args)
         return fs.col_fn(df["geom_wkb"], df["value"], extent, fs.args)
@@ -819,7 +899,12 @@ def _explain_spark_path(
         _k = getattr(_fs, "input_kind", "tile")
         _n = max(row_counts)
         try:
-            if _k in ("tile_aggregate", "geometry_aggregate", "h3_aggregate"):
+            if _k in (
+                "tile_aggregate",
+                "geometry_aggregate",
+                "h3_aggregate",
+                "grid_aggregate",
+            ):
                 _run_aggregate(
                     spark,
                     root,
@@ -834,6 +919,33 @@ def _explain_spark_path(
                     explain_only=True,
                     explain_dir=explain_dir,
                 )
+            elif getattr(_fs, "udtf", False):
+                # UDTF grid fn: the spark-path is a SQL LATERAL join, not a scalar
+                # column, so build + explain the LATERAL plan (the scalar col_fn
+                # would raise NotImplementedError). Register the light UDTF first.
+                from databricks.labs.gbx.pyrx import functions as _prx_reg
+
+                _prx_reg.register(spark, only=[_fs.sql_name])
+                _ps = (
+                    partition_size
+                    if (partition_size and partition_size > 0)
+                    else max(1, _n // (nparts * 4))
+                )
+                _parts = max(1, math.ceil(_n / _ps))
+                _edf = df_all.repartition(max(1, _parts), F.rand())
+                _view = f"_bench_udtf_explain_{_fs.name}"
+                _edf.createOrReplaceTempView(_view)
+                try:
+                    _emit_explain(
+                        f"{_fs.name} (udtf-lateral, n={_n}, parts={_parts})",
+                        spark.sql(_udtf_lateral_sql(_view, _fs)),
+                        explain_dir,
+                    )
+                finally:
+                    try:
+                        spark.catalog.dropTempView(_view)
+                    except Exception:  # noqa: BLE001
+                        pass
             else:
                 _ps = (
                     partition_size
@@ -856,6 +968,39 @@ def _explain_spark_path(
             print(f"  explain error for {_fs.name}: {_e}")
 
 
+def _sql_literal(v) -> str:
+    """Render a scalar bench arg as a SQL literal for a LATERAL UDTF call.
+
+    The grid-family UDTFs (rastertogrid* / tessellate) take numeric scalars only
+    (resolution / tile_width / tile_height / overlap / min_z / max_z), but keep the
+    string branch defensive so a future string-arg UDTF still renders correctly.
+    """
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return repr(v)
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def _udtf_lateral_sql(view: str, fs) -> str:
+    """The timed SQL for a UDTF grid fn: SELECT ... FROM <view>, LATERAL <udtf>(...).
+
+    The lightweight grid functions (rastertogrid* / tessellate) are registered as
+    Python UDTFs, so their realistic distributed per-tile cost is a SQL LATERAL
+    table-function join over the tile DataFrame -- NOT a scalar column (the pyrx
+    ``prx.<fn>`` wrapper raises NotImplementedError for exactly this reason). The
+    UDTF's first positional arg is the tile struct (``d.tile``); the remaining
+    scalar args ride from ``fs.args`` in signature order as SQL literals. ``t.*``
+    projects every emitted row so the whole per-tile cell/row fan-out is realized
+    (and written to noop for timing), not short-circuited.
+    """
+    scalar_args = "".join(", " + _sql_literal(v) for v in fs.args.values())
+    return (
+        f"SELECT t.* FROM {view} AS d, "
+        f"LATERAL {fs.sql_name}(d.tile{scalar_args}) AS t"
+    )
+
+
 def _spark_path_warmup(spark, fnspecs, pool, df_all, input_col):
     """One throwaway Spark job so JVM/Spark spin-up isn't charged to the first timed
     cell. Band-aware (mirrors the Scala HeavyRunner warm-up) + guarded so a warm-up
@@ -866,8 +1011,17 @@ def _spark_path_warmup(spark, fnspecs, pool, df_all, input_col):
         f
         for f in fnspecs
         if "spark-path" in f.modes
+        # Exclude the aggregators (no _input_col column form) AND the UDTF grid fns
+        # (their scalar col_fn raises NotImplementedError -- they warm up per-fn via
+        # the LATERAL warm body inside _run_udtf_lateral instead).
+        and not getattr(f, "udtf", False)
         and getattr(f, "input_kind", "tile")
-        not in ("tile_aggregate", "geometry_aggregate", "h3_aggregate")
+        not in (
+            "tile_aggregate",
+            "geometry_aggregate",
+            "h3_aggregate",
+            "grid_aggregate",
+        )
     ]
     _warm = next(
         (f for f in _spark_fns if getattr(f, "min_bands", 1) <= pool.bands), None
@@ -885,6 +1039,307 @@ def _spark_path_warmup(spark, fnspecs, pool, df_all, input_col):
             ).save()
         except Exception:  # noqa: BLE001 — warm-up failures must never abort timing
             pass
+
+
+def _run_udtf_lateral(
+    spark,
+    fs,
+    run_id,
+    row_counts,
+    warmup,
+    measured,
+    env,
+    pool,
+    df_all,
+    warm_df,
+    max_rows,
+    nparts,
+    partition_size,
+    math,
+    F,
+) -> List[ResultRow]:
+    """Time a UDTF grid fn's spark-path via SQL LATERAL over the tile ladder.
+
+    The lightweight rastertogrid* / tessellate functions are registered Python
+    UDTFs; their realistic distributed per-tile cost is a SQL LATERAL table-function
+    join over the tile DataFrame (``SELECT t.* FROM <view> AS d, LATERAL
+    <udtf>(d.tile, <scalar args>) AS t``), NOT a scalar column -- the scalar
+    ``prx.<fn>`` wrapper raises NotImplementedError. This mirrors the scalar
+    spark-path cell exactly (same row ladder, same repartition sizing, same noop
+    write, same warm-up-one-row-per-slot), only the timed body is the LATERAL SQL.
+    Registers the per-fn view name off df_all / warm_df so ``spark.sql`` can join it.
+    """
+    out: List[ResultRow] = []
+    # Register the cached tile DataFrames as temp views the LATERAL SQL can join.
+    # Per-fn unique names so parallel/repeated calls don't collide; dropped in finally.
+    _safe = fs.name
+    _view = f"_bench_udtf_{_safe}"
+    _warm_view = f"_bench_udtf_warm_{_safe}"
+    for n in sorted(row_counts):
+        # Same partition sizing as the scalar spark-path cell (oversubscribe slots).
+        if partition_size and partition_size > 0:
+            _psize = partition_size
+        else:
+            _psize = max(1, n // (nparts * 4))
+        _parts = max(1, math.ceil(n / _psize))
+        _src = df_all if n >= max_rows else df_all.limit(n)
+        df = _src.repartition(max(1, _parts), F.rand())
+        try:
+            df.createOrReplaceTempView(_view)
+            warm_df.createOrReplaceTempView(_warm_view)
+            _sql = _udtf_lateral_sql(_view, fs)
+            _warm_sql = _udtf_lateral_sql(_warm_view, fs)
+
+            def job(_q=_sql):
+                spark.sql(_q).write.format("noop").mode("overwrite").save()
+
+            def warm(_q=_warm_sql):
+                spark.sql(_q).write.format("noop").mode("overwrite").save()
+
+            stats = time_iters(job, warmup, measured, warmup_fn=warm)
+            ms = stats["iter_median_ms"]
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn=fs.name,
+                    category=fs.category,
+                    mode="spark-path",
+                    tile_px=pool.tile_px,
+                    bands=pool.bands,
+                    dtype=pool.dtype,
+                    srid=(pool.tiles[0].srid if pool.tiles else 0),
+                    rows=n,
+                    nodata_frac=0.0,
+                    warmup_iters=stats["warmup_iters"],
+                    measured_iters=stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                    avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                    per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+                    per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+                    throughput_mpix_s=(
+                        (_mpix(pool.tile_px, pool.bands, n) / (ms / 1000.0))
+                        if ms
+                        else 0.0
+                    ),
+                    throughput_rows_s=(n / (ms / 1000.0)) if ms else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status="ok",
+                    note="lateral-udtf",
+                    output_fingerprint="",
+                    **env,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn=fs.name,
+                    category=fs.category,
+                    mode="spark-path",
+                    tile_px=pool.tile_px,
+                    bands=pool.bands,
+                    dtype=pool.dtype,
+                    srid=(pool.tiles[0].srid if pool.tiles else 0),
+                    rows=n,
+                    nodata_frac=0.0,
+                    warmup_iters=warmup,
+                    measured_iters=0,
+                    iter_median_s=0.0,
+                    iter_min_s=0.0,
+                    iter_p90_s=0.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=0.0,
+                    peak_rss_mb=0.0,
+                    status="error",
+                    note=str(e)[:300],
+                    output_fingerprint="",
+                    **env,
+                )
+            )
+        finally:
+            try:
+                spark.catalog.dropTempView(_view)
+                spark.catalog.dropTempView(_warm_view)
+            except Exception:  # noqa: BLE001
+                pass
+    return out
+
+
+def _sp_progress_line(fn_name, fn_rows, mark, leg_i, leg_n):
+    """Print a per-function progress line after a spark-path fn finishes.
+
+    Must never raise -- the outer loop catches nothing here; any print failure
+    would abort the timing run.
+    """
+    try:
+        _fn_rows = fn_rows[mark:]
+        # Prefer the max-row row (headline throughput); fall back to any ok.
+        _ok_rows = [r for r in _fn_rows if r.status == "ok"]
+        if _ok_rows:
+            _rep = max(_ok_rows, key=lambda r: r.rows)
+            _ms_str = (
+                f"{_rep.per_tile_avg_ms:.2f}ms/tile @{_rep.rows}r"
+                if _rep.per_tile_avg_ms
+                else f"{_rep.iter_median_s * 1000:.1f}ms"
+            )
+            _status = "ok"
+        elif _fn_rows:
+            _rep = _fn_rows[-1]
+            _ms_str = "-"
+            _status = _rep.status
+        else:
+            _ms_str = "-"
+            _status = "error"
+        print(
+            f"[{leg_i}/{leg_n}] {fn_name}  lightweight spark-path"
+            f"  {_ms_str}  {_status}"
+        )
+    except Exception:  # noqa: BLE001 — progress print must never abort the leg
+        pass
+
+
+def _sp_scalar_ok_row(fs, run_id, pool, n, env, stats):
+    """Build a successful spark-path ResultRow for a scalar fn at row-count n."""
+    ms = stats["iter_median_ms"]
+    return ResultRow(
+        run_id=run_id,
+        api="lightweight",
+        fn=fs.name,
+        category=fs.category,
+        mode="spark-path",
+        tile_px=pool.tile_px,
+        bands=pool.bands,
+        dtype=pool.dtype,
+        srid=(pool.tiles[0].srid if pool.tiles else 0),
+        rows=n,
+        nodata_frac=0.0,
+        warmup_iters=stats["warmup_iters"],
+        measured_iters=stats["measured_iters"],
+        iter_median_s=ms / 1000.0,
+        iter_min_s=stats["iter_min_ms"] / 1000.0,
+        iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+        iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+        avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+        # Headline spark-path metric: amortized wall-clock per tile,
+        # reported in both seconds and milliseconds.
+        per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+        per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+        throughput_mpix_s=(
+            (_mpix(pool.tile_px, pool.bands, n) / (ms / 1000.0)) if ms else 0.0
+        ),
+        throughput_rows_s=(n / (ms / 1000.0)) if ms else 0.0,
+        peak_rss_mb=peak_rss_mb(),
+        status="ok",
+        note="",
+        output_fingerprint="",
+        **env,
+    )
+
+
+def _sp_scalar_error_row(fs, run_id, pool, n, env, warmup_iters, e):
+    """Build an error spark-path ResultRow for a scalar fn at row-count n."""
+    return ResultRow(
+        run_id=run_id,
+        api="lightweight",
+        fn=fs.name,
+        category=fs.category,
+        mode="spark-path",
+        tile_px=pool.tile_px,
+        bands=pool.bands,
+        dtype=pool.dtype,
+        srid=(pool.tiles[0].srid if pool.tiles else 0),
+        rows=n,
+        nodata_frac=0.0,
+        warmup_iters=warmup_iters,
+        measured_iters=0,
+        iter_median_s=0.0,
+        iter_min_s=0.0,
+        iter_p90_s=0.0,
+        throughput_mpix_s=0.0,
+        throughput_rows_s=0.0,
+        peak_rss_mb=0.0,
+        status="error",
+        note=str(e)[:300],
+        output_fingerprint="",
+        **env,
+    )
+
+
+def _run_sp_scalar_fn(
+    fs,
+    run_id,
+    pool,
+    env,
+    row_counts,
+    warmup,
+    measured,
+    df_all,
+    warm_df,
+    max_rows,
+    nparts,
+    partition_size,
+    input_col_fn,
+    math,
+    F,
+):
+    """Time a single scalar spark-path fn over each row-count ladder point.
+
+    Handles partition sizing, per-n DataFrame slicing, warm-up / measured
+    timing, and ResultRow building.  Extracted from ``run_spark_path`` to
+    reduce that function's cyclomatic complexity.
+    """
+    import math as _math
+
+    _kind = getattr(fs, "input_kind", "tile")
+    rows: List[ResultRow] = []
+    for n in sorted(row_counts):
+        # Force the partition (task) count via repartition. AQE is disabled for the run
+        # (notebook preamble) so it can't coalesce these back toward defaultParallelism
+        # (~slots) -- which would reintroduce the straggler idle. (Also handles
+        # limit(n<total), which GlobalLimit-collapses to ONE partition -> single-slot.)
+        #
+        # Partition count = ceil(n / tiles_per_partition). Default tiles/partition =
+        # n / (slots * 4) -> ~4 tasks per slot (oversubscribed) so finished slots grab
+        # pending tasks instead of idling through a straggler tail. --override-partition-size
+        # pins tiles/partition. tile_array fns (rst_merge/combineavg/frombands) emit one
+        # often-LARGER output per row from a constant broadcast array; >1 per task can OOM
+        # an executor (rst_merge did), so they're hard-pinned to ONE tile/partition.
+        if partition_size and partition_size > 0:
+            _psize = partition_size
+        else:
+            _psize = max(1, n // (nparts * 4))
+        _parts = n if _kind == "tile_array" else max(1, _math.ceil(n / _psize))
+        # df_all is already capped to max_rows at the SOURCE (paths = tiles[:max_rows])
+        # and cached, so when n == max_rows the whole cached set IS the input -- use it
+        # directly. A per-fn .limit(n) would inject a GlobalLimit that collapses the
+        # corpus through ONE partition (SinglePartition funnel) BEFORE the repartition,
+        # serializing every tile through a single task ahead of the UDF -- paid per fn for
+        # zero benefit when n already == the cached size. Only sub-max ladder points
+        # (n < max_rows) still need a limit; that one funnels a smaller (cheaper) subset.
+        _src = df_all if n >= max_rows else df_all.limit(n)
+        # repartition by F.rand() not the tile struct (avoid hashing the raster payload).
+        df = _src.repartition(max(1, _parts), F.rand())
+        try:
+
+            def job(_df=df, _fs=fs, _k=_kind):
+                c = _fs.col_fn(input_col_fn(_fs.name, _k, _df), _fs.args)
+                _df.select(c.alias("out")).write.format("noop").mode("overwrite").save()
+
+            # Warm-up runs over warm_df (one row per slot), NOT the full n rows.
+            def warm(_wd=warm_df, _fs=fs, _k=_kind):
+                c = _fs.col_fn(input_col_fn(_fs.name, _k, _wd), _fs.args)
+                _wd.select(c.alias("out")).write.format("noop").mode("overwrite").save()
+
+            stats = time_iters(job, warmup, measured, warmup_fn=warm)
+            rows.append(_sp_scalar_ok_row(fs, run_id, pool, n, env, stats))
+        except Exception as e:  # noqa: BLE001
+            rows.append(_sp_scalar_error_row(fs, run_id, pool, n, env, warmup, e))
+    return rows
 
 
 def run_spark_path(
@@ -1050,6 +1505,19 @@ def run_spark_path(
         )
         return []
 
+    # UDTF grid fns (rastertogrid* / tessellate) are invoked via SQL LATERAL, so
+    # their registered gbx_ names must exist in this session. Register JUST the light
+    # UDTFs needed by this run's udtf fns (idempotent; last registration wins) so the
+    # LATERAL branch below can call them. The scalar col_fn path never needs this
+    # (its UDFs are module-level singletons), so register only when a udtf fn is present.
+    _udtf_fns = [
+        f for f in fnspecs if getattr(f, "udtf", False) and "spark-path" in f.modes
+    ]
+    if _udtf_fns:
+        from databricks.labs.gbx.pyrx import functions as _prx_reg
+
+        _prx_reg.register(spark, only=[f.sql_name for f in _udtf_fns])
+
     # Spark warm-up: one throwaway job so JVM/Spark spin-up isn't charged to the first
     # timed cell (delegated to _spark_path_warmup).
     _spark_path_warmup(spark, fnspecs, pool, df_all, _input_col)
@@ -1068,10 +1536,21 @@ def run_spark_path(
     # "geometry_aggregate"} and are handled by a dedicated aggregate harness (below)
     # that emits BOTH a consistency fingerprint (a fixed deterministic single group
     # -> one out tile -> raster fingerprint) and the perf timing (scaled groupBy).
-    _agg_kinds = ("tile_aggregate", "geometry_aggregate", "h3_aggregate")
+    _agg_kinds = (
+        "tile_aggregate",
+        "geometry_aggregate",
+        "h3_aggregate",
+        "grid_aggregate",
+    )
+    _sp_leg_fns = [f for f in fnspecs if "spark-path" in f.modes]
+    _sp_leg_n = len(_sp_leg_fns)
+    print(f"[bench] lightweight spark-path: {_sp_leg_n} fn(s) to run")
+    _sp_leg_i = 0
+
     for fs in fnspecs:
         if "spark-path" not in fs.modes:
             continue
+        _sp_leg_i += 1
         _mark = len(out)
         if getattr(fs, "input_kind", "tile") in _agg_kinds:
             out += _run_aggregate(
@@ -1087,119 +1566,55 @@ def run_spark_path(
                 partition_size=partition_size,
             )
             _flush(out, _mark)
+            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
             continue
-        _kind = getattr(fs, "input_kind", "tile")
-        for n in sorted(row_counts):
-            # Force the partition (task) count via repartition. AQE is disabled for the run
-            # (notebook preamble) so it can't coalesce these back toward defaultParallelism
-            # (~slots) -- which would reintroduce the straggler idle. (Also handles
-            # limit(n<total), which GlobalLimit-collapses to ONE partition -> single-slot.)
-            #
-            # Partition count = ceil(n / tiles_per_partition). Default tiles/partition =
-            # n / (slots * 4) -> ~4 tasks per slot (oversubscribed) so finished slots grab
-            # pending tasks instead of idling through a straggler tail. --override-partition-size
-            # pins tiles/partition. tile_array fns (rst_merge/combineavg/frombands) emit one
-            # often-LARGER output per row from a constant broadcast array; >1 per task can OOM
-            # an executor (rst_merge did), so they're hard-pinned to ONE tile/partition.
-            if partition_size and partition_size > 0:
-                _psize = partition_size
-            else:
-                _psize = max(1, n // (_nparts * 4))
-            _parts = n if _kind == "tile_array" else max(1, math.ceil(n / _psize))
-            # df_all is already capped to max_rows at the SOURCE (paths = tiles[:max_rows])
-            # and cached, so when n == max_rows the whole cached set IS the input -- use it
-            # directly. A per-fn .limit(n) would inject a GlobalLimit that collapses the
-            # corpus through ONE partition (SinglePartition funnel) BEFORE the repartition,
-            # serializing every tile through a single task ahead of the UDF -- paid per fn for
-            # zero benefit when n already == the cached size. Only sub-max ladder points
-            # (n < max_rows) still need a limit; that one funnels a smaller (cheaper) subset.
-            _src = df_all if n >= max_rows else df_all.limit(n)
-            # repartition by F.rand() not the tile struct (avoid hashing the raster payload).
-            df = _src.repartition(max(1, _parts), F.rand())
-            try:
-
-                def job(_df=df, _fs=fs, _k=_kind):
-                    c = _fs.col_fn(_input_col(_fs.name, _k, _df), _fs.args)
-                    _df.select(c.alias("out")).write.format("noop").mode(
-                        "overwrite"
-                    ).save()
-
-                # Warm-up runs over _warm_df (one row per slot), NOT the full n rows.
-                def warm(_wd=_warm_df, _fs=fs, _k=_kind):
-                    c = _fs.col_fn(_input_col(_fs.name, _k, _wd), _fs.args)
-                    _wd.select(c.alias("out")).write.format("noop").mode(
-                        "overwrite"
-                    ).save()
-
-                stats = time_iters(job, warmup, measured, warmup_fn=warm)
-                ms = stats["iter_median_ms"]
-                out.append(
-                    ResultRow(
-                        run_id=run_id,
-                        api="lightweight",
-                        fn=fs.name,
-                        category=fs.category,
-                        mode="spark-path",
-                        tile_px=pool.tile_px,
-                        bands=pool.bands,
-                        dtype=pool.dtype,
-                        srid=(pool.tiles[0].srid if pool.tiles else 0),
-                        rows=n,
-                        nodata_frac=0.0,
-                        warmup_iters=stats["warmup_iters"],
-                        measured_iters=stats["measured_iters"],
-                        iter_median_s=ms / 1000.0,
-                        iter_min_s=stats["iter_min_ms"] / 1000.0,
-                        iter_p90_s=stats["iter_p90_ms"] / 1000.0,
-                        iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"]
-                        / 1000.0,
-                        avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
-                        # Headline spark-path metric: amortized wall-clock per tile,
-                        # reported in both seconds and milliseconds.
-                        per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
-                        per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
-                        throughput_mpix_s=(
-                            (_mpix(pool.tile_px, pool.bands, n) / (ms / 1000.0))
-                            if ms
-                            else 0.0
-                        ),
-                        throughput_rows_s=(n / (ms / 1000.0)) if ms else 0.0,
-                        peak_rss_mb=peak_rss_mb(),
-                        status="ok",
-                        note="",
-                        output_fingerprint="",
-                        **env,
-                    )
-                )
-            except Exception as e:  # noqa: BLE001
-                out.append(
-                    ResultRow(
-                        run_id=run_id,
-                        api="lightweight",
-                        fn=fs.name,
-                        category=fs.category,
-                        mode="spark-path",
-                        tile_px=pool.tile_px,
-                        bands=pool.bands,
-                        dtype=pool.dtype,
-                        srid=(pool.tiles[0].srid if pool.tiles else 0),
-                        rows=n,
-                        nodata_frac=0.0,
-                        warmup_iters=warmup,
-                        measured_iters=0,
-                        iter_median_s=0.0,
-                        iter_min_s=0.0,
-                        iter_p90_s=0.0,
-                        throughput_mpix_s=0.0,
-                        throughput_rows_s=0.0,
-                        peak_rss_mb=0.0,
-                        status="error",
-                        note=str(e)[:300],
-                        output_fingerprint="",
-                        **env,
-                    )
-                )
+        if getattr(fs, "udtf", False):
+            # UDTF grid fns (rastertogrid* / tessellate): the lightweight impl is a
+            # registered Python UDTF, so the realistic distributed per-tile cost is a
+            # SQL LATERAL table-function join over the tile DataFrame -- NOT a scalar
+            # column (prx.<fn> raises NotImplementedError). Time
+            # `SELECT t.* FROM <view> AS d, LATERAL <udtf>(d.tile, <args>) AS t`
+            # written to noop, over the same row ladder + partitioning as the scalar
+            # path, so the number is comparable to the scalar spark-path cells.
+            out += _run_udtf_lateral(
+                spark,
+                fs,
+                run_id,
+                row_counts,
+                warmup,
+                measured,
+                env,
+                pool,
+                df_all,
+                _warm_df,
+                max_rows,
+                _nparts,
+                partition_size,
+                math,
+                F,
+            )
+            _flush(out, _mark)
+            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
+            continue
+        out += _run_sp_scalar_fn(
+            fs,
+            run_id,
+            pool,
+            env,
+            row_counts,
+            warmup,
+            measured,
+            df_all,
+            _warm_df,
+            max_rows,
+            _nparts,
+            partition_size,
+            _input_col,
+            math,
+            F,
+        )
         _flush(out, _mark)
+        _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
     df_all.unpersist()
     return out
 

@@ -24,6 +24,7 @@ const sidebars = {
       type: 'category',
       label: 'Examples',
       collapsed: true,
+      link: { type: 'doc', id: 'examples/overview' },
       items: [
         {
           type: 'category',
@@ -61,6 +62,7 @@ const sidebars = {
         'sample-data/naip-downloader',
         'sample-data/dem-downloader',
         'sample-data/tropomi-downloader',
+        'sample-data/nasanex-downloader',
         'sample-data/emit-downloader',
         'sample-data/wells-downloader',
       ],
@@ -69,6 +71,7 @@ const sidebars = {
       type: 'category',
       label: 'Readers & Writers',
       collapsed: true,
+      link: { type: 'doc', id: 'readers-writers' },
       items: [
         {
           type: 'category',
@@ -77,7 +80,7 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/netcdf', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
           ],
         },
         {
@@ -87,7 +90,7 @@ const sidebars = {
           items: [
             'writers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['writers/raster', 'writers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/netcdf', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
           ],
         },
       ],
@@ -107,6 +110,7 @@ const sidebars = {
           collapsed: true,
           link: { type: 'doc', id: 'api/raster-functions' },
           items: [
+            'api/rasterio-distributed',
             'api/h3-raster-tessellation',
           ],
         },

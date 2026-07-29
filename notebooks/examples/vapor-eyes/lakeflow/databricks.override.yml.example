@@ -20,4 +20,4 @@ targets:
       # Override any other databricks.yml variable here, e.g.:
       # catalog: my_catalog
       # schema: my_vapor_eyes_lf
-      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.4.2-py3-none-any.whl
+      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.4.3-py3-none-any.whl

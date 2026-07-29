@@ -15,7 +15,7 @@ This guide will help you get started with GeoBrix quickly after installation. Al
 
 GeoBrix ships in two tiers that share the same function names — pick one with the toggle below and the rest of this page follows your choice (all tabs grouped under the same tier toggle stay in sync).
 
-<Tabs groupId="gbx-tier" queryString="tier">
+<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight — recommended">
 
 Pure-Python (rasterio / pyogrio / NumPy), no JAR and no GDAL or OGR to install. A single wheel via `%pip` or as a cluster library, and it runs on serverless, standard/shared, ARM, and Lakeflow declarative pipelines. Covers **RasterX** (every `rst_*` function), **VectorX** (`gbx_st_*`), and the **GridX quadbin** grid (`gbx_quadbin_*`), plus the lightweight readers.
@@ -72,7 +72,7 @@ You do not need to register functions if you are only using the included readers
 
 The import/register line is the one place each package genuinely differs by tier. Pick your tier; the function names you call afterward are the same either way.
 
-<Tabs groupId="gbx-tier" queryString="tier">
+<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight">
 
 <CodeFromTest
@@ -160,7 +160,7 @@ Register GridX (BNG) and VectorX the same way:
 
 Paths below assume the [Sample Data](./sample-data/overview) layout (e.g. Essential Bundle). The reader format string is the part that differs by tier: lightweight uses the pure-Python `*_gbx` readers (no GDAL/OGR install); heavyweight uses the GDAL/OGR readers.
 
-<Tabs groupId="gbx-tier" queryString="tier">
+<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight">
 
 Register the lightweight readers once per session, then load by format string (`gtiff_gbx` / `raster_gbx` for rasters; `shapefile_gbx` / `geojson_gbx` / `gpkg_gbx` / `file_gdb_gbx` for vectors).
@@ -241,7 +241,7 @@ Identical on both tiers — only the import/register differs (see the tier toggl
 
 All GridX grids — **quadbin** (`gx.quadbin_*` / `gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom grids** (`gbx_custom_*`) — are available on **both** tiers.
 
-<Tabs groupId="gbx-tier" queryString="tier">
+<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight">
 
 Index a point to a quadbin cell and read its resolution:

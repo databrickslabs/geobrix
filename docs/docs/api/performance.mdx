@@ -53,7 +53,8 @@ The compute underneath each UDF shape comes from best-in-class Python libraries 
 | **NumPy** | Band math (spectral indices, map algebra, thresholding), array ops |
 | **SciPy** | Focal filtering (`rst_filter`, `rst_convolve`); Delaunay triangulation + barycentric interpolation for the TIN functions (`st_triangulate`, `st_interpolateelevation*`) |
 | **rio-tiler** | XYZ / web-tile output (`rst_tilexyz`, `rst_xyzpyramid`) |
-| **xarray-spatial** | Terrain analysis (slope, hillshade, aspect, tri, tpi, roughness, viewshed) |
+| **NumPy** (Horn 3×3) | Terrain analysis (slope, aspect, hillshade, tri, tpi, roughness) |
+| **xarray-spatial** | Viewshed |
 | **shapely** | WKB geometry handling (clip, polygonize, rasterize, grid aggregation); TIN geometry parse and legacy-struct decode to WKB (`st_legacyaswkb`) |
 | **pyogrio** | Vector reader I/O (Arrow-native columnar batches — OGR-free) |
 | **mapbox-vector-tile** | MVT protobuf encode / decode (`st_asmvt`, `st_asmvt_pyramid`) |
@@ -88,11 +89,31 @@ These functions are Python UDTFs registered via `spark.udtf.register(...)`. Each
 | `gbx_rst_h3_rastertogridmax` | `rst_h3_rastertogridmax` | One row per H3 cell |
 | `gbx_rst_h3_rastertogridmin` | `rst_h3_rastertogridmin` | One row per H3 cell |
 | `gbx_rst_h3_rastertogridmedian` | `rst_h3_rastertogridmedian` | One row per H3 cell |
+| `gbx_rst_h3_rastertogridsum` | `rst_h3_rastertogridsum` | One row per H3 cell |
+| `gbx_rst_h3_rastertogridvariance` | `rst_h3_rastertogridvariance` | One row per H3 cell |
+| `gbx_rst_h3_rastertogridstddev` | `rst_h3_rastertogridstddev` | One row per H3 cell |
+**QuadBin and BNG grid variants** (both tiers — heavyweight Scala/JVM CollectionGenerators and lightweight `pyrx` UDTFs backed by `pygx._quadbin` / `_bng` cell math + `rasterio`; the BNG family auto-warps to EPSG:27700 and renders STRING cell IDs — listed here because they share the same fan-out shape):
+
+| SQL name | Python name | Output per input tile |
+|---|---|---|
 | `gbx_rst_quadbin_rastertogridavg` | `rst_quadbin_rastertogridavg` | One row per QuadBin cell covering the tile |
 | `gbx_rst_quadbin_rastertogridcount` | `rst_quadbin_rastertogridcount` | One row per QuadBin cell |
 | `gbx_rst_quadbin_rastertogridmax` | `rst_quadbin_rastertogridmax` | One row per QuadBin cell |
 | `gbx_rst_quadbin_rastertogridmin` | `rst_quadbin_rastertogridmin` | One row per QuadBin cell |
 | `gbx_rst_quadbin_rastertogridmedian` | `rst_quadbin_rastertogridmedian` | One row per QuadBin cell |
+| `gbx_rst_quadbin_rastertogridsum` | `rst_quadbin_rastertogridsum` | One row per QuadBin cell |
+| `gbx_rst_quadbin_rastertogridvariance` | `rst_quadbin_rastertogridvariance` | One row per QuadBin cell |
+| `gbx_rst_quadbin_rastertogridstddev` | `rst_quadbin_rastertogridstddev` | One row per QuadBin cell |
+| `gbx_rst_quadbin_tessellate` | `rst_quadbin_tessellate` | One row per QuadBin cell covering the tile (clipped chip) |
+| `gbx_rst_bng_rastertogridavg` | `rst_bng_rastertogridavg` | One row per BNG cell covering the tile (auto-reprojects to EPSG:27700) |
+| `gbx_rst_bng_rastertogridcount` | `rst_bng_rastertogridcount` | One row per BNG cell |
+| `gbx_rst_bng_rastertogridmax` | `rst_bng_rastertogridmax` | One row per BNG cell |
+| `gbx_rst_bng_rastertogridmin` | `rst_bng_rastertogridmin` | One row per BNG cell |
+| `gbx_rst_bng_rastertogridmedian` | `rst_bng_rastertogridmedian` | One row per BNG cell |
+| `gbx_rst_bng_rastertogridsum` | `rst_bng_rastertogridsum` | One row per BNG cell |
+| `gbx_rst_bng_rastertogridvariance` | `rst_bng_rastertogridvariance` | One row per BNG cell |
+| `gbx_rst_bng_rastertogridstddev` | `rst_bng_rastertogridstddev` | One row per BNG cell |
+| `gbx_rst_bng_tessellate` | `rst_bng_tessellate` | One row per BNG cell covering the tile (auto-reprojects to EPSG:27700) |
 
 **VectorX (pyvx)**
 
@@ -139,6 +160,13 @@ These functions are Arrow-backed `pandas_udf(BinaryType())` aggregators used ins
 | `gbx_rst_gridfrompoints_agg` | `rst_gridfrompoints_agg` | Interpolate a raster from point observations |
 | `gbx_rst_dtmfromgeoms_agg` | `rst_dtmfromgeoms_agg` | Build a DTM raster from elevation geometries |
 | `gbx_rst_h3_rasterize_agg` | `rst_h3_rasterize_agg` | Burn a group of H3 cells onto one raster (presence mask, or per-cell value) |
+
+**QuadBin and BNG grid variants** (both tiers — heavyweight Scala/JVM TypedImperativeAggregates and lightweight `pyrx` aggregators backed by `pygx._quadbin` / `_bng` cell math + `rasterio`; the BNG variant works in EPSG:27700 natively — cell geometries are derived from `pygx._bng` with no warp step, since these aggregators take cellid+value rows rather than a raster tile — listed here because they share the same reduce-to-one-raster shape):
+
+| SQL name | Python name | Aggregation |
+|---|---|---|
+| `gbx_rst_quadbin_rasterize_agg` | `rst_quadbin_rasterize_agg` | Burn quadbin cell geometry/value pairs onto one raster per group |
+| `gbx_rst_bng_rasterize_agg` | `rst_bng_rasterize_agg` | Burn BNG cell geometry/value pairs onto one raster per group (auto-reprojects to EPSG:27700) |
 
 **VectorX (pyvx)**
 
@@ -358,8 +386,8 @@ Each UDF shape delegates compute to a focused Python module in `pyrx/core/` or `
 | `pyrx/core/combine.py` | rasterio + NumPy | `rst_merge`, `rst_combineavg`, `rst_frombands`, `rst_band`, `rst_separatebands` |
 | `pyrx/core/bandmath.py` | NumPy | `rst_ndvi`, `rst_ndwi`, `rst_nbr`, `rst_savi`, `rst_evi`, `rst_index`, `rst_mapalgebra`, `rst_threshold`, `rst_derivedband` |
 | `pyrx/core/focal.py` | SciPy + NumPy | `rst_filter`, `rst_convolve` |
-| `pyrx/core/terrain.py` | xarray-spatial | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness`, `rst_color_relief`, `rst_viewshed` |
-| `pyrx/core/analysis.py` | rasterio + shapely | `rst_proximity`, `rst_contour`, `rst_sample` |
+| `pyrx/core/terrain.py` | NumPy (Horn 3×3) | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness`, `rst_color_relief` |
+| `pyrx/core/analysis.py` | rasterio + shapely + xarray-spatial | `rst_proximity`, `rst_contour`, `rst_sample`, `rst_viewshed` |
 | `pyrx/core/tiles.py` | rasterio + rio-tiler | `rst_retile`, `rst_tooverlappingtiles`, `rst_maketiles`, `rst_tilexyz`, `rst_xyzpyramid` |
 | `pyrx/core/grid.py` | rasterio + shapely + h3/quadbin | `rst_h3_tessellate`, discrete-grid rastertogrid (UDTF path) |
 | `pyrx/core/bridge.py` | rasterio + shapely | `rst_rasterize`, `rst_gridfrompoints`, `rst_dtmfromgeoms` |

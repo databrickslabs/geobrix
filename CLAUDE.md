@@ -4,7 +4,7 @@ This file is the entry point for any Claude (or Cursor) session in this repo. Us
 
 ## Project
 
-**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3 LTS or 18 LTS). Current version **0.4.2** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/beta-release-notes.mdx` for breaking changes.
+**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3 LTS or 18 LTS). Current version **0.4.3** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/beta-release-notes.mdx` for breaking changes.
 
 Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
 
@@ -35,8 +35,8 @@ Three API packages, each with its own SQL prefix:
 Each package exposes `functions` with `register(spark)` to install SQL UDFs. Shared primitives (`expressions`, `ds`, `util`) live under `com.databricks.labs.gbx`. Spark data source registrations are in `src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.
 
 **Readers** are namespace-suffixed:
-- Raster (GDAL): `gdal`, `gtiff_gdal`
-- Vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`
+- Raster (GDAL): `gdal`, `gtiff_gdal`, `netcdf_gdal`
+- Vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`, `netcdf_ogr`
 
 Named readers extend generic readers and preset driver options via `dsExtraMap`. Pattern: `<format>_<engine>`. Generic readers (`ogr`, `gdal`) remain clean for flexibility.
 

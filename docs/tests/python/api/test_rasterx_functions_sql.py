@@ -681,3 +681,187 @@ def test_h3_cell_bbox_sql_example(spark):
     for row in result:
         assert row["bbox"] is not None
     assert hasattr(rasterx_functions_sql, "h3_cell_bbox_sql_example_output")
+
+
+# ============================================================================
+# BNG / quadbin raster-grid functions (9 functions)
+#
+# BNG examples require a UK raster (BNG warps any CRS to EPSG:27700; a NYC
+# raster over Britain would bin no pixels). The London SRTM elevation raster
+# (srtm_n51w001.tif, EPSG:4326, over the TQ grid square) is used. Quadbin/tessellate
+# examples warp to EPSG:4326 (web-mercator quadtree) and work on lon/lat overlap.
+# ============================================================================
+
+
+@pytest.fixture(scope="module")
+def london_rasters_view(spark):
+    """Temp view `london_rasters` over the London SRTM elevation raster (srtm_n51w001.tif, EPSG:4326).
+
+    Used by BNG examples (warp to EPSG:27700) and quadbin examples (warp to
+    EPSG:4326). Skips the dependent test when the sample raster is absent.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx
+    rx.register(spark)
+    path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
+    try:
+        df = spark.read.format("gdal").load(path)
+        if df.count() == 0:
+            pytest.skip(f"London sample raster not available at {path}")
+    except Exception as e:  # pragma: no cover - env-dependent
+        pytest.skip(f"London sample raster not loadable: {e}")
+    view_df = df.withColumnRenamed("source", "path") if "source" in df.columns else df
+    view_df.createOrReplaceTempView("london_rasters")
+    yield
+    spark.catalog.dropTempView("london_rasters")
+
+
+@pytest.mark.parametrize("example_attr,sql_fn", [
+    ("rst_bng_rastertogridavg_sql_example",
+     "gbx_rst_bng_rastertogridavg"),
+    ("rst_bng_rastertogridcount_sql_example",
+     "gbx_rst_bng_rastertogridcount"),
+    ("rst_bng_rastertogridmax_sql_example",
+     "gbx_rst_bng_rastertogridmax"),
+    ("rst_bng_rastertogridmin_sql_example",
+     "gbx_rst_bng_rastertogridmin"),
+    ("rst_bng_rastertogridmedian_sql_example",
+     "gbx_rst_bng_rastertogridmedian"),
+    ("rst_bng_rastertogridsum_sql_example",
+     "gbx_rst_bng_rastertogridsum"),
+    ("rst_bng_rastertogridvariance_sql_example",
+     "gbx_rst_bng_rastertogridvariance"),
+    ("rst_bng_rastertogridstddev_sql_example",
+     "gbx_rst_bng_rastertogridstddev"),
+])
+def test_bng_rastertogrid_sql_example(spark, london_rasters, london_rasters_view,
+                                      example_attr, sql_fn):
+    """Each BNG rastertogrid reducer emits STRING cell ids over a real UK raster."""
+    sql_template = getattr(rasterx_functions_sql, example_attr)()
+    assert sql_fn in sql_template, f"{example_attr} should mention {sql_fn}"
+    # Reducer returns ARRAY<ARRAY<STRUCT<cellID:STRING, measure>>>; explode band 0
+    # and assert the cell ids are BNG strings (e.g. TQ38SW), never numeric.
+    sql = f"""
+    SELECT cell.cellID AS bng_cell, cell.measure AS measure
+    FROM london_rasters
+    LATERAL VIEW explode({sql_fn}(tile, '1km')[0]) AS cell
+    """
+    result = spark.sql(sql).collect()
+    assert len(result) > 0, f"{sql_fn} produced no cells over the London raster"
+    import re
+    bng_re = re.compile(r"^[A-Z]{2}\d*[A-Z]*$")
+    for row in result:
+        assert isinstance(row["bng_cell"], str), "BNG cell id must be a STRING"
+        assert bng_re.match(row["bng_cell"]), (
+            f"expected BNG string id, got '{row['bng_cell']}'"
+        )
+        assert row["measure"] is not None
+
+
+@pytest.fixture(scope="module")
+def london_rasters(spark):
+    """Alias fixture: load the London raster DataFrame (skips if unavailable)."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    rx.register(spark)
+    path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
+    try:
+        df = spark.read.format("gdal").load(path)
+        if df.count() == 0:
+            pytest.skip(f"London sample raster not available at {path}")
+        return df
+    except Exception as e:  # pragma: no cover - env-dependent
+        pytest.skip(f"London sample raster not loadable: {e}")
+
+
+def test_rst_quadbin_tessellate_sql_example(spark, london_rasters, london_rasters_view):
+    """quadbin tessellate generator emits one raster tile chip per overlapping cell."""
+    sql = rasterx_functions_sql.rst_quadbin_tessellate_sql_example()
+    assert "gbx_rst_quadbin_tessellate" in sql
+    # covering mode over zoom 12; the CollectionGenerator yields one `tile` per
+    # overlapping quadbin cell (used via LATERAL VIEW, like gbx_rst_maketiles).
+    result = spark.sql("""
+        SELECT r.path, g.tile
+        FROM london_rasters r
+        LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'covering') g AS tile
+    """).collect()
+    assert len(result) > 0, "quadbin tessellate produced no tile rows"
+    first = result[0].asDict()
+    assert "tile" in first
+    assert first["tile"] is not None
+    assert hasattr(rasterx_functions_sql, "rst_quadbin_tessellate_sql_example_output")
+
+
+def test_rst_bng_tessellate_sql_example(spark, london_rasters, london_rasters_view):
+    """bng tessellate generator emits one raster tile chip per overlapping BNG cell."""
+    sql = rasterx_functions_sql.rst_bng_tessellate_sql_example()
+    assert "gbx_rst_bng_tessellate" in sql
+    # BNG warps the raster to EPSG:27700 then yields one `tile` per overlapping cell.
+    result = spark.sql("""
+        SELECT r.path, g.tile
+        FROM london_rasters r
+        LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'covering') g AS tile
+    """).collect()
+    assert len(result) > 0, "bng tessellate produced no tile rows"
+    first = result[0].asDict()
+    assert "tile" in first
+    assert first["tile"] is not None
+    assert hasattr(rasterx_functions_sql, "rst_bng_tessellate_sql_example_output")
+
+
+def test_rst_quadbin_rasterize_agg_sql_example(spark):
+    """quadbin rasterize_agg burns a group of quadbin cells into one non-null tile."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from databricks.labs.gbx.gridx.quadbin import functions as qbx
+    rx.register(spark)
+    qbx.register(spark)
+    sql = rasterx_functions_sql.rst_quadbin_rasterize_agg_sql_example()
+    assert "gbx_rst_quadbin_rasterize_agg" in sql
+    # Build a small quadbin cell set over central London (lon/lat, zoom 12).
+    spark.sql("""
+        CREATE OR REPLACE TEMP VIEW quadbin_cell_values AS
+        SELECT 1 AS region_id,
+               gbx_quadbin_pointascell(cast(lon as double), cast(lat as double), 12) AS cellid,
+               cast(val as double) AS burn_value
+        FROM (VALUES
+            (-0.10, 51.50, 1.0),
+            (-0.11, 51.51, 2.0),
+            (-0.09, 51.49, 3.0)
+        ) AS t(lon, lat, val)
+    """)
+    result = spark.sql(sql).collect()
+    spark.catalog.dropTempView("quadbin_cell_values")
+    assert len(result) == 1
+    tile = result[0]["tile"]
+    assert tile is not None, "quadbin rasterize_agg must produce a non-null tile"
+    assert hasattr(rasterx_functions_sql, "rst_quadbin_rasterize_agg_sql_example_output")
+
+
+def test_rst_bng_rasterize_agg_sql_example(spark):
+    """bng rasterize_agg burns a group of STRING BNG cells into one non-null tile."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from databricks.labs.gbx.gridx.bng import functions as bngx
+    rx.register(spark)
+    bngx.register(spark)
+    sql = rasterx_functions_sql.rst_bng_rasterize_agg_sql_example()
+    assert "gbx_rst_bng_rasterize_agg" in sql
+    # Build BNG STRING cell ids over central London (BNG eastings/northings, 1km).
+    spark.sql("""
+        CREATE OR REPLACE TEMP VIEW bng_cell_values AS
+        SELECT 1 AS region_id,
+               gbx_bng_eastnorthasbng(e, n, 3) AS cellid,
+               val AS burn_value
+        FROM (VALUES
+            (cast(530000.0 as double), cast(180000.0 as double), cast(1.0 as double)),
+            (cast(531000.0 as double), cast(181000.0 as double), cast(2.0 as double)),
+            (cast(529000.0 as double), cast(179000.0 as double), cast(3.0 as double))
+        ) AS t(e, n, val)
+    """)
+    # Confirm the helper yields STRING BNG ids (contract for the aggregator's cellid arg).
+    ids = spark.sql("SELECT cellid FROM bng_cell_values").collect()
+    for row in ids:
+        assert isinstance(row["cellid"], str), "bng cellid must be a STRING"
+    result = spark.sql(sql).collect()
+    spark.catalog.dropTempView("bng_cell_values")
+    assert len(result) == 1
+    tile = result[0]["tile"]
+    assert tile is not None, "bng rasterize_agg must produce a non-null tile"
+    assert hasattr(rasterx_functions_sql, "rst_bng_rasterize_agg_sql_example_output")

@@ -20,7 +20,8 @@ from typing import TYPE_CHECKING, Optional, Sequence, Union
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame, SparkSession
 
-PLANETARY_COMPUTER = "https://planetarycomputer.microsoft.com/api/stac/v1"
+from databricks.labs.gbx.stac import PLANETARY_COMPUTER  # canonical STAC catalog root
+
 NAIP_COLLECTION = "naip"
 
 # NAIP is always the "image" asset (the only downloaded asset).

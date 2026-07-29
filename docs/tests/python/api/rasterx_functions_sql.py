@@ -1089,6 +1089,67 @@ rst_h3_tessellate_sql_example_output = """
 +------+------------------+--------------+"""
 
 
+def rst_quadbin_tessellate_sql_example():
+    """Tessellate a raster into CARTO quadbin v0 cells (covering or centroid mode)"""
+    return """
+-- covering mode (default): every quadbin cell whose tile overlaps the raster
+-- bbox, each chip clipped to its cell. Zoom 12 for a city-scale raster. The
+-- generator yields one `tile` chip per overlapping cell.
+SELECT r.path, g.tile
+FROM rasters r
+LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'covering') g AS tile;
+
+-- centroid mode: single-assign each valid pixel to the cell holding its
+-- centroid (chips partition the pixels, no double-count).
+SELECT r.path, g.tile
+FROM rasters r
+LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'centroid') g AS tile;
+
+-- backward-compatible two-argument form (covering)
+SELECT r.path, g.tile
+FROM rasters r
+LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12) g AS tile;
+"""
+
+
+rst_quadbin_tessellate_sql_example_output = """
++----+----------------------------------------------+
+|path|tile                                          |
++----+----------------------------------------------+
+|... |{null, <raster bytes>, {driver -> GTiff, ...}}|
++----+----------------------------------------------+"""
+
+
+def rst_bng_tessellate_sql_example():
+    """Tessellate a raster into British National Grid cells (covering or centroid mode)"""
+    return """
+-- covering mode (default): every BNG grid square whose cell overlaps the raster
+-- bbox. '1km' (== integer resolution 3); a raster in any CRS is warped to
+-- EPSG:27700 first. The generator yields one `tile` chip per overlapping cell.
+SELECT r.path, g.tile
+FROM rasters r
+LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'covering') g AS tile;
+
+-- centroid mode: single-assign each valid pixel to the cell holding its centroid.
+SELECT r.path, g.tile
+FROM rasters r
+LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'centroid') g AS tile;
+
+-- backward-compatible two-argument form (covering)
+SELECT r.path, g.tile
+FROM rasters r
+LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km') g AS tile;
+"""
+
+
+rst_bng_tessellate_sql_example_output = """
++----+----------------------------------------------+
+|path|tile                                          |
++----+----------------------------------------------+
+|... |{null, <raster bytes>, {driver -> GTiff, ...}}|
++----+----------------------------------------------+"""
+
+
 def rst_h3_rastertogridavg_sql_example():
     """Aggregate raster values to H3 grid using average"""
     return """
@@ -1197,6 +1258,66 @@ rst_h3_rastertogridmedian_sql_example_output = """
 |h3_cell |median_value|
 +--------+------------+
 |8f283...|128.0       |
++--------+------------+
+"""
+
+
+def rst_h3_rastertogridsum_sql_example():
+    """Get the sum of pixel values per H3 cell"""
+    return """
+SELECT
+    cell.cellID as h3_cell,
+    cell.measure as sum_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_h3_rastertogridsum(tile, 7)[0]) AS cell;
+"""
+
+
+rst_h3_rastertogridsum_sql_example_output = """
++--------+---------+
+|h3_cell |sum_value|
++--------+---------+
+|8f283...|4096.0   |
++--------+---------+
+"""
+
+
+def rst_h3_rastertogridvariance_sql_example():
+    """Get the population variance of pixel values per H3 cell"""
+    return """
+SELECT
+    cell.cellID as h3_cell,
+    cell.measure as variance_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_h3_rastertogridvariance(tile, 7)[0]) AS cell;
+"""
+
+
+rst_h3_rastertogridvariance_sql_example_output = """
++--------+--------------+
+|h3_cell |variance_value|
++--------+--------------+
+|8f283...|152.0         |
++--------+--------------+
+"""
+
+
+def rst_h3_rastertogridstddev_sql_example():
+    """Get the population standard deviation of pixel values per H3 cell"""
+    return """
+SELECT
+    cell.cellID as h3_cell,
+    cell.measure as stddev_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_h3_rastertogridstddev(tile, 7)[0]) AS cell;
+"""
+
+
+rst_h3_rastertogridstddev_sql_example_output = """
++--------+------------+
+|h3_cell |stddev_value|
++--------+------------+
+|8f283...|12.33       |
 +--------+------------+
 """
 
@@ -1310,6 +1431,251 @@ rst_quadbin_rastertogridmedian_sql_example_output = """
 +------------+------------+
 |5188146...  |128.0       |
 +------------+------------+
+"""
+
+
+def rst_quadbin_rastertogridsum_sql_example():
+    """Get the sum of pixel values per CARTO quadbin v0 cell"""
+    return """
+SELECT
+    cell.cellID as quadbin_cell,
+    cell.measure as sum_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_quadbin_rastertogridsum(tile, 7)[0]) AS cell;
+"""
+
+
+rst_quadbin_rastertogridsum_sql_example_output = """
++------------+---------+
+|quadbin_cell|sum_value|
++------------+---------+
+|5188146...  |4096.0   |
++------------+---------+
+"""
+
+
+def rst_quadbin_rastertogridvariance_sql_example():
+    """Get the population variance of pixel values per CARTO quadbin v0 cell"""
+    return """
+SELECT
+    cell.cellID as quadbin_cell,
+    cell.measure as variance_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_quadbin_rastertogridvariance(tile, 7)[0]) AS cell;
+"""
+
+
+rst_quadbin_rastertogridvariance_sql_example_output = """
++------------+--------------+
+|quadbin_cell|variance_value|
++------------+--------------+
+|5188146...  |152.0         |
++------------+--------------+
+"""
+
+
+def rst_quadbin_rastertogridstddev_sql_example():
+    """Get the population standard deviation of pixel values per CARTO quadbin v0 cell"""
+    return """
+SELECT
+    cell.cellID as quadbin_cell,
+    cell.measure as stddev_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_quadbin_rastertogridstddev(tile, 7)[0]) AS cell;
+"""
+
+
+rst_quadbin_rastertogridstddev_sql_example_output = """
++------------+------------+
+|quadbin_cell|stddev_value|
++------------+------------+
+|5188146...  |12.33       |
++------------+------------+
+"""
+
+
+# ============================================================================
+# BNG (British National Grid) rastertogrid reducers
+#
+# BNG works natively in EPSG:27700; a raster in any CRS is warped to 27700
+# before pixels are binned. Cell ids are STRINGS (e.g. "TQ38SW"), not Longs.
+# Resolution is an integer index (1=100km, 2=10km, 3=1km, 4=100m, 5=10m, 6=1m)
+# or a resolution string ("1km", "100m", ...). Most examples use the resolution
+# string "1km"; rastertogridcount uses the integer form (2 == 10km) to show the
+# integer binding path. Examples use the London SRTM elevation raster
+# (srtm_n51w001.tif, EPSG:4326), which overlaps the TQ grid square over central London.
+# ============================================================================
+
+
+def rst_bng_rastertogridavg_sql_example():
+    """Aggregate raster values to British National Grid cells using average"""
+    return """
+-- Aggregate raster to a 1km BNG grid ('1km' == integer resolution 3).
+SELECT
+    path,
+    gbx_rst_bng_rastertogridavg(tile, '1km') as bng_grid
+FROM rasters;
+
+-- Explode the first band into (BNG string cell id, average) rows.
+SELECT
+    path,
+    cell.cellID as bng_cell,
+    cell.measure as avg_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridavg(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridavg_sql_example_output = """
++----+------------------+
+|path|bng_grid          |
++----+------------------+
+|... |[[{TQ38SW, 0.42}]]|
++----+------------------+
+
++----+--------+---------+
+|path|bng_cell|avg_value|
++----+--------+---------+
+|... |TQ38SW  |0.45     |
++----+--------+---------+
+"""
+
+
+def rst_bng_rastertogridcount_sql_example():
+    """Count pixels per British National Grid cell"""
+    return """
+SELECT
+    gbx_rst_bng_rastertogridcount(tile, 2) as pixel_counts
+FROM rasters;
+"""
+
+
+rst_bng_rastertogridcount_sql_example_output = """
++----------------+
+|pixel_counts    |
++----------------+
+|[[{TQ38, 1024}]]|
++----------------+
+"""
+
+
+def rst_bng_rastertogridmax_sql_example():
+    """Get maximum values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as max_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridmax(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridmax_sql_example_output = """
++--------+---------+
+|bng_cell|max_value|
++--------+---------+
+|TQ38SW  |255.0    |
++--------+---------+
+"""
+
+
+def rst_bng_rastertogridmin_sql_example():
+    """Get minimum values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as min_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridmin(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridmin_sql_example_output = """
++--------+---------+
+|bng_cell|min_value|
++--------+---------+
+|TQ38SW  |0.0      |
++--------+---------+
+"""
+
+
+def rst_bng_rastertogridmedian_sql_example():
+    """Get median values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as median_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridmedian(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridmedian_sql_example_output = """
++--------+------------+
+|bng_cell|median_value|
++--------+------------+
+|TQ38SW  |128.0       |
++--------+------------+
+"""
+
+
+def rst_bng_rastertogridsum_sql_example():
+    """Get the sum of pixel values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as sum_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridsum(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridsum_sql_example_output = """
++--------+---------+
+|bng_cell|sum_value|
++--------+---------+
+|TQ38SW  |32896.0  |
++--------+---------+
+"""
+
+
+def rst_bng_rastertogridvariance_sql_example():
+    """Get the population variance of pixel values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as variance_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridvariance(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridvariance_sql_example_output = """
++--------+--------------+
+|bng_cell|variance_value|
++--------+--------------+
+|TQ38SW  |152.0         |
++--------+--------------+
+"""
+
+
+def rst_bng_rastertogridstddev_sql_example():
+    """Get the population standard deviation of pixel values per British National Grid cell"""
+    return """
+SELECT
+    cell.cellID as bng_cell,
+    cell.measure as stddev_value
+FROM rasters
+LATERAL VIEW explode(gbx_rst_bng_rastertogridstddev(tile, '1km')[0]) AS cell;
+"""
+
+
+rst_bng_rastertogridstddev_sql_example_output = """
++--------+------------+
+|bng_cell|stddev_value|
++--------+------------+
+|TQ38SW  |12.33       |
++--------+------------+
 """
 
 
@@ -2243,6 +2609,67 @@ GROUP BY region_id;
 
 
 rst_h3_rasterize_agg_sql_example_output = """
++---------+----------------------------------------------+
+|region_id|tile                                          |
++---------+----------------------------------------------+
+|R-01     |{null, <raster bytes>, {driver -> GTiff, ...}}|
++---------+----------------------------------------------+
+"""
+
+
+def rst_quadbin_rasterize_agg_sql_example():
+    """Aggregator: rasterize a group of CARTO quadbin v0 cells into one tile (pixel-centroid burn)."""
+    return """
+-- Rasterize quadbin cells into one raster tile per region. Each cell's value
+-- is burned at the cell centroid pixel; the extent auto-derives from the cell
+-- set (null canvas args). cellid is BIGINT. The output BINARY is a GTiff-encoded
+-- tile; wrap with gbx_rst_fromcontent(..., 'GTiff') to recover a tile struct.
+SELECT region_id,
+    gbx_rst_quadbin_rasterize_agg(
+        cellid, burn_value,
+        4326, cast(null as double),
+        cast(null as double), cast(null as double),
+        cast(null as double), cast(null as double),
+        cast(null as int), cast(null as int),
+        'centroids', cast(0 as int)
+    ) AS tile
+FROM quadbin_cell_values
+GROUP BY region_id;
+"""
+
+
+rst_quadbin_rasterize_agg_sql_example_output = """
++---------+----------------------------------------------+
+|region_id|tile                                          |
++---------+----------------------------------------------+
+|R-01     |{null, <raster bytes>, {driver -> GTiff, ...}}|
++---------+----------------------------------------------+
+"""
+
+
+def rst_bng_rasterize_agg_sql_example():
+    """Aggregator: rasterize a group of British National Grid cells into one tile (pixel-centroid burn)."""
+    return """
+-- Rasterize BNG cells into one raster tile per region. cellid is a STRING
+-- (e.g. 'TQ38SW'); the srid argument is a no-op (BNG always forces EPSG:27700,
+-- pass 27700 for clarity). The extent auto-derives from the cell set (null
+-- canvas args). The output BINARY is a GTiff-encoded tile; wrap with
+-- gbx_rst_fromcontent(..., 'GTiff') to recover a tile struct.
+SELECT region_id,
+    gbx_rst_bng_rasterize_agg(
+        cellid, burn_value,
+        27700, cast(null as double),
+        cast(null as double), cast(null as double),
+        cast(null as double), cast(null as double),
+        cast(null as int), cast(null as int),
+        'centroids', cast(0 as int)
+    ) AS tile
+FROM bng_cell_values
+GROUP BY region_id;
+"""
+
+
+rst_bng_rasterize_agg_sql_example_output = """
 +---------+----------------------------------------------+
 |region_id|tile                                          |
 +---------+----------------------------------------------+

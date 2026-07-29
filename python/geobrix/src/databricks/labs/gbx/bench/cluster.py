@@ -210,6 +210,20 @@ GRID_CUSTOM_ONLY = {grid_custom_only!r}
 # --fanout-only: ONLY run the fanout benchmark, skip all fn benchmarks.
 BENCHMARK_FANOUT = {benchmark_fanout!r}
 FANOUT_ONLY = {fanout_only!r}
+# --benchmark-netcdf: also run the NetCDF reader benchmark (light netcdf_gbx vs heavy
+# netcdf_gdal) over the same staged .nc granule pool at {{CORPUS}}/netcdf.
+# --netcdf-only: ONLY run the NetCDF reader benchmark, skip all fn benchmarks.
+# The corpus is staged separately (real S5P L2 CH4 granules via TropomiDownloader);
+# the bench SKIPS CLEANLY when the pool is empty/missing.
+BENCHMARK_NETCDF = {benchmark_netcdf!r}
+NETCDF_ONLY = {netcdf_only!r}
+# --benchmark-netcdf-writer: also run the NetCDF WRITER benchmark (light netcdf_gbx write
+# throughput, raster + vector legs) reusing the reader-cycle corpora at {{CORPUS}}/netcdf +
+# {{CORPUS}}/netcdf-swath. --netcdf-writer-only: ONLY run it, skip all fn benchmarks.
+# LIGHT-ONLY: there is no heavy NetCDF writer, so this is a throughput measurement, NOT a
+# heavy-vs-light comparison. Skips cleanly when the input corpus is empty/missing.
+BENCHMARK_NETCDF_WRITER = {benchmark_netcdf_writer!r}
+NETCDF_WRITER_ONLY = {netcdf_writer_only!r}
 # --fanout-scale: dial the synthetic fan-out size (default 1.0 -> meaningful but ~couple
 # minutes on ~20 workers). Larger = more output rows per function.
 FANOUT_SCALE = {fanout_scale}
@@ -247,7 +261,21 @@ print(
     + " databricks.adaptive="
     + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
 )
-corpus = _m.Corpus.read(f"{{CORPUS}}/corpus.json")
+# Reader-only runs (readers/pmtiles/vector/mvt/pmtiles-agg/tin/grid/fanout/netcdf --*-only) stage
+# their OWN corpus (a reader pool, a vector corpus, synthetic in-memory rows, or -- for netcdf --
+# the {{CORPUS}}/netcdf + {{CORPUS}}/netcdf-swath pools). They do NOT use the function-bench row
+# pool, so requiring {{CORPUS}}/corpus.json for them would hard-fail a valid reader run on a missing
+# scaffold. Read corpus.json LAZILY: only when a function-bench leg actually runs. When it is not
+# read, `corpus` is None and downstream pool_size usages fall back to None (summarize accepts it).
+_READER_ONLY = (
+    READERS_ONLY or PMTILES_ONLY or VECTOR_ONLY or MVT_ONLY or PMTILES_AGG_ONLY
+    or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
+    or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY
+)
+corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
+# Function-bench summaries annotate results with the row-pool size; reader-only runs have no
+# function pool (corpus is None), so POOL_SIZE is None and results.summarize omits that annotation.
+POOL_SIZE = None if corpus is None else len(corpus.row_pool.tiles)
 fnspecs = _s.select(functions=[x for x in FUNCTIONS.split(",") if x] or None, set=SET)
 # --redo-functions FORCES its fns into the run scope even when they fall outside --set /
 # --functions, so `--redo-functions X` actually RE-RUNS X. Purging alone (the old behavior)
@@ -450,7 +478,7 @@ def show_section(api, mode, rows):
         display(_df)
     except Exception:
         _df.show(300, truncate=False)
-    _md = results.summarize(rows, pool_size=len(corpus.row_pool.tiles))
+    _md = results.summarize(rows, pool_size=POOL_SIZE)
     _path = f"{OUT}/{api}.{mode}.summary.md"
     with open(_path, "w") as fh:
         fh.write(_md)
@@ -647,6 +675,220 @@ if _reader_rows:
         _df.show(100, truncate=False)
     _md = results.summarize(_reader_rows)
     _show_md(f"reader benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_NETCDF = """# NetCDF RASTER reader benchmark: heavy netcdf_gdal vs light netcdf_gbx (regular grids, on-cluster)
+# Honest heavy-vs-light throughput over real NASA-NEX GDDP-CMIP6 granules staged at {CORPUS}/netcdf
+# (download-and-stop via NasaNexDownloader -- staged separately, decoupled from read()). These are
+# regular 0.25-degree lat/lon global grids, so BOTH tiers can enumerate the SAME .nc pool with
+# filterRegex .*\\.nc$ (light in raster mode) -- a fair comparison. size_mib=-1 makes each grid var
+# ONE tile in both tiers (matching one-tile-per-var granularity). This is a THROUGHPUT bench, NOT a
+# bit-parity gate (cross-tier parity uses a small gridded fixture -- see docs/api/benchmarking.mdx).
+from databricks.labs.gbx.bench import readers as _rd
+import os as _os
+import glob as _glob
+_netcdf_dir = f"{CORPUS}/netcdf"
+# GUARD: the NASA-NEX grid corpus is staged separately (download-and-stop at stage time).
+# When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
+_nc_files = _rd.list_corpus_files(_netcdf_dir, r".*\\.nc$") if _os.path.isdir(_netcdf_dir) else []
+if not _nc_files:
+    print(
+        f"NETCDF BENCH SKIPPED: no .nc granules under {_netcdf_dir}. "
+        f"Stage the raster corpus first via readers.stage_nasanex_corpus(spark, '{{CORPUS}}/netcdf', ...) "
+        f"(real NASA-NEX GDDP-CMIP6 regular grids from Planetary Computer, anonymous access), then "
+        f"re-run with --benchmark-netcdf / --netcdf-only.",
+        flush=True,
+    )
+else:
+    print(f"NETCDF RASTER BENCH: {len(_nc_files)} .nc grid granule(s) under {_netcdf_dir}", flush=True)
+    _netcdf_rows = []
+    if LIGHTWEIGHT:
+        _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                                 api="lightweight", fmt="netcdf_gbx",
+                                 options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
+        _sink([_r]); lw.append(_r); _netcdf_rows.append(_r)
+    if HEAVYWEIGHT:
+        _r = _rd.run_format_read(spark, _netcdf_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                                 api="heavyweight", fmt="netcdf_gdal",
+                                 options={"filterRegex": r".*\\.nc$"}, size_mib=-1, where="cluster")
+        _sink([_r]); hw.append(_r); _netcdf_rows.append(_r)
+    if _netcdf_rows:
+        _df = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'reader' AND fn LIKE 'read_netcdf%'"
+        )
+        try:
+            display(_df)
+        except Exception:
+            _df.show(100, truncate=False)
+        _md = results.summarize(_netcdf_rows)
+        _show_md(f"netcdf RASTER reader benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_NETCDF_SWATH = """# NetCDF VECTOR (swath) reader benchmark: light netcdf_gbx mode=vector ONLY (S5P swaths, on-cluster)
+# Real Sentinel-5P L2 CH4 SWATH granules staged at {CORPUS}/netcdf-swath (download-and-stop via
+# TropomiDownloader -- staged separately, decoupled from read()). S5P L2 is an irregular per-pixel
+# lat/lon SWATH, so it is read in the light netcdf_gbx VECTOR mode (one point row per pixel). There
+# is NO heavy swath path -- netcdf_gdal has no swath reader -- so this leg is a LIGHT-ONLY throughput
+# measurement, NOT a heavy-vs-light comparison. (The heavy-vs-light comparison lives in the RASTER
+# leg above, over regular-grid NASA-NEX granules.)
+from databricks.labs.gbx.bench import readers as _rd
+import os as _os
+_swath_dir = f"{CORPUS}/netcdf-swath"
+# GUARD: the S5P swath corpus is staged separately (download-and-stop at stage time).
+# When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
+_swath_files = _rd.list_corpus_files(_swath_dir, r".*\\.nc$") if _os.path.isdir(_swath_dir) else []
+if not _swath_files:
+    print(
+        f"NETCDF SWATH BENCH SKIPPED: no .nc granules under {_swath_dir}. "
+        f"Stage the swath corpus first via readers.stage_netcdf_corpus(spark, '{{CORPUS}}/netcdf-swath', ...) "
+        f"(real S5P L2 CH4 swaths from Planetary Computer, anonymous access), then re-run "
+        f"with --benchmark-netcdf / --netcdf-only.",
+        flush=True,
+    )
+elif not LIGHTWEIGHT:
+    # Light-only leg: heavy has no swath path, so nothing to run when --heavyweight-only.
+    print(
+        "NETCDF SWATH BENCH SKIPPED: swath (vector) mode is light-only (heavy has no swath path); "
+        "run with --lightweight to include it.",
+        flush=True,
+    )
+else:
+    print(f"NETCDF SWATH BENCH (light-only): {len(_swath_files)} .nc swath granule(s) under {_swath_dir}", flush=True)
+    _swath_rows = []
+    # S5P L2 stores its fields under the /PRODUCT HDF5 group; without group+variables the reader
+    # opens the (empty) root group and yields zero rows. Match TropomiDownloader.read's options.
+    _r = _rd.run_format_read(spark, _swath_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                             api="lightweight", fmt="netcdf_gbx",
+                             options={"mode": "vector", "group": "/PRODUCT",
+                                      "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                      "filterRegex": r".*\\.nc$"}, where="cluster")
+    _sink([_r]); lw.append(_r); _swath_rows.append(_r)
+    if _swath_rows:
+        _df = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'reader' AND fn LIKE 'read_netcdf%'"
+        )
+        try:
+            display(_df)
+        except Exception:
+            _df.show(100, truncate=False)
+        _md = results.summarize(_swath_rows)
+        _show_md(f"netcdf VECTOR (swath, light-only) reader benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_NETCDF_WRITER = """# NetCDF WRITER benchmark: light netcdf_gbx write throughput (raster + vector legs, on-cluster)
+# LIGHT-ONLY: there is NO heavy NetCDF writer (netcdf_gdal is read-only here), so this is a
+# throughput measurement of the light netcdf_gbx writer, NOT a heavy-vs-light comparison -- the
+# same shape as the S5P vector reader leg. Each mode runs THREE write shapes:
+#   parts  (default): one .nc per row (raster) / per partition (vector)
+#   single (singleFile=true): two-phase scratch+driver-merge into ONE .nc
+#   merge  (merge=true keepParts=true): POST-HOC fold of the .nc parts ALREADY on disk
+# Corpora:
+#   RASTER leg  -> read {CORPUS}/netcdf-distinct (DISTINCT-variable SINGLE-grid corpus)
+#                  -> write {CORPUS}/netcdf-out{,-single,-merge}
+#   VECTOR leg  -> read {CORPUS}/netcdf-swath    (S5P swaths)
+#                  -> write {CORPUS}/netcdf-swath-out{,-single,-merge}
+# The RASTER corpus is distinct-variable single-grid on purpose: single+merge REQUIRE
+# distinct data vars sharing one grid (they correctly ERROR on duplicate variable names),
+# so the 33-same-variable NASA-NEX raster reader corpus would make single+merge fail by
+# design. All three raster legs read the SAME distinct-var input for a fair comparison.
+# run_format_write reads the input once via read_fmt, caches it, then times the write.format(
+# write_fmt).save(...) call. It applies the SAME `options` dict to BOTH the reader and the writer,
+# so mode=vector on the vector leg dispatches the vector reader (point rows) AND the vector writer.
+# For the merge legs it also does a ONE-SHOT untimed parts write to seed the dir (see readers.py).
+from databricks.labs.gbx.bench import readers as _rd
+import os as _os
+_ncw_rows = []
+# --- RASTER writer leg (distinct-variable single-grid corpus: parts/single/merge comparison) ---
+_ncw_in = f"{CORPUS}/netcdf-distinct"
+_ncw_files = _rd.list_corpus_files(_ncw_in, r".*\\.nc$") if _os.path.isdir(_ncw_in) else []
+if not LIGHTWEIGHT:
+    # Light-only leg: there is no heavy netcdf writer, so nothing to run when --heavyweight-only.
+    print(
+        "NETCDF WRITER RASTER BENCH SKIPPED: the netcdf writer is light-only "
+        "(no heavy netcdf writer); run with --lightweight to include it.",
+        flush=True,
+    )
+elif not _ncw_files:
+    print(
+        f"NETCDF WRITER RASTER BENCH SKIPPED: no .nc granules under {_ncw_in}. "
+        f"Stage the raster corpus first (same pool as the netcdf RASTER reader leg), then "
+        f"re-run with --benchmark-netcdf-writer / --netcdf-writer-only.",
+        flush=True,
+    )
+else:
+    print(f"NETCDF WRITER RASTER BENCH (light-only): {len(_ncw_files)} .nc grid granule(s) under {_ncw_in}", flush=True)
+    _wr = _rd.run_format_write(spark, _ncw_in, f"{CORPUS}/netcdf-out", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"filterRegex": r".*\\.nc$"}, where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # singleFile variant: same corpus, distinct out-dir + label so the parts vs single
+    # rows are a real comparison in the store (label -> note "... [singleFile]").
+    _wr = _rd.run_format_write(spark, _ncw_in, f"{CORPUS}/netcdf-out-single", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"filterRegex": r".*\\.nc$", "singleFile": "true"},
+                               label="singleFile", where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # merge variant: POST-HOC fold of the parts already on disk (distinct out-dir + label).
+    # keepParts=true is REQUIRED so parts survive across warmup+measured iters (run_format_write
+    # seeds the dir with a one-shot untimed parts write before timing the merge).
+    _wr = _rd.run_format_write(spark, _ncw_in, f"{CORPUS}/netcdf-out-merge", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"filterRegex": r".*\\.nc$", "merge": "true", "keepParts": "true"},
+                               label="merge", where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+# --- VECTOR (swath) writer leg: mode=vector on read AND write ---
+_ncw_sw_in = f"{CORPUS}/netcdf-swath"
+_ncw_sw_files = _rd.list_corpus_files(_ncw_sw_in, r".*\\.nc$") if _os.path.isdir(_ncw_sw_in) else []
+if not LIGHTWEIGHT:
+    print(
+        "NETCDF WRITER SWATH BENCH SKIPPED: the netcdf writer is light-only "
+        "(no heavy netcdf writer); run with --lightweight to include it.",
+        flush=True,
+    )
+elif not _ncw_sw_files:
+    print(
+        f"NETCDF WRITER SWATH BENCH SKIPPED: no .nc granules under {_ncw_sw_in}. "
+        f"Stage the swath corpus first (same pool as the netcdf VECTOR reader leg), then "
+        f"re-run with --benchmark-netcdf-writer / --netcdf-writer-only.",
+        flush=True,
+    )
+else:
+    print(f"NETCDF WRITER SWATH BENCH (light-only): {len(_ncw_sw_files)} .nc swath granule(s) under {_ncw_sw_in}", flush=True)
+    # S5P fields live under the /PRODUCT group; pass group+variables so the read yields point rows
+    # (the single options dict flows to BOTH the read and the vector write). Match TropomiDownloader.
+    _wr = _rd.run_format_write(spark, _ncw_sw_in, f"{CORPUS}/netcdf-swath-out", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"mode": "vector", "group": "/PRODUCT",
+                                                          "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                                          "filterRegex": r".*\\.nc$"}, where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # singleFile variant: distinct out-dir + label so parts vs single don't collide/clobber.
+    _wr = _rd.run_format_write(spark, _ncw_sw_in, f"{CORPUS}/netcdf-swath-out-single", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"mode": "vector", "group": "/PRODUCT",
+                                                          "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                                          "filterRegex": r".*\\.nc$", "singleFile": "true"},
+                               label="singleFile", where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+    # merge variant: POST-HOC fold of the CF-DSG .nc parts already on disk (distinct out-dir).
+    # keepParts=true keeps parts across warmup+measured iters; run_format_write seeds the dir first.
+    _wr = _rd.run_format_write(spark, _ncw_sw_in, f"{CORPUS}/netcdf-swath-out-merge", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                               write_api="lightweight", read_fmt="netcdf_gbx", write_fmt="netcdf_gbx",
+                               mode="overwrite", options={"mode": "vector", "group": "/PRODUCT",
+                                                          "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+                                                          "filterRegex": r".*\\.nc$", "merge": "true", "keepParts": "true"},
+                               label="merge", where="cluster")
+    _sink([_wr]); lw.append(_wr); _ncw_rows.append(_wr)
+if _ncw_rows:
+    _df = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'writer' AND api = 'lightweight'"
+    )
+    try:
+        display(_df)
+    except Exception:
+        _df.show(100, truncate=False)
+    _md = results.summarize(_ncw_rows)
+    _show_md(f"netcdf WRITER (light-only) throughput benchmark -- {RUN_ID}", _md)
 """
 
 _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
@@ -2484,11 +2726,11 @@ all_rows = lw + hw
 if lw:
     results.write_jsonl(lw, f"{OUT}/lightweight.jsonl")
     with open(f"{OUT}/lightweight.summary.md", "w") as fh:
-        fh.write(results.summarize(lw, pool_size=len(corpus.row_pool.tiles)))
+        fh.write(results.summarize(lw, pool_size=POOL_SIZE))
 if hw:
     results.write_jsonl(hw, f"{OUT}/heavyweight.jsonl")
     with open(f"{OUT}/heavyweight.summary.md", "w") as fh:
-        fh.write(results.summarize(hw, pool_size=len(corpus.row_pool.tiles)))
+        fh.write(results.summarize(hw, pool_size=POOL_SIZE))
 
 # Rows were appended incrementally by _sink as each function finished, so there is no
 # bulk append here -- delta_rows is the running count the sink accumulated.
@@ -2509,7 +2751,7 @@ if hw and lw:
     cells, unmatched = compare.compare_cells(hw, lw)
     compare.write_csv(cells, f"{OUT}/comparison.csv")
     _cmp_md = compare.summarize_compare(
-        cells, unmatched, hw, lw, pool_size=len(corpus.row_pool.tiles)
+        cells, unmatched, hw, lw, pool_size=POOL_SIZE
     )
     with open(f"{OUT}/summary.md", "w") as fh:
         fh.write(_cmp_md)
@@ -2592,6 +2834,10 @@ def build_bench_notebook(cfg: dict) -> dict:
         benchmark_fanout=bool(cfg.get("benchmark_fanout")),
         fanout_only=bool(cfg.get("fanout_only")),
         fanout_scale=float(cfg.get("fanout_scale", 1.0)),
+        benchmark_netcdf=bool(cfg.get("benchmark_netcdf")),
+        netcdf_only=bool(cfg.get("netcdf_only")),
+        benchmark_netcdf_writer=bool(cfg.get("benchmark_netcdf_writer")),
+        netcdf_writer_only=bool(cfg.get("netcdf_writer_only")),
     )
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section
@@ -2626,14 +2872,18 @@ def build_bench_notebook(cfg: dict) -> dict:
     grid_custom_only = bool(cfg.get("grid_custom_only"))
     benchmark_fanout = bool(cfg.get("benchmark_fanout"))
     fanout_only = bool(cfg.get("fanout_only"))
+    benchmark_netcdf = bool(cfg.get("benchmark_netcdf"))
+    netcdf_only = bool(cfg.get("netcdf_only"))
+    benchmark_netcdf_writer = bool(cfg.get("benchmark_netcdf_writer"))
+    netcdf_writer_only = bool(cfg.get("netcdf_writer_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
     # (light, heavy) then spark-path (light, heavy).
     cells = [
         # Ensure BOTH fresh geobrix code AND the full [light] dep set every run. The wheel
-        # version is a fixed 0.4.2 string, so on a WARM cluster that already has geobrix
-        # installed, a bare `pip install '<wheel>[light]'` no-ops: pip sees geobrix==0.4.2
+        # version is a fixed 0.4.3 string, so on a WARM cluster that already has geobrix
+        # installed, a bare `pip install '<wheel>[light]'` no-ops: pip sees geobrix==0.4.3
         # satisfied and skips the install ENTIRELY -- including resolving the [light] extra
         # deps. So the cluster can end up running STALE code (e.g. a freshly added DataSource
         # -> DATA_SOURCE_NOT_FOUND) OR missing a [light] dep (e.g. shapely -> ModuleNotFound
@@ -2650,18 +2900,26 @@ def build_bench_notebook(cfg: dict) -> dict:
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),
     ]
-    if (
-        not readers_only
-        and not pmtiles_only
-        and not vector_only
-        and not mvt_only
-        and not pmtiles_agg_only
-        and not vector_tin_only
-        and not grid_quadbin_only
-        and not grid_bng_only
-        and not grid_custom_only
-        and not fanout_only
-    ):
+    # Any "*-only" reader/writer benchmark suppresses the per-function sections (they stage
+    # their own corpus and don't touch the function-bench row pool). Collapsed into one
+    # membership test so adding a new *-only leg doesn't grow this function's branch count.
+    _any_only = any(
+        (
+            readers_only,
+            pmtiles_only,
+            vector_only,
+            mvt_only,
+            pmtiles_agg_only,
+            vector_tin_only,
+            grid_quadbin_only,
+            grid_bng_only,
+            grid_custom_only,
+            fanout_only,
+            netcdf_only,
+            netcdf_writer_only,
+        )
+    )
+    if not _any_only:
         if light and do_pure:
             cells.append(_cell(_CELL_LIGHT_PURE))
         if heavy and do_pure:
@@ -2670,26 +2928,29 @@ def build_bench_notebook(cfg: dict) -> dict:
             cells.append(_cell(_CELL_LIGHT_SPARK))
         if heavy and do_spark:
             cells.append(_cell(_CELL_HEAVY_SPARK))
-    if benchmark_readers or readers_only:
-        cells.append(_cell(_CELL_READERS))
-    if benchmark_pmtiles or pmtiles_only:
-        cells.append(_cell(_CELL_PMTILES))
-    if benchmark_vector or vector_only:
-        cells.append(_cell(_CELL_VECTOR))
-    if benchmark_mvt or mvt_only:
-        cells.append(_cell(_CELL_MVT))
-    if benchmark_pmtiles_agg or pmtiles_agg_only:
-        cells.append(_cell(_CELL_PMTILES_AGG))
-    if benchmark_vector_tin or vector_tin_only:
-        cells.append(_cell(_CELL_VECTOR_TIN))
-    if benchmark_grid_quadbin or grid_quadbin_only:
-        cells.append(_cell(_CELL_GRID_QUADBIN))
-    if benchmark_grid_bng or grid_bng_only:
-        cells.append(_cell(_CELL_GRID_BNG))
-    if benchmark_grid_custom or grid_custom_only:
-        cells.append(_cell(_CELL_GRID_CUSTOM))
-    if benchmark_fanout or fanout_only:
-        cells.append(_cell(_CELL_FANOUT))
+    # Table-driven benchmark-cell emission: (enabled, [cells]) pairs. Each reader/writer
+    # benchmark is appended when its --benchmark-* OR --*-only flag is set. Kept as a loop
+    # (not a chain of ifs) so adding a new benchmark leg is one row here, not a new branch in
+    # this function. NetCDF reader emits TWO cells (raster + vector split); the netcdf writer
+    # emits one LIGHT-ONLY writer cell (raster + vector legs inside; heavy has no netcdf writer).
+    _bench_cells = [
+        (benchmark_readers or readers_only, [_CELL_READERS]),
+        (benchmark_netcdf or netcdf_only, [_CELL_NETCDF, _CELL_NETCDF_SWATH]),
+        (benchmark_netcdf_writer or netcdf_writer_only, [_CELL_NETCDF_WRITER]),
+        (benchmark_pmtiles or pmtiles_only, [_CELL_PMTILES]),
+        (benchmark_vector or vector_only, [_CELL_VECTOR]),
+        (benchmark_mvt or mvt_only, [_CELL_MVT]),
+        (benchmark_pmtiles_agg or pmtiles_agg_only, [_CELL_PMTILES_AGG]),
+        (benchmark_vector_tin or vector_tin_only, [_CELL_VECTOR_TIN]),
+        (benchmark_grid_quadbin or grid_quadbin_only, [_CELL_GRID_QUADBIN]),
+        (benchmark_grid_bng or grid_bng_only, [_CELL_GRID_BNG]),
+        (benchmark_grid_custom or grid_custom_only, [_CELL_GRID_CUSTOM]),
+        (benchmark_fanout or fanout_only, [_CELL_FANOUT]),
+    ]
+    for _enabled, _cell_srcs in _bench_cells:
+        if _enabled:
+            for _src in _cell_srcs:
+                cells.append(_cell(_src))
     cells.append(_cell(_EPILOGUE))
     cells.append(
         _cell(_EXIT)

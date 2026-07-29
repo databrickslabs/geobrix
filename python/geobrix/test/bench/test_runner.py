@@ -93,8 +93,10 @@ def test_run_pure_core_produces_ok_rows(tmp_path):
     assert all(r.mode == "pure-core" and r.rows == 1 for r in rows)
     # consistency fingerprint captured for every pure-core row
     assert all(r.output_fingerprint for r in rows)
-    # one row per (fn x size_sweep tile)
-    assert len(rows) == 2 * len(corpus.size_sweep)
+    # one row per (fn x size_sweep tile). Non-BNG fns skip the GB-only tile
+    # (role "bng_gb"), so the expected tile count excludes it.
+    _sweep = [t for t in corpus.size_sweep if t.role != "bng_gb"]
+    assert len(rows) == 2 * len(_sweep)
 
 
 def test_run_pure_core_geometry_in_fns_produce_raster_fingerprints(tmp_path):
@@ -143,7 +145,8 @@ def test_run_pure_core_geometry_in_fns_produce_raster_fingerprints(tmp_path):
         assert r.output_fingerprint, r.fn
         fp = json.loads(r.output_fingerprint)
         assert fp["kind"] == "raster", (r.fn, fp.get("kind"))
-    assert len(rows) == 3 * len(corpus.size_sweep)
+    _sweep = [t for t in corpus.size_sweep if t.role != "bng_gb"]
+    assert len(rows) == 3 * len(_sweep)
 
 
 @pytest.fixture(scope="module")
@@ -200,6 +203,154 @@ def test_run_spark_path_produces_ok_rows(tmp_path, spark):
         assert r.per_tile_avg_s == pytest.approx(r.iter_median_s / r.rows, rel=1e-9)
         assert r.per_tile_avg_ms == pytest.approx(r.per_tile_avg_s * 1000.0, rel=1e-9)
     assert sorted({r.rows for r in rows}) == [2, 4]
+
+
+def test_run_pure_core_emits_per_fn_progress(tmp_path, capsys):
+    # Per-function progress lines must be printed to stdout as each fn finishes:
+    # leg header "[bench] lightweight pure-core: N fn(s) to run", then per-fn
+    # "[i/N] fn_name  lightweight pure-core  <ms>  <status>" for each fn.
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=11,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=2,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_width", "rst_avg"])
+    rows = rn.run_pure_core(
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="prog-test",
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    # Leg header is the first line.
+    assert any("[bench] lightweight pure-core:" in ln for ln in lines)
+    # One progress line per fn (2 fns).
+    fn_lines = [
+        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
+    ]
+    assert len(fn_lines) == 2
+    # Each progress line contains "i/N", the fn name, tier+mode, and a status.
+    for i, fn_name in enumerate(["rst_width", "rst_avg"], 1):
+        matching = [ln for ln in fn_lines if fn_name in ln]
+        assert matching, f"no progress line for {fn_name}"
+        pl = matching[0]
+        # i/N prefix
+        assert f"[{i}/2]" in pl or f"/{2}]" in pl
+        assert "lightweight pure-core" in pl
+        assert "ok" in pl or "error" in pl or "na_by_design" in pl
+    # Result rows are unaffected.
+    assert rows and all(r.fn in {"rst_width", "rst_avg"} for r in rows)
+
+
+def test_run_pure_core_progress_on_error_fn(tmp_path, capsys, monkeypatch):
+    # When a fn raises, its progress line must still be printed with status=error,
+    # and the remaining fns must still run (the loop continues).
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=13,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=2,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_width", "rst_avg"])
+    import databricks.labs.gbx.bench.runner as _rn_mod
+
+    _orig = _rn_mod._capture_and_call
+
+    call_count = {"n": 0}
+
+    def _patched_cap(fs, *a, **kw):
+        call_count["n"] += 1
+        if fs.name == "rst_width":
+            raise RuntimeError("simulated error")
+        return _orig(fs, *a, **kw)
+
+    monkeypatch.setattr(_rn_mod, "_capture_and_call", _patched_cap)
+    rows = rn.run_pure_core(
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="err-test",
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    fn_lines = [
+        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
+    ]
+    # Both fns produce a progress line.
+    assert len(fn_lines) == 2
+    err_lines = [ln for ln in fn_lines if "rst_width" in ln]
+    assert err_lines and "error" in err_lines[0]
+    ok_lines = [ln for ln in fn_lines if "rst_avg" in ln]
+    assert ok_lines and "ok" in ok_lines[0]
+    # Error rows present for rst_width; ok rows present for rst_avg.
+    assert any(r.fn == "rst_width" and r.status == "error" for r in rows)
+    assert any(r.fn == "rst_avg" and r.status == "ok" for r in rows)
+
+
+def test_run_spark_path_emits_per_fn_progress(tmp_path, spark, capsys):
+    # Per-function progress lines for spark-path:
+    # leg header "[bench] lightweight spark-path: N fn(s) to run", then per-fn line.
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=17,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_width"])
+    rows = rn.run_spark_path(
+        spark=spark,
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="sp-prog",
+        row_counts=[2, 4],
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    out = capsys.readouterr().out
+    lines = out.splitlines()
+    assert any("[bench] lightweight spark-path:" in ln for ln in lines)
+    fn_lines = [
+        ln for ln in lines if "lightweight spark-path" in ln and "[bench]" not in ln
+    ]
+    assert len(fn_lines) == 1
+    line = fn_lines[0]
+    assert "[1/1]" in line
+    assert "rst_width" in line
+    assert "lightweight spark-path" in line
+    assert "ok" in line or "error" in line
+    # Result rows unaffected.
+    assert rows and all(r.fn == "rst_width" for r in rows)
 
 
 def test_emit_explain_prints_and_writes_file(tmp_path, spark, capsys):
@@ -577,6 +728,60 @@ def test_run_spark_path_h3_rasterize_agg_produces_raster_fingerprint(tmp_path, s
     assert fp.get(2), "no consistency fingerprint at N=2"
     parsed = json.loads(fp[2])
     assert parsed["kind"] == "raster", parsed.get("kind")
+
+
+def test_udtf_grid_fn_spark_path_runs_via_lateral_not_error(tmp_path, spark):
+    # The rastertogrid* / tessellate fns are registered Python UDTFs, so their
+    # lightweight spark-path must run via SQL LATERAL (a table-function join over the
+    # tile DataFrame), NOT the scalar .select(col_fn(...)) path -- the scalar
+    # prx.<fn> wrapper raises NotImplementedError. This proves the runner takes the
+    # udtf branch and produces OK rows (not error rows) with a real timing.
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=11,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_h3_rastertogridavg"])
+    assert fns and fns[0].udtf, "rst_h3_rastertogridavg must be flagged udtf=True"
+    rows = rn.run_spark_path(
+        spark=spark,
+        corpus_root=tmp_path,
+        corpus=corpus,
+        fnspecs=fns,
+        run_id="t",
+        row_counts=[2, 4],
+        warmup=1,
+        measured=1,
+        where="venv",
+    )
+    assert rows, "expected UDTF spark-path rows"
+    assert all(r.status == "ok" for r in rows), [
+        (r.fn, r.status, r.note) for r in rows if r.status != "ok"
+    ]
+    assert all(
+        r.mode == "spark-path" and r.fn == "rst_h3_rastertogridavg" for r in rows
+    )
+    # the udtf branch tags its rows so the invocation shape is auditable in the store
+    assert all(r.note == "lateral-udtf" for r in rows)
+    assert sorted({r.rows for r in rows}) == [2, 4]
+
+
+def test_udtf_lateral_sql_builds_expected_shape():
+    # The LATERAL SQL feeds the tile struct as the first UDTF arg and the scalar
+    # bench args (resolution etc.) as SQL literals after it, projecting t.* so the
+    # whole per-tile row fan-out is realized.
+    fs = s.select(functions=["rst_h3_rastertogridavg"])[0]
+    sql = rn._udtf_lateral_sql("_v", fs)
+    assert "LATERAL gbx_rst_h3_rastertogridavg(d.tile, 7)" in sql
+    assert sql.startswith("SELECT t.* FROM _v AS d")
 
 
 def test_pure_core_emits_na_by_design_for_low_band_count(tmp_path):

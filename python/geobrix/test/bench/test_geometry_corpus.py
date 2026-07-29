@@ -211,4 +211,6 @@ def test_runner_feeds_geometry_set_to_geometry_input_kind(tmp_path):
     )
     assert rows and all(r.status == "ok" for r in rows)
     assert all(r.output_fingerprint for r in rows)
-    assert len(rows) == len(corpus.size_sweep)
+    # Non-BNG fns skip the GB-only tile (role "bng_gb").
+    _sweep = [t for t in corpus.size_sweep if t.role != "bng_gb"]
+    assert len(rows) == len(_sweep)

@@ -30,7 +30,7 @@ import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Polygonize
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Rasterize
 import com.databricks.labs.gbx.rasterx.expressions.grid.RST_GridFromPoints
 import com.databricks.labs.gbx.rasterx.expressions.RST_DTMFromGeoms
-import com.databricks.labs.gbx.gridx.grid.H3
+import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.spectral._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
@@ -169,10 +169,28 @@ object BenchDispatch {
     "rst_h3_tessellate" -> DGGS,
     "rst_h3_rastertogridavg" -> DGGS, "rst_h3_rastertogridcount" -> DGGS,
     "rst_h3_rastertogridmax" -> DGGS, "rst_h3_rastertogridmedian" -> DGGS,
-    "rst_h3_rastertogridmin" -> DGGS,
+    "rst_h3_rastertogridmin" -> DGGS, "rst_h3_rastertogridsum" -> DGGS,
+    "rst_h3_rastertogridvariance" -> DGGS, "rst_h3_rastertogridstddev" -> DGGS,
     "rst_quadbin_rastertogridavg" -> DGGS, "rst_quadbin_rastertogridcount" -> DGGS,
     "rst_quadbin_rastertogridmax" -> DGGS, "rst_quadbin_rastertogridmedian" -> DGGS,
-    "rst_quadbin_rastertogridmin" -> DGGS,
+    "rst_quadbin_rastertogridmin" -> DGGS, "rst_quadbin_rastertogridsum" -> DGGS,
+    "rst_quadbin_rastertogridvariance" -> DGGS, "rst_quadbin_rastertogridstddev" -> DGGS,
+    // BNG raster->grid reducers (DGGS, same shape as H3/quadbin reducers). Their
+    // cell ids are OS grid STRINGS (e.g. "TQ3080"), not Longs, so the pure-core
+    // path fingerprints them via ofDggsGridStr; the timing is otherwise identical.
+    // BNG reducers/tessellate reproject the tile to EPSG:27700 internally (unlike
+    // the 4326-native H3/quadbin), so their timing includes that warp.
+    "rst_bng_rastertogridavg" -> DGGS, "rst_bng_rastertogridcount" -> DGGS,
+    "rst_bng_rastertogridmax" -> DGGS, "rst_bng_rastertogridmedian" -> DGGS,
+    "rst_bng_rastertogridmin" -> DGGS, "rst_bng_rastertogridsum" -> DGGS,
+    "rst_bng_rastertogridvariance" -> DGGS, "rst_bng_rastertogridstddev" -> DGGS,
+    // tessellate generators (DGGS, same as rst_h3_tessellate). quadbin is
+    // 4326-native; BNG reprojects to 27700 and emits STRING cell ids.
+    "rst_quadbin_tessellate" -> DGGS, "rst_bng_tessellate" -> DGGS,
+    // grid rasterize aggregators (DGGS; routed through the grid-aggregate branch
+    // like rst_h3_rasterize_agg -- see gridAggregate). quadbin streams LONG cell
+    // ids; BNG streams STRING cell ids and burns onto a 27700-native grid.
+    "rst_quadbin_rasterize_agg" -> DGGS, "rst_bng_rasterize_agg" -> DGGS,
     // bucket B, group B-vec: vector-out fns (contour LINES, polygonize POLYGONS)
     "rst_contour" -> VECTOR, "rst_polygonize" -> VECTOR,
     // bucket D: geometry-in constructors (burn/interpolate a geometry set into a
@@ -219,11 +237,15 @@ object BenchDispatch {
     Set("rst_combineavg_agg", "rst_merge_agg", "rst_frombands_agg", "rst_derivedband_agg")
   private val geometryAggregate: Set[String] =
     Set("rst_rasterize_agg", "rst_gridfrompoints_agg", "rst_dtmfromgeoms_agg")
-  // rst_h3_rasterize_agg reduces a GROUP of (cellid LONG, value DOUBLE) rows to
-  // ONE tile, burning each H3 cell's centroid pixel onto an EXPLICIT, hardcoded
-  // grid. Its fixed consistency group is a deterministic H3 cell set generated
-  // here (NOT from synth tiles or geometry.json), mirroring the pyrx tier.
-  private val h3Aggregate: Set[String] = Set("rst_h3_rasterize_agg")
+  // The grid rasterize aggregators reduce a GROUP of (cellid, value) rows to ONE
+  // tile, burning each grid cell's centroid pixel onto an EXPLICIT, hardcoded
+  // grid. Their fixed consistency group is a deterministic cell set generated
+  // here (NOT from synth tiles or geometry.json), mirroring the pyrx tier. H3 +
+  // quadbin stream LONG cell ids; BNG streams STRING cell ids (OS grid refs).
+  // Renamed from the H3-only h3Aggregate to hold all three grids' rasterize_aggs;
+  // the branch behavior (fixed cell set -> explicit grid -> one tile) is identical.
+  private val gridAggregate: Set[String] =
+    Set("rst_h3_rasterize_agg", "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg")
   def inputKind(fn: String): String =
     if (byteInput.contains(fn)) "bytes"
     else if (pathInput.contains(fn)) "path"
@@ -231,8 +253,20 @@ object BenchDispatch {
     else if (geometryInput.contains(fn)) "geometry"
     else if (tileAggregate.contains(fn)) "tile_aggregate"
     else if (geometryAggregate.contains(fn)) "geometry_aggregate"
-    else if (h3Aggregate.contains(fn)) "h3_aggregate"
+    else if (gridAggregate.contains(fn)) "grid_aggregate"
     else "tile"
+
+  // Functions whose pure-core sweep must run on the Great-Britain-overlapping tile
+  // (TileEntry.role == "bng_gb") rather than the ordinary NYC-ish sweep tiles: the
+  // BNG raster->grid reducers + BNG tessellate reproject to EPSG:27700 internally
+  // and drop out-of-GB pixels, so on a sweep tile they bin an EMPTY grid (a vacuous
+  // both-empty cross-tier match). Mirrors the Python FnSpec.gb_tile flag exactly.
+  private val gbTileFns: Set[String] = Set(
+    "rst_bng_rastertogridavg", "rst_bng_rastertogridcount", "rst_bng_rastertogridmax",
+    "rst_bng_rastertogridmedian", "rst_bng_rastertogridmin", "rst_bng_rastertogridsum",
+    "rst_bng_rastertogridvariance", "rst_bng_rastertogridstddev",
+    "rst_bng_tessellate")
+  def gbTile(fn: String): Boolean = gbTileFns.contains(fn)
 
   // --- rst_h3_rasterize_agg: fixed cell set + EXPLICIT grid (PARITY CONTRACT) ---
   // These MUST stay byte-for-byte in sync with the Python bench/spec.py block
@@ -270,6 +304,54 @@ object BenchDispatch {
   def h3RasterizeCells(): Seq[Long] = {
     val center = H3.pointToCellID(h3RaggCenterLng, h3RaggCenterLat, h3RaggRes)
     H3.kRing(center, h3RaggK).toSeq.sorted
+  }
+
+  // --- rst_quadbin_rasterize_agg: fixed cell set (PARITY CONTRACT) ---
+  // The zoom-15 quadbin cell at NYC (lat, lng) = (40.7128, -74.0060), kRing'd
+  // (Chebyshev) to k=3 -> (2*3+1)^2 = 49 cells (a small deterministic set, "a few
+  // cells"). Quadbin is 4326-native. The aggregator auto-derives the grid from the
+  // cell set (deterministic given a fixed cell set), so the burn is reproducible
+  // without a hardcoded canvas -- when the light tier adds this fn it mirrors this
+  // recipe (center + zoom + k), the SAME parity anchor h3 uses for its cell set.
+  private val quadbinRaggZoom = 15
+  private val quadbinRaggCenterLat = 40.7128
+  private val quadbinRaggCenterLng = -74.0060
+  private val quadbinRaggK = 3
+  private val quadbinRaggSrid = 4326
+  // Cross-tier sanity-check count (kRing(center, k=3) = (2k+1)^2); asserted in tests.
+  val quadbinRaggNCells: Int = (2 * quadbinRaggK + 1) * (2 * quadbinRaggK + 1)
+
+  /** The fixed deterministic quadbin cell-id set the bench rasterizes (both tiers).
+    * The zoom-15 NYC cell, kRing'd to k=3. Quadbin ids are signed Longs, exactly
+    * what the Spark LONG column carries -- parity-comparable across engines. */
+  def quadbinRasterizeCells(): Seq[Long] = {
+    val center = Quadbin.pointToCell(quadbinRaggCenterLng, quadbinRaggCenterLat, quadbinRaggZoom)
+    Quadbin.kRing(center, quadbinRaggK).toSeq.sorted
+  }
+
+  // --- rst_bng_rasterize_agg: fixed cell set (PARITY CONTRACT) ---
+  // The res-3 (1km) BNG cell at British National Grid easting/northing
+  // (530000, 180000) (central London -- BNG expects EPSG:27700 eastings/northings,
+  // NOT WGS84 lon/lat), kRing'd to k=3 -> 49 cells (a handful of GB cells). BNG
+  // cell ids are OS grid REFERENCE STRINGS (BNG.format of the internal Long id),
+  // NOT Longs -- so the aggregator streams a STRING cellid column. BNG is
+  // 27700-native (srid forced to 27700 by the expression); the aggregator
+  // auto-derives the 27700 grid from the cell set (deterministic).
+  private val bngRaggResolution = 3    // 1km (BNG resolution index 3, per BNG.resolutionMap)
+  private val bngRaggEasting = 530000.0
+  private val bngRaggNorthing = 180000.0
+  private val bngRaggK = 3
+  private val bngRaggSrid = 27700
+  // Cross-tier sanity-check count (BNG.kRing(center, k=3) = (2k+1)^2); asserted in tests.
+  val bngRaggNCells: Int = (2 * bngRaggK + 1) * (2 * bngRaggK + 1)
+
+  /** The fixed deterministic BNG cell-id set the bench rasterizes (both tiers).
+    * The res-3 (1km) central-London cell, kRing'd to k=3. Returns OS grid
+    * REFERENCE STRINGS (BNG.format), the SAME string ids the light pygx `_bng`
+    * tier emits -- so the string-keyed dggs fingerprints compare directly. */
+  def bngRasterizeCells(): Seq[String] = {
+    val center = BNG.pointToCellID(bngRaggEasting, bngRaggNorthing, bngRaggResolution)
+    BNG.kRing(center, bngRaggK).map(BNG.format).toSeq.sorted
   }
 
   // bench.synth recipe name for a tile_array fn (mirrors spec.synth_recipe).
@@ -521,6 +603,12 @@ object BenchDispatch {
       BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridMedian.execute(ds, argI(a, "resolution", 7)).toSeq)
     case "rst_h3_rastertogridmin" =>
       BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridMin.execute(ds, argI(a, "resolution", 7)).toSeq)
+    case "rst_h3_rastertogridsum" =>
+      BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridSum.execute(ds, argI(a, "resolution", 7)).toSeq)
+    case "rst_h3_rastertogridvariance" =>
+      BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridVariance.execute(ds, argI(a, "resolution", 7)).toSeq)
+    case "rst_h3_rastertogridstddev" =>
+      BenchFingerprint.ofDggsGrid(RST_H3_RasterToGridStddev.execute(ds, argI(a, "resolution", 7)).toSeq)
     case "rst_quadbin_rastertogridavg" =>
       BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridAvg.execute(ds, argI(a, "resolution", 15)).toSeq)
     case "rst_quadbin_rastertogridcount" =>
@@ -533,6 +621,34 @@ object BenchDispatch {
       BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridMedian.execute(ds, argI(a, "resolution", 15)).toSeq)
     case "rst_quadbin_rastertogridmin" =>
       BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridMin.execute(ds, argI(a, "resolution", 15)).toSeq)
+    case "rst_quadbin_rastertogridsum" =>
+      BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridSum.execute(ds, argI(a, "resolution", 15)).toSeq)
+    case "rst_quadbin_rastertogridvariance" =>
+      BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridVariance.execute(ds, argI(a, "resolution", 15)).toSeq)
+    case "rst_quadbin_rastertogridstddev" =>
+      BenchFingerprint.ofDggsGrid(RST_Quadbin_RasterToGridStddev.execute(ds, argI(a, "resolution", 15)).toSeq)
+    // BNG raster->grid reducers. BNG cell ids are OS grid STRINGS (not Longs), so
+    // fingerprint via ofDggsGridStr. The reducers reproject the tile to EPSG:27700
+    // internally, so their timing includes that warp (unlike 4326-native H3/quadbin).
+    // resolution default 3 == "1km" (BNG.resolutionMap); NEVER metres-as-Int.
+    case "rst_bng_rastertogridavg" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridAvg.execute(ds, argI(a, "resolution", 3)).toSeq)
+    case "rst_bng_rastertogridcount" =>
+      BenchFingerprint.ofDggsGridStr(
+        RST_BNG_RasterToGridCount.execute(ds, argI(a, "resolution", 3))
+          .map(_.map { case (c, m) => (c, m.toDouble) }).toSeq)
+    case "rst_bng_rastertogridmax" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridMax.execute(ds, argI(a, "resolution", 3)).toSeq)
+    case "rst_bng_rastertogridmedian" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridMedian.execute(ds, argI(a, "resolution", 3)).toSeq)
+    case "rst_bng_rastertogridmin" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridMin.execute(ds, argI(a, "resolution", 3)).toSeq)
+    case "rst_bng_rastertogridsum" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridSum.execute(ds, argI(a, "resolution", 3)).toSeq)
+    case "rst_bng_rastertogridvariance" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridVariance.execute(ds, argI(a, "resolution", 3)).toSeq)
+    case "rst_bng_rastertogridstddev" =>
+      BenchFingerprint.ofDggsGridStr(RST_BNG_RasterToGridStddev.execute(ds, argI(a, "resolution", 3)).toSeq)
     // tessellate: one tile per overlapping H3 cell, NO scalar measure. Drain the
     // iterator (a CLONE of the shared input ds, since the iterator closes its
     // source on exhaustion), collect the cell ids, RELEASE each output tile, and
@@ -546,6 +662,28 @@ object BenchDispatch {
         if (resDs != null) RasterDriver.releaseDataset(resDs)
       }
       BenchFingerprint.ofDggsGridIds(ids.toSeq)
+    // quadbin tessellate: LONG cell ids, 4326-native. Same drain-release-fingerprint
+    // shape as H3 tessellate (id-only dggs_grid, empty agg).
+    case "rst_quadbin_tessellate" =>
+      val iter = RasterTessellate.tessellateQuadbinIter(cloneDs(ds), Map.empty, argI(a, "resolution", 15))
+      val ids = scala.collection.mutable.ArrayBuffer.empty[Long]
+      iter.foreach { case (cell, resDs, _) =>
+        ids += cell
+        if (resDs != null) RasterDriver.releaseDataset(resDs)
+      }
+      BenchFingerprint.ofDggsGridIds(ids.toSeq)
+    // BNG tessellate: STRING cell ids (OS grid refs), reprojects the tile to
+    // EPSG:27700 internally (timing includes that warp). Fingerprint the id-only
+    // STRING dggs_grid (empty agg), the string analogue of the H3/quadbin path.
+    // resolution default 3 == "1km" (BNG.resolutionMap); NEVER metres-as-Int.
+    case "rst_bng_tessellate" =>
+      val iter = RasterTessellate.tessellateBngIter(cloneDs(ds), Map.empty, argI(a, "resolution", 3))
+      val ids = scala.collection.mutable.ArrayBuffer.empty[String]
+      iter.foreach { case (cell, resDs, _) =>
+        ids += cell
+        if (resDs != null) RasterDriver.releaseDataset(resDs)
+      }
+      BenchFingerprint.ofDggsGridStrIds(ids.toSeq)
     // bucket B, group B-vec: vector-out fns. RST_Contour / RST_Polygonize each
     // return an ArrayData of struct(geom_wkb BINARY, value DOUBLE); fpVector
     // decodes the WKB -> JTS and fingerprints (feature count + total measure
@@ -962,11 +1100,29 @@ object BenchDispatch {
       case "rst_h3_rastertogridmax"        => rst_h3_rastertogridmax(tile, argI(a, "resolution", 7))
       case "rst_h3_rastertogridmedian"     => rst_h3_rastertogridmedian(tile, argI(a, "resolution", 7))
       case "rst_h3_rastertogridmin"        => rst_h3_rastertogridmin(tile, argI(a, "resolution", 7))
+      case "rst_h3_rastertogridsum"        => rst_h3_rastertogridsum(tile, argI(a, "resolution", 7))
+      case "rst_h3_rastertogridvariance"   => rst_h3_rastertogridvariance(tile, argI(a, "resolution", 7))
+      case "rst_h3_rastertogridstddev"     => rst_h3_rastertogridstddev(tile, argI(a, "resolution", 7))
       case "rst_quadbin_rastertogridavg"   => rst_quadbin_rastertogridavg(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridcount" => rst_quadbin_rastertogridcount(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridmax"   => rst_quadbin_rastertogridmax(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridmedian" => rst_quadbin_rastertogridmedian(tile, argI(a, "resolution", 15))
       case "rst_quadbin_rastertogridmin"   => rst_quadbin_rastertogridmin(tile, argI(a, "resolution", 15))
+      case "rst_quadbin_rastertogridsum"   => rst_quadbin_rastertogridsum(tile, argI(a, "resolution", 15))
+      case "rst_quadbin_rastertogridvariance" => rst_quadbin_rastertogridvariance(tile, argI(a, "resolution", 15))
+      case "rst_quadbin_rastertogridstddev" => rst_quadbin_rastertogridstddev(tile, argI(a, "resolution", 15))
+      // BNG reducers/tessellate: 27700-reprojecting (timing includes the warp).
+      // resolution default 3 == "1km"; the Int overload maps to BNG.getResolution.
+      case "rst_bng_rastertogridavg"       => rst_bng_rastertogridavg(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridcount"     => rst_bng_rastertogridcount(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridmax"       => rst_bng_rastertogridmax(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridmedian"    => rst_bng_rastertogridmedian(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridmin"       => rst_bng_rastertogridmin(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridsum"       => rst_bng_rastertogridsum(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridvariance"  => rst_bng_rastertogridvariance(tile, argI(a, "resolution", 3))
+      case "rst_bng_rastertogridstddev"    => rst_bng_rastertogridstddev(tile, argI(a, "resolution", 3))
+      case "rst_quadbin_tessellate"        => rst_quadbin_tessellate(tile, argI(a, "resolution", 15))
+      case "rst_bng_tessellate"            => rst_bng_tessellate(tile, argI(a, "resolution", 3))
       // bucket B, group B-vec: vector-out fns -> ARRAY<struct> column (spark-path
       // is timing-only, not fingerprint-compared, so the args only need to be
       // valid). contour rides FIXED_LEVELS [0.2, 0.4, 0.6, 0.8] as an
@@ -1051,6 +1207,21 @@ object BenchDispatch {
           s"gbx_rst_h3_rasterize_agg(cellid, value, $h3RaggSrid, $h3RaggPixelSize, " +
             s"$h3RaggXmin, $h3RaggYmin, $h3RaggXmax, $h3RaggYmax, " +
             s"$h3RaggWidth, $h3RaggHeight, '$h3RaggMode', $h3RaggKringPad)")
+      // rst_quadbin_rasterize_agg: stream (cellid LONG, value DOUBLE); value NULL on
+      // every row -> presence-mask burn (1.0). The 2-arg overload auto-derives the
+      // 4326 grid from the fixed deterministic quadbin cell set (quadbinRasterizeCells,
+      // the SAME recipe the light tier will mirror), so the burn is reproducible. The
+      // heavy UDAF returns a tile STRUCT directly (like rst_h3_rasterize_agg), so the
+      // consistency collect reads `raster` straight off the struct.
+      case "rst_quadbin_rasterize_agg" =>
+        rst_quadbin_rasterize_agg(col("cellid"), col("value"))
+      // rst_bng_rasterize_agg: stream (cellid STRING, value DOUBLE); value NULL on
+      // every row -> presence-mask burn. cellid is an OS grid REFERENCE STRING (not a
+      // Long). The 2-arg overload auto-derives the 27700-native grid from the fixed
+      // deterministic BNG cell set (bngRasterizeCells). srid is forced to 27700 by the
+      // expression regardless of the argument.
+      case "rst_bng_rasterize_agg" =>
+        rst_bng_rasterize_agg(col("cellid"), col("value"))
       case other => throw new IllegalArgumentException(s"not an aggregator: $other")
     }
   }

@@ -168,6 +168,58 @@ def fingerprint_dggs_grid(cells) -> str:
     )
 
 
+def _grid_records_str(cells):
+    """Flatten a per-band BNG grid output into (string_cell_id, value) pairs.
+
+    BNG ``gridagg.raster_to_grid`` returns one list per band of
+    ``{"cellID": str, "measure": float|int}`` (OS grid reference STRINGS, e.g.
+    ``"TQ3080"``), and BNG tessellation yields ``(cellid_str, bytes)`` tuples
+    (no measure). Unlike H3/quadbin the cell id is a STRING, so it is kept as-is
+    (no signed-int64 fold). Both shapes are accepted.
+    """
+    ids = []
+    vals = []
+    for band in cells:
+        for rec in band:
+            if isinstance(rec, dict):
+                cid = rec.get("cellID")
+                v = rec.get("measure")
+            else:  # (cellid, _) tuple (tessellate)
+                cid = rec[0]
+                v = rec[1] if len(rec) > 1 else None
+            ids.append(str(cid))
+            if v is not None and not isinstance(v, (bytes, bytearray)):
+                vals.append(float(v))
+    return ids, vals
+
+
+def fingerprint_dggs_grid_str(cells) -> str:
+    """Fingerprint a STRING-cell-id discrete-global-grid output (BNG grid fns).
+
+    The BNG analogue of :func:`fingerprint_dggs_grid`: BNG cell ids are OS grid
+    reference STRINGS (e.g. ``"TQ3080"``), not Longs, so the cell-set hash is
+    over the SORTED string ids (no signed-int64 fold). Records the cell COUNT, a
+    sha256 of the sorted string ids, the sorted ids, plus order-independent agg
+    stats over the measures (``{}`` when there are none, e.g. tessellation). The
+    light pygx ``_bng`` tier emits the SAME string ids as the heavy tier, so an
+    identical ``cells_hash`` is an exact cell-set match (mirrors the Scala
+    ``BenchFingerprint.ofDggsGridStr`` / ``ofDggsGridStrIds``).
+    """
+    ids, vals = _grid_records_str(cells)
+    sorted_ids = sorted(ids)
+    joined = "\n".join(sorted_ids)
+    return json.dumps(
+        {
+            "kind": "dggs_grid",
+            "count": len(sorted_ids),
+            "cells_hash": hashlib.sha256(joined.encode()).hexdigest(),
+            "cell_ids": sorted_ids,
+            "agg": _stat(np.asarray(vals, dtype="float64")) if vals else {},
+        },
+        sort_keys=True,
+    )
+
+
 def _vector_features(features):
     """Split features into (geometries, attributes).
 

@@ -1,0 +1,67 @@
+---
+sidebar_position: 1
+title: Readers & Writers
+---
+
+# Readers & Writers
+
+GeoBrix provides Spark DataSource V2 **readers** and **writers** for geospatial file formats,
+across both execution tiers — lightweight (`pyrx`, pure-Python, no JAR) and heavyweight
+(`rasterx`, GDAL/OGR-backed). Both tiers scale by partitioning work across the cluster rather
+than reading or writing sequentially on a single node.
+
+Each lightweight `*_gbx` format pairs with a heavyweight counterpart (`*_ogr` / `gdal` /
+`gtiff_gdal`), and the two tiers are held to **row-count / byte parity** as a hard gate in
+benchmarking.
+
+## Readers
+
+Load geospatial files into a distributed DataFrame. See the **[Readers Overview](./readers/overview)**
+for the full list, tier differences, output schemas, and options.
+
+| Format | Lightweight | Heavyweight |
+|---|---|---|
+| [Raster (generic)](./readers/raster) | `raster_gbx` | `gdal` |
+| [GeoTIFF](./readers/geotiff) | `gtiff_gbx` | `gtiff_gdal` |
+| [NetCDF](./readers/netcdf) | `netcdf_gbx` | `netcdf_gdal` |
+| [PMTiles](./readers/pmtiles) | `pmtiles_gbx` | — (light-only) |
+| [Vector (generic)](./readers/vector) | `vector_gbx` | `ogr` |
+| [Shapefile](./readers/shapefile) | `shapefile_gbx` | `shapefile_ogr` |
+| [GeoJSON](./readers/geojson) | `geojson_gbx` | `geojson_ogr` |
+| [GeoPackage](./readers/geopackage) | `gpkg_gbx` | `gpkg_ogr` |
+| [File Geodatabase](./readers/filegdb) | `file_gdb_gbx` | `file_gdb_ogr` |
+
+## Writers
+
+Write DataFrames back out to geospatial files. See the **[Writers Overview](./writers/overview)**
+for the column contract, single-file vs sharded trade-offs, and per-format details.
+
+| Format | Lightweight | Heavyweight |
+|---|---|---|
+| [Raster (generic)](./writers/raster) | `raster_gbx` | `gdal` |
+| [GeoTIFF](./writers/geotiff) | `gtiff_gbx` | `gtiff_gdal` |
+| [PMTiles](./writers/pmtiles) | `pmtiles_gbx` | `pmtiles` |
+| [NetCDF](./writers/netcdf) | `netcdf_gbx` | — (light-only) |
+| [Vector (generic)](./writers/vector) | `vector_gbx` | — |
+| [Shapefile](./writers/shapefile) | `shapefile_gbx` | — |
+| [GeoJSON](./writers/geojson) | `geojson_gbx` | — |
+| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` | `geojsonl_ogr` |
+| [GeoPackage](./writers/geopackage) | `gpkg_gbx` | — |
+| [File Geodatabase](./writers/filegdb) | `file_gdb_gbx` | — (hybrid; needs native GDAL) |
+
+## Registering the lightweight tier
+
+Heavyweight readers and writers are auto-discovered from the JAR. The lightweight Python
+DataSources are **not** auto-registered — call `register(spark)` once per session before using
+any `*_gbx` format:
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+```
+
+## Next Steps
+
+- [Readers Overview](./readers/overview) — every reader, tier differences, output schemas, options.
+- [Writers Overview](./writers/overview) — the column contract, single-file vs sharded writers, per-format details.
+- [Benchmarking](./api/benchmarking) — tier-vs-tier timing and parity methodology.

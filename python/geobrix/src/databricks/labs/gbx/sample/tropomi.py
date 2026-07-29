@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Optional, Sequence
 
-PLANETARY_COMPUTER = "https://planetarycomputer.microsoft.com/api/stac/v1"
+from databricks.labs.gbx.stac import PLANETARY_COMPUTER  # canonical STAC catalog root
+
 # Verified against the PC collection (2026-07-10): collection id + CH4 asset key.
 S5P_COLLECTION = "sentinel-5p-l2-netcdf"
 _CH4_ASSET = "ch4"

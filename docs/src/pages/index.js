@@ -53,7 +53,7 @@ function HomepageFeatures() {
         <div className="row">
           <Feature
             title="RasterX"
-            description="Satellite imagery, elevation models, and gridded data — reprojection, terrain analysis, spectral indices, XYZ/PMTiles tiling, and H3/quadbin aggregation."
+            description="Satellite imagery, elevation models, and gridded data — reprojection, terrain analysis, spectral indices, XYZ/PMTiles tiling, and H3/quadbin aggregation. In large part, distributed rasterio + best-of-breed raster packages."
             link="/docs/api/raster-functions"
           />
           <Feature

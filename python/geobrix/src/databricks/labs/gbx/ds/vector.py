@@ -1029,7 +1029,7 @@ class VectorGbxWriter(DataSourceWriter):
         finally:
             if local_dir is not None:
                 shutil.rmtree(local_dir, ignore_errors=True)
-            shutil.rmtree(self.scratch_dir, ignore_errors=True)
+            _scratch.remove_scratch_dir(self.scratch_dir)
 
     def _drop_meta_cols(self, tbl):
         return tbl.drop_columns(
@@ -1327,7 +1327,7 @@ class VectorGbxWriter(DataSourceWriter):
             os.remove(self.path)
 
     def abort(self, messages: List[Optional[WriterCommitMessage]]) -> None:
-        shutil.rmtree(self.scratch_dir, ignore_errors=True)
+        _scratch.remove_scratch_dir(self.scratch_dir)
         if os.path.isfile(self.path):
             os.remove(self.path)
         elif os.path.isdir(self.path):

@@ -42,3 +42,44 @@
   font-size: 1.5rem;
 }
 
+
+/* --------------------------------------------------------------------------
+ * Tier tabs (groupId="gbx-tier"): visually distinguish the HEAVYWEIGHT path.
+ *
+ * Lightweight is the recommended default and keeps the normal green accent.
+ * The tier choice is sticky (shared groupId + ?tier= query param), so a
+ * remembered "Heavyweight" selection can otherwise look identical to
+ * Lightweight on a fresh page. When Heavyweight (the 2nd tab) is active we
+ * recolor the active tab blue (matching the .heavy tier badge, #2545b3) and
+ * tint the visible content panel, so "you are on the heavy path" reads at a
+ * glance. Scoped to .gbx-tier-tabs so other tab groups are unaffected.
+ * ------------------------------------------------------------------------ */
+
+/* Heavyweight tab = 2nd .tabs__item; recolor its active underline + label. */
+.gbx-tier-tabs.tabs .tabs__item:nth-child(2).tabs__item--active {
+  --ifm-tabs-color-active: #2545b3;
+  --ifm-tabs-color-active-border: #2545b3;
+}
+
+/* Tint the visible heavyweight content panel while it is selected.
+ * The panel (role=tabpanel) sits under a .margin-top--md wrapper inside
+ * .tabs-container; :has() keys the panel styling off which tier tab is
+ * active. The wrapper is a descendant, so no direct-child combinator. */
+.tabs-container:has(
+    > .gbx-tier-tabs .tabs__item:nth-child(2).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]) {
+  border-left: 3px solid #2545b3;
+  background: #f5f8ff;
+  padding: 0.75rem 1rem;
+  border-radius: 0 4px 4px 0;
+}
+
+[data-theme='dark']
+  .tabs-container:has(
+    > .gbx-tier-tabs .tabs__item:nth-child(2).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]) {
+  border-left-color: #6b8cff;
+  background: rgba(107, 140, 255, 0.08);
+}

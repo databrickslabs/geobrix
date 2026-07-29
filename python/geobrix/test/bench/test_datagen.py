@@ -101,6 +101,43 @@ def test_validity_gate_passes_for_generated_corpus(tmp_path):
     assert problems == []
 
 
+def test_corpus_includes_gb_tile_yielding_nonempty_bng_cells(tmp_path):
+    # The corpus must carry exactly one Great-Britain-overlapping tile (role
+    # "bng_gb", EPSG:27700 over London) so the BNG raster->grid / tessellate fns
+    # bench REAL cells instead of a vacuous empty grid. Verify it exists, is
+    # 27700, matches the first sweep tile's band/dtype/px, and that warping +
+    # binning it to BNG yields > 0 cells (the whole point of the tile).
+    from databricks.labs.gbx.pyrx.core import gridagg
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=1234,
+        tile_px=[128],
+        bands=[4],
+        dtypes=["float32"],
+        srids=[4326, 3857],
+        nodata_fracs=[0.02],
+        row_rows=1,
+        row_tile_px=128,
+        row_bands=4,
+        row_dtype="float32",
+    )
+    gb = [t for t in corpus.size_sweep if t.role == "bng_gb"]
+    assert len(gb) == 1, "expected exactly one GB (bng_gb) tile"
+    te = gb[0]
+    assert te.srid == 27700
+    # matches the first sweep tile's conventions
+    first = next(t for t in corpus.size_sweep if t.role == "sweep")
+    assert (te.bands, te.dtype, te.tile_px) == (first.bands, first.dtype, first.tile_px)
+    import rasterio
+
+    with rasterio.open(tmp_path / te.path) as ds:
+        assert ds.crs.to_epsg() == 27700
+        cells = gridagg.raster_to_grid(ds, 3, "bng", "avg")
+    total = sum(len(band) for band in cells)
+    assert total > 0, "GB tile must bin non-empty BNG cells"
+
+
 def test_int16_band_correlation_yields_valid_ndvi_range():
     # int16 tiles must also keep NDVI within [-1, 1] (non-negative reflectance).
     b = dg.make_tile_bytes(

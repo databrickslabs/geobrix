@@ -1,0 +1,197 @@
+---
+sidebar_position: 3
+sidebar_label: Rasterio Distributed
+title: Rasterio Distributed
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import rioDist from '!!raw-loader!../../tests/python/api/rasterio_distributed_examples.py';
+
+# Rasterio Distributed
+
+[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, rio-cogeo, scipy, xarray-spatial, scikit-image, shapely, pyproj, h3, quadbin — run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR, no init script, no native GDAL install separate from rasterio's bundled GDAL.
+
+If you already know `rasterio`, you already understand what `pyrx` does. The coverage matrix below maps the surface, and the side-by-sides show each operation in rasterio next to its distributed `pyrx` form.
+
+---
+
+## Register
+
+Register the lightweight data sources and SQL functions once per session before using any `rst_*` function or `raster_gbx` reader:
+
+<CodeFromTest
+  language="python"
+  title="Register pyrx functions and lightweight data sources"
+  source="docs/tests/python/api/rasterio_distributed_examples.py"
+  testFile="docs/tests/python/api/test_rasterio_distributed_examples.py"
+  functionName="REGISTER"
+>
+  {rioDist}
+</CodeFromTest>
+
+---
+
+## Capability coverage
+
+The table below maps each RasterX capability to the `pyrx` function(s) that implement it and the backing Python library. Every `rst_*` function is available in both execution tiers (lightweight `pyrx` and heavyweight `rasterx`).
+
+See the [RasterX Function Reference](./raster-functions) for runnable per-function code examples.
+
+| Capability | pyrx function(s) | Backing library |
+|---|---|---|
+| **I/O & metadata** | `rst_fromcontent`, `rst_fromfile`, `rst_width`, `rst_height`, `rst_srid`, `rst_numbands`, `rst_metadata`, `rst_summary`, `rst_subdatasets` | rasterio |
+| **Warp / reproject** | `rst_transform` | rasterio |
+| **Clip / mask** | `rst_clip` | rasterio + shapely |
+| **Resample** | `rst_resample` | rasterio |
+| **Merge** | `rst_merge`, `rst_merge_agg` | rasterio + NumPy |
+| **COG conversion** | `rst_cog_convert` | rio-cogeo |
+| **Band math / spectral indices** | `rst_ndvi`, `rst_evi`, `rst_savi`, `rst_ndwi`, `rst_nbr`, `rst_index`, `rst_derivedband`, `rst_derivedband_agg`, `rst_combineavg`, `rst_combineavg_agg` | NumPy + numexpr |
+| **Terrain (Horn 3×3)** | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness` | NumPy |
+| **Color relief** | `rst_color_relief` | NumPy (see [Known divergences](#known-behavior-divergences)) |
+| **Rasterize / polygonize** | `rst_rasterize`, `rst_polygonize`, `rst_h3_rasterize_agg` | rasterio + shapely |
+| **Focal / convolution** | `rst_filter`, `rst_convolve` | scipy.ndimage |
+| **Proximity** | `rst_proximity` | scipy |
+| **Contour** | `rst_contour` | scikit-image (see [Known divergences](#known-behavior-divergences)) |
+| **Viewshed** | `rst_viewshed` | xarray-spatial |
+| **XYZ tiles** | `rst_tilexyz`, `rst_xyzpyramid` | rio-tiler + morecantile |
+| **Tiling / retile** | `rst_maketiles`, `rst_retile` | rasterio + NumPy |
+| **Grid aggregation (H3)** | `rst_h3_tessellate`, `rst_h3_rastertogrid*` | h3 |
+| **Grid aggregation (quadbin)** | `rst_quadbin_tessellate`, `rst_quadbin_rastertogrid*`, `rst_quadbin_rasterize_agg` | quadbin |
+| **Grid aggregation (BNG)** | `rst_bng_tessellate`, `rst_bng_rastertogrid*`, `rst_bng_rasterize_agg` | pure-Python BNG codec + rasterio (27700 warp) |
+
+---
+
+## Side-by-sides
+
+### Reproject (warp)
+
+**rasterio** computes the target grid for a single file:
+
+<CodeFromTest
+  language="python"
+  title="Single-node rasterio: reproject one file to EPSG:3857"
+  source="docs/tests/python/api/rasterio_distributed_examples.py"
+  testFile="docs/tests/python/api/test_rasterio_distributed_examples.py"
+  functionName="WARP_RASTERIO"
+>
+  {rioDist}
+</CodeFromTest>
+
+**pyrx** runs the same `rasterio.warp` logic on each tile across the cluster:
+
+<CodeFromTest
+  language="python"
+  title="GeoBrix pyrx: reproject a DataFrame of tiles, distributed"
+  source="docs/tests/python/api/rasterio_distributed_examples.py"
+  testFile="docs/tests/python/api/test_rasterio_distributed_examples.py"
+  functionName="WARP_PYRX"
+>
+  {rioDist}
+</CodeFromTest>
+
+The test verifies that the pyrx-reprojected tile reports the correct target CRS (EPSG:3857) and that its geographic bounds agree with the bounds `calculate_default_transform` computes on the rasterio side, within 1%. Pixel-level equality between the two outputs was not asserted — rasterio's warp and pyrx's distributed warp agree on the reprojected grid geometry, not on every pixel value.
+
+---
+
+### Clip
+
+**rasterio** clips a single file to a geometry:
+
+<CodeFromTest
+  language="python"
+  title="Single-node rasterio: clip one raster to a geometry"
+  source="docs/tests/python/api/rasterio_distributed_examples.py"
+  testFile="docs/tests/python/api/test_rasterio_distributed_examples.py"
+  functionName="CLIP_RASTERIO"
+>
+  {rioDist}
+</CodeFromTest>
+
+**pyrx** applies the same clip operation to every tile in a DataFrame:
+
+<CodeFromTest
+  language="python"
+  title="GeoBrix pyrx: clip every tile to a geometry, distributed"
+  source="docs/tests/python/api/rasterio_distributed_examples.py"
+  testFile="docs/tests/python/api/test_rasterio_distributed_examples.py"
+  functionName="CLIP_PYRX"
+>
+  {rioDist}
+</CodeFromTest>
+
+Both operations mask the raster to the provided geometry. The third argument to `rst_clip` controls border pixel inclusion (`True` = include any pixel that touches the geometry boundary; `False` = include only pixels fully inside). This corresponds to `rasterio.mask`'s `all_touched` parameter, but the border semantics of `rasterio.mask` and the GDAL cutline path used in the heavyweight tier can diverge on boundary pixels — both are shown here as the same distributed clip operation, not as pixel-level equivalents.
+
+---
+
+### NDVI (band math)
+
+**rasterio + NumPy** computes NDVI for a single file:
+
+<CodeFromTest
+  language="python"
+  title="Single-node rasterio + NumPy: NDVI (band1=red, band2=nir)"
+  source="docs/tests/python/api/rasterio_distributed_examples.py"
+  testFile="docs/tests/python/api/test_rasterio_distributed_examples.py"
+  functionName="NDVI_RASTERIO"
+>
+  {rioDist}
+</CodeFromTest>
+
+**pyrx** computes the same NDVI across a DataFrame of tiles:
+
+<CodeFromTest
+  language="python"
+  title="GeoBrix pyrx: NDVI across a DataFrame of tiles, distributed"
+  source="docs/tests/python/api/rasterio_distributed_examples.py"
+  testFile="docs/tests/python/api/test_rasterio_distributed_examples.py"
+  functionName="NDVI_PYRX"
+>
+  {rioDist}
+</CodeFromTest>
+
+The test asserts `np.allclose` between the rasterio-computed NDVI array and the pyrx-computed result. NDVI is pure NumPy arithmetic on rasterio-read band arrays — the two sides agree to within floating-point tolerance.
+
+---
+
+## Gaps and divergences
+
+### Distributed in pyrx today
+
+Everything in the matrix above. Every `rst_*` function runs in both the lightweight (`pyrx`) and heavyweight (`rasterx`) tiers.
+
+### Heavyweight differences (minor)
+
+A small number of capabilities run only in the heavyweight tier:
+
+- **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes: `mode='constrained'` (constrained Delaunay, the default) works in both tiers; `mode='conforming'` (Steiner-point conforming Delaunay) requires a C-level refinement library not available in the lightweight stack and raises in `pyrx` with an informative message.
+- **Advanced PMTiles writer options.** The `gbx_pmtiles_agg` aggregate function is available in both tiers. Advanced DataSource-level `pmtiles_gbx` writer options (multi-part, spatial index tuning) are heavyweight-only.
+
+See [Execution Tiers](./execution-tiers) for how to choose and switch between tiers.
+
+### Known behavior divergences
+
+Where the lightweight and heavyweight implementations use different underlying algorithms, their outputs may not be pixel-identical on edge cases:
+
+| Function | Heavyweight | Lightweight | Divergence |
+|---|---|---|---|
+| `rst_color_relief` | `gdal.DEMProcessing` | NumPy `np.interp` | Color ramp interpolation can differ at boundary values; `default` keyword not available in `pyrx` |
+| `rst_convolve`, `rst_derivedband` | GDAL halo convolution | NumPy `pad(mode='edge')` | Border pixel handling differs at tile edges |
+| `rst_resample` | GDAL resampler | rasterio resampler | NoData and boundary pixels can differ |
+| `rst_contour` | `gdal.ContourGenerateEx` | `skimage.find_contours` | Contour tracing algorithm differs; vertex positions near NoData may diverge |
+| `rst_viewshed` | `gdal.ViewshedGenerate` | `xrspatial.viewshed` | Visibility computation differs in algorithm; results agree on clear line-of-sight and fully obstructed pixels, but may differ at grazing angles |
+
+See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both tiers.
+
+Rasterio's bundled GDAL also has a narrower driver set than the heavyweight custom build. If you are reading an obscure raster format (HDF4, GRIB2 with specific subtype handling, certain radar formats), the heavyweight tier is more likely to support it.
+
+---
+
+## How it is distributed
+
+The `pyrx` tier distributes rasterio and NumPy compute over Spark via three mechanisms, none of which require the Spark JVM internals:
+
+- **Arrow scalar UDFs** (per-tile functions): each scalar `rst_*` function invoked via the Python Column API is a `@pandas_udf` (`tile_scalar_udf` / `tile_scalar_udf2` in `pyrx/_udf.py`) — it receives a batch of tiles' raster bytes as a Pandas Series, calls rasterio/NumPy once per tile within the batch, and returns transformed bytes. The Arrow batch crosses the JVM↔Python boundary **once per batch**, not once per row. The same functions are also registered as plain `@f.udf` for SQL use (so `DESCRIBE FUNCTION` and SQL calls work), but the Python Column API always routes through the `pandas_udf` path.
+- **Grouped-aggregate pandas UDFs** (merges and combineavg): `rst_merge_agg`, `rst_combineavg_agg`, and similar grouped aggregators use `@pandas_udf(BinaryType())` — Spark 4 auto-detects the grouped-aggregate eval type. Each receives all tiles in a group as a Pandas Series and merges them in one Python call.
+- **Streaming UDTFs** (fan-out): `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`, `rst_maketiles`, `rst_retile`, `rst_xyzpyramid` use `@udtf` to yield one output row per chip or tile without materializing the full output in memory first.
+
+No `_jvm` access, no `.rdd`, no Spark driver-side collect before distributing. Data-source readers and writers (`raster_gbx`, `gdal`, `gtiff_gdal`, etc.) use the DataSource V2 API. See [Performance](./performance) for partitioning guidance and per-tier timing benchmarks.

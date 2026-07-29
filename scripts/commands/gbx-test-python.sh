@@ -13,6 +13,7 @@ show_help() {
     echo ""
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--path <dir>${NC}           Specific test directory or file"
+    echo -e "  ${GREEN}-k <expr>${NC}              Pytest keyword filter (e.g. 'merge or fileName')"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     echo -e "  ${GREEN}--with-integration${NC}     Include ${YELLOW}@pytest.mark.integration${NC} tests (network downloads, slow); excluded by default"
     echo -e "  ${GREEN}--markers <expr>${NC}        Override marker filter with a pytest expression (e.g. 'not slow'); disables the default 'not integration' filter"
@@ -36,6 +37,7 @@ show_help() {
 # Parse arguments
 TEST_PATH="/root/geobrix/python/geobrix/test/"
 LOG_PATH=""
+KEYWORD=""
 # Default: exclude integration tests (network downloads); matches CI's python_build action.
 MARKERS="-m 'not integration'"
 
@@ -43,6 +45,10 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --path)
             TEST_PATH="/root/geobrix/$2"
+            shift 2
+            ;;
+        -k)
+            KEYWORD="-k '$2'"
             shift 2
             ;;
         --log)
@@ -95,7 +101,7 @@ echo ""
 # Build pytest command
 PYTEST_CMD="unset JAVA_TOOL_OPTIONS && \
     cd /root/geobrix && \
-    python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS"
+    python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
 
 docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"
 EXIT_CODE=$?

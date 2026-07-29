@@ -28,7 +28,7 @@ Rasterize landscape PNG (for slides / 16:9 decks):
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-# --- Data: 108 functions, organized by category --------------------------------
+# --- Data: 126 functions, organized by category --------------------------------
 
 @dataclass
 class Section:
@@ -87,6 +87,7 @@ CARDS_LEFT = [
             "rst_frombands_agg", "rst_rasterize_agg",
             "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg",
             "rst_h3_rasterize_agg",
+            "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg",
         ],
     ),
     Card(
@@ -105,6 +106,17 @@ CARDS_LEFT = [
         color="#2E8B57", tint="#E0F4EA",
         fns=["rst_ndvi", "rst_evi", "rst_savi", "rst_ndwi", "rst_nbr", "rst_index"],
     ),
+    Card(
+        title="H3 Grid",
+        subtitle="Aggregate raster values onto H3 cells",
+        color="#0F8E8B", tint="#D5ECEC",
+        fns=[
+            "rst_h3_rastertogridavg", "rst_h3_rastertogridcount",
+            "rst_h3_rastertogridmax", "rst_h3_rastertogridmin",
+            "rst_h3_rastertogridmedian", "rst_h3_rastertogridstddev",
+            "rst_h3_rastertogridsum", "rst_h3_rastertogridvariance",
+        ],
+    ),
 ]
 
 CARDS_RIGHT = [
@@ -115,6 +127,7 @@ CARDS_RIGHT = [
         fns=[
             "rst_maketiles", "rst_retile", "rst_tooverlappingtiles",
             "rst_separatebands", "rst_h3_tessellate",
+            "rst_quadbin_tessellate", "rst_bng_tessellate",
         ],
     ),
     Card(
@@ -156,23 +169,25 @@ CARDS_RIGHT = [
         ],
     ),
     Card(
-        title="H3 Grid",
-        subtitle="Aggregate raster values onto H3 cells",
-        color="#0F8E8B", tint="#D5ECEC",
-        fns=[
-            "rst_h3_rastertogridavg", "rst_h3_rastertogridcount",
-            "rst_h3_rastertogridmax", "rst_h3_rastertogridmin",
-            "rst_h3_rastertogridmedian",
-        ],
-    ),
-    Card(
         title="Quadbin Grid",
         subtitle="Aggregate raster values onto Quadbin cells",
         color="#1571A8", tint="#DFF0FA",
         fns=[
             "rst_quadbin_rastertogridavg", "rst_quadbin_rastertogridcount",
             "rst_quadbin_rastertogridmax", "rst_quadbin_rastertogridmin",
-            "rst_quadbin_rastertogridmedian",
+            "rst_quadbin_rastertogridmedian", "rst_quadbin_rastertogridstddev",
+            "rst_quadbin_rastertogridsum", "rst_quadbin_rastertogridvariance",
+        ],
+    ),
+    Card(
+        title="BNG Grid",
+        subtitle="Aggregate raster values onto British National Grid cells",
+        color="#B0357A", tint="#F8E1EF",
+        fns=[
+            "rst_bng_rastertogridavg", "rst_bng_rastertogridcount",
+            "rst_bng_rastertogridmax", "rst_bng_rastertogridmin",
+            "rst_bng_rastertogridmedian", "rst_bng_rastertogridstddev",
+            "rst_bng_rastertogridsum", "rst_bng_rastertogridvariance",
         ],
     ),
     Card(
@@ -374,7 +389,7 @@ def render():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'108 SQL functions for raster data on Spark &#8212; registered as '
+        f'126 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -383,7 +398,7 @@ def render():
         f'</text>'
     )
     # Version pill (top-right)
-    pill_text = "v0.4.2  *  Beta"
+    pill_text = "v0.4.3  *  Beta"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{CANVAS_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '
@@ -483,7 +498,7 @@ def render_landscape():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'108 SQL functions for raster data on Spark &#8212; registered as '
+        f'126 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -492,7 +507,7 @@ def render_landscape():
         f'</text>'
     )
     # Version pill (top-right)
-    pill_text = "v0.4.2  *  Beta"
+    pill_text = "v0.4.3  *  Beta"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{LANDSCAPE_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '

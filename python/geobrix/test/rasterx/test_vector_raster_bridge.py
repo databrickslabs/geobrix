@@ -48,14 +48,12 @@ def test_rasterize_polygonize_roundtrip(spark):
         "00000000000000000000000000002440"
         "00000000000000000000000000000000"
     )
-    df = spark.sql(
-        f"""
+    df = spark.sql(f"""
         SELECT gbx_rst_polygonize(
             gbx_rst_rasterize(unhex('{sq_wkb_hex}'),
                               42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326)
         ) AS features
-        """
-    )
+        """)
     out = df.collect()
     assert len(out) == 1
     features = out[0]["features"]

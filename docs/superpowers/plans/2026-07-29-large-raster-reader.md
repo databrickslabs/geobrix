@@ -18,7 +18,7 @@
 - **Perf-parity gate.** Resample-on-COG must be ≥ today's speed; the split path must not regress the small-file passthrough fast path. (memory: perf-parity-light-vs-heavy)
 - **Decoded budget, not encoded.** All budget math keys on `width*height*bands*dtype_itemsize`, never encoded byte size. (spec §2)
 - **New test dirs must be tier-gated** in `_LIGHT_TEST_DIRS` and the light CI lockfiles if a new package dir is introduced. This plan adds tests under existing `test/ds/` and `test/pyrx/` dirs — no new dir, but verify. (memory: light-ci-lock-completeness, new-feature-dep-and-tier-checklist)
-- **Version bump to 0.4.0** is the final task (pom/`__init__`/package.json + wheel/JAR/banners/pills per geobrix-version-bump-checklist). Do NOT bump earlier.
+- **Version bump to 0.4.4** (current is 0.4.3) is the final task (pom/`__init__`/package.json + wheel/JAR/banners/pills per geobrix-version-bump-checklist). Do NOT bump earlier.
 
 ---
 
@@ -1108,7 +1108,7 @@ Add the two-axes options table (`splitStrategy`: auto|serverless|classic|none; `
 
 - [ ] **Step 2: Update `beta-release-notes.mdx`**
 
-Document the behavior change: reader default now auto-splits large rasters (`splitStrategy=auto`); recover old behavior with `splitStrategy=none`. Note tileFormat=auto emits COG on split. This is 0.4.0.
+Document the behavior change: reader default now auto-splits large rasters (`splitStrategy=auto`); recover old behavior with `splitStrategy=none`. Note tileFormat=auto emits COG on split. This is 0.4.4.
 
 - [ ] **Step 3: Add/adjust a doc-test**
 
@@ -1127,7 +1127,7 @@ Expected: PASS. Verify `grep -rn -iE "wave [0-9]+" docs/docs/` prints nothing.
 
 ```bash
 git add docs/
-git commit -m "docs: large-raster reader options, COG POV, 0.4.0 release notes
+git commit -m "docs: large-raster reader options, COG POV, 0.4.4 release notes
 
 Co-authored-by: Isaac"
 ```
@@ -1167,7 +1167,7 @@ Co-authored-by: Isaac"
 
 ---
 
-## Task 11: Version bump to 0.4.0
+## Task 11: Version bump to 0.4.4
 
 Per geobrix-version-bump-checklist. This is the release.
 
@@ -1176,7 +1176,7 @@ Per geobrix-version-bump-checklist. This is the release.
 
 - [ ] **Step 1: Bump version strings**
 
-CHANGE `pom.xml`, `__init__.py`, `package.json` to `0.4.0`; regen `geobrix-0.4.0` wheel/JAR/banners/pills. LEAVE lockfile/app-version per the checklist. Re-run `resources/images/rasterx-*.py` to refresh PNGs (release pill is in bytes).
+CHANGE `pom.xml`, `__init__.py`, `package.json` to `0.4.4`; regen `geobrix-0.4.4` wheel/JAR/banners/pills. LEAVE lockfile/app-version per the checklist. Re-run `resources/images/rasterx-*.py` to refresh PNGs (release pill is in bytes).
 
 - [ ] **Step 2: Rebuild + stage wheel (WHL-change rule)**
 
@@ -1191,7 +1191,7 @@ Expected: PASS.
 
 ```bash
 git add -A
-git commit -m "chore: bump version to 0.4.0 (large-raster reader release)
+git commit -m "chore: bump version to 0.4.4 (large-raster reader release)
 
 Co-authored-by: Isaac"
 ```

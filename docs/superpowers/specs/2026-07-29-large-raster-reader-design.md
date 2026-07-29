@@ -3,7 +3,7 @@
 **Date:** 2026-07-29
 **Branch:** `feature/large-raster-reader`
 **Status:** Design approved (pending written-spec review)
-**Release framing:** This feature is significant enough to *be* the GeoBrix **0.4.0** release, not an incremental patch.
+**Release framing:** This feature is significant enough to *be* the GeoBrix **0.4.4** release (current is 0.4.3), not an incremental patch.
 
 ## Problem
 
@@ -238,7 +238,7 @@ This feature's entire reason to exist is large striped rasters, so benchmarking 
 
 ## Roadmap / sequencing
 
-1. **This spec (light tier, scope B):** robust large-raster ingest + two axes + COG detection contract + `stamp_format_metadata` + writer COG options + the one `rst_resample*` consumer rewrite + large-raster benchmarking. **= GeoBrix 0.4.0.**
+1. **This spec (light tier, scope B):** robust large-raster ingest + two axes + COG detection contract + `stamp_format_metadata` + writer COG options + the one `rst_resample*` consumer rewrite + large-raster benchmarking. **= GeoBrix 0.4.4.**
 2. **Heavy-tier parity (immediate fast-follow):** port layout-aware chunking + decoded-budget + `tileFormat` COG axis to the Scala reader. `splitStrategy` values become `auto | classic | cluster | none` (no `serverless`; heavy doesn't run on Serverless). **Gated on the light-vs-heavy head-to-head large-raster benchmark.**
 3. **Full consumer audit (scope C):** rewire every STRONG-benefit COG-aware function to exploit overviews; add optional overview-based "approx" stat/terrain variants. Builds on `detect_cog` + `stamp_format_metadata` + R1/R2 from this spec. Nothing ships to users until C is reached (explicit user constraint).
 

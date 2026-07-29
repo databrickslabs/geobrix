@@ -1,13 +1,27 @@
 """raster_gbx — catch-all pure-Python DataSource V2 raster reader.
 
 1:1 swap-out for the Scala ``gdal`` reader: recursively lists files, splits each
-into BalancedSubdivision tiles, re-encodes each tile as GTiff, emits
-(source, tile) rows matching pyrx._serde.TILE_SCHEMA. Pure Python (Serverless).
+into layout-aware tiles determined by a decoded-memory budget, re-encodes each
+tile as GTiff or COG, emits (source, tile) rows matching pyrx._serde.TILE_SCHEMA.
+Pure Python (Serverless).
 
-Fast path: when a source is a single whole-raster GTiff tile (the common
-"directory of GeoTIFFs" case), the original file bytes are passed through
-unchanged instead of being decoded + re-encoded — pixels are identical, so it
-is parity-safe (decoded-pixel, not byte) and ~80x cheaper per tile.
+Split strategy (``splitStrategy`` option, default ``auto``):
+  - ``auto``       — resolves to ``serverless`` or ``classic`` by env probe.
+  - ``serverless`` — 512 MiB decoded budget per tile.
+  - ``classic``    — 1 536 MiB decoded budget per tile.
+  - ``none``       — no split; one tile per file (pre-0.4.4 behavior).
+
+Tile format (``tileFormat`` option, default ``auto``):
+  - ``auto``       — whole-file: passthrough source format; split: COG.
+  - ``gtiff``      — always emit plain GTiff (no overviews).
+  - ``cog``        — always emit COG with overviews.
+
+Power-user override: ``sizeInMB`` (positive integer) overrides the budget in
+bytes. ``sizeInMB=-1`` is equivalent to ``splitStrategy=none``.
+
+Fast path: when a source is a single whole-raster GTiff tile and tileFormat is
+``auto`` or ``gtiff``, the original file bytes are passed through unchanged —
+pixels are identical (parity-safe) and ~80x cheaper per tile.
 
 Limitation: per-band masks/alpha and source colormaps are not yet propagated to
 the re-encoded tiles (band data + nodata/dtype/crs/transform are). Sources that
@@ -17,6 +31,7 @@ reader; tracked as a follow-up.
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, Iterator, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
@@ -24,6 +39,9 @@ from pyspark.sql.types import StringType, StructField, StructType
 
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core import budget
+
+logger = logging.getLogger(__name__)
 
 # Spark BinaryType cells are bounded by the JVM 2 GiB array limit; a single
 # whole-image tile larger than this cannot be materialized and would otherwise
@@ -64,12 +82,40 @@ def reader_schema() -> StructType:
     )
 
 
+def _resolve_emit_format(tile_format: str, split: bool) -> str:
+    """Resolve the actual emit format for a tile.
+
+    ``cog``   -> always ``"cog"``
+    ``gtiff`` -> always ``"gtiff"``
+    ``auto``  -> ``"cog"`` when splitting (sub-tiles); ``"gtiff"`` when whole-image.
+    """
+    fmt = (tile_format or "auto").lower()
+    if fmt == "cog":
+        return "cog"
+    if fmt == "gtiff":
+        return "gtiff"
+    # auto
+    return "cog" if split else "gtiff"
+
+
 class _FilePartition(InputPartition):
     """One source file = one partition (picklable)."""
 
-    def __init__(self, file_path: str, size_mib: int):
+    def __init__(
+        self,
+        file_path: str,
+        size_mib: int,
+        budget_bytes: int = 0,
+        tile_format: str = "auto",
+        cog_blocksize: int = 512,
+        cog_overview_resampling: str = "AVERAGE",
+    ):
         self.file_path = file_path
         self.size_mib = size_mib
+        self.budget_bytes = budget_bytes
+        self.tile_format = tile_format
+        self.cog_blocksize = cog_blocksize
+        self.cog_overview_resampling = cog_overview_resampling
 
 
 class RasterGbxReader(DataSourceReader):
@@ -79,6 +125,11 @@ class RasterGbxReader(DataSourceReader):
             raise ValueError("raster_gbx requires a 'path' (e.g. .load(path)).")
         self.size_mib = int(options.get("sizeInMB", "-1"))
         self.filter_regex = options.get("filterRegex", ".*")
+        # Split strategy + tile format options (new in 0.4.4).
+        self.strategy = budget.resolve_strategy(options.get("splitStrategy", "auto"))
+        self.tile_format = options.get("tileFormat", "auto")
+        self.cog_blocksize = int(options.get("cogBlockSize", "512"))
+        self.cog_overview_resampling = options.get("cogOverviewResampling", "AVERAGE")
         # Optional AOI window-on-read. `bbox` is "minx,miny,maxx,maxy" in the source
         # CRS by default; `bboxCrs` (e.g. "EPSG:4326") declares the bbox CRS and the
         # window primitive reprojects it. None = read the whole raster (prior behavior).
@@ -97,7 +148,23 @@ class RasterGbxReader(DataSourceReader):
 
     def partitions(self) -> Sequence[InputPartition]:
         files = _listing.list_files(self.path, self.filter_regex)
-        return [_FilePartition(f, self.size_mib) for f in files]
+        # Resolve the decoded-memory budget ONCE at the driver.
+        # sizeInMB > 0 is a power-user byte-level override; it wins over strategy.
+        if self.size_mib > 0:
+            resolved_budget = self.size_mib * 1024 * 1024
+        else:
+            resolved_budget = budget.decoded_budget_bytes(self.strategy)
+        return [
+            _FilePartition(
+                f,
+                self.size_mib,
+                budget_bytes=resolved_budget,
+                tile_format=self.tile_format,
+                cog_blocksize=self.cog_blocksize,
+                cog_overview_resampling=self.cog_overview_resampling,
+            )
+            for f in files
+        ]
 
     def read(self, partition: "_FilePartition") -> Iterator[Tuple]:
         import os
@@ -107,7 +174,6 @@ class RasterGbxReader(DataSourceReader):
         import rasterio
 
         from databricks.labs.gbx.pyrx import _env
-        from databricks.labs.gbx.pyrx.core import tiling as core_tiling
 
         _env.configure_gdal_env()
 
@@ -152,26 +218,25 @@ class RasterGbxReader(DataSourceReader):
                 shutil.rmtree(staged_dir, ignore_errors=True)
             return
 
-        # Heavy keys the BalancedSubdivision split on RasterAccessors.memSize,
-        # which for an on-disk source is the file's encoded byte size. Reuse the
-        # shared, tested split math in core.tiling rather than re-deriving it.
         size_bytes = os.path.getsize(partition.file_path)
         # Phase 1 (FUSE-safe): open the source to read metadata + compute the split, and
         # serve the whole-image GTiff fast path (sequential byte read). Reading the header
         # is small/sequential, so it is fine directly on a UC Volume.
         with rasterio.open(partition.file_path) as ds:
             width, height, driver = ds.width, ds.height, ds.driver
-            tile_x, tile_y = core_tiling._get_tile_size(
-                width, height, size_bytes, partition.size_mib
+            bands = ds.count
+            itemsize = _numpy_itemsize(ds.dtypes[0])
+            # Determine whole-image vs split based on decoded-memory budget.
+            # budget_bytes <= 0 means no split (strategy=none or sizeInMB unset under
+            # old-style call). Otherwise compare raw decoded size to budget.
+            whole = partition.budget_bytes <= 0 or (
+                width * height * bands * itemsize <= partition.budget_bytes
             )
-            whole = tile_x >= width and tile_y >= height
             # Large-raster safety: a single whole-image tile that would exceed
             # Spark's ~2 GiB BinaryType cell limit must fail with an actionable
             # message rather than producing a giant (or unmaterializable) cell.
             if whole:
-                est = _estimate_tile_bytes(
-                    width, height, ds.count, ds.dtypes[0], size_bytes
-                )
+                est = _estimate_tile_bytes(width, height, bands, ds.dtypes[0], size_bytes)
                 if est > _MAX_TILE_BYTES:
                     raise ValueError(
                         f"raster {partition.file_path} is ~{est // (1024 * 1024)} MB "
@@ -179,10 +244,12 @@ class RasterGbxReader(DataSourceReader):
                         f"set the reader option sizeInMB=<n> (a positive MB value) to "
                         f"tile it into smaller pieces."
                     )
-            # Fast path: a single tile spanning the whole raster AND a GTiff source ->
-            # emit the original file bytes (sequential read, no decode/re-encode). Pixels
-            # are identical (parity-safe). Sub-tiles / non-GTiff fall through to phase 2.
-            if whole and driver == "GTiff":
+            # Fast path: whole-image AND a GTiff source AND tileFormat is not forcing COG
+            # -> emit the original file bytes (sequential read, no decode/re-encode).
+            # Pixels are identical (parity-safe). Sub-tiles / non-GTiff / tileFormat=cog
+            # fall through to phase 2.
+            emit_fmt = _resolve_emit_format(partition.tile_format, split=not whole)
+            if whole and driver == "GTiff" and emit_fmt != "cog":
                 compression = str(ds.profile.get("compress") or "DEFLATE").upper()
                 cellid, raster_bytes, meta = _encode.passthrough_tile(
                     partition.file_path,
@@ -194,15 +261,17 @@ class RasterGbxReader(DataSourceReader):
                 )
                 yield (source, (cellid, raster_bytes, meta))
                 return
+            # Capture tiled layout metadata for plan_layout (needed in phase 2).
+            tiled = bool(ds.profile.get("tiled", False))
+            blockxsize = ds.profile.get("blockxsize")
+            blockysize = ds.profile.get("blockysize")
 
-        # Phase 2 (windowed split): per-window ds.read() SEEKS, which UC Volume FUSE can't
-        # serve, and holding the whole file in RAM (MemoryFile) OOMs the worker under
-        # concurrency for large scenes (Sentinel-2 10 m bands reach ~230 MB). So stage the
-        # source to worker-local disk with a SEQUENTIAL copy (FUSE-safe), then window from
-        # local disk: each ds.read(window) loads only that window's blocks, so per-task RAM
-        # stays ~tile-sized regardless of source size. The staged file is created, fully
-        # consumed (all windows yielded), and removed -- all within this generator (in-block,
-        # one executor task); only encoded tile BYTES (never a path) cross into the columnar
+        # Phase 2 (windowed split or whole-image re-encode): per-window ds.read() SEEKS,
+        # which UC Volume FUSE can't serve. Stage to worker-local disk with a SEQUENTIAL
+        # copy (FUSE-safe), then window from local disk. Each ds.read(window) loads only
+        # that window's blocks, so per-task RAM stays ~tile-sized regardless of source
+        # size. The staged file is created, fully consumed, and removed — all within this
+        # generator (one executor task); only encoded tile BYTES cross into the columnar
         # output, so nothing local leaks downstream.
         staged_dir = tempfile.mkdtemp(prefix="gbx_raster_")
         try:
@@ -215,21 +284,33 @@ class RasterGbxReader(DataSourceReader):
             ):
                 shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
             with rasterio.open(local_path) as ds:
-                row_off = 0
-                while row_off < height:
-                    win_h = min(tile_y, height - row_off)
-                    col_off = 0
-                    while col_off < width:
-                        win_w = min(tile_x, width - col_off)
-                        cellid, raster_bytes, meta = _encode.encode_tile(
-                            ds,
-                            window=(col_off, row_off, win_w, win_h),
-                            source_path=partition.file_path,
-                            all_parents="",
+                if whole:
+                    # tileFormat=cog on a whole-image tile: encode the full raster as COG.
+                    plan_tiles = [(0, 0, width, height)]
+                else:
+                    plan = budget.plan_layout(
+                        width, height, bands, itemsize,
+                        tiled, blockxsize, blockysize,
+                        partition.budget_bytes,
+                    )
+                    if plan.degraded:
+                        logger.warning(
+                            "raster %s: layout plan hit the 512-tile cap; some tiles "
+                            "may exceed the decoded-memory budget.",
+                            partition.file_path,
                         )
-                        yield (source, (cellid, raster_bytes, meta))
-                        col_off += tile_x
-                    row_off += tile_y
+                    plan_tiles = plan.tiles
+                for col, row, w, h in plan_tiles:
+                    cellid, raster_bytes, meta = _encode.encode_tile(
+                        ds,
+                        window=(col, row, w, h),
+                        source_path=partition.file_path,
+                        all_parents="",
+                        tile_format=emit_fmt,
+                        cog_blocksize=partition.cog_blocksize,
+                        cog_overview_resampling=partition.cog_overview_resampling,
+                    )
+                    yield (source, (cellid, raster_bytes, meta))
         finally:
             shutil.rmtree(staged_dir, ignore_errors=True)
 

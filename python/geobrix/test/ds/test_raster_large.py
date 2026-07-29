@@ -58,3 +58,24 @@ def test_options_default_resolution():
     r = RasterGbxReader({"path": "/x", "splitStrategy": "auto"})
     assert r.strategy in ("serverless", "classic")
     assert r.tile_format == "auto"
+
+
+def test_gtiff_reader_inherits_options(tmp_path):
+    from databricks.labs.gbx.ds.gtiff import GTiffGbxReader
+    r = GTiffGbxReader({"path": str(tmp_path), "splitStrategy": "classic",
+                        "tileFormat": "cog"})
+    assert r.strategy == "classic"
+    assert r.tile_format == "cog"
+    assert r.driver == "GTiff"
+
+
+def test_netcdf_reader_accepts_options(tmp_path):
+    """NetcdfRasterReader constructs without error and propagates tile options."""
+    from databricks.labs.gbx.ds.netcdf import NetcdfRasterReader
+    r = NetcdfRasterReader({"path": str(tmp_path), "splitStrategy": "serverless",
+                            "tileFormat": "cog", "cogBlockSize": "256",
+                            "cogOverviewResampling": "NEAREST"})
+    assert r.strategy == "serverless"
+    assert r.tile_format == "cog"
+    assert r.cog_blocksize == 256
+    assert r.cog_overview_resampling == "NEAREST"

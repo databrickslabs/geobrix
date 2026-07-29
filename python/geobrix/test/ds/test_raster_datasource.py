@@ -230,21 +230,36 @@ def test_none_strategy_yields_one_row(spark, tmp_path):
     assert rows[0]["tile"]["cellid"] == -1
 
 
-def test_auto_strategy_splits_large_raster_by_default(spark, tmp_path):
-    # Default splitStrategy=auto resolves to serverless/classic and DOES split a large
-    # raster. A 2048x2048 3-band uint8 raster is ~12 MB decoded, well above the
-    # serverless 512 MiB budget — but note: on a test machine IS_SERVERLESS is unset
-    # so the budget resolves to serverless (safe default). The raster IS still split
-    # because 2048*2048*3*1 = 12 MiB < 512 MiB — so actually it WON'T split under the
-    # real serverless budget. We use a tiny explicit budget via sizeInMB to confirm the
-    # sizeInMB-override path also works alongside auto.
+def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
+    # Default splitStrategy=auto must split large rasters on a decoded-memory budget.
+    #
+    # We test the driver-side path (partitions() -> read()) directly in-process so that
+    # monkeypatch is effective. Spark workers run in a subprocess in local mode; module-
+    # level patches do NOT propagate into them, so a Spark-layer test would silently pass
+    # whether or not the split logic fires (the worker would see the unpatched 512 MiB
+    # budget and take the whole-image passthrough path).
+    #
+    # The budget is baked into each _FilePartition by partitions() (driver-side), so
+    # testing partitions() + read() in-process verifies the full contract: default options
+    # -> budget resolved in partitions() -> baked into partition -> split in read().
+    import databricks.labs.gbx.pyrx.core.budget as budget_mod
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    monkeypatch.setattr(budget_mod, "decoded_budget_bytes", lambda _strategy: 1024 * 1024)
+
     f = tmp_path / "big_auto.tif"
     _write_big_incompressible(str(f))
-    spark.dataSource.register(RasterGbxDataSource)
-    # Verify the no-option default resolves to a strategy (not crashing).
-    df_default = spark.read.format("raster_gbx").load(str(f))
-    # Default should yield at least 1 row (doesn't assert count, which depends on env).
-    assert df_default.count() >= 1
+
+    # Read with DEFAULT options — no splitStrategy, no sizeInMB.
+    reader = RasterGbxReader({"path": str(f)})
+    parts = reader.partitions()
+    assert len(parts) == 1
+    assert parts[0].budget_bytes == 1024 * 1024, (
+        "partitions() must bake the patched 1 MiB budget into the partition"
+    )
+
+    rows = list(reader.read(parts[0]))
+    assert len(rows) > 1, "default (auto) reader must split a raster exceeding the budget"
 
 
 def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):

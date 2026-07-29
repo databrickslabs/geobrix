@@ -1170,6 +1170,178 @@ def _run_udtf_lateral(
     return out
 
 
+def _sp_progress_line(fn_name, fn_rows, mark, leg_i, leg_n):
+    """Print a per-function progress line after a spark-path fn finishes.
+
+    Must never raise -- the outer loop catches nothing here; any print failure
+    would abort the timing run.
+    """
+    try:
+        _fn_rows = fn_rows[mark:]
+        # Prefer the max-row row (headline throughput); fall back to any ok.
+        _ok_rows = [r for r in _fn_rows if r.status == "ok"]
+        if _ok_rows:
+            _rep = max(_ok_rows, key=lambda r: r.rows)
+            _ms_str = (
+                f"{_rep.per_tile_avg_ms:.2f}ms/tile @{_rep.rows}r"
+                if _rep.per_tile_avg_ms
+                else f"{_rep.iter_median_s * 1000:.1f}ms"
+            )
+            _status = "ok"
+        elif _fn_rows:
+            _rep = _fn_rows[-1]
+            _ms_str = "-"
+            _status = _rep.status
+        else:
+            _ms_str = "-"
+            _status = "error"
+        print(
+            f"[{leg_i}/{leg_n}] {fn_name}  lightweight spark-path"
+            f"  {_ms_str}  {_status}"
+        )
+    except Exception:  # noqa: BLE001 — progress print must never abort the leg
+        pass
+
+
+def _sp_scalar_ok_row(fs, run_id, pool, n, env, stats):
+    """Build a successful spark-path ResultRow for a scalar fn at row-count n."""
+    ms = stats["iter_median_ms"]
+    return ResultRow(
+        run_id=run_id,
+        api="lightweight",
+        fn=fs.name,
+        category=fs.category,
+        mode="spark-path",
+        tile_px=pool.tile_px,
+        bands=pool.bands,
+        dtype=pool.dtype,
+        srid=(pool.tiles[0].srid if pool.tiles else 0),
+        rows=n,
+        nodata_frac=0.0,
+        warmup_iters=stats["warmup_iters"],
+        measured_iters=stats["measured_iters"],
+        iter_median_s=ms / 1000.0,
+        iter_min_s=stats["iter_min_ms"] / 1000.0,
+        iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+        iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+        avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+        # Headline spark-path metric: amortized wall-clock per tile,
+        # reported in both seconds and milliseconds.
+        per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+        per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+        throughput_mpix_s=(
+            (_mpix(pool.tile_px, pool.bands, n) / (ms / 1000.0)) if ms else 0.0
+        ),
+        throughput_rows_s=(n / (ms / 1000.0)) if ms else 0.0,
+        peak_rss_mb=peak_rss_mb(),
+        status="ok",
+        note="",
+        output_fingerprint="",
+        **env,
+    )
+
+
+def _sp_scalar_error_row(fs, run_id, pool, n, env, warmup_iters, e):
+    """Build an error spark-path ResultRow for a scalar fn at row-count n."""
+    return ResultRow(
+        run_id=run_id,
+        api="lightweight",
+        fn=fs.name,
+        category=fs.category,
+        mode="spark-path",
+        tile_px=pool.tile_px,
+        bands=pool.bands,
+        dtype=pool.dtype,
+        srid=(pool.tiles[0].srid if pool.tiles else 0),
+        rows=n,
+        nodata_frac=0.0,
+        warmup_iters=warmup_iters,
+        measured_iters=0,
+        iter_median_s=0.0,
+        iter_min_s=0.0,
+        iter_p90_s=0.0,
+        throughput_mpix_s=0.0,
+        throughput_rows_s=0.0,
+        peak_rss_mb=0.0,
+        status="error",
+        note=str(e)[:300],
+        output_fingerprint="",
+        **env,
+    )
+
+
+def _run_sp_scalar_fn(
+    fs,
+    run_id,
+    pool,
+    env,
+    row_counts,
+    warmup,
+    measured,
+    df_all,
+    warm_df,
+    max_rows,
+    nparts,
+    partition_size,
+    input_col_fn,
+    math,
+    F,
+):
+    """Time a single scalar spark-path fn over each row-count ladder point.
+
+    Handles partition sizing, per-n DataFrame slicing, warm-up / measured
+    timing, and ResultRow building.  Extracted from ``run_spark_path`` to
+    reduce that function's cyclomatic complexity.
+    """
+    import math as _math
+
+    _kind = getattr(fs, "input_kind", "tile")
+    rows: List[ResultRow] = []
+    for n in sorted(row_counts):
+        # Force the partition (task) count via repartition. AQE is disabled for the run
+        # (notebook preamble) so it can't coalesce these back toward defaultParallelism
+        # (~slots) -- which would reintroduce the straggler idle. (Also handles
+        # limit(n<total), which GlobalLimit-collapses to ONE partition -> single-slot.)
+        #
+        # Partition count = ceil(n / tiles_per_partition). Default tiles/partition =
+        # n / (slots * 4) -> ~4 tasks per slot (oversubscribed) so finished slots grab
+        # pending tasks instead of idling through a straggler tail. --override-partition-size
+        # pins tiles/partition. tile_array fns (rst_merge/combineavg/frombands) emit one
+        # often-LARGER output per row from a constant broadcast array; >1 per task can OOM
+        # an executor (rst_merge did), so they're hard-pinned to ONE tile/partition.
+        if partition_size and partition_size > 0:
+            _psize = partition_size
+        else:
+            _psize = max(1, n // (nparts * 4))
+        _parts = n if _kind == "tile_array" else max(1, _math.ceil(n / _psize))
+        # df_all is already capped to max_rows at the SOURCE (paths = tiles[:max_rows])
+        # and cached, so when n == max_rows the whole cached set IS the input -- use it
+        # directly. A per-fn .limit(n) would inject a GlobalLimit that collapses the
+        # corpus through ONE partition (SinglePartition funnel) BEFORE the repartition,
+        # serializing every tile through a single task ahead of the UDF -- paid per fn for
+        # zero benefit when n already == the cached size. Only sub-max ladder points
+        # (n < max_rows) still need a limit; that one funnels a smaller (cheaper) subset.
+        _src = df_all if n >= max_rows else df_all.limit(n)
+        # repartition by F.rand() not the tile struct (avoid hashing the raster payload).
+        df = _src.repartition(max(1, _parts), F.rand())
+        try:
+
+            def job(_df=df, _fs=fs, _k=_kind):
+                c = _fs.col_fn(input_col_fn(_fs.name, _k, _df), _fs.args)
+                _df.select(c.alias("out")).write.format("noop").mode("overwrite").save()
+
+            # Warm-up runs over warm_df (one row per slot), NOT the full n rows.
+            def warm(_wd=warm_df, _fs=fs, _k=_kind):
+                c = _fs.col_fn(input_col_fn(_fs.name, _k, _wd), _fs.args)
+                _wd.select(c.alias("out")).write.format("noop").mode("overwrite").save()
+
+            stats = time_iters(job, warmup, measured, warmup_fn=warm)
+            rows.append(_sp_scalar_ok_row(fs, run_id, pool, n, env, stats))
+        except Exception as e:  # noqa: BLE001
+            rows.append(_sp_scalar_error_row(fs, run_id, pool, n, env, warmup, e))
+    return rows
+
+
 def run_spark_path(
     spark,
     corpus_root,
@@ -1375,34 +1547,6 @@ def run_spark_path(
     print(f"[bench] lightweight spark-path: {_sp_leg_n} fn(s) to run")
     _sp_leg_i = 0
 
-    def _sp_progress(fn_name, fn_rows, mark):
-        # Emit one progress line after a fn finishes; must never raise.
-        try:
-            _fn_rows = fn_rows[mark:]
-            # For spark-path, prefer the max-row row (headline throughput); fall back to any ok.
-            _ok_rows = [r for r in _fn_rows if r.status == "ok"]
-            if _ok_rows:
-                _rep = max(_ok_rows, key=lambda r: r.rows)
-                _ms_str = (
-                    f"{_rep.per_tile_avg_ms:.2f}ms/tile @{_rep.rows}r"
-                    if _rep.per_tile_avg_ms
-                    else f"{_rep.iter_median_s * 1000:.1f}ms"
-                )
-                _status = "ok"
-            elif _fn_rows:
-                _rep = _fn_rows[-1]
-                _ms_str = "-"
-                _status = _rep.status
-            else:
-                _ms_str = "-"
-                _status = "error"
-            print(
-                f"[{_sp_leg_i}/{_sp_leg_n}] {fn_name}  lightweight spark-path"
-                f"  {_ms_str}  {_status}"
-            )
-        except Exception:  # noqa: BLE001 — progress print must never abort the leg
-            pass
-
     for fs in fnspecs:
         if "spark-path" not in fs.modes:
             continue
@@ -1422,7 +1566,7 @@ def run_spark_path(
                 partition_size=partition_size,
             )
             _flush(out, _mark)
-            _sp_progress(fs.name, out, _mark)
+            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
             continue
         if getattr(fs, "udtf", False):
             # UDTF grid fns (rastertogrid* / tessellate): the lightweight impl is a
@@ -1450,121 +1594,27 @@ def run_spark_path(
                 F,
             )
             _flush(out, _mark)
-            _sp_progress(fs.name, out, _mark)
+            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
             continue
-        _kind = getattr(fs, "input_kind", "tile")
-        for n in sorted(row_counts):
-            # Force the partition (task) count via repartition. AQE is disabled for the run
-            # (notebook preamble) so it can't coalesce these back toward defaultParallelism
-            # (~slots) -- which would reintroduce the straggler idle. (Also handles
-            # limit(n<total), which GlobalLimit-collapses to ONE partition -> single-slot.)
-            #
-            # Partition count = ceil(n / tiles_per_partition). Default tiles/partition =
-            # n / (slots * 4) -> ~4 tasks per slot (oversubscribed) so finished slots grab
-            # pending tasks instead of idling through a straggler tail. --override-partition-size
-            # pins tiles/partition. tile_array fns (rst_merge/combineavg/frombands) emit one
-            # often-LARGER output per row from a constant broadcast array; >1 per task can OOM
-            # an executor (rst_merge did), so they're hard-pinned to ONE tile/partition.
-            if partition_size and partition_size > 0:
-                _psize = partition_size
-            else:
-                _psize = max(1, n // (_nparts * 4))
-            _parts = n if _kind == "tile_array" else max(1, math.ceil(n / _psize))
-            # df_all is already capped to max_rows at the SOURCE (paths = tiles[:max_rows])
-            # and cached, so when n == max_rows the whole cached set IS the input -- use it
-            # directly. A per-fn .limit(n) would inject a GlobalLimit that collapses the
-            # corpus through ONE partition (SinglePartition funnel) BEFORE the repartition,
-            # serializing every tile through a single task ahead of the UDF -- paid per fn for
-            # zero benefit when n already == the cached size. Only sub-max ladder points
-            # (n < max_rows) still need a limit; that one funnels a smaller (cheaper) subset.
-            _src = df_all if n >= max_rows else df_all.limit(n)
-            # repartition by F.rand() not the tile struct (avoid hashing the raster payload).
-            df = _src.repartition(max(1, _parts), F.rand())
-            try:
-
-                def job(_df=df, _fs=fs, _k=_kind):
-                    c = _fs.col_fn(_input_col(_fs.name, _k, _df), _fs.args)
-                    _df.select(c.alias("out")).write.format("noop").mode(
-                        "overwrite"
-                    ).save()
-
-                # Warm-up runs over _warm_df (one row per slot), NOT the full n rows.
-                def warm(_wd=_warm_df, _fs=fs, _k=_kind):
-                    c = _fs.col_fn(_input_col(_fs.name, _k, _wd), _fs.args)
-                    _wd.select(c.alias("out")).write.format("noop").mode(
-                        "overwrite"
-                    ).save()
-
-                stats = time_iters(job, warmup, measured, warmup_fn=warm)
-                ms = stats["iter_median_ms"]
-                out.append(
-                    ResultRow(
-                        run_id=run_id,
-                        api="lightweight",
-                        fn=fs.name,
-                        category=fs.category,
-                        mode="spark-path",
-                        tile_px=pool.tile_px,
-                        bands=pool.bands,
-                        dtype=pool.dtype,
-                        srid=(pool.tiles[0].srid if pool.tiles else 0),
-                        rows=n,
-                        nodata_frac=0.0,
-                        warmup_iters=stats["warmup_iters"],
-                        measured_iters=stats["measured_iters"],
-                        iter_median_s=ms / 1000.0,
-                        iter_min_s=stats["iter_min_ms"] / 1000.0,
-                        iter_p90_s=stats["iter_p90_ms"] / 1000.0,
-                        iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"]
-                        / 1000.0,
-                        avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
-                        # Headline spark-path metric: amortized wall-clock per tile,
-                        # reported in both seconds and milliseconds.
-                        per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
-                        per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
-                        throughput_mpix_s=(
-                            (_mpix(pool.tile_px, pool.bands, n) / (ms / 1000.0))
-                            if ms
-                            else 0.0
-                        ),
-                        throughput_rows_s=(n / (ms / 1000.0)) if ms else 0.0,
-                        peak_rss_mb=peak_rss_mb(),
-                        status="ok",
-                        note="",
-                        output_fingerprint="",
-                        **env,
-                    )
-                )
-            except Exception as e:  # noqa: BLE001
-                out.append(
-                    ResultRow(
-                        run_id=run_id,
-                        api="lightweight",
-                        fn=fs.name,
-                        category=fs.category,
-                        mode="spark-path",
-                        tile_px=pool.tile_px,
-                        bands=pool.bands,
-                        dtype=pool.dtype,
-                        srid=(pool.tiles[0].srid if pool.tiles else 0),
-                        rows=n,
-                        nodata_frac=0.0,
-                        warmup_iters=warmup,
-                        measured_iters=0,
-                        iter_median_s=0.0,
-                        iter_min_s=0.0,
-                        iter_p90_s=0.0,
-                        throughput_mpix_s=0.0,
-                        throughput_rows_s=0.0,
-                        peak_rss_mb=0.0,
-                        status="error",
-                        note=str(e)[:300],
-                        output_fingerprint="",
-                        **env,
-                    )
-                )
+        out += _run_sp_scalar_fn(
+            fs,
+            run_id,
+            pool,
+            env,
+            row_counts,
+            warmup,
+            measured,
+            df_all,
+            _warm_df,
+            max_rows,
+            _nparts,
+            partition_size,
+            _input_col,
+            math,
+            F,
+        )
         _flush(out, _mark)
-        _sp_progress(fs.name, out, _mark)
+        _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
     df_all.unpersist()
     return out
 

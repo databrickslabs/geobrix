@@ -111,6 +111,47 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
     )
 
 
+def test_writer_stages_source_before_converting(tmp_path, monkeypatch):
+    """Regression guard: write() must stage the source to local disk before
+    calling cog_convert_file. GDAL's rasterio.shutil.copy needs random seeks
+    on the source; a /Volumes FUSE path can't serve seeks efficiently (buffers
+    the whole file → OOM on large sources). Verify cog_convert_file receives a
+    path that differs from the original source path — i.e. a staged local copy."""
+    import databricks.labs.gbx.ds.cog_writer as _cw_mod
+
+    # Capture the real function BEFORE patching to avoid recursion in the spy.
+    import databricks.labs.gbx.pyrx.core.analysis as _analysis_mod
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file as _real_convert
+
+    captured_src = []
+
+    def _fake_convert(src_path, dst_path, **kwargs):
+        captured_src.append(src_path)
+        # Call the real conversion so the output COG is valid.
+        _real_convert(src_path, dst_path, **kwargs)
+
+    # Patch inside write()'s import scope by monkeypatching the analysis module.
+    monkeypatch.setattr(_analysis_mod, "cog_convert_file", _fake_convert)
+
+    src = tmp_path / "in" / "staged.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
+    row = {"path": str(src)}
+    w.write(iter([row]))
+
+    assert len(captured_src) == 1, "cog_convert_file should have been called once"
+    # The path passed to cog_convert_file must NOT be the original source path —
+    # it must be the staged (worker-local) copy.
+    assert captured_src[0] != str(src), (
+        f"cog_convert_file was called with the original source path {src!r}; "
+        "expected a worker-local staged copy"
+    )
+    assert os.path.exists(captured_src[0]), "staged path must exist on disk"
+
+
 def test_writer_uses_copyfile_not_copy(tmp_path, monkeypatch):
     """Regression guard: write() must not call shutil.copy (which invokes chmod).
     UC Volume FUSE rejects chmod with PermissionError. Simulate this by patching

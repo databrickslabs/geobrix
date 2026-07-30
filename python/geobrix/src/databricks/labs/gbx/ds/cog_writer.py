@@ -65,27 +65,32 @@ class CogGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        from databricks.labs.gbx.ds.raster import _get_or_stage_file
         from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
         for row in iterator:
-            src = _listing.to_local_path(str(row["path"]))
+            src_volume = _listing.to_local_path(str(row["path"]))
+            # Stage source to worker-local disk first — GDAL must not seek over
+            # FUSE (rasterio.shutil.copy needs random seeks on the source).
+            # _get_or_stage_file copies sequentially (FUSE-safe) and caches per process.
+            src_local = _get_or_stage_file(src_volume)
             # output name: derive from source basename (or name_col if given)
             if self.name_col and row[self.name_col] is not None:
                 base = os.path.basename(str(row[self.name_col]))
             else:
-                base = os.path.basename(src)
+                base = os.path.basename(src_volume)
             stem = os.path.splitext(base)[0]
             out_path = os.path.join(self.out_dir, f"{stem}.{self.ext}")
 
-            # Stream-convert to a local temp COG (no whole-array decode), then
-            # copyfile (bytes-only) to the output dir — FUSE-safe on /Volumes.
+            # Stream-convert LOCAL src → local temp COG (block-by-block, no full decode),
+            # then copyfile (bytes-only) to output dir — FUSE-safe on /Volumes.
             fd, tmp = tempfile.mkstemp(suffix=f".{self.ext}")
             os.close(fd)
             try:
                 cog_convert_file(
-                    src, tmp,
+                    src_local, tmp,
                     compression=self.cog_compression,
                     blocksize=self.cog_blocksize,
                     overview_resampling=self.cog_overview_resampling,

@@ -1,6 +1,7 @@
 """cog_gbx — the optimized COG lane. Reader is COG-aware (efficient windowed /
 overview reads; bbox AOI is the blessed clip path). Writer prepares master COGs.
 """
+
 from __future__ import annotations
 
 from typing import Dict
@@ -32,9 +33,13 @@ class CogGbxDataSource(RasterGbxDataSource):
         if not path:
             raise ValueError("cog_gbx writer requires an output path (.save(path)).")
         return CogGbxWriter(
-            path, schema, overwrite,
+            path,
+            schema,
+            overwrite,
             cog_blocksize=int(self.options.get("cogBlockSize", "512")),
-            cog_overview_resampling=self.options.get("cogOverviewResampling", "AVERAGE"),
+            cog_overview_resampling=self.options.get(
+                "cogOverviewResampling", "AVERAGE"
+            ),
             cog_compression=self.options.get("cogCompression", "DEFLATE"),
             name_col=self.options.get("nameCol"),
             ext=self.options.get("ext", "tif"),

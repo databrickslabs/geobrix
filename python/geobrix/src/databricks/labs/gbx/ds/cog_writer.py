@@ -5,6 +5,7 @@ Volume, converts it to ONE master COG (internally tiled + overviews, no split)
 via the shared analysis.cog_convert (driver="COG"), and writes it FUSE-safe to
 the output Volume. Pixels never ride in a Spark column — accumulation-proof.
 """
+
 from __future__ import annotations
 
 import glob
@@ -35,9 +36,17 @@ def assert_path_schema(schema: StructType) -> None:
 
 
 class CogGbxWriter(DataSourceWriter):
-    def __init__(self, path, schema, overwrite, cog_blocksize=512,
-                 cog_overview_resampling="AVERAGE", cog_compression="DEFLATE",
-                 name_col=None, ext="tif"):
+    def __init__(
+        self,
+        path,
+        schema,
+        overwrite,
+        cog_blocksize=512,
+        cog_overview_resampling="AVERAGE",
+        cog_compression="DEFLATE",
+        name_col=None,
+        ext="tif",
+    ):
         assert_path_schema(schema)
         self.out_dir = _listing.to_local_path(path)
         self.overwrite = overwrite
@@ -54,8 +63,9 @@ class CogGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
-        from databricks.labs.gbx.pyrx.core.analysis import cog_convert
         import rasterio
+
+        from databricks.labs.gbx.pyrx.core.analysis import cog_convert
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
@@ -73,7 +83,9 @@ class CogGbxWriter(DataSourceWriter):
             # the Volume (FUSE-safe). cog_convert handles the driver="COG" encode.
             with rasterio.open(src) as ds:
                 cog_bytes = cog_convert(
-                    ds, self.cog_compression, self.cog_blocksize,
+                    ds,
+                    self.cog_compression,
+                    self.cog_blocksize,
                     self.cog_overview_resampling,
                 )
             fd, tmp = tempfile.mkstemp(suffix=f".{self.ext}")

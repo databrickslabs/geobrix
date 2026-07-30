@@ -1,4 +1,4 @@
-from databricks.labs.gbx.ds.cog import CogGbxReader, CogGbxDataSource
+from databricks.labs.gbx.ds.cog import CogGbxDataSource, CogGbxReader
 
 
 def test_cog_reader_defaults_no_split():

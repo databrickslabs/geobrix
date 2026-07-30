@@ -1,5 +1,4 @@
-import os
-from databricks.labs.gbx.ds.file import FileGbxReader, FILE_SCHEMA
+from databricks.labs.gbx.ds.file import FileGbxReader
 
 
 def _touch(p, data=b"x"):
@@ -15,9 +14,9 @@ def test_lists_files_with_extension(tmp_path):
     rows = [row for part in r.partitions() for row in r.read(part)]
     by_name = {row[1]: row for row in rows}  # name -> (path,name,ext,size,mtime)
     assert by_name["a.tif"][2] == "tif"
-    assert by_name["b.TIFF"][2] == "tiff"      # lowercased
-    assert by_name["noext"][2] is None          # null when no extension
-    assert all(row[3] >= 1 for row in rows)     # size
+    assert by_name["b.TIFF"][2] == "tiff"  # lowercased
+    assert by_name["noext"][2] is None  # null when no extension
+    assert all(row[3] >= 1 for row in rows)  # size
     assert by_name["a.tif"][0].endswith("a.tif")  # path
 
 

@@ -298,9 +298,9 @@ def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
     for p in parts:
         for _, tile in reader.read(p):
             _, _, md = tile
-            assert md.get(cog_mod.GBX_FORMAT) == "gtiff", (
-                f"split tiles must be plain gtiff; got {md.get(cog_mod.GBX_FORMAT)!r}"
-            )
+            assert (
+                md.get(cog_mod.GBX_FORMAT) == "gtiff"
+            ), f"split tiles must be plain gtiff; got {md.get(cog_mod.GBX_FORMAT)!r}"
 
 
 def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):
@@ -357,3 +357,24 @@ def test_reader_optin_split_still_works():
 
     r = RasterGbxReader({"path": "/x", "splitStrategy": "serverless"})
     assert r.strategy == "serverless"
+
+
+def test_gtiff_writer_has_no_cog_option(tmp_path):
+    # The gtiff lane writes plain GTiff; cog options belong to cog_gbx.
+    # Even if a caller passes cog=true as an option, gtiff_gbx must IGNORE it
+    # (COG kwargs were removed from GTiffGbxDataSource.writer — they don't reach
+    # RasterGbxWriter so it stays at its default cog=False).
+    from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+    from databricks.labs.gbx.ds.raster import reader_schema
+
+    src = GTiffGbxDataSource(options={"path": str(tmp_path), "cog": "true"})
+    writer = src.writer(reader_schema(), overwrite=True)
+    # RasterGbxWriter.cog must be False — gtiff lane never COGs.
+    assert getattr(writer, "cog", False) is False
+
+
+def test_file_and_cog_registered():
+    from databricks.labs.gbx.ds.register import _SOURCES
+
+    names = {s.name() for s in _SOURCES}
+    assert "file_gbx" in names and "cog_gbx" in names

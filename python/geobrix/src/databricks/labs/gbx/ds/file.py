@@ -1,6 +1,7 @@
 """file_gbx — path-listing DataSource. Emits file REFERENCES, never content
 (the deliberate contrast to binaryFile, which drags bytes into memory).
 Raster-agnostic: a pure lister; consumers decide what to do with paths."""
+
 from __future__ import annotations
 
 import os
@@ -8,18 +9,24 @@ from typing import Dict, Iterator, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 from pyspark.sql.types import (
-    LongType, StringType, StructField, StructType, TimestampType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
 )
 
 from databricks.labs.gbx.ds import _listing
 
-FILE_SCHEMA = StructType([
-    StructField("path", StringType(), nullable=False),
-    StructField("name", StringType(), nullable=False),
-    StructField("extension", StringType(), nullable=True),
-    StructField("size", LongType(), nullable=False),
-    StructField("modificationTime", TimestampType(), nullable=True),
-])
+FILE_SCHEMA = StructType(
+    [
+        StructField("path", StringType(), nullable=False),
+        StructField("name", StringType(), nullable=False),
+        StructField("extension", StringType(), nullable=True),
+        StructField("size", LongType(), nullable=False),
+        StructField("modificationTime", TimestampType(), nullable=True),
+    ]
+)
 
 
 class _PathPartition(InputPartition):

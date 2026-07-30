@@ -136,6 +136,6 @@ def test_bbox_read_emits_gtiff(spark, tmp_path):
         "bbox read must emit plain GTiff (use cog_gbx writer for COG creation)"
     )
     info = sniff_header(raster_bytes)
-    assert not info.is_cog, (
-        f"bytes sniff says is_cog={info.is_cog}; expected plain GTiff, not COG"
-    )
+    assert (
+        not info.is_cog
+    ), f"bytes sniff says is_cog={info.is_cog}; expected plain GTiff, not COG"

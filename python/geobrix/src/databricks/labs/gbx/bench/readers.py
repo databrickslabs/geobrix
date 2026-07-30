@@ -6712,38 +6712,65 @@ def _write_striped_gtiff(
 
 
 def _write_tiled_cog(
-    path: str, width: int, height: int, bands: int, dtype: str
+    path: str,
+    width: int,
+    height: int,
+    bands: int,
+    dtype: str,
+    cog_blocksize: int = 64,
 ) -> None:
-    """Write a tiled COG GeoTIFF to ``path``.
+    """Write a genuine Cloud-Optimized GeoTIFF (COG) to ``path``.
 
-    The tiled layout is the recommended storage format for cloud-native access;
-    it serves as the baseline leg against which the striped leg is compared. Uses
-    512×512 tiles (the raster_gbx COG default). ``path`` must end in ``.tif``.
+    A real COG has (a) internal tiling AND (b) pre-built overview pyramid.
+    This function writes a temporary plain GeoTIFF, then converts it to COG
+    using the shared ``pyrx.core.analysis.cog_convert`` path — the same path
+    the reader/writer COG features use — so the result is identical to what the
+    product emits.
+
+    ``cog_blocksize`` controls the overview tile size.  It must be small enough
+    that at least one overview level is generated for the given ``width``/``height``
+    (rule of thumb: ``max(width, height) > cog_blocksize``).  The default 64 is
+    small so even tiny 128×128 unit-test fixtures produce overviews.
+
+    ``path`` must end in ``.tif``.
     """
+    import tempfile
+
     import numpy as np
     import rasterio
     from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert
 
     data = np.zeros((bands, height, width), dtype=dtype)
     for b in range(bands):
         data[b] = np.arange(height * width, dtype=dtype).reshape(height, width) % 256
 
-    block = min(512, width, height)
-    profile = dict(
-        driver="GTiff",
-        width=width,
-        height=height,
-        count=bands,
-        dtype=dtype,
-        crs="EPSG:4326",
-        transform=from_origin(0.0, 60.0, 0.01, 0.01),
-        compress="DEFLATE",
-        tiled=True,
-        blockxsize=block,
-        blockysize=block,
-    )
-    with rasterio.open(path, "w", **profile) as ds:
-        ds.write(data)
+    # Write a plain GTiff first, then convert to COG in-memory.
+    fd, tmp_path = tempfile.mkstemp(suffix=".tif")
+    import os
+
+    os.close(fd)
+    try:
+        profile = dict(
+            driver="GTiff",
+            width=width,
+            height=height,
+            count=bands,
+            dtype=dtype,
+            crs="EPSG:4326",
+            transform=from_origin(0.0, 60.0, 0.01, 0.01),
+        )
+        with rasterio.open(tmp_path, "w", **profile) as ds_tmp:
+            ds_tmp.write(data)
+        # Convert to real COG (tiled + overviews) using the shared converter.
+        with rasterio.open(tmp_path) as ds_src:
+            cog_bytes = cog_convert(ds_src, "DEFLATE", cog_blocksize, "AVERAGE")
+    finally:
+        os.unlink(tmp_path)
+
+    with open(path, "wb") as fh:
+        fh.write(cog_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -6771,7 +6798,7 @@ def _large_raster_result_row(
     run_id: str,
     env: dict,
     source_tag: str,
-    layout: str,
+    raster_dtype: str,
     strategy: str,
     rows: int,
     status: str,
@@ -6783,14 +6810,16 @@ def _large_raster_result_row(
 ) -> "ResultRow":
     """Build a ResultRow for one large-raster bench leg.
 
-    ``source_tag``  — "striped" | "tiled-cog" | "giant-strip"
-    ``layout``      — mirrors source_tag for the ``dtype`` field (reused for
-                      compact labelling in the note; dtype isn't meaningful here).
-    ``strategy``    — splitStrategy value: "none"|"serverless"|"classic"|"auto".
+    ``source_tag``    — "striped" | "tiled-cog"
+    ``raster_dtype``  — the actual NumPy/rasterio dtype of the corpus raster
+                        (e.g. "float32"), stored in the ``dtype`` field as intended.
+    ``strategy``      — splitStrategy value: "none"|"serverless"|"classic"|"auto",
+                        stored in the dedicated ``split_strategy`` optional field.
     ``corpus_size_mib`` — decoded file size in MiB; stamped into ``note`` so a
                           0-row fast read is immediately visible as wrong.
-    ``throughput_mib_s`` — decoded MiB/s; stored in ``throughput_mpix_s`` (repurposed
-                           for this profile since mpix doesn't apply to large files).
+    ``throughput_mib_s`` — decoded MiB/s; stored in ``throughput_mpix_s``
+                           (repurposed for this profile since mpix doesn't apply
+                           to large single-file reads).
     """
     ms = stats["iter_median_ms"] if stats else 0.0
     return ResultRow(
@@ -6801,7 +6830,7 @@ def _large_raster_result_row(
         mode="spark-path",
         tile_px=0,
         bands=0,
-        dtype=strategy,  # repurpose dtype field for strategy label
+        dtype=raster_dtype,
         srid=0,
         rows=rows,
         nodata_frac=0.0,
@@ -6816,13 +6845,14 @@ def _large_raster_result_row(
         avg_wall_clock_s=((stats["avg_wall_clock_ms"] / 1000.0) if stats else 0.0),
         per_tile_avg_s=((ms / rows / 1000.0) if (ms and rows) else 0.0),
         per_tile_avg_ms=((ms / rows) if (ms and rows) else 0.0),
-        # Repurpose throughput_mpix_s for decoded MiB/s (more meaningful here).
+        # throughput_mpix_s repurposed for decoded MiB/s (mpix doesn't apply here).
         throughput_mpix_s=throughput_mib_s,
         throughput_rows_s=((rows / (ms / 1000.0)) if (ms and rows) else 0.0),
         peak_rss_mb=peak_rss_mb(),
         status=status,
         note=note,
         output_fingerprint="",
+        split_strategy=strategy,
         **env,
     )
 
@@ -6837,6 +6867,7 @@ def _bench_large_raster_leg(
     source_tag: str,
     strategy: str,
     corpus_size_mib: float,
+    raster_dtype: str,
     where: str,
     env: dict,
 ) -> "ResultRow":
@@ -6880,7 +6911,7 @@ def _bench_large_raster_leg(
                 run_id=run_id,
                 env=env,
                 source_tag=source_tag,
-                layout=source_tag,
+                raster_dtype=raster_dtype,
                 strategy=strategy,
                 rows=0,
                 status="empty",
@@ -6894,7 +6925,7 @@ def _bench_large_raster_leg(
             run_id=run_id,
             env=env,
             source_tag=source_tag,
-            layout=source_tag,
+            raster_dtype=raster_dtype,
             strategy=strategy,
             rows=actual_rows,
             status="ok",
@@ -6908,7 +6939,7 @@ def _bench_large_raster_leg(
             run_id=run_id,
             env=env,
             source_tag=source_tag,
-            layout=source_tag,
+            raster_dtype=raster_dtype,
             strategy=strategy,
             rows=0,
             status="error",
@@ -7041,6 +7072,7 @@ def run_large_raster_profile(
             source_tag="striped",
             strategy=strategy,
             corpus_size_mib=decoded_mib,
+            raster_dtype=dtype,
             where=where,
             env=env,
         )
@@ -7068,6 +7100,7 @@ def run_large_raster_profile(
             source_tag="tiled-cog",
             strategy=strategy,
             corpus_size_mib=decoded_mib,
+            raster_dtype=dtype,
             where=where,
             env=env,
         )
@@ -7117,7 +7150,7 @@ def run_large_raster_profile(
                     mode="spark-path",
                     tile_px=0,
                     bands=0,
-                    dtype=strategy,
+                    dtype=dtype,
                     srid=0,
                     rows=r_s.rows + r_c.rows,
                     nodata_frac=0.0,
@@ -7132,6 +7165,7 @@ def run_large_raster_profile(
                     per_tile_avg_ms=0.0,
                     throughput_mpix_s=delta,
                     throughput_rows_s=0.0,
+                    split_strategy=strategy,
                     peak_rss_mb=peak_rss_mb(),
                     status=delta_status,
                     note=note,

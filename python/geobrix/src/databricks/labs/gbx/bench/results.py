@@ -6,7 +6,7 @@ import json
 from collections import defaultdict
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,10 @@ class ResultRow:
     # order so the table's first column shows what ran last + reveals per-event slowdown.
     # 0 at construction; the cluster sink stamps the real value (continues across resume).
     run_event_num: int = 0
+    # splitStrategy label for the large-raster profile. None for all other profiles so
+    # existing callers are unaffected (the field has a default). Carries values like
+    # "none", "serverless", "classic", or "auto".
+    split_strategy: Optional[str] = None
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

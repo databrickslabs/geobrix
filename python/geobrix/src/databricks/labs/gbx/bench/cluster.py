@@ -50,6 +50,9 @@ ORDER = [
     "iter_min_s",
     "iter_p90_s",
     "iter_total_wall_clock_s",
+    # Large-raster profile: splitStrategy value ("none"|"serverless"|"classic"|"auto").
+    # None for all other profiles; the field is optional in ResultRow.
+    "split_strategy",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.
@@ -67,11 +70,26 @@ def rows_to_dataframe(rows: List[ResultRow], spark, where: str = "cluster"):
     Columns are emitted in the explicit ``ORDER`` (not dataclass field order) so the
     Delta table column layout is the human-readable grouping, with the per-iter
     distribution (iter_*) trailing.
+
+    Optional[str] fields (e.g. ``split_strategy``) that are all-None in the batch
+    must be explicitly typed as StringType; Spark/pandas cannot infer the type of an
+    all-None column. The pandas column is filled with empty string before creating the
+    DataFrame so the inference path works; the value is preserved as-is for non-None
+    rows (the actual strategy label), and the empty string is a safe sentinel for rows
+    where the field is not applicable (all non-large-raster profiles).
     """
     import pandas as pd
 
+    _OPTIONAL_STR_FIELDS = {"split_strategy"}
+
     retagged = [replace(r, env_where=where) for r in rows]
-    df = spark.createDataFrame(pd.DataFrame([asdict(r) for r in retagged]))
+    records = [asdict(r) for r in retagged]
+    # Fill all-None optional-str columns so pandas can infer "object" (string) dtype.
+    for field in _OPTIONAL_STR_FIELDS:
+        if all(rec.get(field) is None for rec in records):
+            for rec in records:
+                rec[field] = ""
+    df = spark.createDataFrame(pd.DataFrame(records))
     return df.select(*ORDER)
 
 

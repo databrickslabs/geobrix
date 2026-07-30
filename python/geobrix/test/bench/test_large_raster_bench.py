@@ -19,10 +19,12 @@ from databricks.labs.gbx.bench.readers import (
 )
 
 # ---------------------------------------------------------------------------
-# Fixture writers: small dimensions so tests complete in seconds
+# Fixture dimensions.
+# 256x256 is large enough that cog_convert generates >=1 overview level with
+# the default cog_blocksize=64 (rule: max(w,h) > blocksize -> at least 1 level).
 # ---------------------------------------------------------------------------
 
-_W, _H, _B, _DT = 128, 64, 1, "float32"
+_W, _H, _B, _DT = 256, 256, 1, "float32"
 
 
 def _decoded_mib(w, h, b, dt):
@@ -48,14 +50,35 @@ def test_write_striped_gtiff_creates_valid_file(tmp_path):
 
 
 def test_write_tiled_cog_creates_valid_file(tmp_path):
-    """_write_tiled_cog produces a readable tiled GeoTIFF."""
+    """_write_tiled_cog produces a genuine COG: tiled AND has overview levels."""
+    from databricks.labs.gbx.pyrx.core.cog import sniff_header
+
     p = str(tmp_path / "cog.tif")
     _write_tiled_cog(p, _W, _H, _B, _DT)
     assert os.path.exists(p)
+
+    # Structural check via rasterio: tiled and has at least one overview.
     with rasterio.open(p) as ds:
         assert ds.width == _W
         assert ds.height == _H
-        assert ds.profile.get("tiled", False)
+        assert ds.profile.get("tiled", False), "COG must be internally tiled"
+        ovr_count = len(ds.overviews(1))
+        assert ovr_count >= 1, (
+            f"COG must have >=1 overview level for band 1; got {ovr_count}. "
+            "Fixture may be too small relative to cog_blocksize."
+        )
+
+    # Header-sniff check via the shared COG detector: is_cog must be True.
+    raw = open(p, "rb").read()
+    info = sniff_header(raw)
+    assert info.is_cog, (
+        f"sniff_header reports is_cog=False (tiled={info.tiled}, "
+        f"overview_levels={info.overview_levels}). "
+        "The fixture is not a genuine COG."
+    )
+    assert (
+        info.overview_levels >= 1
+    ), f"sniff_header found {info.overview_levels} overview IFD(s); need >=1."
 
 
 def test_write_striped_is_idempotent(tmp_path):
@@ -187,7 +210,7 @@ def test_run_large_raster_profile_cog_rows_gt_zero(spark, tmp_path):
 
 
 def test_run_large_raster_profile_delta_row_present(spark, tmp_path):
-    """A delta row is emitted for each strategy."""
+    """A delta row is emitted for each strategy with split_strategy set."""
     rows = run_large_raster_profile(
         spark,
         str(tmp_path / "corpus"),
@@ -204,8 +227,11 @@ def test_run_large_raster_profile_delta_row_present(spark, tmp_path):
     delta = [r for r in rows if "delta" in r.fn]
     assert len(delta) == 1
     r = delta[0]
-    # Delta is present and its dtype column carries the strategy label.
-    assert r.dtype == "serverless"
+    # split_strategy carries the strategy label; dtype holds the raster dtype.
+    assert (
+        r.split_strategy == "serverless"
+    ), f"split_strategy should be 'serverless', got {r.split_strategy!r}"
+    assert r.dtype == _DT, f"dtype should be the raster dtype '{_DT}', got {r.dtype!r}"
     # iter_median_s holds the ratio; for a well-formed run it is positive.
     assert r.iter_median_s >= 0.0
 
@@ -282,12 +308,12 @@ def test_run_large_raster_profile_note_contains_corpus_size(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Strategy is encoded in the dtype field (our compact label convention)
+# split_strategy field carries the strategy; dtype carries the raster dtype
 # ---------------------------------------------------------------------------
 
 
-def test_run_large_raster_profile_strategy_in_dtype(spark, tmp_path):
-    """Each data row carries its splitStrategy in the dtype field."""
+def test_run_large_raster_profile_strategy_in_split_strategy_field(spark, tmp_path):
+    """Each data row carries its splitStrategy in split_strategy, not in dtype."""
     strategies = ("none", "serverless")
     rows = run_large_raster_profile(
         spark,
@@ -302,7 +328,15 @@ def test_run_large_raster_profile_strategy_in_dtype(spark, tmp_path):
         split_strategies=strategies,
         where="venv",
     )
-    data_rows = [r for r in rows if "delta" not in r.fn]
-    dtypes_seen = {r.dtype for r in data_rows}
+    # Every row (data + delta) must carry the strategy in split_strategy.
+    strategies_seen = {r.split_strategy for r in rows}
     for s in strategies:
-        assert s in dtypes_seen, f"strategy {s!r} not found in dtype column of results"
+        assert (
+            s in strategies_seen
+        ), f"strategy {s!r} not found in split_strategy field of results"
+    # dtype must hold the ACTUAL raster dtype, not the strategy string.
+    for r in rows:
+        assert r.dtype == _DT, (
+            f"dtype field must be the raster dtype '{_DT}', "
+            f"not a strategy label; got {r.dtype!r} (fn={r.fn})"
+        )

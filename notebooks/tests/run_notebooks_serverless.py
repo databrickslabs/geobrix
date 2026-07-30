@@ -202,6 +202,10 @@ def run_one(
                 task_key=task_key,
                 environment_key=ENV_KEY,
                 notebook_task=jobs.NotebookTask(notebook_path=ws_path),
+                # Run exactly once — do not retry a failed validation run (a retry
+                # just re-burns compute on the same failure and doubles the child
+                # runs to sift through).
+                max_retries=0,
             )
         ],
     )

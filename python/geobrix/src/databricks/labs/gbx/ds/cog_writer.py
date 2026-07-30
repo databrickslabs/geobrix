@@ -93,7 +93,7 @@ class CogGbxWriter(DataSourceWriter):
             try:
                 with open(tmp, "wb") as fh:
                     fh.write(cog_bytes)
-                shutil.copy(tmp, out_path)  # sequential → FUSE-safe on /Volumes
+                shutil.copyfile(tmp, out_path)  # bytes-only → FUSE-safe on /Volumes (no chmod)
             finally:
                 if os.path.exists(tmp):
                     os.remove(tmp)

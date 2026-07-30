@@ -24,6 +24,28 @@ def _write_src(path, w=512, h=512):
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w))
 
 
+def test_writer_uses_copyfile_not_copy(tmp_path, monkeypatch):
+    """Regression guard: write() must not call shutil.copy (which invokes chmod).
+    UC Volume FUSE rejects chmod with PermissionError. Simulate this by patching
+    os.chmod to raise — copyfile never calls chmod, so the write succeeds."""
+    import shutil as _shutil
+
+    def _no_chmod(path, mode, **kwargs):
+        raise PermissionError(f"chmod not permitted on FUSE: {path}")
+
+    monkeypatch.setattr(os, "chmod", _no_chmod)
+
+    src = tmp_path / "in" / "small.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
+    row = {"path": str(src)}
+    msg = w.write(iter([row]))
+    assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
+
+
 def test_assert_path_schema_requires_path():
     ok = StructType([StructField("path", StringType(), False)])
     assert_path_schema(ok)  # no raise

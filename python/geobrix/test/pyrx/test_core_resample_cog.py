@@ -1,13 +1,22 @@
 import numpy as np
 import rasterio
 from rasterio.io import MemoryFile
+
 from databricks.labs.gbx.pyrx.core import resample
 
 
 def _cog(w=1024, h=1024):
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert
-    profile = dict(driver="GTiff", width=w, height=h, count=1, dtype="uint8",
-                   crs="EPSG:4326", transform=rasterio.Affine.identity())
+
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.Affine.identity(),
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             # gradient so resampling is meaningful
@@ -53,8 +62,15 @@ def test_resample_downsample_cog_uses_overview(monkeypatch):
 
 def test_resample_non_cog_parity():
     # Plain GTiff (no overviews): output identical dims to today's path.
-    profile = dict(driver="GTiff", width=512, height=512, count=1, dtype="uint8",
-                   crs="EPSG:4326", transform=rasterio.Affine.identity())
+    profile = dict(
+        driver="GTiff",
+        width=512,
+        height=512,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.Affine.identity(),
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(np.zeros((1, 512, 512), dtype="uint8"))

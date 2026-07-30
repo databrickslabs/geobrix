@@ -5,6 +5,7 @@ turns that budget into concrete windows honoring physical layout (row-bands
 for striped sources, block-snapped grid for tiled). Budget math is always on
 decoded size (w*h*bands*itemsize), never encoded bytes.
 """
+
 from __future__ import annotations
 
 import math
@@ -97,9 +98,15 @@ def _ceil_to(v, m):
 
 
 def plan_layout(
-    width: int, height: int, bands: int, dtype_itemsize: int,
-    tiled: bool, blockxsize: Optional[int], blockysize: Optional[int],
-    budget_bytes: int, max_tiles: int = _MAX_TILES,
+    width: int,
+    height: int,
+    bands: int,
+    dtype_itemsize: int,
+    tiled: bool,
+    blockxsize: Optional[int],
+    blockysize: Optional[int],
+    budget_bytes: int,
+    max_tiles: int = _MAX_TILES,
 ) -> LayoutPlan:
     bytes_per_px = max(1, bands) * max(1, dtype_itemsize)
     if budget_bytes <= 0:
@@ -107,7 +114,8 @@ def plan_layout(
     if width * height * bytes_per_px <= budget_bytes:
         return LayoutPlan(tiles=[(0, 0, width, height)], degraded=False)
     if tiled:
-        return _block_grid(width, height, bytes_per_px, budget_bytes,
-                           blockxsize, blockysize, max_tiles)
+        return _block_grid(
+            width, height, bytes_per_px, budget_bytes, blockxsize, blockysize, max_tiles
+        )
     per_row_bytes = width * bytes_per_px
     return _row_bands(width, height, per_row_bytes, budget_bytes, max_tiles)

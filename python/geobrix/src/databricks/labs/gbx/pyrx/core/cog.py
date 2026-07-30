@@ -5,6 +5,7 @@ shared by `detect_cog` (read/route) and `stamp_format_metadata` (write/heal) so
 the two can never disagree. Sniffing parses only the TIFF header + IFDs (a few
 hundred bytes); it never decodes pixels.
 """
+
 from __future__ import annotations
 
 import struct
@@ -17,7 +18,20 @@ GBX_OVERVIEW_LEVELS = "gbx_overview_levels"
 
 _TAG_TILE_WIDTH = 322
 _TAG_SUBFILE_TYPE = 254  # bit 0 = reduced-resolution (overview)
-_TYPE_SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8}
+_TYPE_SIZES = {
+    1: 1,
+    2: 1,
+    3: 2,
+    4: 4,
+    5: 8,
+    6: 1,
+    7: 1,
+    8: 2,
+    9: 4,
+    10: 8,
+    11: 4,
+    12: 8,
+}
 
 
 @dataclass(frozen=True)
@@ -84,8 +98,12 @@ def sniff_header(raster_bytes: bytes) -> CogInfo:
             ifd_index += 1
 
         is_cog = tiled and overview_levels >= 1
-        return CogInfo(is_cog=is_cog, tiled=tiled, blocksize=blocksize,
-                       overview_levels=overview_levels)
+        return CogInfo(
+            is_cog=is_cog,
+            tiled=tiled,
+            blocksize=blocksize,
+            overview_levels=overview_levels,
+        )
     except Exception:
         return _NON_COG
 
@@ -101,11 +119,19 @@ def detect_cog(metadata: Optional[Dict[str, str]], raster_bytes: bytes) -> CogIn
             except (TypeError, ValueError):
                 ovr = 0
             try:
-                blk = int(metadata[GBX_BLOCKSIZE]) if metadata.get(GBX_BLOCKSIZE) else None
+                blk = (
+                    int(metadata[GBX_BLOCKSIZE])
+                    if metadata.get(GBX_BLOCKSIZE)
+                    else None
+                )
             except (TypeError, ValueError):
                 blk = None
-            return CogInfo(is_cog=is_cog, tiled=is_cog or blk is not None,
-                          blocksize=blk, overview_levels=ovr)
+            return CogInfo(
+                is_cog=is_cog,
+                tiled=is_cog or blk is not None,
+                blocksize=blk,
+                overview_levels=ovr,
+            )
     return sniff_header(raster_bytes)
 
 

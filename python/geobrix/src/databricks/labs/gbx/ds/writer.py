@@ -99,9 +99,10 @@ class RasterGbxWriter(DataSourceWriter):
             raster_bytes = bytes(tile["raster"])
             metadata = dict(tile["metadata"] or {})
             if self.cog:
-                from databricks.labs.gbx.pyrx.core import cog as _cog
-                from databricks.labs.gbx.pyrx.core import analysis as _analysis
                 from rasterio.io import MemoryFile
+
+                from databricks.labs.gbx.pyrx.core import analysis as _analysis
+                from databricks.labs.gbx.pyrx.core import cog as _cog
 
                 info = _cog.detect_cog(metadata, raster_bytes)
                 if not info.is_cog:

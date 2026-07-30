@@ -1,12 +1,20 @@
 import numpy as np
 import rasterio
 from rasterio.io import MemoryFile
+
 from databricks.labs.gbx.pyrx.core import cog
 
 
 def _plain_gtiff_bytes(w=256, h=256, tiled=False):
-    profile = dict(driver="GTiff", width=w, height=h, count=1, dtype="uint8",
-                   crs="EPSG:4326", transform=rasterio.Affine.identity())
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.Affine.identity(),
+    )
     if tiled:
         profile.update(tiled=True, blockxsize=128, blockysize=128)
     with MemoryFile() as mf:
@@ -17,6 +25,7 @@ def _plain_gtiff_bytes(w=256, h=256, tiled=False):
 
 def _cog_bytes(w=512, h=512):
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+
     with MemoryFile(_plain_gtiff_bytes(w, h, tiled=False)) as mf, mf.open() as ds:
         return cog_convert(ds, "DEFLATE", 256, "AVERAGE")
 
@@ -69,7 +78,7 @@ def test_detect_cog_fallback_plain_gtiff():
 
 def test_stamp_writes_gbx_keys_from_bytes():
     md = cog.stamp_format_metadata(_cog_bytes(), {"driver": "GTiff"})
-    assert md["driver"] == "GTiff"          # existing keys preserved
+    assert md["driver"] == "GTiff"  # existing keys preserved
     assert md[cog.GBX_FORMAT] == "cog"
     assert int(md[cog.GBX_OVERVIEW_LEVELS]) >= 1
     assert int(md[cog.GBX_BLOCKSIZE]) == 256

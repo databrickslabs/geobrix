@@ -92,8 +92,8 @@ def test_corrupt_file_fails_fast(spark, tmp_path):
 def test_multi_tile_split_matches_plan_layout(spark, tmp_path):
     import rasterio
 
-    from databricks.labs.gbx.pyrx.core import budget as budget_mod
     from databricks.labs.gbx.ds.raster import _numpy_itemsize
+    from databricks.labs.gbx.pyrx.core import budget as budget_mod
 
     # Incompressible noise so the on-disk file is genuinely large -> forces a split.
     f = tmp_path / "big.tif"
@@ -120,7 +120,9 @@ def test_multi_tile_split_matches_plan_layout(spark, tmp_path):
         tiled = bool(ds.profile.get("tiled", False))
         bx = ds.profile.get("blockxsize")
         by = ds.profile.get("blockysize")
-    plan = budget_mod.plan_layout(width, height, bands, itemsize, tiled, bx, by, budget_bytes)
+    plan = budget_mod.plan_layout(
+        width, height, bands, itemsize, tiled, bx, by, budget_bytes
+    )
     expected = len(plan.tiles)
     assert expected > 1, "test setup failed to force a multi-tile split"
 
@@ -245,7 +247,9 @@ def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
     import databricks.labs.gbx.pyrx.core.budget as budget_mod
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
-    monkeypatch.setattr(budget_mod, "decoded_budget_bytes", lambda _strategy: 1024 * 1024)
+    monkeypatch.setattr(
+        budget_mod, "decoded_budget_bytes", lambda _strategy: 1024 * 1024
+    )
 
     f = tmp_path / "big_auto.tif"
     _write_big_incompressible(str(f))
@@ -254,12 +258,14 @@ def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
     reader = RasterGbxReader({"path": str(f)})
     parts = reader.partitions()
     assert len(parts) == 1
-    assert parts[0].budget_bytes == 1024 * 1024, (
-        "partitions() must bake the patched 1 MiB budget into the partition"
-    )
+    assert (
+        parts[0].budget_bytes == 1024 * 1024
+    ), "partitions() must bake the patched 1 MiB budget into the partition"
 
     rows = list(reader.read(parts[0]))
-    assert len(rows) > 1, "default (auto) reader must split a raster exceeding the budget"
+    assert (
+        len(rows) > 1
+    ), "default (auto) reader must split a raster exceeding the budget"
 
 
 def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):

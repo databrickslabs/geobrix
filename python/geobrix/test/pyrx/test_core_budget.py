@@ -1,4 +1,3 @@
-import pytest
 from databricks.labs.gbx.pyrx.core import budget
 
 

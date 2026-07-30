@@ -65,8 +65,9 @@ def encode_tile(
         from databricks.labs.gbx.pyrx.core.analysis import cog_convert
 
         with MemoryFile(raster_bytes) as cmf, cmf.open() as cds:
-            raster_bytes = cog_convert(cds, compression, cog_blocksize,
-                                       cog_overview_resampling)
+            raster_bytes = cog_convert(
+                cds, compression, cog_blocksize, cog_overview_resampling
+            )
 
     metadata = {
         "path": f"/vsimem/light_{os.path.basename(source_path)}_{col_off}_{row_off}.tif",

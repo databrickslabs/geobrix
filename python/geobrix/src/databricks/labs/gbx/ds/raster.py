@@ -238,7 +238,9 @@ class RasterGbxReader(DataSourceReader):
             # Spark's ~2 GiB BinaryType cell limit must fail with an actionable
             # message rather than producing a giant (or unmaterializable) cell.
             if whole:
-                est = _estimate_tile_bytes(width, height, bands, ds.dtypes[0], size_bytes)
+                est = _estimate_tile_bytes(
+                    width, height, bands, ds.dtypes[0], size_bytes
+                )
                 if est > _MAX_TILE_BYTES:
                     raise ValueError(
                         f"raster {partition.file_path} is ~{est // (1024 * 1024)} MB "
@@ -291,8 +293,13 @@ class RasterGbxReader(DataSourceReader):
                     plan_tiles = [(0, 0, width, height)]
                 else:
                     plan = budget.plan_layout(
-                        width, height, bands, itemsize,
-                        tiled, blockxsize, blockysize,
+                        width,
+                        height,
+                        bands,
+                        itemsize,
+                        tiled,
+                        blockxsize,
+                        blockysize,
                         partition.budget_bytes,
                     )
                     if plan.degraded:
@@ -347,6 +354,8 @@ class RasterGbxDataSource(DataSource):
             force_driver=None,
             cog=str(self.options.get("cog", "false")).lower() == "true",
             cog_blocksize=int(self.options.get("cogBlockSize", "512")),
-            cog_overview_resampling=self.options.get("cogOverviewResampling", "AVERAGE"),
+            cog_overview_resampling=self.options.get(
+                "cogOverviewResampling", "AVERAGE"
+            ),
             cog_compression=self.options.get("cogCompression", "DEFLATE"),
         )

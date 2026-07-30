@@ -12,7 +12,7 @@
 <rect x="0" y="0" width="1416" height="1854" fill="url(#bg)"/>
 <text x="36" y="64" font-size="30" font-weight="800" fill="#0F1B2A">GeoBrix &#183; RasterX</text>
 <text x="36" y="92" font-size="15" fill="#3F4D5E">126 SQL functions for raster data on Spark &#8212; registered as <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan> &#183; also available in Python &amp; Scala as <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700" fill="#0F1B2A">rst_*</tspan></text>
-<rect x="1254" y="44" rx="13" ry="13" width="126" height="26" fill="#0F1B2A"/><text x="1317.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.4.3  *  Beta</text>
+<rect x="1254" y="44" rx="13" ry="13" width="126" height="26" fill="#0F1B2A"/><text x="1317.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.4.4  *  Beta</text>
 <rect x="36" y="146" rx="14" ry="14" width="660" height="136" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
 <path d="M 36 160 A 14 14 0 0 1 50 146 H 682 A 14 14 0 0 1 696 160 V 151 H 36 Z" fill="#E04E2A"/>
 <rect x="617" y="172" rx="11" ry="11" width="57" height="22" fill="#E04E2A"/><text x="645.5" y="187.5" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">3 fns</text>

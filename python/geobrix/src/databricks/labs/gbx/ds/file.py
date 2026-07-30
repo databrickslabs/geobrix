@@ -49,7 +49,9 @@ class FileGbxReader(DataSourceReader):
         import datetime as _dt
 
         local = _listing.to_local_path(partition.file_path)
-        st = os.stat(local)
+        # UC Volume FUSE can transiently raise FileNotFoundError (eventual-
+        # consistency lag). Retry up to 10× before re-raising.
+        st = _listing._retry_transient(lambda: os.stat(local))
         name = os.path.basename(local)
         stem, ext = os.path.splitext(name)
         extension = ext[1:].lower() if ext else None

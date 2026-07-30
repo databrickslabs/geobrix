@@ -109,11 +109,16 @@ def _get_or_stage_file(file_path: str) -> str:
         safe_name = f"{abs(hash(file_path)):x}_{basename}"
         local_path = os.path.join(stage_dir, safe_name)
 
-        with (
-            open(file_path, "rb") as _src,
-            open(local_path, "wb") as _dst,
-        ):
-            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
+        # UC Volume FUSE can transiently raise FileNotFoundError even when the
+        # file exists (eventual-consistency lag after write). Retry up to 10×.
+        def _do_stage() -> None:
+            with (
+                open(file_path, "rb") as _src,
+                open(local_path, "wb") as _dst,
+            ):
+                shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
+
+        _listing._retry_transient(_do_stage)
 
         _STAGED_FILES[file_path] = local_path
         return local_path

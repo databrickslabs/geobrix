@@ -1,4 +1,7 @@
+import os
+
 from databricks.labs.gbx.ds.file import FileGbxReader
+from databricks.labs.gbx.ds import _listing
 
 
 def _touch(p, data=b"x"):
@@ -26,6 +29,31 @@ def test_filter_regex(tmp_path):
     r = FileGbxReader({"path": str(tmp_path), "filterRegex": r".*\.tif$"})
     rows = [row for part in r.partitions() for row in r.read(part)]
     assert [row[1] for row in rows] == ["keep.tif"]
+
+
+def test_read_retries_transient_stat_failure(tmp_path, monkeypatch):
+    """read() must succeed when os.stat raises FileNotFoundError transiently.
+    Simulates UC Volume FUSE eventual-consistency: first call fails, second succeeds."""
+    _touch(str(tmp_path / "retry.tif"), b"x" * 16)
+    r = FileGbxReader({"path": str(tmp_path)})
+    parts = r.partitions()
+    assert len(parts) == 1
+
+    real_stat = os.stat
+    call_count = [0]
+
+    def _flaky_stat(path, *args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            raise FileNotFoundError("transient FUSE miss")
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    monkeypatch.setattr(os, "stat", _flaky_stat)
+    rows = list(r.read(parts[0]))
+    assert len(rows) == 1
+    assert rows[0][1] == "retry.tif"
+    assert call_count[0] == 2  # one failure then success
 
 
 def test_never_reads_content(tmp_path):

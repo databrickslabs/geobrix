@@ -111,6 +111,41 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
     )
 
 
+def test_writer_retries_transient_stage_failure(tmp_path, monkeypatch):
+    """write() must succeed when the source open raises FileNotFoundError transiently.
+    Simulates UC Volume FUSE eventual-consistency via _get_or_stage_file retry."""
+    import databricks.labs.gbx.ds._listing as _listing_mod
+    import builtins
+
+    src = tmp_path / "in" / "transient.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+
+    real_open = builtins.open
+    open_calls = [0]
+
+    def _flaky_open(path, mode="r", *args, **kwargs):
+        # Fail the first open of the source file in binary read mode only.
+        if str(path) == str(src) and "b" in str(mode) and open_calls[0] == 0:
+            open_calls[0] += 1
+            raise FileNotFoundError("transient FUSE miss")
+        return real_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(_listing_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(builtins, "open", _flaky_open)
+
+    # Clear any cached staging state so this test gets a fresh stage attempt.
+    import databricks.labs.gbx.ds.raster as _raster_mod
+    _raster_mod._STAGED_FILES.clear()
+
+    w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
+    row = {"path": str(src)}
+    msg = w.write(iter([row]))
+    assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
+
+
 def test_writer_stages_source_before_converting(tmp_path, monkeypatch):
     """Regression guard: write() must stage the source to local disk before
     calling cog_convert_file. GDAL's rasterio.shutil.copy needs random seeks

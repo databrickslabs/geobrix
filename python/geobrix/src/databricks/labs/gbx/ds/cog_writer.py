@@ -1,11 +1,10 @@
 """cog_gbx writer — master-COG file preparation.
 
-Accepts PATH-bearing rows (from file_gbx), opens each source file on the
-Volume, converts it to ONE master COG (internally tiled + overviews, no split)
-via cog_convert_file (rasterio.shutil.copy driver="COG", streaming block-by-block),
-and writes it FUSE-safe to the output Volume. Pixels never ride in a Spark column
-and the whole raster is never decoded into a Python array — accumulation-proof and
-OOM-safe for large files.
+Accepts PATH-bearing rows (from file_gbx), converts each source to ONE master
+COG via cog_convert_file (rasterio.shutil.copy driver="COG"), and writes it
+FUSE-safe to the output Volume. GDAL reads the source natively (cloud-native
+sequential read over FUSE) — the source never passes through the Python heap.
+Pixels never ride in a Spark column — accumulation-proof and OOM-safe for large files.
 """
 
 from __future__ import annotations
@@ -65,17 +64,12 @@ class CogGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
-        from databricks.labs.gbx.ds.raster import _get_or_stage_file
         from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
         for row in iterator:
             src_volume = _listing.to_local_path(str(row["path"]))
-            # Stage source to worker-local disk first — GDAL must not seek over
-            # FUSE (rasterio.shutil.copy needs random seeks on the source).
-            # _get_or_stage_file copies sequentially (FUSE-safe) and caches per process.
-            src_local = _get_or_stage_file(src_volume)
             # output name: derive from source basename (or name_col if given)
             if self.name_col and row[self.name_col] is not None:
                 base = os.path.basename(str(row[self.name_col]))
@@ -84,13 +78,15 @@ class CogGbxWriter(DataSourceWriter):
             stem = os.path.splitext(base)[0]
             out_path = os.path.join(self.out_dir, f"{stem}.{self.ext}")
 
-            # Stream-convert LOCAL src → local temp COG (block-by-block, no full decode),
-            # then copyfile (bytes-only) to output dir — FUSE-safe on /Volumes.
+            # Pass the /Volumes source path directly to cog_convert_file.
+            # GDAL (via rasterio.shutil.copy driver="COG") reads the source
+            # natively block-by-block — no Python-heap copy of the whole file.
+            # Only the COG output (local temp → copyfile) touches the Python heap.
             fd, tmp = tempfile.mkstemp(suffix=f".{self.ext}")
             os.close(fd)
             try:
                 cog_convert_file(
-                    src_local, tmp,
+                    src_volume, tmp,
                     compression=self.cog_compression,
                     blocksize=self.cog_blocksize,
                     overview_resampling=self.cog_overview_resampling,

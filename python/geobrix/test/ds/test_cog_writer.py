@@ -111,80 +111,37 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
     )
 
 
-def test_writer_retries_transient_stage_failure(tmp_path, monkeypatch):
-    """write() must succeed when the source open raises FileNotFoundError transiently.
-    Simulates UC Volume FUSE eventual-consistency via _get_or_stage_file retry."""
-    import databricks.labs.gbx.ds._listing as _listing_mod
-    import builtins
-
-    src = tmp_path / "in" / "transient.tif"
-    src.parent.mkdir()
-    _write_src(str(src))
-    out = tmp_path / "out"
-    schema = StructType([StructField("path", StringType(), False)])
-
-    real_open = builtins.open
-    open_calls = [0]
-
-    def _flaky_open(path, mode="r", *args, **kwargs):
-        # Fail the first open of the source file in binary read mode only.
-        if str(path) == str(src) and "b" in str(mode) and open_calls[0] == 0:
-            open_calls[0] += 1
-            raise FileNotFoundError("transient FUSE miss")
-        return real_open(path, mode, *args, **kwargs)
-
-    monkeypatch.setattr(_listing_mod.time, "sleep", lambda s: None)
-    monkeypatch.setattr(builtins, "open", _flaky_open)
-
-    # Clear any cached staging state so this test gets a fresh stage attempt.
-    import databricks.labs.gbx.ds.raster as _raster_mod
-    _raster_mod._STAGED_FILES.clear()
-
-    w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
-    row = {"path": str(src)}
-    msg = w.write(iter([row]))
-    assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
-
-
-def test_writer_stages_source_before_converting(tmp_path, monkeypatch):
-    """Regression guard: write() must stage the source to local disk before
-    calling cog_convert_file. GDAL's rasterio.shutil.copy needs random seeks
-    on the source; a /Volumes FUSE path can't serve seeks efficiently (buffers
-    the whole file → OOM on large sources). Verify cog_convert_file receives a
-    path that differs from the original source path — i.e. a staged local copy."""
-    import databricks.labs.gbx.ds.cog_writer as _cw_mod
-
-    # Capture the real function BEFORE patching to avoid recursion in the spy.
+def test_writer_passes_source_path_directly_to_cog_convert(tmp_path, monkeypatch):
+    """Regression guard: write() must pass the source path directly to cog_convert_file
+    WITHOUT staging. Python-heap staging of a 1.5 GiB source (copyfileobj over FUSE)
+    OOMs the serverless DS-V2 write worker. GDAL (rasterio.shutil.copy driver=COG)
+    reads the source natively block-by-block — no Python-heap buffer of the whole file.
+    Verify cog_convert_file receives EXACTLY the source path (not a staged copy)."""
     import databricks.labs.gbx.pyrx.core.analysis as _analysis_mod
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file as _real_convert
 
     captured_src = []
 
-    def _fake_convert(src_path, dst_path, **kwargs):
+    def _spy_convert(src_path, dst_path, **kwargs):
         captured_src.append(src_path)
-        # Call the real conversion so the output COG is valid.
         _real_convert(src_path, dst_path, **kwargs)
 
-    # Patch inside write()'s import scope by monkeypatching the analysis module.
-    monkeypatch.setattr(_analysis_mod, "cog_convert_file", _fake_convert)
+    monkeypatch.setattr(_analysis_mod, "cog_convert_file", _spy_convert)
 
-    src = tmp_path / "in" / "staged.tif"
+    src = tmp_path / "in" / "direct.tif"
     src.parent.mkdir()
     _write_src(str(src))
     out = tmp_path / "out"
     schema = StructType([StructField("path", StringType(), False)])
     w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
-    row = {"path": str(src)}
-    w.write(iter([row]))
+    w.write(iter([{"path": str(src)}]))
 
-    assert len(captured_src) == 1, "cog_convert_file should have been called once"
-    # The path passed to cog_convert_file must NOT be the original source path —
-    # it must be the staged (worker-local) copy.
-    assert captured_src[0] != str(src), (
-        f"cog_convert_file was called with the original source path {src!r}; "
-        "expected a worker-local staged copy"
+    assert len(captured_src) == 1, "cog_convert_file should be called once"
+    # Must receive the original source path — not a staged copy under /tmp or similar.
+    assert captured_src[0] == str(src), (
+        f"cog_convert_file received {captured_src[0]!r} instead of the source path "
+        f"{str(src)!r} — writer is staging the source through Python heap (OOM risk)"
     )
-    assert os.path.exists(captured_src[0]), "staged path must exist on disk"
 
 
 def test_writer_uses_copyfile_not_copy(tmp_path, monkeypatch):

@@ -160,7 +160,17 @@ def halo_mode_prepare_cog(spark, src_path=None):
 
 
 def halo_mode_bbox_read(spark, src_path=None):
-    """cog_gbx reader: whole-file read returns (source, tile) rows after COG prepare."""
+    """file_gbx -> cog_gbx writer -> cog_gbx reader round-trip (whole file).
+
+    Verifies the full preparation pipeline: list files with file_gbx, write master
+    COGs with the cog_gbx writer, then read them back with the cog_gbx reader and
+    confirm the (source, tile) schema is present with non-null raster bytes.
+
+    Note: bbox clipping is not exercised here — the sentinel2 minimal-bundle sample
+    has non-standard native CRS bounds that cause a NYC bbox window to return empty.
+    Bbox clipping is unit-tested in python/geobrix/test/ds/test_raster_bbox.py and
+    test_cog_reader.py.
+    """
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE
 

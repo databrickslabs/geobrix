@@ -44,7 +44,7 @@ halo-mode pipeline.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one whole-image tile per file), `auto` (resolve to `serverless` or `classic` by environment), `serverless` (opt-in, 128 MiB decoded budget per tile), `classic` (opt-in, 1 536 MiB decoded budget per tile). |
+| `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one whole-image tile per file), `auto` (resolve to `serverless` or `classic` by environment), `serverless` (opt-in, 64 MiB decoded budget per tile), `classic` (opt-in, 1 536 MiB decoded budget per tile). |
 | `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB. A positive value implies opt-in split regardless of `splitStrategy`. `-1` = defer to `splitStrategy`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
 | `bbox` | _none_ | Clip window: `"xmin,ymin,xmax,ymax"`. When set, only the intersecting window is read. See also the [COG Reader](./cog), which pairs naturally with `bbox`. |

@@ -38,10 +38,10 @@ This makes `cog_gbx` the natural read path after COG preparation with the
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
 
 :::tip Default is no-split
-Unlike `raster_gbx` (which defaults to `splitStrategy=auto` since 0.4.4),
-`cog_gbx` defaults to `splitStrategy=none` — one tile per file. COG files
-prepared by the `cog_gbx` writer already carry internal tiling and overviews,
-so the reader can serve any AOI without splitting the source into partitions.
+Both `raster_gbx` and `cog_gbx` default to `splitStrategy=none` — one tile per
+file. Splitting is opt-in. COG files prepared by the `cog_gbx` writer already
+carry internal tiling and overviews, so the reader can serve any AOI without
+splitting the source into partitions.
 :::
 
 ## Register

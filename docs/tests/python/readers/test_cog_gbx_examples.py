@@ -25,5 +25,9 @@ def test_halo_mode_prepare_cog(spark):
 
 
 def test_halo_mode_bbox_read(spark):
-    """cog_gbx reader bbox clip returns non-empty tiles within the AOI."""
+    """file_gbx -> cog_gbx writer -> cog_gbx reader whole-file round-trip.
+
+    Confirms the full preparation pipeline: list, write COGs, read back.
+    Bbox clipping is unit-tested in test_raster_bbox.py / test_cog_reader.py.
+    """
     ex.halo_mode_bbox_read(spark)

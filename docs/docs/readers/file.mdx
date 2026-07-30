@@ -43,7 +43,12 @@ you pass to a subsequent writer.
 | Option | Default | Description |
 |--------|---------|-------------|
 | `filterRegex` | `".*"` | Keep only files whose full path matches this regex. |
-| `recursiveFileLookup` | `"false"` | When `true`, walk subdirectories recursively. |
+
+:::note Always recursive
+`file_gbx` always walks subdirectories. There is no opt-out — it uses
+`os.walk` unconditionally. Use `filterRegex` to scope which files are
+included.
+:::
 
 ## Register
 
@@ -63,11 +68,6 @@ register(spark)
 <CodeFromTest code={cogExamples} language="python" functionName="FILE_GBX_FILTER"
   source="docs/tests/python/readers/cog_gbx_examples.py"
   testFile="docs/tests/python/readers/test_cog_gbx_examples.py" />
-
-## Recursive listing
-
-<CodeFromTest code={cogExamples} language="python" functionName="FILE_GBX_RECURSIVE"
-  source="docs/tests/python/readers/cog_gbx_examples.py" />
 
 ## Typical use: halo-mode COG preparation
 

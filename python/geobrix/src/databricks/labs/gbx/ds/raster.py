@@ -329,7 +329,6 @@ def _plan_partitions_for_file(
         tiled = bool(ds.profile.get("tiled", False))
         blockxsize = ds.profile.get("blockxsize")
         blockysize = ds.profile.get("blockysize")
-        compression = str(ds.profile.get("compress") or "DEFLATE").upper()
 
     whole = budget_bytes <= 0 or (width * height * bands * itemsize <= budget_bytes)
 

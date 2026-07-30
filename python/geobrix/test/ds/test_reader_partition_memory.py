@@ -13,7 +13,6 @@ These tests do NOT require Spark and can run under plain pytest.
 from __future__ import annotations
 
 import os
-import resource
 import subprocess
 import sys
 import textwrap
@@ -22,7 +21,6 @@ import numpy as np
 import pytest
 import rasterio
 from rasterio.transform import from_origin
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -75,14 +73,13 @@ def test_partitions_gt1_for_split_raster(tmp_path):
     p = tmp_path / "split_test.tif"
     _write_striped(str(p), side=1024, bands=3, dtype="uint8")  # ~3 MiB decoded
 
-    reader = RasterGbxReader({"path": str(p), "splitStrategy": "none"})
-    # Override sizeInMB to force a 1 MiB budget (defeats "none" strategy).
-    reader2 = RasterGbxReader({"path": str(p), "sizeInMB": "1"})
-    parts = reader2.partitions()
+    # Override sizeInMB to force a 1 MiB budget.
+    reader = RasterGbxReader({"path": str(p), "sizeInMB": "1"})
+    parts = reader.partitions()
 
-    assert len(parts) > 1, (
-        f"Expected >1 partition for a ~3 MiB raster with 1 MiB budget, got {len(parts)}"
-    )
+    assert (
+        len(parts) > 1
+    ), f"Expected >1 partition for a ~3 MiB raster with 1 MiB budget, got {len(parts)}"
 
 
 def test_one_row_per_tile_partition(tmp_path):
@@ -97,9 +94,9 @@ def test_one_row_per_tile_partition(tmp_path):
 
     for part in parts:
         rows = list(reader.read(part))
-        assert len(rows) == 1, (
-            f"read() must yield exactly 1 row per _TilePartition, got {len(rows)}"
-        )
+        assert (
+            len(rows) == 1
+        ), f"read() must yield exactly 1 row per _TilePartition, got {len(rows)}"
 
 
 def test_tile_coverage_equivalence(tmp_path):
@@ -173,6 +170,7 @@ def test_passthrough_partition_has_no_window(tmp_path):
 # (b) Per-tile peak RSS < 750 MiB (subprocess gate)
 # ---------------------------------------------------------------------------
 
+
 def _rss_mib() -> float:
     """Return current process RSS in MiB (cross-platform)."""
     import resource
@@ -223,7 +221,6 @@ _PROBE_SCRIPT = textwrap.dedent(
 
 def _run_probe(path: str, side: int, bands: int) -> dict:
     """Run the RSS probe in a fresh subprocess and return parsed JSON."""
-    script = os.path.join(os.path.dirname(__file__), "_probe_rss.py")
     # Write probe script to a temp file so it can be executed cleanly.
     probe_file = os.path.join(str(os.path.dirname(path)), "_probe_rss.py")
     with open(probe_file, "w") as fh:

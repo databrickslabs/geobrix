@@ -254,16 +254,16 @@ def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
     parts = reader.partitions()
 
     # One-tile-per-partition: the split must produce more than one partition.
-    assert len(parts) > 1, (
-        "partitions() must produce >1 _TilePartition for a raster exceeding the budget"
-    )
+    assert (
+        len(parts) > 1
+    ), "partitions() must produce >1 _TilePartition for a raster exceeding the budget"
 
     # Each partition yields exactly one row (structural OOM fix).
     for p in parts:
         part_rows = list(reader.read(p))
-        assert len(part_rows) == 1, (
-            "read() must yield exactly one row per _TilePartition"
-        )
+        assert (
+            len(part_rows) == 1
+        ), "read() must yield exactly one row per _TilePartition"
 
     # Total emitted rows across all partitions equals total planned tiles.
     total_rows = sum(len(list(reader.read(p))) for p in parts)

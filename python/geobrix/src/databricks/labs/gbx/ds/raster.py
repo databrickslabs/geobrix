@@ -7,7 +7,7 @@ Pure Python (Serverless).
 
 Split strategy (``splitStrategy`` option, default ``auto``):
   - ``auto``       — resolves to ``serverless`` or ``classic`` by env probe.
-  - ``serverless`` — 512 MiB decoded budget per tile.
+  - ``serverless`` — 128 MiB decoded budget per tile.
   - ``classic``    — 1 536 MiB decoded budget per tile.
   - ``none``       — no split; one tile per file (pre-0.4.4 behavior).
 
@@ -25,6 +25,19 @@ Fast path: when a source is a single whole-raster GTiff tile and tileFormat is
 ``auto`` or ``gtiff``, the original file bytes are passed through unchanged —
 pixels are identical (parity-safe) and ~80x cheaper per tile.
 
+One-tile-per-partition architecture: the tile window plan is computed at the
+driver in ``partitions()``, and each ``_TilePartition`` covers exactly one
+(file, window) pair.  Each ``read()`` call emits exactly ONE row and then
+releases all buffers — this eliminates the per-file tile-accumulation that
+previously caused Serverless OOM when all N tile bytes for a file were held
+concurrently in a single partition task.
+
+Worker-local staging cache: source files that require windowed reads are staged
+to worker-local disk once per (worker process, file path) via a module-level
+dict.  Tasks for the same file on the same worker reuse the staged copy without
+re-copying (no 2.4 TiB re-staging tax).  Staged files are removed at process
+exit via ``atexit``.
+
 Limitation: per-band masks/alpha and source colormaps are not yet propagated to
 the re-encoded tiles (band data + nodata/dtype/crs/transform are). Sources that
 rely on a colormap or per-band mask will differ structurally from the heavy
@@ -33,8 +46,13 @@ reader; tracked as a follow-up.
 
 from __future__ import annotations
 
+import atexit
 import logging
-from typing import Dict, Iterator, Sequence, Tuple
+import os
+import shutil
+import tempfile
+import threading
+from typing import Dict, Iterator, Optional, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 from pyspark.sql.types import StringType, StructField, StructType
@@ -50,6 +68,58 @@ logger = logging.getLogger(__name__)
 # fail deep in the writer with an opaque error. Guard the no-split path against
 # it (conservative ~1.9 GiB) so users get an actionable "set sizeInMB" message.
 _MAX_TILE_BYTES = 1932735283  # ~1.8 GiB
+
+# ---------------------------------------------------------------------------
+# Worker-local staging cache (module-level, process-global)
+# ---------------------------------------------------------------------------
+# Key: original source file_path.  Value: absolute local path of the staged copy.
+# Guarded by _STAGE_LOCK for thread safety (multiple Spark tasks in one worker).
+_STAGED_FILES: Dict[str, str] = {}
+_STAGE_LOCK = threading.Lock()
+# Directory holding all staged files for this process — cleaned at exit.
+_STAGE_DIR: Optional[str] = None
+
+
+def _ensure_stage_dir() -> str:
+    global _STAGE_DIR
+    if _STAGE_DIR is None:
+        _STAGE_DIR = tempfile.mkdtemp(prefix="gbx_stage_")
+        atexit.register(_cleanup_stage_dir)
+    return _STAGE_DIR
+
+
+def _cleanup_stage_dir() -> None:
+    global _STAGE_DIR
+    if _STAGE_DIR and os.path.isdir(_STAGE_DIR):
+        shutil.rmtree(_STAGE_DIR, ignore_errors=True)
+        _STAGE_DIR = None
+
+
+def _get_or_stage_file(file_path: str) -> str:
+    """Return worker-local path for *file_path*, staging it if not yet cached.
+
+    Staging is a single sequential ``shutil.copyfileobj`` pass (FUSE-safe on
+    Databricks UC Volumes which don't support per-window seeks).  The local copy
+    is reused by all tile tasks for the same source on the same worker process.
+    """
+    with _STAGE_LOCK:
+        if file_path in _STAGED_FILES:
+            return _STAGED_FILES[file_path]
+
+        stage_dir = _ensure_stage_dir()
+        # Disambiguate in case two different dirs share a basename.
+        basename = os.path.basename(file_path) or "raster.tif"
+        safe_name = f"{abs(hash(file_path)):x}_{basename}"
+        local_path = os.path.join(stage_dir, safe_name)
+
+        with (
+            open(file_path, "rb") as _src,
+            open(local_path, "wb") as _dst,
+        ):
+            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
+
+        _STAGED_FILES[file_path] = local_path
+        return local_path
 
 
 def _numpy_itemsize(dtype: str) -> int:
@@ -100,8 +170,84 @@ def _resolve_emit_format(tile_format: str, split: bool) -> str:
     return "cog" if split else "gtiff"
 
 
-class _FilePartition(InputPartition):
-    """One source file = one partition (picklable)."""
+class _TilePartition(InputPartition):
+    """One (source file, tile window) = one partition (picklable).
+
+    ``window`` is ``None`` for passthrough tiles (whole-file GTiff fast path)
+    or bbox-clipped single-window tiles.  For split tiles it is
+    ``(col_off, row_off, win_w, win_h)``.
+
+    ``is_passthrough`` signals the whole-file GTiff fast path (no decode/
+    re-encode — original file bytes emitted directly).
+
+    ``is_whole`` signals a single-tile whole-image encode (not a sub-tile of
+    a larger split plan).
+    """
+
+    __slots__ = (
+        "file_path",
+        "window",
+        "is_passthrough",
+        "is_whole",
+        "emit_fmt",
+        "cog_blocksize",
+        "cog_overview_resampling",
+        "all_parents",
+        # Kept for backward compat with tests that still inspect budget_bytes.
+        "budget_bytes",
+        "size_mib",
+        "tile_format",
+    )
+
+    def __init__(
+        self,
+        file_path: str,
+        window: Optional[Tuple[int, int, int, int]],
+        *,
+        is_passthrough: bool = False,
+        is_whole: bool = False,
+        emit_fmt: str = "gtiff",
+        cog_blocksize: int = 512,
+        cog_overview_resampling: str = "AVERAGE",
+        all_parents: str = "",
+        # Legacy fields so old tests that pass _FilePartition kwargs still work.
+        budget_bytes: int = 0,
+        size_mib: int = -1,
+        tile_format: str = "auto",
+    ):
+        self.file_path = file_path
+        self.window = window
+        self.is_passthrough = is_passthrough
+        self.is_whole = is_whole
+        self.emit_fmt = emit_fmt
+        self.cog_blocksize = cog_blocksize
+        self.cog_overview_resampling = cog_overview_resampling
+        self.all_parents = all_parents
+        self.budget_bytes = budget_bytes
+        self.size_mib = size_mib
+        self.tile_format = tile_format
+
+
+# ---------------------------------------------------------------------------
+# Backward-compatible alias: old code that constructs _FilePartition directly
+# (notably test_raster_datasource.py and test_raster_large.py) still works.
+# _FilePartition is now a thin factory that returns a _TilePartition configured
+# to reproduce the OLD per-file behaviour — read() will compute the tile plan
+# inline when it sees a _TilePartition with window=None and is_passthrough=False
+# and is_whole=False.
+# ---------------------------------------------------------------------------
+
+
+class _FilePartition(_TilePartition):
+    """Legacy: one source file = one partition.  Retained for test compatibility.
+
+    Constructed like the old _FilePartition; ``read()`` detects this via
+    ``_is_legacy`` and runs the full tile-plan-inline path (one call can yield
+    multiple tiles, mirroring the old behaviour).  New code should construct
+    ``_TilePartition`` objects via ``RasterGbxReader.partitions()``.
+    """
+
+    _is_legacy = True
 
     def __init__(
         self,
@@ -112,12 +258,150 @@ class _FilePartition(InputPartition):
         cog_blocksize: int = 512,
         cog_overview_resampling: str = "AVERAGE",
     ):
-        self.file_path = file_path
-        self.size_mib = size_mib
-        self.budget_bytes = budget_bytes
-        self.tile_format = tile_format
-        self.cog_blocksize = cog_blocksize
-        self.cog_overview_resampling = cog_overview_resampling
+        super().__init__(
+            file_path=file_path,
+            window=None,
+            is_passthrough=False,
+            is_whole=False,
+            emit_fmt=_resolve_emit_format(tile_format, split=False),
+            cog_blocksize=cog_blocksize,
+            cog_overview_resampling=cog_overview_resampling,
+            all_parents="",
+            budget_bytes=budget_bytes,
+            size_mib=size_mib,
+            tile_format=tile_format,
+        )
+
+
+def _plan_partitions_for_file(
+    file_path: str,
+    budget_bytes: int,
+    tile_format: str,
+    cog_blocksize: int,
+    cog_overview_resampling: str,
+    bbox: Optional[Tuple[float, float, float, float]],
+    bbox_crs: Optional[str],
+) -> Sequence["_TilePartition"]:
+    """Driver-side: open a raster header and return one _TilePartition per tile.
+
+    All window planning happens here so each worker task handles exactly one
+    (file, window) pair.
+    """
+    import rasterio
+
+    size_bytes = os.path.getsize(file_path)
+
+    # ------------------------------------------------------------------
+    # bbox path: single windowed tile.  No splitting.
+    # ------------------------------------------------------------------
+    if bbox is not None:
+        from databricks.labs.gbx.ds._window import window_for_bbox
+
+        with rasterio.open(file_path) as ds:
+            win = window_for_bbox(ds, bbox, bbox_crs)
+        if win is None:
+            return []  # source does not overlap AOI
+        emit_fmt = _resolve_emit_format(tile_format, split=False)
+        return [
+            _TilePartition(
+                file_path=file_path,
+                window=(
+                    int(win.col_off),
+                    int(win.row_off),
+                    int(win.width),
+                    int(win.height),
+                ),
+                is_passthrough=False,
+                is_whole=True,
+                emit_fmt=emit_fmt,
+                cog_blocksize=cog_blocksize,
+                cog_overview_resampling=cog_overview_resampling,
+            )
+        ]
+
+    # ------------------------------------------------------------------
+    # Normal path: read header metadata, decide whole vs split.
+    # ------------------------------------------------------------------
+    with rasterio.open(file_path) as ds:
+        width, height, driver = ds.width, ds.height, ds.driver
+        bands = ds.count
+        itemsize = _numpy_itemsize(ds.dtypes[0])
+        tiled = bool(ds.profile.get("tiled", False))
+        blockxsize = ds.profile.get("blockxsize")
+        blockysize = ds.profile.get("blockysize")
+        compression = str(ds.profile.get("compress") or "DEFLATE").upper()
+
+    whole = budget_bytes <= 0 or (width * height * bands * itemsize <= budget_bytes)
+
+    if whole:
+        est = _estimate_tile_bytes(width, height, bands, "float32", size_bytes)
+        if est > _MAX_TILE_BYTES:
+            raise ValueError(
+                f"raster {file_path} is ~{est // (1024 * 1024)} MB "
+                f"as a single tile, which exceeds the ~2 GB Spark cell limit; "
+                f"set the reader option sizeInMB=<n> (a positive MB value) to "
+                f"tile it into smaller pieces."
+            )
+
+    emit_fmt = _resolve_emit_format(tile_format, split=not whole)
+
+    # Passthrough: whole GTiff + emit is NOT forced COG.
+    if whole and driver == "GTiff" and emit_fmt != "cog":
+        return [
+            _TilePartition(
+                file_path=file_path,
+                window=None,
+                is_passthrough=True,
+                is_whole=True,
+                emit_fmt=emit_fmt,
+                cog_blocksize=cog_blocksize,
+                cog_overview_resampling=cog_overview_resampling,
+            )
+        ]
+
+    if whole:
+        # Single whole-image re-encode (e.g. tileFormat=cog on small raster).
+        return [
+            _TilePartition(
+                file_path=file_path,
+                window=(0, 0, width, height),
+                is_passthrough=False,
+                is_whole=True,
+                emit_fmt=emit_fmt,
+                cog_blocksize=cog_blocksize,
+                cog_overview_resampling=cog_overview_resampling,
+            )
+        ]
+
+    # Split: one partition per tile window.
+    plan = budget.plan_layout(
+        width,
+        height,
+        bands,
+        itemsize,
+        tiled,
+        blockxsize,
+        blockysize,
+        budget_bytes,
+    )
+    if plan.degraded:
+        logger.warning(
+            "raster %s: layout plan hit the 512-tile cap; some tiles "
+            "may exceed the decoded-memory budget.",
+            file_path,
+        )
+    return [
+        _TilePartition(
+            file_path=file_path,
+            window=(col, row, w, h),
+            is_passthrough=False,
+            is_whole=False,
+            emit_fmt=emit_fmt,
+            cog_blocksize=cog_blocksize,
+            cog_overview_resampling=cog_overview_resampling,
+        )
+        for col, row, w, h in plan.tiles
+    ]
 
 
 class RasterGbxReader(DataSourceReader):
@@ -156,44 +440,98 @@ class RasterGbxReader(DataSourceReader):
             resolved_budget = self.size_mib * 1024 * 1024
         else:
             resolved_budget = budget.decoded_budget_bytes(self.strategy)
-        return [
-            _FilePartition(
-                f,
-                self.size_mib,
-                budget_bytes=resolved_budget,
-                tile_format=self.tile_format,
-                cog_blocksize=self.cog_blocksize,
-                cog_overview_resampling=self.cog_overview_resampling,
+
+        result: list = []
+        for f in files:
+            result.extend(
+                _plan_partitions_for_file(
+                    file_path=f,
+                    budget_bytes=resolved_budget,
+                    tile_format=self.tile_format,
+                    cog_blocksize=self.cog_blocksize,
+                    cog_overview_resampling=self.cog_overview_resampling,
+                    bbox=self.bbox,
+                    bbox_crs=self.bbox_crs,
+                )
             )
-            for f in files
-        ]
+        return result
 
-    def read(self, partition: "_FilePartition") -> Iterator[Tuple]:
-        import os
-        import shutil
-        import tempfile
-
+    def read(self, partition: "_TilePartition") -> Iterator[Tuple]:
         import rasterio
 
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
 
-        # rasterio reads the BARE FUSE path; only the emitted source column is
-        # scheme-qualified to match binaryFile / heavy gdal (dbfs:/Volumes/...),
-        # so a light-produced DataFrame joins cleanly against that convention.
+        # Spark's Python DataSource V2 can call read(None) when the partition
+        # list is empty (e.g. bbox misses all files). Guard and emit nothing.
+        if partition is None:
+            return
+
+        # ------------------------------------------------------------------
+        # Legacy _FilePartition: the partition was built by tests with the old
+        # API — run the inline tile-plan path (may yield multiple rows).
+        # ------------------------------------------------------------------
+        if getattr(partition, "_is_legacy", False):
+            yield from self._read_legacy(partition)
+            return
+
         source = _listing.to_spark_uri(partition.file_path)
 
-        # AOI window-on-read: stage to worker-local disk (FUSE-safe sequential copy --
-        # Volume FUSE cannot serve the per-window seeks), then window from local disk.
-        # bbox disables the whole-image fast path and the multi-tile split.
+        # ------------------------------------------------------------------
+        # Passthrough tile: emit original file bytes, no decode.
+        # ------------------------------------------------------------------
+        if partition.is_passthrough:
+            with rasterio.open(partition.file_path) as ds:
+                width, height = ds.width, ds.height
+                compression = str(ds.profile.get("compress") or "DEFLATE").upper()
+            cellid, raster_bytes, meta = _encode.passthrough_tile(
+                partition.file_path,
+                width,
+                height,
+                source_path=partition.file_path,
+                all_parents=partition.all_parents,
+                compression=compression,
+            )
+            yield (source, (cellid, raster_bytes, meta))
+            return
+
+        # ------------------------------------------------------------------
+        # Windowed / whole-image encode: stage source once, read one window.
+        # ------------------------------------------------------------------
+        local_path = _get_or_stage_file(partition.file_path)
+
+        with rasterio.Env(GDAL_CACHEMAX=128):
+            with rasterio.open(local_path) as ds:
+                cellid, raster_bytes, meta = _encode.encode_tile(
+                    ds,
+                    window=partition.window,
+                    source_path=partition.file_path,
+                    all_parents=partition.all_parents,
+                    tile_format=partition.emit_fmt,
+                    cog_blocksize=partition.cog_blocksize,
+                    cog_overview_resampling=partition.cog_overview_resampling,
+                )
+        yield (source, (cellid, raster_bytes, meta))
+
+    # ------------------------------------------------------------------
+    # Legacy path (backward compat with tests that use _FilePartition directly)
+    # ------------------------------------------------------------------
+    def _read_legacy(self, partition: "_FilePartition") -> Iterator[Tuple]:
+        """Reproduce original one-file-yields-all-tiles behaviour for _FilePartition."""
+        import rasterio
+
+        source = _listing.to_spark_uri(partition.file_path)
+
+        # bbox path
         if self.bbox is not None:
             from databricks.labs.gbx.ds._window import window_for_bbox
 
             staged_dir = tempfile.mkdtemp(prefix="gbx_raster_")
             try:
                 local_path = os.path.join(
-                    staged_dir, os.path.basename(partition.file_path) or "raster.tif"
+                    staged_dir,
+                    os.path.basename(partition.file_path) or "raster.tif",
                 )
                 with (
                     open(partition.file_path, "rb") as _src,
@@ -203,11 +541,8 @@ class RasterGbxReader(DataSourceReader):
                 with rasterio.open(local_path) as ds:
                     win = window_for_bbox(ds, self.bbox, self.bbox_crs)
                     if win is None:
-                        return  # source does not overlap the AOI -> emit nothing
-                    # A bbox read produces a single windowed tile (not a split), so
-                    # resolve the emit format the same way the whole-image path does
-                    # for a non-splitting tile: auto -> gtiff, cog -> cog, gtiff -> gtiff.
-                    emit_fmt = _resolve_emit_format(self.tile_format, split=False)
+                        return
+                    emit_fmt = _resolve_emit_format(partition.tile_format, split=False)
                     cellid, raster_bytes, meta = _encode.encode_tile(
                         ds,
                         window=(
@@ -228,22 +563,13 @@ class RasterGbxReader(DataSourceReader):
             return
 
         size_bytes = os.path.getsize(partition.file_path)
-        # Phase 1 (FUSE-safe): open the source to read metadata + compute the split, and
-        # serve the whole-image GTiff fast path (sequential byte read). Reading the header
-        # is small/sequential, so it is fine directly on a UC Volume.
         with rasterio.open(partition.file_path) as ds:
             width, height, driver = ds.width, ds.height, ds.driver
             bands = ds.count
             itemsize = _numpy_itemsize(ds.dtypes[0])
-            # Determine whole-image vs split based on decoded-memory budget.
-            # budget_bytes <= 0 means no split (strategy=none or sizeInMB unset under
-            # old-style call). Otherwise compare raw decoded size to budget.
             whole = partition.budget_bytes <= 0 or (
                 width * height * bands * itemsize <= partition.budget_bytes
             )
-            # Large-raster safety: a single whole-image tile that would exceed
-            # Spark's ~2 GiB BinaryType cell limit must fail with an actionable
-            # message rather than producing a giant (or unmaterializable) cell.
             if whole:
                 est = _estimate_tile_bytes(
                     width, height, bands, ds.dtypes[0], size_bytes
@@ -255,10 +581,6 @@ class RasterGbxReader(DataSourceReader):
                         f"set the reader option sizeInMB=<n> (a positive MB value) to "
                         f"tile it into smaller pieces."
                     )
-            # Fast path: whole-image AND a GTiff source AND tileFormat is not forcing COG
-            # -> emit the original file bytes (sequential read, no decode/re-encode).
-            # Pixels are identical (parity-safe). Sub-tiles / non-GTiff / tileFormat=cog
-            # fall through to phase 2.
             emit_fmt = _resolve_emit_format(partition.tile_format, split=not whole)
             if whole and driver == "GTiff" and emit_fmt != "cog":
                 compression = str(ds.profile.get("compress") or "DEFLATE").upper()
@@ -272,22 +594,15 @@ class RasterGbxReader(DataSourceReader):
                 )
                 yield (source, (cellid, raster_bytes, meta))
                 return
-            # Capture tiled layout metadata for plan_layout (needed in phase 2).
             tiled = bool(ds.profile.get("tiled", False))
             blockxsize = ds.profile.get("blockxsize")
             blockysize = ds.profile.get("blockysize")
 
-        # Phase 2 (windowed split or whole-image re-encode): per-window ds.read() SEEKS,
-        # which UC Volume FUSE can't serve. Stage to worker-local disk with a SEQUENTIAL
-        # copy (FUSE-safe), then window from local disk. Each ds.read(window) loads only
-        # that window's blocks, so per-task RAM stays ~tile-sized regardless of source
-        # size. The staged file is created, fully consumed, and removed — all within this
-        # generator (one executor task); only encoded tile BYTES cross into the columnar
-        # output, so nothing local leaks downstream.
         staged_dir = tempfile.mkdtemp(prefix="gbx_raster_")
         try:
             local_path = os.path.join(
-                staged_dir, os.path.basename(partition.file_path) or "raster.tif"
+                staged_dir,
+                os.path.basename(partition.file_path) or "raster.tif",
             )
             with (
                 open(partition.file_path, "rb") as _src,
@@ -296,7 +611,6 @@ class RasterGbxReader(DataSourceReader):
                 shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
             with rasterio.open(local_path) as ds:
                 if whole:
-                    # tileFormat=cog on a whole-image tile: encode the full raster as COG.
                     plan_tiles = [(0, 0, width, height)]
                 else:
                     plan = budget.plan_layout(

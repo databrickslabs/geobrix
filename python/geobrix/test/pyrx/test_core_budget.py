@@ -12,11 +12,12 @@ def test_resolve_auto_is_serverless_or_classic():
 
 
 def test_budget_values():
-    # serverless: 96 MiB decoded/tile. Sized against TOTAL worker RSS (not delta):
-    # a 96 MiB tile's driver="COG" encode peaks ~514 MiB total locally, leaving
-    # headroom for serverless Spark/Arrow/worker overhead under the 1 GB PySpark UDF
-    # hard cap. (256 MiB was too large — ~974 MiB total local, OOM'd on serverless.)
-    assert budget.decoded_budget_bytes("serverless") == 96 * 1024 * 1024
+    # serverless: 128 MiB decoded/tile.  With one-tile-per-partition (structural
+    # fix for Serverless OOM), driver="COG" encode peaks ~665 MiB total locally at
+    # 128 MiB, leaving ~335 MiB headroom for Spark/Arrow/worker overhead under the
+    # 1 GB PySpark UDF hard cap.  (96 MiB was sized for the old multi-tile-per-
+    # partition architecture where accumulation was the real problem.)
+    assert budget.decoded_budget_bytes("serverless") == 128 * 1024 * 1024
     assert budget.decoded_budget_bytes("classic") == 1536 * 1024 * 1024
     assert budget.decoded_budget_bytes("none") == 0
 

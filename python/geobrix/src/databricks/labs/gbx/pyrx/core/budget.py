@@ -14,7 +14,15 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 _MIB = 1024 * 1024
-_BUDGETS = {"serverless": 96 * _MIB, "classic": 1536 * _MIB, "none": 0}
+# serverless: 128 MiB decoded/tile.
+# With one-tile-per-partition (no accumulation), the encode peak for one tile
+# with driver="COG" is ~2.8x decoded size.  128 MiB decoded -> ~665 MiB total
+# local RSS, leaving ~335 MiB headroom for Serverless Spark/Arrow/worker
+# overhead under the 1 GB PySpark UDF hard cap.
+# (Previous value 96 MiB was sized for the OLD multi-tile-per-partition
+# architecture where accumulation was the real problem; 128 MiB is safe here
+# because the structural fix eliminates accumulation entirely.)
+_BUDGETS = {"serverless": 128 * _MIB, "classic": 1536 * _MIB, "none": 0}
 _MAX_TILES = 512
 
 

@@ -235,15 +235,10 @@ def test_none_strategy_yields_one_row(spark, tmp_path):
 def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
     # Default splitStrategy=auto must split large rasters on a decoded-memory budget.
     #
-    # We test the driver-side path (partitions() -> read()) directly in-process so that
-    # monkeypatch is effective. Spark workers run in a subprocess in local mode; module-
-    # level patches do NOT propagate into them, so a Spark-layer test would silently pass
-    # whether or not the split logic fires (the worker would see the unpatched 512 MiB
-    # budget and take the whole-image passthrough path).
-    #
-    # The budget is baked into each _FilePartition by partitions() (driver-side), so
-    # testing partitions() + read() in-process verifies the full contract: default options
-    # -> budget resolved in partitions() -> baked into partition -> split in read().
+    # With the one-tile-per-partition architecture, partitions() now returns one
+    # _TilePartition per tile window (not one per file).  Each read() call yields
+    # exactly ONE row.  We monkeypatch the budget so a 2048×2048×3 uint8 raster
+    # (12 MiB decoded) forces a split under a 1 MiB budget.
     import databricks.labs.gbx.pyrx.core.budget as budget_mod
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
@@ -257,15 +252,22 @@ def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
     # Read with DEFAULT options — no splitStrategy, no sizeInMB.
     reader = RasterGbxReader({"path": str(f)})
     parts = reader.partitions()
-    assert len(parts) == 1
-    assert (
-        parts[0].budget_bytes == 1024 * 1024
-    ), "partitions() must bake the patched 1 MiB budget into the partition"
 
-    rows = list(reader.read(parts[0]))
-    assert (
-        len(rows) > 1
-    ), "default (auto) reader must split a raster exceeding the budget"
+    # One-tile-per-partition: the split must produce more than one partition.
+    assert len(parts) > 1, (
+        "partitions() must produce >1 _TilePartition for a raster exceeding the budget"
+    )
+
+    # Each partition yields exactly one row (structural OOM fix).
+    for p in parts:
+        part_rows = list(reader.read(p))
+        assert len(part_rows) == 1, (
+            "read() must yield exactly one row per _TilePartition"
+        )
+
+    # Total emitted rows across all partitions equals total planned tiles.
+    total_rows = sum(len(list(reader.read(p))) for p in parts)
+    assert total_rows == len(parts)
 
 
 def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):

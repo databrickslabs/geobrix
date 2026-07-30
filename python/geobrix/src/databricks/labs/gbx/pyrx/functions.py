@@ -1031,14 +1031,14 @@ def rst_cog_convert(
     """Convert a raster tile to a Cloud Optimized GeoTIFF (COG) layout.
 
     Mirrors the heavyweight ``gbx_rst_cog_convert`` (``gdal.Translate -of COG``),
-    implemented with rio-cogeo's ``cog_translate``. The output tile's raster
+    implemented via GDAL's native ``driver="COG"``.  The output tile's raster
     bytes are COG-layout GTiff; downstream readers see ``metadata.driver =
     "GTiff"`` (COG is a GTiff variant).
 
     Args:
         tile:                Tile struct column.
-        compression:         COG compression / rio-cogeo profile (default
-                             "DEFLATE"; e.g. NONE, LZW, ZSTD, WEBP, JPEG, LERC).
+        compression:         COG compression name (default "DEFLATE"; e.g.
+                             LZW, ZSTD, WEBP, JPEG, LERC, RAW).
         blocksize:           Internal tile size in pixels, square (default 512).
         overview_resampling: Overview-pyramid resampling (default "AVERAGE").
 

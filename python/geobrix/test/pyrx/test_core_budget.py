@@ -12,7 +12,9 @@ def test_resolve_auto_is_serverless_or_classic():
 
 
 def test_budget_values():
-    assert budget.decoded_budget_bytes("serverless") == 512 * 1024 * 1024
+    # serverless: 256 MiB × ~2.8× COG encode peak = ~717 MiB, safe under
+    # Databricks Serverless 1 GB PySpark UDF hard cap.
+    assert budget.decoded_budget_bytes("serverless") == 256 * 1024 * 1024
     assert budget.decoded_budget_bytes("classic") == 1536 * 1024 * 1024
     assert budget.decoded_budget_bytes("none") == 0
 

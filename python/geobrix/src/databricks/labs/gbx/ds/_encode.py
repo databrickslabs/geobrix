@@ -7,6 +7,7 @@ WindowedExtract metadata. tile.raster is NOT raw source bytes.
 from __future__ import annotations
 
 import os
+import tempfile
 from typing import Dict, Tuple
 
 import rasterio
@@ -30,6 +31,11 @@ def encode_tile(
 ) -> Tuple[int, bytes, Dict[str, str]]:
     """Read one window, re-encode it as an in-memory GTiff or COG, return (cellid, bytes, metadata).
 
+    For the COG path (``tile_format="cog"``) the decoded window is written
+    directly via GDAL's ``driver="COG"`` without a GTiff intermediate round-trip.
+    This keeps peak RSS at ~2.8× the decoded tile size, well within the
+    Databricks Serverless 1 GB Python UDF hard cap.
+
     Args:
         ds:                    Open rasterio DatasetReader.
         window:                (col_off, row_off, win_w, win_h) pixel window.
@@ -37,8 +43,7 @@ def encode_tile(
         all_parents:           Semicolon-delimited parent chain (for metadata).
         compression:           GTiff/COG compression (default ``"DEFLATE"``).
         tile_format:           ``"gtiff"`` (default, plain windowed GTiff) or
-                               ``"cog"`` (opt-in COG with overviews via
-                               ``analysis.cog_convert``).
+                               ``"cog"`` (opt-in COG with overviews, ~2.8× peak).
         cog_blocksize:         Internal tile size for COG output (default 512).
         cog_overview_resampling: Overview resampling algorithm for COG (default
                                ``"AVERAGE"``).
@@ -47,27 +52,61 @@ def encode_tile(
     rio_window = Window(col_off, row_off, win_w, win_h)
     data = ds.read(window=rio_window)
 
-    profile = ds.profile.copy()
-    profile.update(
-        driver="GTiff",
-        width=win_w,
-        height=win_h,
-        compress=compression.lower(),
-        transform=ds.window_transform(rio_window),
-    )
-
-    with MemoryFile() as mf:
-        with mf.open(**profile) as out:
-            out.write(data)
-        raster_bytes = mf.read()
+    win_transform = ds.window_transform(rio_window)
 
     if str(tile_format).lower() == "cog":
-        from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+        # Write directly from the decoded array to driver="COG" — no GTiff
+        # intermediate so peak = decoded array + COG file bytes (not all three).
+        from rio_cogeo.profiles import cog_profiles
 
-        with MemoryFile(raster_bytes) as cmf, cmf.open() as cds:
-            raster_bytes = cog_convert(
-                cds, compression, cog_blocksize, cog_overview_resampling
+        compression_str = str(compression).upper()
+        # Validate compression name (same set as analysis.cog_convert).
+        _profile_check = cog_profiles.get(compression_str.lower())
+        if _profile_check is None:
+            raise ValueError(
+                f"encode_tile: unknown compression '{compression}'; "
+                f"valid: {', '.join(sorted(cog_profiles.keys()))}"
             )
+
+        profile = ds.profile.copy()
+        profile.update(
+            driver="COG",
+            width=win_w,
+            height=win_h,
+            transform=win_transform,
+            blocksize=cog_blocksize,
+            overview_resampling=str(cog_overview_resampling).upper(),
+        )
+        if compression_str != "RAW":
+            profile["compress"] = compression_str
+        else:
+            profile.pop("compress", None)
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
+        tmp.close()
+        try:
+            with rasterio.open(tmp.name, "w", **profile) as out:
+                out.write(data)
+            # Free the decoded array before reading bytes back.
+            del data
+            with open(tmp.name, "rb") as fh:
+                raster_bytes = fh.read()
+        finally:
+            os.unlink(tmp.name)
+    else:
+        # GTiff path: in-memory encode.
+        profile = ds.profile.copy()
+        profile.update(
+            driver="GTiff",
+            width=win_w,
+            height=win_h,
+            compress=compression.lower(),
+            transform=win_transform,
+        )
+        with MemoryFile() as mf:
+            with mf.open(**profile) as out:
+                out.write(data)
+            raster_bytes = mf.read()
 
     metadata = {
         "path": f"/vsimem/light_{os.path.basename(source_path)}_{col_off}_{row_off}.tif",

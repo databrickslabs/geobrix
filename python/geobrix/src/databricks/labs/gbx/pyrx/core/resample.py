@@ -19,12 +19,12 @@ def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> byt
     profile.update(
         driver="GTiff", width=dst_width, height=dst_height, transform=new_transform
     )
-    # rasterio's windowed out_shape read automatically selects the best
-    # internal overview level when the source is a COG.  For downsampling
-    # a COG this means GDAL reads from the overview band (fewer bytes
-    # decoded) rather than decoding full resolution and decimating in
-    # memory.  No explicit overview-selection code is needed: out_shape
-    # is the lever that triggers this optimisation.
+    # Passing out_shape lets GDAL serve the read from internal overviews
+    # when the dataset has them (COGs being the common case we produce).
+    # GDAL selects the best overview level automatically; no explicit
+    # overview-selection code is needed.  For upsampling or plain GTiffs
+    # without overviews, out_shape triggers the same decimated-read path
+    # at full resolution — behaviour is identical to the pre-COG code.
     data = ds.read(
         out_shape=(ds.count, dst_height, dst_width),
         resampling=resampling_enum(algorithm),

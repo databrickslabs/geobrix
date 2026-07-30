@@ -18,12 +18,35 @@ def _cog(w=1024, h=1024):
 
 
 def test_resample_downsample_cog_uses_overview(monkeypatch):
-    calls = {"full_res_reads": 0}
     b = _cog()
     with MemoryFile(b) as mf, mf.open() as ds:
         assert ds.overviews(1)  # sanity: COG has overviews
+
+        # Spy on ds.read to capture the out_shape kwarg.  The spy calls
+        # through so _write_resampled still produces real output.
+        captured_out_shapes = []
+        real_read = ds.read
+
+        def spy_read(*args, **kwargs):
+            captured_out_shapes.append(kwargs.get("out_shape"))
+            return real_read(*args, **kwargs)
+
+        monkeypatch.setattr(ds, "read", spy_read)
         out = resample.resample_to_size(ds, 128, 128, "average")
-    # Output opens and has the requested size (correctness).
+
+    # out_shape must be the reduced target dims — not full-res (1024×1024).
+    # This is what lets GDAL serve the read from an internal overview.
+    assert len(captured_out_shapes) == 1, "expected exactly one ds.read call"
+    recorded = captured_out_shapes[0]
+    assert recorded is not None, "out_shape kwarg was not passed to ds.read"
+    _, h, w = recorded
+    assert (w, h) == (128, 128), (
+        f"ds.read was called with out_shape dims ({w}, {h}), "
+        "not the requested (128, 128) — implementation is doing a "
+        "full-res decode instead of a reduced out_shape read"
+    )
+
+    # Output correctness: requested size is preserved.
     with MemoryFile(out) as mf2, mf2.open() as ods:
         assert (ods.width, ods.height) == (128, 128)
 

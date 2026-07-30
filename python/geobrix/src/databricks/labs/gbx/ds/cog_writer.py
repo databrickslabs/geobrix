@@ -2,8 +2,10 @@
 
 Accepts PATH-bearing rows (from file_gbx), opens each source file on the
 Volume, converts it to ONE master COG (internally tiled + overviews, no split)
-via the shared analysis.cog_convert (driver="COG"), and writes it FUSE-safe to
-the output Volume. Pixels never ride in a Spark column — accumulation-proof.
+via cog_convert_file (rasterio.shutil.copy driver="COG", streaming block-by-block),
+and writes it FUSE-safe to the output Volume. Pixels never ride in a Spark column
+and the whole raster is never decoded into a Python array — accumulation-proof and
+OOM-safe for large files.
 """
 
 from __future__ import annotations
@@ -63,15 +65,13 @@ class CogGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
-        import rasterio
-
-        from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+        from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
         for row in iterator:
             src = _listing.to_local_path(str(row["path"]))
-            # output name: derive from source basename (or nameCol if given)
+            # output name: derive from source basename (or name_col if given)
             if self.name_col and row[self.name_col] is not None:
                 base = os.path.basename(str(row[self.name_col]))
             else:
@@ -79,20 +79,17 @@ class CogGbxWriter(DataSourceWriter):
             stem = os.path.splitext(base)[0]
             out_path = os.path.join(self.out_dir, f"{stem}.{self.ext}")
 
-            # Convert to a master COG. Build to local temp then sequential-copy to
-            # the Volume (FUSE-safe). cog_convert handles the driver="COG" encode.
-            with rasterio.open(src) as ds:
-                cog_bytes = cog_convert(
-                    ds,
-                    self.cog_compression,
-                    self.cog_blocksize,
-                    self.cog_overview_resampling,
-                )
+            # Stream-convert to a local temp COG (no whole-array decode), then
+            # copyfile (bytes-only) to the output dir — FUSE-safe on /Volumes.
             fd, tmp = tempfile.mkstemp(suffix=f".{self.ext}")
             os.close(fd)
             try:
-                with open(tmp, "wb") as fh:
-                    fh.write(cog_bytes)
+                cog_convert_file(
+                    src, tmp,
+                    compression=self.cog_compression,
+                    blocksize=self.cog_blocksize,
+                    overview_resampling=self.cog_overview_resampling,
+                )
                 shutil.copyfile(tmp, out_path)  # bytes-only → FUSE-safe on /Volumes (no chmod)
             finally:
                 if os.path.exists(tmp):

@@ -1,5 +1,9 @@
 import glob
+import json
 import os
+import subprocess
+import sys
+import textwrap
 
 import numpy as np
 import rasterio
@@ -22,6 +26,89 @@ def _write_src(path, w=512, h=512):
     )
     with rasterio.open(path, "w", **profile) as ds:
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w))
+
+
+# ---------------------------------------------------------------------------
+# Memory regression guard — subprocess probe (catches local-vs-serverless gap)
+# ---------------------------------------------------------------------------
+
+# Probe script: writes a 8192×8192 float32 GTiff (~0.25 GiB decoded), runs
+# cog_convert_file on it, and reports peak RSS via ru_maxrss.
+_MEMORY_PROBE = textwrap.dedent(
+    """\
+    import os, sys, resource, json, tempfile
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    def _rss_mib():
+        rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        if sys.platform == "darwin":
+            return rss / (1024 * 1024)
+        return rss / 1024  # KB -> MiB
+
+    side = int(sys.argv[1])
+    work_dir = sys.argv[2]
+
+    # Write a striped GTiff (NOT internally tiled) — worst case for array decode.
+    src = os.path.join(work_dir, "large.tif")
+    profile = dict(driver="GTiff", width=side, height=side, count=1,
+                   dtype="float32", crs="EPSG:4326",
+                   transform=from_origin(0, 60, 0.001, 0.001))
+    with rasterio.open(src, "w", **profile) as ds:
+        ds.write(np.zeros((1, side, side), dtype="float32"))
+
+    before = _rss_mib()
+    dst = os.path.join(work_dir, "out.tif")
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+    cog_convert_file(src, dst, compression="DEFLATE", blocksize=512,
+                     overview_resampling="AVERAGE")
+    after = _rss_mib()
+    delta = after - before
+
+    print(json.dumps({"delta_mib": delta, "peak_rss_mib": after}))
+    """
+)
+
+_RSS_LIMIT_MIB = 250
+
+
+def _run_memory_probe(work_dir: str, side: int) -> dict:
+    probe_path = os.path.join(work_dir, "_cog_memory_probe.py")
+    with open(probe_path, "w") as fh:
+        fh.write(_MEMORY_PROBE)
+    result = subprocess.run(
+        [sys.executable, probe_path, str(side), work_dir],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Memory probe failed (rc={result.returncode}):\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+    for line in reversed(result.stdout.strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            return json.loads(line)
+    raise ValueError(f"No JSON in probe output:\n{result.stdout}")
+
+
+def test_cog_convert_file_peak_rss_bounded(tmp_path):
+    """Streaming cog_convert_file must not decode the whole raster into RAM.
+
+    A 8192×8192 float32 raster = ~0.25 GiB decoded.  The array-based path
+    (cog_convert) would consume ≥256 MiB just for ds.read().  The streaming
+    path (rasterio.shutil.copy + GDAL_CACHEMAX=200) should stay well under
+    that ceiling.  Threshold: {rss_limit} MiB RSS delta in a fresh subprocess.
+    """.format(rss_limit=_RSS_LIMIT_MIB)
+    result = _run_memory_probe(str(tmp_path), side=8192)
+    delta = result["delta_mib"]
+    assert delta < _RSS_LIMIT_MIB, (
+        f"cog_convert_file RSS delta {delta:.1f} MiB exceeds {_RSS_LIMIT_MIB} MiB "
+        f"— whole-raster decode path may have been used (peak_rss={result['peak_rss_mib']:.1f} MiB)"
+    )
 
 
 def test_writer_uses_copyfile_not_copy(tmp_path, monkeypatch):

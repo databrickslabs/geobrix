@@ -233,6 +233,54 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
         os.unlink(tmp.name)
 
 
+def cog_convert_file(
+    src_path: str,
+    dst_path: str,
+    compression: str = "DEFLATE",
+    blocksize: int = 512,
+    overview_resampling: str = "AVERAGE",
+) -> None:
+    """Convert a raster file to COG layout using streaming block-by-block copy.
+
+    Unlike ``cog_convert`` (which decodes the whole raster into a Python array),
+    this function uses ``rasterio.shutil.copy`` with ``driver="COG"`` inside a
+    bounded GDAL cache.  GDAL streams block-by-block so peak RSS stays at ~GDAL
+    cache size regardless of file size — safe for large files under Databricks
+    Serverless's 1 GB Python UDF cap.
+
+    Uses rasterio only — does NOT import osgeo.gdal.
+
+    Args:
+        src_path:            Source raster path (local or FUSE-mounted Volume).
+        dst_path:            Destination path for the output COG (must be local;
+                             caller is responsible for FUSE-safe staging if needed).
+        compression:         COG compression name (case-insensitive, e.g. "DEFLATE").
+        blocksize:           Internal tile size in pixels (square, must be > 0).
+        overview_resampling: Overview resampling algorithm (e.g. "AVERAGE").
+    """
+    blocksize = int(blocksize)
+    if blocksize <= 0:
+        raise ValueError(f"cog_convert_file: blocksize must be > 0; got {blocksize}")
+    if compression is None or str(compression).strip() == "":
+        raise ValueError("cog_convert_file: compression must be non-empty")
+    if overview_resampling is None or str(overview_resampling).strip() == "":
+        raise ValueError("cog_convert_file: overview_resampling must be non-empty")
+
+    import rasterio
+    import rasterio.shutil as rio_shutil
+
+    creation = dict(
+        blocksize=int(blocksize),
+        overview_resampling=str(overview_resampling).upper(),
+    )
+    comp = str(compression).upper()
+    if comp != "RAW":
+        creation["compress"] = comp
+
+    with rasterio.Env(GDAL_CACHEMAX=200):
+        rio_shutil.copy(src_path, dst_path, driver="COG", **creation)
+
+
 def contour(ds, levels, interval, base, attr_field):
     """Generate contour lines from band 1 as ``(geom_wkb, value)`` features.
 

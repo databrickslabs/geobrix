@@ -36,12 +36,18 @@ Inherits the [lightweight `raster_gbx` options](./raster#options). Key options:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `splitStrategy` | `"auto"` | When to split large rasters: `auto` (default, budget-based), `serverless`, `classic`, `none` (no split). See [Raster Options](./raster#options). |
-| `tileFormat` | `"auto"` | Output format: `auto` (passthrough when no split; COG when splitting), `cog`, `gtiff`. |
-| `cogBlockSize` | `"512"` | Internal tile size (px) for COG output. |
-| `cogOverviewResampling` | `"AVERAGE"` | Resampling algorithm for COG overviews. |
+| `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one tile per file), `auto`, `serverless`, `classic`. See [Raster Options](./raster#options). |
 | `sizeInMB` | `"-1"` | Power-user budget override in MiB (positive value). `-1` = use `splitStrategy`. |
+| `bbox` | _none_ | Clip window: `"xmin,ymin,xmax,ymax"`. |
+| `bboxCrs` | `"EPSG:4326"` | CRS of the `bbox` coordinates. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
+
+:::note COG output is a writer concern
+The `tileFormat`, `cogBlockSize`, and `cogOverviewResampling` reader options are
+removed. COG creation belongs to the `cog_gbx` writer — see
+[COG Writer](../writers/cog). The `gtiff_gbx` writer still accepts `cog=true` to
+re-encode a tile DataFrame as COG.
+:::
 
 ### Heavyweight (`gtiff_gdal`)
 

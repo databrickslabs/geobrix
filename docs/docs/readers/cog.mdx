@@ -1,0 +1,99 @@
+---
+sidebar_position: 3
+sidebar_label: COG Reader (cog_gbx)
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_examples.py';
+
+# COG Reader — `cog_gbx`
+
+`cog_gbx` reads Cloud-Optimized GeoTIFFs (COGs) into the shared `(source, tile)`
+schema. Its defining feature is **bbox clipping**: pass a bounding box and the
+reader issues HTTP range-requests (or FUSE range-reads) that fetch only the
+bytes that intersect the AOI, skipping the rest of the file entirely.
+
+This makes `cog_gbx` the natural read path after COG preparation with the
+`cog_gbx` writer — the halo-mode pipeline:
+
+1. **List** source files with `file_gbx`.
+2. **Prepare** — convert each to a master COG with the `cog_gbx` writer
+   (internal tiling + overview levels baked in).
+3. **Read** — clip to any AOI with `cog_gbx` + `bbox`, pulling only the
+   required tiles and overview levels.
+
+:::note Lightweight only
+`cog_gbx` is a pure-Python lightweight DataSource (no JAR). Register it with
+`register(spark)` before use.
+:::
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `bbox` | _none_ | Clip window: `"xmin,ymin,xmax,ymax"` string. When set, only tiles that intersect the box are read. |
+| `bboxCrs` | `"EPSG:4326"` | CRS of the `bbox` coordinates. Passed as an EPSG authority string (e.g. `"EPSG:27700"`). The reader reprojects internally. |
+| `splitStrategy` | `"none"` | Split large COGs: `none` (default — one tile per file), `serverless`, `classic`, or `auto`. Splitting respects the COG's internal tile grid. |
+| `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile budget in MiB. `-1` defers to `splitStrategy`. |
+| `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
+
+:::tip Default is no-split
+Unlike `raster_gbx` (which defaults to `splitStrategy=auto` since 0.4.4),
+`cog_gbx` defaults to `splitStrategy=none` — one tile per file. COG files
+prepared by the `cog_gbx` writer already carry internal tiling and overviews,
+so the reader can serve any AOI without splitting the source into partitions.
+:::
+
+## Register
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+```
+
+## Read a COG directory
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+
+df = spark.read.format("cog_gbx").load("/Volumes/main/.../cog-prepared/nyc-sentinel2")
+df.show()
+```
+
+## Read with bbox clip
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
+  source="docs/tests/python/readers/cog_gbx_examples.py"
+  testFile="docs/tests/python/readers/test_cog_gbx_examples.py" />
+
+## Output schema
+
+`cog_gbx` emits the standard raster schema:
+
+```
+root
+ |-- source: string   — path to the source COG file
+ |-- tile: struct
+ |    |-- cellid: bigint (nullable)
+ |    |-- raster: binary — clipped tile bytes (GeoTIFF)
+ |    |-- metadata: map<string,string> — driver, CRS, extent, …
+```
+
+The clipped tile carries the CRS and geotransform of the clipped window, not
+the full source file. Downstream `rst_*` functions consume it identically to
+any other tile.
+
+## Full halo-mode pipeline
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_PREPARE"
+  source="docs/tests/python/readers/cog_gbx_examples.py" />
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
+  source="docs/tests/python/readers/cog_gbx_examples.py" />
+
+## Next steps
+
+- [File Lister](./file) — list source files before preparation
+- [COG Writer](../writers/cog) — prepare master COGs from source rasters
+- [Raster Functions](../api/raster-functions) — process the clipped tiles

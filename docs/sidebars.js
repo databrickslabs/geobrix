@@ -80,6 +80,7 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
+            { type: 'category', label: 'COG Lane', collapsed: true, items: ['readers/file', 'readers/cog'] },
             { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
           ],
         },
@@ -90,6 +91,7 @@ const sidebars = {
           items: [
             'writers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['writers/raster', 'writers/vector'] },
+            { type: 'category', label: 'COG Lane', collapsed: true, items: ['writers/cog'] },
             { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/netcdf', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
           ],
         },

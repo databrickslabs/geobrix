@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 _MIB = 1024 * 1024
-_BUDGETS = {"serverless": 256 * _MIB, "classic": 1536 * _MIB, "none": 0}
+_BUDGETS = {"serverless": 96 * _MIB, "classic": 1536 * _MIB, "none": 0}
 _MAX_TILES = 512
 
 

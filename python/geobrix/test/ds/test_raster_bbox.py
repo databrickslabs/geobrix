@@ -5,6 +5,7 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+from databricks.labs.gbx.pyrx.core.cog import GBX_FORMAT, sniff_header
 
 
 def _write_sample(path, width=4, height=3, epsg=4326):
@@ -87,3 +88,58 @@ def test_malformed_bbox_raises(spark, tmp_path):
 
     with pytest.raises(Exception):
         spark.read.format("raster_gbx").option("bbox", "1,2,3").load(str(f)).collect()
+
+
+def _write_large_sample(path, width=512, height=512, epsg=4326):
+    """Write a 512x512 raster so an AOI window of 256x256 exceeds a 64px COG blocksize.
+
+    extent: origin (0.0, 1.0), 1/512 px/deg -> x[0,1], y[0,1]
+    """
+    data = np.arange(width * height, dtype="float32").reshape(height, width)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="float32",
+        crs=f"EPSG:{epsg}",
+        transform=from_origin(0.0, 1.0, 1.0 / width, 1.0 / height),
+        nodata=-9999.0,
+    ) as ds:
+        ds.write(data, 1)
+
+
+def test_bbox_tileformat_cog_is_honored(spark, tmp_path):
+    """bbox read with tileFormat=cog must emit a COG tile, not a plain GTiff.
+
+    Uses a small cogBlockSize (64) so the 256x256 AOI window is large enough
+    for overviews to be built (overview requires the full image is larger than
+    the tile block — 256 >> 64, so at least one overview level is produced).
+    """
+    f = tmp_path / "large.tif"
+    _write_large_sample(str(f), width=512, height=512)
+    spark.dataSource.register(RasterGbxDataSource)
+    df = (
+        spark.read.format("raster_gbx")
+        .option("bbox", "0.0,0.0,0.5,0.5")  # AOI = 256x256 px window
+        .option("tileFormat", "cog")
+        .option("cogBlockSize", "64")
+        .load(str(f))
+    )
+    rows = df.collect()
+    assert len(rows) == 1, "expected exactly one tile for the AOI"
+    tile = rows[0]["tile"]
+    raster_bytes = bytes(tile["raster"])
+    metadata = tile["metadata"]
+    # Both the metadata stamp AND the byte-level sniff must agree: COG.
+    assert metadata.get(GBX_FORMAT) == "cog", (
+        f"metadata gbx_format was '{metadata.get(GBX_FORMAT)}', expected 'cog'; "
+        "tileFormat=cog was silently ignored on the bbox read path"
+    )
+    info = sniff_header(raster_bytes)
+    assert info.is_cog, (
+        f"bytes sniff says is_cog={info.is_cog} (tiled={info.tiled}, "
+        f"overviews={info.overview_levels}); expected a COG with at least 1 overview"
+    )

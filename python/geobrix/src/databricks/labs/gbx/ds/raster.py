@@ -204,6 +204,10 @@ class RasterGbxReader(DataSourceReader):
                     win = window_for_bbox(ds, self.bbox, self.bbox_crs)
                     if win is None:
                         return  # source does not overlap the AOI -> emit nothing
+                    # A bbox read produces a single windowed tile (not a split), so
+                    # resolve the emit format the same way the whole-image path does
+                    # for a non-splitting tile: auto -> gtiff, cog -> cog, gtiff -> gtiff.
+                    emit_fmt = _resolve_emit_format(self.tile_format, split=False)
                     cellid, raster_bytes, meta = _encode.encode_tile(
                         ds,
                         window=(
@@ -214,6 +218,9 @@ class RasterGbxReader(DataSourceReader):
                         ),
                         source_path=partition.file_path,
                         all_parents="",
+                        tile_format=emit_fmt,
+                        cog_blocksize=self.cog_blocksize,
+                        cog_overview_resampling=self.cog_overview_resampling,
                     )
                     yield (source, (cellid, raster_bytes, meta))
             finally:

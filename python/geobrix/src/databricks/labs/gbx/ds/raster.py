@@ -17,7 +17,9 @@ Tile format (``tileFormat`` option, default ``auto``):
   - ``cog``        — always emit COG with overviews.
 
 Power-user override: ``sizeInMB`` (positive integer) overrides the budget in
-bytes. ``sizeInMB=-1`` is equivalent to ``splitStrategy=none``.
+MiB, bypassing the strategy-derived budget. ``sizeInMB=-1`` (default) means
+defer to the active ``splitStrategy`` budget — large rasters still auto-split
+under ``splitStrategy=auto``. Only ``splitStrategy=none`` disables splitting.
 
 Fast path: when a source is a single whole-raster GTiff tile and tileFormat is
 ``auto`` or ``gtiff``, the original file bytes are passed through unchanged —

@@ -44,7 +44,7 @@ The split is controlled by two independent axes:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `splitStrategy` | `"auto"` | Split strategy: `auto` (default — resolves to `serverless` or `classic` based on the environment), `serverless` (512 MiB decoded budget per tile), `classic` (1 536 MiB decoded budget per tile), `none` (no split — one whole-image tile per file, the pre-0.4.4 behavior). |
-| `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB instead of using the environment-derived budget. `sizeInMB=-1` (the default) is equivalent to `splitStrategy=none`. Ignored when `splitStrategy=none`. |
+| `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB, overriding the strategy budget. `sizeInMB=-1` (the default) means defer to the active `splitStrategy` budget — this is why large rasters auto-split by default with `splitStrategy=auto`. Ignored when `splitStrategy=none`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
 
 **Axis 2 — output format for split tiles (`tileFormat`)**

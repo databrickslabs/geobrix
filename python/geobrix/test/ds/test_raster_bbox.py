@@ -111,12 +111,11 @@ def _write_large_sample(path, width=512, height=512, epsg=4326):
         ds.write(data, 1)
 
 
-def test_bbox_tileformat_cog_is_honored(spark, tmp_path):
-    """bbox read with tileFormat=cog must emit a COG tile, not a plain GTiff.
+def test_bbox_read_emits_gtiff(spark, tmp_path):
+    """bbox read always emits a plain GTiff tile (COG is a cog_gbx writer concern).
 
-    Uses a small cogBlockSize (64) so the 256x256 AOI window is large enough
-    for overviews to be built (overview requires the full image is larger than
-    the tile block — 256 >> 64, so at least one overview level is produced).
+    The reader no longer accepts tileFormat/cogBlockSize options. AOI windowed
+    reads emit plain GTiff regardless of any passed tileFormat option.
     """
     f = tmp_path / "large.tif"
     _write_large_sample(str(f), width=512, height=512)
@@ -124,8 +123,6 @@ def test_bbox_tileformat_cog_is_honored(spark, tmp_path):
     df = (
         spark.read.format("raster_gbx")
         .option("bbox", "0.0,0.0,0.5,0.5")  # AOI = 256x256 px window
-        .option("tileFormat", "cog")
-        .option("cogBlockSize", "64")
         .load(str(f))
     )
     rows = df.collect()
@@ -133,13 +130,12 @@ def test_bbox_tileformat_cog_is_honored(spark, tmp_path):
     tile = rows[0]["tile"]
     raster_bytes = bytes(tile["raster"])
     metadata = tile["metadata"]
-    # Both the metadata stamp AND the byte-level sniff must agree: COG.
-    assert metadata.get(GBX_FORMAT) == "cog", (
-        f"metadata gbx_format was '{metadata.get(GBX_FORMAT)}', expected 'cog'; "
-        "tileFormat=cog was silently ignored on the bbox read path"
+    # Reader always emits plain GTiff — COG creation is a writer concern.
+    assert metadata.get(GBX_FORMAT) == "gtiff", (
+        f"metadata gbx_format was '{metadata.get(GBX_FORMAT)}', expected 'gtiff'; "
+        "bbox read must emit plain GTiff (use cog_gbx writer for COG creation)"
     )
     info = sniff_header(raster_bytes)
-    assert info.is_cog, (
-        f"bytes sniff says is_cog={info.is_cog} (tiled={info.tiled}, "
-        f"overviews={info.overview_levels}); expected a COG with at least 1 overview"
+    assert not info.is_cog, (
+        f"bytes sniff says is_cog={info.is_cog}; expected plain GTiff, not COG"
     )

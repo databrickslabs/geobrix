@@ -68,9 +68,7 @@ class NetcdfRasterReader(RasterGbxReader):
                             window=(0, 0, w, h),
                             source_path=partition.file_path,
                             all_parents="",
-                            tile_format=self.tile_format,
-                            cog_blocksize=self.cog_blocksize,
-                            cog_overview_resampling=self.cog_overview_resampling,
+                            tile_format="gtiff",
                         )
                 yield (source, (cellid, raster_bytes, meta))
 

@@ -2,28 +2,25 @@
 
 1:1 swap-out for the Scala ``gdal`` reader: recursively lists files, splits each
 into layout-aware tiles determined by a decoded-memory budget, re-encodes each
-tile as GTiff or COG, emits (source, tile) rows matching pyrx._serde.TILE_SCHEMA.
+tile as GTiff, emits (source, tile) rows matching pyrx._serde.TILE_SCHEMA.
 Pure Python (Serverless).
 
-Split strategy (``splitStrategy`` option, default ``auto``):
+Split strategy (``splitStrategy`` option, default ``none``):
+  - ``none``       — no split; one tile per file (default — halo mode).
   - ``auto``       — resolves to ``serverless`` or ``classic`` by env probe.
-  - ``serverless`` — 128 MiB decoded budget per tile.
-  - ``classic``    — 1 536 MiB decoded budget per tile.
-  - ``none``       — no split; one tile per file (pre-0.4.4 behavior).
+  - ``serverless`` — 128 MiB decoded budget per tile (opt-in split).
+  - ``classic``    — 1 536 MiB decoded budget per tile (opt-in split).
 
-Tile format (``tileFormat`` option, default ``auto``):
-  - ``auto``       — whole-file: passthrough source format; split: COG.
-  - ``gtiff``      — always emit plain GTiff (no overviews).
-  - ``cog``        — always emit COG with overviews.
+**Halo mode** (recommended for large rasters): prepare a master COG via
+``cog_gbx`` writer, then read windows with ``bbox``/``splitStrategy``.
+COG creation is a writer concern; the reader always emits plain GTiff tiles.
 
 Power-user override: ``sizeInMB`` (positive integer) overrides the budget in
-MiB, bypassing the strategy-derived budget. ``sizeInMB=-1`` (default) means
-defer to the active ``splitStrategy`` budget — large rasters still auto-split
-under ``splitStrategy=auto``. Only ``splitStrategy=none`` disables splitting.
+MiB, bypassing the strategy-derived budget. Implies opt-in split.
 
-Fast path: when a source is a single whole-raster GTiff tile and tileFormat is
-``auto`` or ``gtiff``, the original file bytes are passed through unchanged —
-pixels are identical (parity-safe) and ~80x cheaper per tile.
+Fast path: when a source is a single whole-raster GTiff tile, the original file
+bytes are passed through unchanged — pixels are identical (parity-safe) and
+~80x cheaper per tile.
 
 One-tile-per-partition architecture: the tile window plan is computed at the
 driver in ``partitions()``, and each ``_TilePartition`` covers exactly one
@@ -276,9 +273,6 @@ class _FilePartition(_TilePartition):
 def _plan_partitions_for_file(
     file_path: str,
     budget_bytes: int,
-    tile_format: str,
-    cog_blocksize: int,
-    cog_overview_resampling: str,
     bbox: Optional[Tuple[float, float, float, float]],
     bbox_crs: Optional[str],
 ) -> Sequence["_TilePartition"]:
@@ -301,7 +295,6 @@ def _plan_partitions_for_file(
             win = window_for_bbox(ds, bbox, bbox_crs)
         if win is None:
             return []  # source does not overlap AOI
-        emit_fmt = _resolve_emit_format(tile_format, split=False)
         return [
             _TilePartition(
                 file_path=file_path,
@@ -313,9 +306,7 @@ def _plan_partitions_for_file(
                 ),
                 is_passthrough=False,
                 is_whole=True,
-                emit_fmt=emit_fmt,
-                cog_blocksize=cog_blocksize,
-                cog_overview_resampling=cog_overview_resampling,
+                emit_fmt="gtiff",
             )
         ]
 
@@ -342,37 +333,32 @@ def _plan_partitions_for_file(
                 f"tile it into smaller pieces."
             )
 
-    emit_fmt = _resolve_emit_format(tile_format, split=not whole)
-
-    # Passthrough: whole GTiff + emit is NOT forced COG.
-    if whole and driver == "GTiff" and emit_fmt != "cog":
+    # Reader always emits plain GTiff (COG is a writer concern — use cog_gbx).
+    # Passthrough: whole GTiff — emit original bytes unchanged.
+    if whole and driver == "GTiff":
         return [
             _TilePartition(
                 file_path=file_path,
                 window=None,
                 is_passthrough=True,
                 is_whole=True,
-                emit_fmt=emit_fmt,
-                cog_blocksize=cog_blocksize,
-                cog_overview_resampling=cog_overview_resampling,
+                emit_fmt="gtiff",
             )
         ]
 
     if whole:
-        # Single whole-image re-encode (e.g. tileFormat=cog on small raster).
+        # Single whole-image re-encode (non-GTiff source or explicit re-encode).
         return [
             _TilePartition(
                 file_path=file_path,
                 window=(0, 0, width, height),
                 is_passthrough=False,
                 is_whole=True,
-                emit_fmt=emit_fmt,
-                cog_blocksize=cog_blocksize,
-                cog_overview_resampling=cog_overview_resampling,
+                emit_fmt="gtiff",
             )
         ]
 
-    # Split: one partition per tile window.
+    # Split: one partition per tile window, all plain GTiff.
     plan = budget.plan_layout(
         width,
         height,
@@ -395,9 +381,7 @@ def _plan_partitions_for_file(
             window=(col, row, w, h),
             is_passthrough=False,
             is_whole=False,
-            emit_fmt=emit_fmt,
-            cog_blocksize=cog_blocksize,
-            cog_overview_resampling=cog_overview_resampling,
+            emit_fmt="gtiff",
         )
         for col, row, w, h in plan.tiles
     ]
@@ -410,11 +394,11 @@ class RasterGbxReader(DataSourceReader):
             raise ValueError("raster_gbx requires a 'path' (e.g. .load(path)).")
         self.size_mib = int(options.get("sizeInMB", "-1"))
         self.filter_regex = options.get("filterRegex", ".*")
-        # Split strategy + tile format options (new in 0.4.4).
-        self.strategy = budget.resolve_strategy(options.get("splitStrategy", "auto"))
-        self.tile_format = options.get("tileFormat", "auto")
-        self.cog_blocksize = int(options.get("cogBlockSize", "512"))
-        self.cog_overview_resampling = options.get("cogOverviewResampling", "AVERAGE")
+        # Split strategy: default is "none" (halo mode — prepare a COG via the
+        # cog_gbx writer, then read windows). Opt-in split: splitStrategy=serverless
+        # or splitStrategy=classic, or sizeInMB>0. COG creation is a writer concern;
+        # split tiles are always emitted as plain GTiff.
+        self.strategy = budget.resolve_strategy(options.get("splitStrategy", "none"))
         # Optional AOI window-on-read. `bbox` is "minx,miny,maxx,maxy" in the source
         # CRS by default; `bboxCrs` (e.g. "EPSG:4326") declares the bbox CRS and the
         # window primitive reprojects it. None = read the whole raster (prior behavior).
@@ -446,9 +430,6 @@ class RasterGbxReader(DataSourceReader):
                 _plan_partitions_for_file(
                     file_path=f,
                     budget_bytes=resolved_budget,
-                    tile_format=self.tile_format,
-                    cog_blocksize=self.cog_blocksize,
-                    cog_overview_resampling=self.cog_overview_resampling,
                     bbox=self.bbox,
                     bbox_crs=self.bbox_crs,
                 )
@@ -541,7 +522,6 @@ class RasterGbxReader(DataSourceReader):
                     win = window_for_bbox(ds, self.bbox, self.bbox_crs)
                     if win is None:
                         return
-                    emit_fmt = _resolve_emit_format(partition.tile_format, split=False)
                     cellid, raster_bytes, meta = _encode.encode_tile(
                         ds,
                         window=(
@@ -552,9 +532,7 @@ class RasterGbxReader(DataSourceReader):
                         ),
                         source_path=partition.file_path,
                         all_parents="",
-                        tile_format=emit_fmt,
-                        cog_blocksize=self.cog_blocksize,
-                        cog_overview_resampling=self.cog_overview_resampling,
+                        tile_format="gtiff",
                     )
                     yield (source, (cellid, raster_bytes, meta))
             finally:
@@ -580,8 +558,7 @@ class RasterGbxReader(DataSourceReader):
                         f"set the reader option sizeInMB=<n> (a positive MB value) to "
                         f"tile it into smaller pieces."
                     )
-            emit_fmt = _resolve_emit_format(partition.tile_format, split=not whole)
-            if whole and driver == "GTiff" and emit_fmt != "cog":
+            if whole and driver == "GTiff":
                 compression = str(ds.profile.get("compress") or "DEFLATE").upper()
                 cellid, raster_bytes, meta = _encode.passthrough_tile(
                     partition.file_path,
@@ -635,9 +612,7 @@ class RasterGbxReader(DataSourceReader):
                         window=(col, row, w, h),
                         source_path=partition.file_path,
                         all_parents="",
-                        tile_format=emit_fmt,
-                        cog_blocksize=partition.cog_blocksize,
-                        cog_overview_resampling=partition.cog_overview_resampling,
+                        tile_format="gtiff",
                     )
                     yield (source, (cellid, raster_bytes, meta))
         finally:

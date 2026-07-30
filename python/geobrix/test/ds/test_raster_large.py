@@ -1,4 +1,4 @@
-"""Tests for splitStrategy / tileFormat / layout-aware chunking in raster_gbx."""
+"""Tests for splitStrategy / layout-aware chunking in raster_gbx."""
 
 import numpy as np
 import rasterio
@@ -58,57 +58,56 @@ def test_none_strategy_single_row(tmp_path):
     assert len(rows) == 1
 
 
-def test_auto_tileformat_cog_when_split(tmp_path):
+def test_optin_split_emits_gtiff_not_cog(tmp_path):
+    """Opt-in split via _FilePartition(budget_bytes>0) emits plain GTiff tiles.
+
+    COG creation is now a writer concern (cog_gbx writer). The reader always
+    emits plain GTiff on split — the old tileFormat=auto-cog behaviour is retired.
+    """
     p = tmp_path / "big.tif"
     _write_striped(str(p))
-    r = RasterGbxReader({"path": str(tmp_path)})
+    r = RasterGbxReader({"path": str(tmp_path), "splitStrategy": "serverless"})
     part = _FilePartition(
         str(p),
         size_mib=-1,
         budget_bytes=1024 * 1024,
-        tile_format="auto",
-        cog_blocksize=256,
-        cog_overview_resampling="AVERAGE",
     )
     rows = list(r.read(part))
     assert len(rows) > 1
-    # Split tiles under tileFormat=auto are COG.
+    # Split tiles must be plain GTiff (not COG — COG is a writer concern).
     _, tile = rows[0]
     cellid, raster_bytes, md = tile
-    assert md[cog.GBX_FORMAT] == "cog"
+    assert md[cog.GBX_FORMAT] == "gtiff"
 
 
 def test_options_default_resolution():
     r = RasterGbxReader({"path": "/x", "splitStrategy": "auto"})
     assert r.strategy in ("serverless", "classic")
-    assert r.tile_format == "auto"
+    # tileFormat/cogBlockSize/cogOverviewResampling are reader options no longer;
+    # the reader always emits plain GTiff. Only strategy is stored.
+    assert not hasattr(r, "tile_format"), "tile_format removed from reader in 0.4.4+"
 
 
 def test_gtiff_reader_inherits_options(tmp_path):
     from databricks.labs.gbx.ds.gtiff import GTiffGbxReader
 
-    r = GTiffGbxReader(
-        {"path": str(tmp_path), "splitStrategy": "classic", "tileFormat": "cog"}
-    )
+    r = GTiffGbxReader({"path": str(tmp_path), "splitStrategy": "classic"})
     assert r.strategy == "classic"
-    assert r.tile_format == "cog"
     assert r.driver == "GTiff"
+    # tileFormat no longer a reader attribute — COG is a writer concern.
+    assert not hasattr(r, "tile_format"), "tile_format removed from reader in 0.4.4+"
 
 
 def test_netcdf_reader_accepts_options(tmp_path):
-    """NetcdfRasterReader constructs without error and propagates tile options."""
+    """NetcdfRasterReader constructs without error and propagates strategy."""
     from databricks.labs.gbx.ds.netcdf import NetcdfRasterReader
 
     r = NetcdfRasterReader(
         {
             "path": str(tmp_path),
             "splitStrategy": "serverless",
-            "tileFormat": "cog",
-            "cogBlockSize": "256",
-            "cogOverviewResampling": "NEAREST",
         }
     )
     assert r.strategy == "serverless"
-    assert r.tile_format == "cog"
-    assert r.cog_blocksize == 256
-    assert r.cog_overview_resampling == "NEAREST"
+    # tileFormat/cogBlockSize/cogOverviewResampling are no longer reader options.
+    assert not hasattr(r, "tile_format"), "tile_format removed from reader in 0.4.4+"

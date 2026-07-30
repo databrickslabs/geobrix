@@ -232,13 +232,36 @@ def test_none_strategy_yields_one_row(spark, tmp_path):
     assert rows[0]["tile"]["cellid"] == -1
 
 
-def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
-    # Default splitStrategy=auto must split large rasters on a decoded-memory budget.
+def test_default_strategy_is_no_split(tmp_path):
+    # Default splitStrategy=none (halo mode): large rasters are NOT split by default.
+    # One partition per file, regardless of size.
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    f = tmp_path / "big_default.tif"
+    _write_big_incompressible(str(f))
+
+    # Read with DEFAULT options — no splitStrategy, no sizeInMB.
+    reader = RasterGbxReader({"path": str(f)})
+    assert reader.strategy == "none"
+    parts = reader.partitions()
+
+    # Default=none: exactly one partition per file (no split).
+    assert (
+        len(parts) == 1
+    ), "default strategy=none must emit exactly one partition per file"
+
+    # Each partition yields exactly one row.
+    part_rows = list(reader.read(parts[0]))
+    assert len(part_rows) == 1, "read() must yield exactly one row per partition"
+
+
+def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
+    # Opt-in splitStrategy=serverless must split large rasters on a decoded-memory budget.
     #
-    # With the one-tile-per-partition architecture, partitions() now returns one
-    # _TilePartition per tile window (not one per file).  Each read() call yields
-    # exactly ONE row.  We monkeypatch the budget so a 2048×2048×3 uint8 raster
-    # (12 MiB decoded) forces a split under a 1 MiB budget.
+    # With the one-tile-per-partition architecture, partitions() returns one
+    # _TilePartition per tile window.  Each read() call yields exactly ONE row.
+    # We monkeypatch the budget so a 2048×2048×3 uint8 raster (12 MiB decoded)
+    # forces a split under a 1 MiB budget.
     import databricks.labs.gbx.pyrx.core.budget as budget_mod
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
@@ -246,11 +269,11 @@ def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
         budget_mod, "decoded_budget_bytes", lambda _strategy: 1024 * 1024
     )
 
-    f = tmp_path / "big_auto.tif"
+    f = tmp_path / "big_split.tif"
     _write_big_incompressible(str(f))
 
-    # Read with DEFAULT options — no splitStrategy, no sizeInMB.
-    reader = RasterGbxReader({"path": str(f)})
+    # Opt-in split with explicit splitStrategy=serverless.
+    reader = RasterGbxReader({"path": str(f), "splitStrategy": "serverless"})
     parts = reader.partitions()
 
     # One-tile-per-partition: the split must produce more than one partition.
@@ -268,6 +291,16 @@ def test_auto_strategy_splits_large_raster_by_default(tmp_path, monkeypatch):
     # Total emitted rows across all partitions equals total planned tiles.
     total_rows = sum(len(list(reader.read(p))) for p in parts)
     assert total_rows == len(parts)
+
+    # Opt-in split tiles are plain GTiff (not COG — COG is a writer concern).
+    from databricks.labs.gbx.pyrx.core import cog as cog_mod
+
+    for p in parts:
+        for _, tile in reader.read(p):
+            _, _, md = tile
+            assert md.get(cog_mod.GBX_FORMAT) == "gtiff", (
+                f"split tiles must be plain gtiff; got {md.get(cog_mod.GBX_FORMAT)!r}"
+            )
 
 
 def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):
@@ -310,3 +343,17 @@ def test_estimate_tile_bytes_uses_max_of_raw_and_file():
     assert (
         raster_mod._estimate_tile_bytes(100, 100, 2, "float32", 10) == 100 * 100 * 2 * 4
     )
+
+
+def test_reader_default_is_no_split():
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    r = RasterGbxReader({"path": "/x"})
+    assert r.strategy == "none"  # default reversed from 0.4.4 'auto'
+
+
+def test_reader_optin_split_still_works():
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    r = RasterGbxReader({"path": "/x", "splitStrategy": "serverless"})
+    assert r.strategy == "serverless"

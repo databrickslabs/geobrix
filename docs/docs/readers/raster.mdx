@@ -7,6 +7,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import rasterGbxExamples from '!!raw-loader!../../tests/python/readers/raster_gbx_read_examples.py';
+import largeRasterExamples from '!!raw-loader!../../tests/python/readers/large_raster_examples.py';
 import gdalExamples from '!!raw-loader!../../tests/python/readers/gdal_examples.py';
 import gdalScala from '!!raw-loader!../../tests/scala/readers/GDALExamples.scala';
 
@@ -35,15 +36,96 @@ the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and meth
 
 ### Lightweight (`raster_gbx`)
 
+Starting in 0.4.4, the lightweight reader auto-splits large rasters by default.
+The split is controlled by two independent axes:
+
+**Axis 1 — when to split (`splitStrategy`)**
+
 | Option | Default | Description |
 |--------|---------|-------------|
-| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split: one whole-image tile per file. Set a positive MB value to tile large rasters into multiple tiles. |
+| `splitStrategy` | `"auto"` | Split strategy: `auto` (default — resolves to `serverless` or `classic` based on the environment), `serverless` (512 MiB decoded budget per tile), `classic` (1 536 MiB decoded budget per tile), `none` (no split — one whole-image tile per file, the pre-0.4.4 behavior). |
+| `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB instead of using the environment-derived budget. `sizeInMB=-1` (the default) is equivalent to `splitStrategy=none`. Ignored when `splitStrategy=none`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
+
+**Axis 2 — output format for split tiles (`tileFormat`)**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `tileFormat` | `"auto"` | Output format for each emitted tile: `auto` (whole-file passthrough when not splitting; COG when splitting), `cog` (always COG with overviews), `gtiff` (always plain GeoTIFF, no overviews). |
+| `cogBlockSize` | `"512"` | Internal tile size (pixels) for COG encoding. Applies when `tileFormat=cog` or when `tileFormat=auto` and the reader splits. |
+| `cogOverviewResampling` | `"AVERAGE"` | Resampling algorithm for COG overview levels. Any GDAL-supported algorithm (`AVERAGE`, `NEAREST`, `BILINEAR`, …). |
+
+:::note Default behavior changed in 0.4.4
+Prior to 0.4.4 the reader never split files by default (`sizeInMB=-1`). From
+0.4.4 onward, `splitStrategy=auto` is the default: large rasters are split
+on a decoded-memory budget tuned to the cluster environment. To recover the
+old behavior, pass `.option("splitStrategy", "none")`.
+
+**Striped GeoTIFFs** (no internal tiling) split into full-width row-bands:
+tiles are wide and short, not square. **Internally-tiled sources** (COG,
+cloud-tiled GeoTIFF) split on a block-snapped grid that aligns to the
+source's existing tile grid.
+:::
+
+**Auto-split with default options (0.4.4+):**
+
+<CodeFromTest code={largeRasterExamples} language="python" functionName="SPLIT_DEFAULT"
+  source="docs/tests/python/readers/large_raster_examples.py"
+  testFile="docs/tests/python/readers/test_large_raster_examples.py"
+  outputConstant="SPLIT_DEFAULT_output" />
+
+**Recover pre-0.4.4 behavior (no split):**
+
+<CodeFromTest code={largeRasterExamples} language="python" functionName="SPLIT_NONE"
+  source="docs/tests/python/readers/large_raster_examples.py" />
+
+**Two-axis option reference:**
+
+<CodeFromTest code={largeRasterExamples} language="python" functionName="SPLIT_OPTIONS_TABLE"
+  source="docs/tests/python/readers/large_raster_examples.py" />
+
+:::tip Classic `READ_WITH_OPTIONS` example
+The `sizeInMB` option remains available as a power-user override:
+:::
 
 <CodeFromTest code={rasterGbxExamples} language="python" functionName="READ_WITH_OPTIONS"
   source="docs/tests/python/readers/raster_gbx_read_examples.py" />
 
 `gtiff_gbx` is `raster_gbx` with the GeoTIFF driver preset.
+
+### COG as the interchange default for split rasters
+
+When the reader splits a large raster (`splitStrategy=auto` or any explicit
+split), `tileFormat=auto` emits each tile as a **Cloud-Optimized GeoTIFF
+(COG)** rather than a plain GeoTIFF. COG tiles carry internal pyramid
+overviews — pre-computed down-sampled layers at progressively coarser
+resolution — which enables downstream consumers that can exploit them to
+skip reading full-resolution data when a lower-resolution view suffices.
+
+**Who benefits today:**
+
+- **`rst_tilexyz` and `rst_xyzpyramid`** — the XYZ tile-serving pipeline uses
+  [rio-tiler](https://cogeotiff.github.io/rio-tiler/), which automatically
+  selects the appropriate COG overview level for the requested zoom. Feeding
+  split-COG tiles through these functions eliminates the need to decode
+  full-resolution bands for low-zoom requests, cutting both I/O and compute
+  for raster tile serving.
+- **`rst_resample*`** — the `rst_resample`, `rst_resample_to_size`, and
+  `rst_resample_to_res` functions use rasterio's `out_shape` parameter, which
+  triggers overview-level selection automatically when a COG source has
+  pre-built overviews.
+
+**Note:** a broader audit of which other RasterX functions benefit from COG
+overviews is planned follow-on work. Most functions that operate on pixels
+at full resolution are unaffected today; the benefit is in the
+overview-aware consumers listed above.
+
+**Force-writing COG output:** the `gtiff_gbx` writer accepts a `cog=true`
+option to re-encode any tile DataFrame as COG:
+
+<CodeFromTest code={largeRasterExamples} language="python" functionName="WRITER_COG"
+  source="docs/tests/python/readers/large_raster_examples.py"
+  testFile="docs/tests/python/readers/test_large_raster_examples.py" />
 
 ### Heavyweight (`gdal`)
 

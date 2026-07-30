@@ -32,11 +32,15 @@ Both named readers preset the GeoTIFF driver and inherit their respective generi
 
 ### Lightweight (`gtiff_gbx`)
 
-Inherits the [lightweight `raster_gbx` options](./raster#options):
+Inherits the [lightweight `raster_gbx` options](./raster#options). Key options:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split: one whole-image tile per file. Set a positive MB value to tile large rasters into multiple tiles. |
+| `splitStrategy` | `"auto"` | When to split large rasters: `auto` (default, budget-based), `serverless`, `classic`, `none` (no split). See [Raster Options](./raster#options). |
+| `tileFormat` | `"auto"` | Output format: `auto` (passthrough when no split; COG when splitting), `cog`, `gtiff`. |
+| `cogBlockSize` | `"512"` | Internal tile size (px) for COG output. |
+| `cogOverviewResampling` | `"AVERAGE"` | Resampling algorithm for COG overviews. |
+| `sizeInMB` | `"-1"` | Power-user budget override in MiB (positive value). `-1` = use `splitStrategy`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
 
 ### Heavyweight (`gtiff_gdal`)

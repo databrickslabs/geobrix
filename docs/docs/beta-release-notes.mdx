@@ -13,6 +13,15 @@ This page tracks **API and naming changes** since the GeoBrix project started. A
 
 ---
 
+## What's new in v0.4.4
+
+In-flight beta release. Adds auto-splitting for large rasters with COG output, on top of v0.4.3.
+
+- **Raster reader default changed to auto-split large rasters (behavior change).** The lightweight `raster_gbx`, `gtiff_gbx`, and `netcdf_gbx` (raster mode) readers now default to `splitStrategy=auto`, which resolves to a decoded-memory budget per tile tuned to the cluster environment — `serverless` (512 MiB/tile) or `classic` (1 536 MiB/tile). Rasters whose decoded size fits within the budget are returned as a single whole-image tile (identical to the previous default, with the same ~80× passthrough speed for small files). Rasters that exceed the budget are split: striped GeoTIFFs chunk into full-width row-bands; internally-tiled sources split on a block-snapped grid. To recover the pre-0.4.4 behavior of always emitting one tile per file, pass `.option("splitStrategy", "none")`. The `sizeInMB` option remains available as a power-user override that pins the budget in MiB. See [Raster Readers](./readers/raster).
+- **Split tiles are emitted as COG by default (`tileFormat=auto`).** When the reader splits a large raster, each tile is encoded as a Cloud-Optimized GeoTIFF (COG with overviews). This enables the `rst_tilexyz` / `rst_xyzpyramid` pipeline (via rio-tiler) and the `rst_resample*` family to use the pre-built overview levels, skipping full-resolution decode at lower zoom or coarser output resolution. When no split occurs, `tileFormat=auto` passes source bytes through unchanged — no re-encode and no overhead. Force COG output on any tile DataFrame at write time with `.write.format("gtiff_gbx").option("cog","true")`. See [Raster Readers](./readers/raster).
+
+---
+
 ## What's new in v0.4.3
 
 In-flight beta release. Completes both-tier parity for the raster-grid family, adds heavyweight NetCDF readers and a lightweight NetCDF writer, and improves the documentation — on top of v0.4.2.

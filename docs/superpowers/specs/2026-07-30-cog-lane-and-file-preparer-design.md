@@ -116,13 +116,34 @@ consume (clip): cog_gbx.load("/Volumes/out").option("bbox", "...")
 
 ## Section 5 — Testing & docs
 
-**Testing (TDD, real sample data, no mocking Spark/GeoBrix/IO):**
+### Testing layers (local unit → Docker doc-test → **Serverless validation**)
+
+**Principle: maximize the fast local loop first; Serverless is the final confirmation, not the workhorse.** Push as much correctness and memory-behavior verification as possible into fast local runs (unit + subprocess RSS) and Docker doc-tests — iterate there until green. Reserve Serverless for confirming ONLY what local cannot faithfully model (the 1 GB PySpark-UDF cap, Spark Connect worker semantics, Volume FUSE I/O, true worker RSS). The lesson from 0.4.4 is not "skip local" — it is "local green is necessary but NOT sufficient; a Serverless run must confirm before the memory-safety claim is considered validated." Aim for a single, well-instrumented Serverless run per real change, entered only after the local loop is exhausted (mirrors the [[iterate-spark-plans-locally]] discipline).
+
+**Local unit (TDD, real sample data, no mocking Spark/GeoBrix/IO):**
 - `file_gbx`: lists a dir → correct rows; `extension` null on an extensionless file; filterRegex/recursive; **asserts no content read** (works on a non-raster file, never opens it).
 - `cog_gbx` writer: path-row DataFrame → output COGs exist, each `cog_validate=True` (strict), pixel-equivalent to source; cog options honored; per-file memory bounded (subprocess RSS ~2.8× one file, not Σ files).
-- End-to-end doc-test: `file_gbx`→`cog_gbx` on real sample GeoTIFFs → prepared COGs; then `cog_gbx.load(...).option("bbox",...)` clips correctly.
 - Reader default: `splitStrategy` defaults to `none` (reversal regression test); opt-in split still works.
 - Two-lane: gtiff writer no longer accepts COG options; cog-lane options rejected on the gtiff surface.
 - Binding/registration: `file_gbx` + `cog_gbx` registered; `gbx:test:bindings` green.
+
+**Docker doc-test:** end-to-end `file_gbx`→`cog_gbx` on real sample GeoTIFFs → prepared COGs; then `cog_gbx.load(...).option("bbox",...)` clips correctly.
+
+### Serverless validation (REQUIRED, gating — local/Docker green is NOT sufficient)
+
+**Hard lesson from the 0.4.4 OOM investigation: local subprocess RSS and Docker doc-tests both passed while the feature OOM'd on real Serverless.** Memory behavior, the 1 GB PySpark-UDF cap, Volume FUSE I/O, and Spark Connect worker semantics only surface on an actual Serverless run. This feature's memory-safety claim (references-not-pixels; per-file — not per-dataset — encode peak) is therefore **not validated until it runs on Serverless**, and the plan MUST include a Serverless validation task gating "done."
+
+Requirements for the Serverless validation (bake in the mechanics that worked this session):
+
+- **Run via `gbx:test:notebooks-serverless`** (`jobs.submit` + env v5), not local/Docker. Notebook is a native `.ipynb` (no jupytext/`# MAGIC` double-encoding); install via the two-step `%pip` (force-reinstall `--no-deps geobrix` then `geobrix[light]`) — the job harness strips `%pip` and installs from the env spec, so the wheel MUST be staged first.
+- **Wheel staleness guard:** rebuild + stage the wheel AFTER the last code commit, and **hash-verify** the staged Volume wheel matches the local build (and grep it for the expected changed symbols) before the run. A same-path overwritten wheel with stale bytes silently invalidates the whole run — this happened repeatedly in 0.4.4.
+- **Persist results to the Volume, not stdout:** the jobs API does not expose notebook stdout for Serverless task runs, and an OOM crashes the worker before any return. Write a JSON marker/result to the Volume BEFORE and AFTER each stage so a worker crash still leaves evidence of exactly what was in flight. Use unique filenames per stage/run (markers from different runs must not clobber). Judge outcome from the persisted markers + the specific child-run error, not the harness exit code.
+- **No `.rdd` / no driver-side monkeypatch of worker code:** Serverless is Spark Connect — `.rdd` does not exist, and a driver-side patch does not reach workers. Instrument via a real UDF or Volume markers.
+- **Corpus:** the file-preparation path must be validated on a real striped multi-GiB source (VIIRS/UK-scale) staged to a Volume — generated FUSE-safe (build on local temp, sequential copy to Volume; row-band streamed so generation doesn't itself OOM the driver). Not just the small doc-test samples.
+- **What to prove on Serverless:** (1) `file_gbx`→`cog_gbx` prepares a master COG for a multi-GiB source without OOM (per-file encode peak, not accumulation); (2) many-files preparation (e.g. a directory of moderate rasters) completes without per-worker accumulation; (3) `cog_gbx.load(...).option("bbox",...)` clips a prepared master COG. Establish the per-file size that succeeds vs strains (the documented single-file ceiling).
+- **Notebooks + markers** live under `prompts/testing/` (gitignored); the persisted validation summary is linked when reported.
+
+See `prompts/testing/2026-07-30-serverless-oom-rootcause.md` for the failure modes this validation exists to catch.
 
 **Docs:**
 - `beta-release-notes.mdx` — breaking: `splitStrategy` default reversal + COG options relocated reader→cog-writer; new file/cog lanes.

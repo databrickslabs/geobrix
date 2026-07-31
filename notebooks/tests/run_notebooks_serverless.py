@@ -206,6 +206,12 @@ def run_one(
                 # just re-burns compute on the same failure and doubles the child
                 # runs to sift through).
                 max_retries=0,
+                # max_retries alone does NOT stop serverless auto-optimization
+                # retries (the "Enable serverless auto-optimization (may include
+                # additional retries)" box, on by default). That is what produced
+                # a duplicate child run on INTERNAL_ERROR. disable_auto_optimization
+                # is the API equivalent of unchecking it → truly at-most-once.
+                disable_auto_optimization=True,
             )
         ],
     )

@@ -301,8 +301,6 @@ def test_driver_mode_abort_does_not_delete_sources(tmp_path):
     abort, it deletes the user's original input rasters.  The guard returns
     early on abort when driver_mode=True so sources survive.
     """
-    from databricks.labs.gbx.ds.cog_writer import CogCommitMessage
-
     # Create two source files that must survive abort().
     src_a = tmp_path / "in" / "a.tif"
     src_b = tmp_path / "in" / "b.tif"

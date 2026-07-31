@@ -161,6 +161,12 @@ class CogGbxWriter(DataSourceWriter):
         return None
 
     def abort(self, messages: List[Optional[WriterCommitMessage]]) -> None:
+        if self.driver_mode:
+            # In driverMode, CogCommitMessage.paths holds SOURCE paths (write()
+            # gathered references; commit() does the conversion via prepare_cogs).
+            # Removing them would delete user input.  Do nothing on abort —
+            # prepare_cogs is idempotent (skip_if_exists) so a re-run is cheap.
+            return None
         for msg in messages:
             if isinstance(msg, CogCommitMessage):
                 for p in msg.paths:

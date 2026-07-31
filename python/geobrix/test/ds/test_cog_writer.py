@@ -34,8 +34,7 @@ def _write_src(path, w=512, h=512):
 
 # Probe script: writes a 8192×8192 float32 GTiff (~0.25 GiB decoded), runs
 # cog_convert_file on it, and reports peak RSS via ru_maxrss.
-_MEMORY_PROBE = textwrap.dedent(
-    """\
+_MEMORY_PROBE = textwrap.dedent("""\
     import os, sys, resource, json, tempfile
     import numpy as np
     import rasterio
@@ -67,8 +66,7 @@ _MEMORY_PROBE = textwrap.dedent(
     delta = after - before
 
     print(json.dumps({"delta_mib": delta, "peak_rss_mib": after}))
-    """
-)
+    """)
 
 _RSS_LIMIT_MIB = 250
 
@@ -102,9 +100,7 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
     (cog_convert) would consume ≥256 MiB just for ds.read().  The streaming
     path (rasterio.shutil.copy + GDAL_CACHEMAX=200) should stay well under
     that ceiling.  Threshold: {rss_limit} MiB RSS delta in a fresh subprocess.
-    """.format(
-        rss_limit=_RSS_LIMIT_MIB
-    )
+    """.format(rss_limit=_RSS_LIMIT_MIB)
     result = _run_memory_probe(str(tmp_path), side=8192)
     delta = result["delta_mib"]
     assert delta < _RSS_LIMIT_MIB, (
@@ -290,3 +286,72 @@ def test_default_mode_unchanged(tmp_path):
     w.write(iter([{"path": str(src)}]))
     # default path converts in write() → <stem>.tif exists
     assert glob.glob(os.path.join(str(out), "*.tif"))
+
+
+# ---------------------------------------------------------------------------
+# abort() regression — driverMode must NOT delete source files
+# ---------------------------------------------------------------------------
+
+
+def test_driver_mode_abort_does_not_delete_sources(tmp_path):
+    """Regression guard: abort() in driverMode must leave source files untouched.
+
+    In driverMode, write() stores SOURCE paths in CogCommitMessage.paths (no
+    conversion on executor).  If the unconditional os.remove() path runs on
+    abort, it deletes the user's original input rasters.  The guard returns
+    early on abort when driver_mode=True so sources survive.
+    """
+    from databricks.labs.gbx.ds.cog_writer import CogCommitMessage
+
+    # Create two source files that must survive abort().
+    src_a = tmp_path / "in" / "a.tif"
+    src_b = tmp_path / "in" / "b.tif"
+    src_a.parent.mkdir(parents=True, exist_ok=True)
+    _write_src(str(src_a))
+    _write_src(str(src_b))
+
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(
+        str(out), schema, overwrite=True, cog_blocksize=256, driver_mode=True
+    )
+
+    # Simulate what Spark does: write() gathers source paths, then abort() fires.
+    msg_a = w.write(iter([{"path": str(src_a)}]))
+    msg_b = w.write(iter([{"path": str(src_b)}]))
+
+    # Sanity: paths in the messages are the SOURCE files, not outputs.
+    assert msg_a.paths == [str(src_a)]
+    assert msg_b.paths == [str(src_b)]
+
+    # abort() must NOT remove them.
+    w.abort([msg_a, msg_b])
+
+    assert src_a.exists(), "abort() deleted source file a.tif — data-loss bug"
+    assert src_b.exists(), "abort() deleted source file b.tif — data-loss bug"
+
+
+def test_default_mode_abort_removes_outputs(tmp_path):
+    """Confirm existing default-mode abort behavior is unchanged.
+
+    In default (non-driverMode) mode, CogCommitMessage.paths holds OUTPUT .tif
+    files produced by write().  abort() should remove them (partial outputs).
+    """
+    from databricks.labs.gbx.ds.cog_writer import CogCommitMessage
+
+    out = tmp_path / "out"
+    out.mkdir(parents=True, exist_ok=True)
+    # Simulate two output files that a failed write() would have produced.
+    out_a = out / "a.tif"
+    out_b = out / "b.tif"
+    out_a.write_bytes(b"partial-a")
+    out_b.write_bytes(b"partial-b")
+
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(str(out), schema, overwrite=False, cog_blocksize=256)
+    # driver_mode is False (default) — abort() should delete the listed outputs.
+    msg = CogCommitMessage(paths=[str(out_a), str(out_b)])
+    w.abort([msg])
+
+    assert not out_a.exists(), "default-mode abort() should remove partial output a.tif"
+    assert not out_b.exists(), "default-mode abort() should remove partial output b.tif"

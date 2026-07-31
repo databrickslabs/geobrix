@@ -93,6 +93,24 @@ After preparation, read with bbox clip:
 <CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
   source="docs/tests/python/readers/cog_gbx_examples.py" />
 
+## Large single files and Serverless
+
+The `cog_gbx` writer converts each source **inside a distributed write task**.
+On Databricks Serverless, a write task runs in a sandbox with a tight per-task
+memory envelope, and GDAL's overview build for a **very large single source**
+(roughly 1 GiB or more, especially a striped GeoTIFF) can exceed it.
+
+- **Moderate source files** convert cleanly on Serverless — GDAL reads the
+  source natively (block-by-block), so the whole file never passes through
+  memory at once.
+- **Very large single files** should be prepared on a **classic cluster** (its
+  per-task memory headroom is much larger), or via a driver-orchestrated
+  preparation step. This mirrors the guidance for the single-file vector
+  writers.
+
+This is a property of the write-task memory envelope, not a code limit — the
+converter itself streams and never decodes the whole raster into an array.
+
 ## When to use `cog_gbx` writer vs `gtiff_gbx` writer with `cog=true`
 
 | | `cog_gbx` writer | `gtiff_gbx` with `cog=true` |

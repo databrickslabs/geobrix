@@ -34,8 +34,7 @@ def _write_src(path, w=512, h=512):
 
 # Probe script: writes a 8192×8192 float32 GTiff (~0.25 GiB decoded), runs
 # cog_convert_file on it, and reports peak RSS via ru_maxrss.
-_MEMORY_PROBE = textwrap.dedent(
-    """\
+_MEMORY_PROBE = textwrap.dedent("""\
     import os, sys, resource, json, tempfile
     import numpy as np
     import rasterio
@@ -67,8 +66,7 @@ _MEMORY_PROBE = textwrap.dedent(
     delta = after - before
 
     print(json.dumps({"delta_mib": delta, "peak_rss_mib": after}))
-    """
-)
+    """)
 
 _RSS_LIMIT_MIB = 250
 
@@ -111,73 +109,51 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
     )
 
 
-def test_writer_local_fallback_produces_valid_cog(tmp_path):
-    """With no dbutils available (local/Docker), _stage_source falls back to
-    shutil.copyfile. The end-to-end result must still be a valid COG on disk."""
-    # _get_dbutils_fs() returns None in Docker/local (no databricks.sdk).
-    src = tmp_path / "in" / "fallback.tif"
+def test_writer_reads_source_directly_no_heap_copy(tmp_path, monkeypatch):
+    """write() must pass the source path DIRECTLY to cog_convert_file — GDAL
+    reads it natively block-by-block, so the whole source never passes through
+    the Python heap (the only in-worker path that avoids OOM on large sources).
+
+    Regression guard for the reverted dbutils/copyfileobj staging: assert
+    cog_convert_file receives the exact source path, not a staged copy."""
+    import databricks.labs.gbx.ds.cog_writer as _cw_mod
+
+    seen_src = []
+    from databricks.labs.gbx.pyrx.core import analysis as _analysis
+
+    real_convert = _analysis.cog_convert_file
+
+    def _spy_convert(src, dst, **kwargs):
+        seen_src.append(src)
+        return real_convert(src, dst, **kwargs)
+
+    monkeypatch.setattr(_cw_mod, "cog_convert_file", _spy_convert, raising=False)
+    monkeypatch.setattr(_analysis, "cog_convert_file", _spy_convert)
+
+    src = tmp_path / "in" / "direct.tif"
     src.parent.mkdir()
     _write_src(str(src))
     out = tmp_path / "out"
     schema = StructType([StructField("path", StringType(), False)])
     w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
     msg = w.write(iter([{"path": str(src)}]))
+
+    assert len(seen_src) == 1, "cog_convert_file should be called once"
+    # The exact source path is passed through — no staged/temp copy in between.
+    assert seen_src[0] == str(src), (
+        f"cog_convert_file got {seen_src[0]!r}, expected the source path {str(src)!r} "
+        "(a staged copy would indicate a Python-heap read of the whole source)"
+    )
     assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
     with open(msg.paths[0], "rb") as fh:
         info = gbxcog.sniff_header(fh.read())
     assert info.is_cog is True and info.overview_levels >= 1
 
 
-def test_writer_uses_dbutils_cp_when_available(tmp_path, monkeypatch):
-    """When dbutils is available, write() must stage via dbutils.fs.cp — routing
-    bytes through the JVM, not the Python heap (OOM avoidance for large /Volumes sources).
-    Verified by: mocking _get_dbutils_fs to return a fake fs that records cp calls
-    and copies the file locally, then asserting cp was called with the correct
-    URI schemes (dbfs: source, file: dest)."""
-    import databricks.labs.gbx.ds.cog_writer as _cw_mod
-
-    cp_calls = []
-
-    class _FakeFs:
-        def cp(self, src, dst):
-            cp_calls.append((src, dst))
-            # Actually copy the bytes so cog_convert_file gets a real file.
-            from databricks.labs.gbx.ds._listing import to_local_path
-            real_src = to_local_path(src)  # strips dbfs: prefix
-            real_dst = dst[len("file:"):]   # strips file: prefix
-            import shutil
-            shutil.copyfile(real_src, real_dst)
-
-    monkeypatch.setattr(_cw_mod, "_get_dbutils_fs", lambda: _FakeFs())
-
-    src = tmp_path / "in" / "dbutils.tif"
-    src.parent.mkdir()
-    _write_src(str(src))
-    out = tmp_path / "out"
-    schema = StructType([StructField("path", StringType(), False)])
-    w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
-    # Simulate file_gbx output: path column is plain local path (no dbfs: prefix in local test)
-    w.write(iter([{"path": str(src)}]))
-
-    assert len(cp_calls) == 1, "dbutils.fs.cp should have been called once"
-    cp_src, cp_dst = cp_calls[0]
-    # Source must carry the dbfs: scheme (or already have it).
-    assert cp_src.startswith("dbfs:"), f"cp source {cp_src!r} must start with dbfs:"
-    # Dest must carry the file: scheme so dbutils.fs.cp writes to local disk.
-    assert cp_dst.startswith("file:"), f"cp dest {cp_dst!r} must start with file:"
-    # Output is a valid COG.
-    produced = glob.glob(os.path.join(str(out), "*.tif"))
-    assert len(produced) == 1
-    with open(produced[0], "rb") as fh:
-        info = gbxcog.sniff_header(fh.read())
-    assert info.is_cog is True
-
-
 def test_writer_uses_copyfile_not_copy(tmp_path, monkeypatch):
     """Regression guard: write() must not call shutil.copy (which invokes chmod).
     UC Volume FUSE rejects chmod with PermissionError. Simulate this by patching
     os.chmod to raise — copyfile never calls chmod, so the write succeeds."""
-    import shutil as _shutil
 
     def _no_chmod(path, mode, **kwargs):
         raise PermissionError(f"chmod not permitted on FUSE: {path}")

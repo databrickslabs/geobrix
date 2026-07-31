@@ -1,7 +1,6 @@
 """Unit tests for recursive path listing with regex filter."""
 
 import os
-from unittest.mock import patch
 
 import pytest
 

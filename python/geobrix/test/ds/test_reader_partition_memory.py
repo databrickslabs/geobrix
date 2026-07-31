@@ -183,8 +183,7 @@ def _rss_mib() -> float:
     return rss / 1024  # KB → MiB
 
 
-_PROBE_SCRIPT = textwrap.dedent(
-    """\
+_PROBE_SCRIPT = textwrap.dedent("""\
     import os, sys, resource, json
 
     def _rss_mib():
@@ -215,8 +214,7 @@ _PROBE_SCRIPT = textwrap.dedent(
         "max_partition_rss_mib": max(peak_mibs) if peak_mibs else 0.0,
         "total_rss_mib": _rss_mib(),
     }))
-    """
-)
+    """)
 
 
 def _run_probe(path: str, side: int, bands: int) -> dict:

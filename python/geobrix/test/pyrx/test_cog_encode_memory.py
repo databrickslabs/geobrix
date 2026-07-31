@@ -58,8 +58,7 @@ def _run_subprocess_encode(tile_format: str) -> float:
     The subprocess prints ``ratio=<float>`` to stdout.  The parent parses
     that line and returns the float.  Any crash / no output raises.
     """
-    script = textwrap.dedent(
-        f"""
+    script = textwrap.dedent(f"""
         import resource
         import sys
         import numpy as np
@@ -100,8 +99,7 @@ def _run_subprocess_encode(tile_format: str) -> float:
         delta = max(0, peak - baseline)
         ratio = delta / DECODED
         print(f"ratio={{ratio:.4f}} delta={{delta/1024/1024:.1f}}MB decoded={{DECODED/1024/1024:.1f}}MB")
-        """
-    )
+        """)
     result = subprocess.run(
         [sys.executable, "-c", script],
         capture_output=True,

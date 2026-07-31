@@ -1,7 +1,7 @@
 import os
 
-from databricks.labs.gbx.ds.file import FileGbxReader
 from databricks.labs.gbx.ds import _listing
+from databricks.labs.gbx.ds.file import FileGbxReader
 
 
 def _touch(p, data=b"x"):

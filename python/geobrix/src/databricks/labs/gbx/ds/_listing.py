@@ -26,7 +26,9 @@ _T = TypeVar("_T")
 #   size   = _retry_transient(lambda: os.stat(path).st_size)
 
 
-def _retry_transient(fn: Callable[[], _T], attempts: int = 10, backoff: float = 0.5) -> _T:
+def _retry_transient(
+    fn: Callable[[], _T], attempts: int = 10, backoff: float = 0.5
+) -> _T:
     """Call *fn()*, retrying on FileNotFoundError / OSError up to *attempts* times.
 
     Each retry waits ``backoff * attempt`` seconds (linear backoff).  After all
@@ -56,6 +58,7 @@ def _retry_transient(fn: Callable[[], _T], attempts: int = 10, backoff: float = 
             if attempt < attempts:
                 time.sleep(backoff * attempt)
     raise last_exc  # type: ignore[misc]
+
 
 # Schemes Hadoop already understands; leave their qualified form untouched.
 _KNOWN_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://?")

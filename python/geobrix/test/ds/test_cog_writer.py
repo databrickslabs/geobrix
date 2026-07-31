@@ -111,37 +111,66 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
     )
 
 
-def test_writer_passes_source_path_directly_to_cog_convert(tmp_path, monkeypatch):
-    """Regression guard: write() must pass the source path directly to cog_convert_file
-    WITHOUT staging. Python-heap staging of a 1.5 GiB source (copyfileobj over FUSE)
-    OOMs the serverless DS-V2 write worker. GDAL (rasterio.shutil.copy driver=COG)
-    reads the source natively block-by-block — no Python-heap buffer of the whole file.
-    Verify cog_convert_file receives EXACTLY the source path (not a staged copy)."""
-    import databricks.labs.gbx.pyrx.core.analysis as _analysis_mod
-    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file as _real_convert
-
-    captured_src = []
-
-    def _spy_convert(src_path, dst_path, **kwargs):
-        captured_src.append(src_path)
-        _real_convert(src_path, dst_path, **kwargs)
-
-    monkeypatch.setattr(_analysis_mod, "cog_convert_file", _spy_convert)
-
-    src = tmp_path / "in" / "direct.tif"
+def test_writer_local_fallback_produces_valid_cog(tmp_path):
+    """With no dbutils available (local/Docker), _stage_source falls back to
+    shutil.copyfile. The end-to-end result must still be a valid COG on disk."""
+    # _get_dbutils_fs() returns None in Docker/local (no databricks.sdk).
+    src = tmp_path / "in" / "fallback.tif"
     src.parent.mkdir()
     _write_src(str(src))
     out = tmp_path / "out"
     schema = StructType([StructField("path", StringType(), False)])
     w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
+    msg = w.write(iter([{"path": str(src)}]))
+    assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
+    with open(msg.paths[0], "rb") as fh:
+        info = gbxcog.sniff_header(fh.read())
+    assert info.is_cog is True and info.overview_levels >= 1
+
+
+def test_writer_uses_dbutils_cp_when_available(tmp_path, monkeypatch):
+    """When dbutils is available, write() must stage via dbutils.fs.cp — routing
+    bytes through the JVM, not the Python heap (OOM avoidance for large /Volumes sources).
+    Verified by: mocking _get_dbutils_fs to return a fake fs that records cp calls
+    and copies the file locally, then asserting cp was called with the correct
+    URI schemes (dbfs: source, file: dest)."""
+    import databricks.labs.gbx.ds.cog_writer as _cw_mod
+
+    cp_calls = []
+
+    class _FakeFs:
+        def cp(self, src, dst):
+            cp_calls.append((src, dst))
+            # Actually copy the bytes so cog_convert_file gets a real file.
+            from databricks.labs.gbx.ds._listing import to_local_path
+            real_src = to_local_path(src)  # strips dbfs: prefix
+            real_dst = dst[len("file:"):]   # strips file: prefix
+            import shutil
+            shutil.copyfile(real_src, real_dst)
+
+    monkeypatch.setattr(_cw_mod, "_get_dbutils_fs", lambda: _FakeFs())
+
+    src = tmp_path / "in" / "dbutils.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(str(out), schema, overwrite=True, cog_blocksize=256)
+    # Simulate file_gbx output: path column is plain local path (no dbfs: prefix in local test)
     w.write(iter([{"path": str(src)}]))
 
-    assert len(captured_src) == 1, "cog_convert_file should be called once"
-    # Must receive the original source path — not a staged copy under /tmp or similar.
-    assert captured_src[0] == str(src), (
-        f"cog_convert_file received {captured_src[0]!r} instead of the source path "
-        f"{str(src)!r} — writer is staging the source through Python heap (OOM risk)"
-    )
+    assert len(cp_calls) == 1, "dbutils.fs.cp should have been called once"
+    cp_src, cp_dst = cp_calls[0]
+    # Source must carry the dbfs: scheme (or already have it).
+    assert cp_src.startswith("dbfs:"), f"cp source {cp_src!r} must start with dbfs:"
+    # Dest must carry the file: scheme so dbutils.fs.cp writes to local disk.
+    assert cp_dst.startswith("file:"), f"cp dest {cp_dst!r} must start with file:"
+    # Output is a valid COG.
+    produced = glob.glob(os.path.join(str(out), "*.tif"))
+    assert len(produced) == 1
+    with open(produced[0], "rb") as fh:
+        info = gbxcog.sniff_header(fh.read())
+    assert info.is_cog is True
 
 
 def test_writer_uses_copyfile_not_copy(tmp_path, monkeypatch):

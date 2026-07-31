@@ -14,7 +14,7 @@ import resource
 import shutil
 import sys
 import tempfile
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 def cog_output_name(source_basename: str) -> str:
@@ -127,3 +127,63 @@ def prepare_cog_measured(
         "peak_rss_mib": _peak_rss_mib(),
         "status": status,
     }
+
+
+DEFAULT_RASTER_EXTS = (".tif", ".tiff", ".cog", ".nc", ".h5", ".hdf")
+
+
+def _has_ext(path: str, extensions) -> bool:
+    if not extensions:
+        return True
+    return os.path.splitext(path)[1].lower() in {e.lower() for e in extensions}
+
+
+def _resolve_sources(
+    sources,
+    recursive: bool = True,
+    extensions=DEFAULT_RASTER_EXTS,
+) -> List[Tuple[str, Optional[str]]]:
+    """Normalize dir | file | iterable-of-both into a flat deduped [(path, error)].
+
+    error=None for a resolved existing file; error="not-found" for a listed path
+    that does not exist. A directory is listed (recursive by default) and
+    extension-filtered; an explicitly-named file bypasses the filter. Scheme-
+    qualified inputs (dbfs:/..., file:/...) are stripped via ds._listing.to_local_path.
+    """
+    from databricks.labs.gbx.ds._listing import to_local_path
+
+    # Normalize to a list of items. A lone str/PathLike is one item.
+    if isinstance(sources, (str, os.PathLike)):
+        items = [sources]
+    else:
+        items = list(sources)
+
+    out: List[Tuple[str, Optional[str]]] = []
+    seen = set()
+
+    def _add(path: str, err: Optional[str]) -> None:
+        if path in seen:
+            return
+        seen.add(path)
+        out.append((path, err))
+
+    for item in items:
+        local = to_local_path(str(item))
+        if os.path.isfile(local):
+            _add(local, None)  # explicit file — no extension filter
+        elif os.path.isdir(local):
+            if recursive:
+                for root, _dirs, names in os.walk(local):
+                    for name in sorted(names):
+                        full = os.path.join(root, name)
+                        if _has_ext(full, extensions):
+                            _add(full, None)
+            else:
+                for name in sorted(os.listdir(local)):
+                    full = os.path.join(local, name)
+                    if os.path.isfile(full) and _has_ext(full, extensions):
+                        _add(full, None)
+        else:
+            _add(local, "not-found")
+
+    return out

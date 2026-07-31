@@ -146,3 +146,55 @@ def test_prepare_cog_out_name_none_uses_basename(tmp_path):
     out_path, status = prepare_cog(str(src), str(out), blocksize=256)
     assert status == "ok"
     assert out_path == str(out / "plain.tif.cog")
+
+
+from databricks.labs.gbx.pyrx.core.preparer import _resolve_sources, DEFAULT_RASTER_EXTS
+
+
+def _touch_tif(p):
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _write_src(str(p))
+
+
+def test_resolve_single_file(tmp_path):
+    f = tmp_path / "a.tif"
+    _touch_tif(f)
+    assert _resolve_sources(str(f)) == [(str(f), None)]
+
+
+def test_resolve_dir_lists_rasters_recursive(tmp_path):
+    _touch_tif(tmp_path / "a.tif")
+    _touch_tif(tmp_path / "sub" / "b.tif")
+    (tmp_path / "note.json").write_text("{}")  # non-raster excluded
+    got = sorted(p for p, e in _resolve_sources(str(tmp_path)))
+    assert got == sorted([str(tmp_path / "a.tif"), str(tmp_path / "sub" / "b.tif")])
+
+
+def test_resolve_dir_non_recursive(tmp_path):
+    _touch_tif(tmp_path / "a.tif")
+    _touch_tif(tmp_path / "sub" / "b.tif")
+    got = sorted(p for p, e in _resolve_sources(str(tmp_path), recursive=False))
+    assert got == [str(tmp_path / "a.tif")]  # sub/ not descended
+
+
+def test_resolve_list_mixes_files_and_dirs_dedup(tmp_path):
+    _touch_tif(tmp_path / "d" / "a.tif")
+    f = tmp_path / "d" / "a.tif"  # same file, also named explicitly
+    _touch_tif(tmp_path / "standalone.tif")
+    resolved = _resolve_sources([str(tmp_path / "d"), str(f), str(tmp_path / "standalone.tif")])
+    paths = [p for p, e in resolved]
+    # a.tif appears once (dir + explicit), plus standalone.tif
+    assert paths.count(str(f)) == 1
+    assert str(tmp_path / "standalone.tif") in paths
+
+
+def test_resolve_missing_path_is_not_found(tmp_path):
+    resolved = _resolve_sources(str(tmp_path / "nope.tif"))
+    assert resolved == [(str(tmp_path / "nope.tif"), "not-found")]
+
+
+def test_resolve_explicit_file_bypasses_extension_filter(tmp_path):
+    weird = tmp_path / "data.bin"       # not in DEFAULT_RASTER_EXTS
+    _touch_tif(weird)                    # but it IS a real GeoTIFF on disk
+    # named explicitly → included despite extension
+    assert _resolve_sources(str(weird)) == [(str(weird), None)]

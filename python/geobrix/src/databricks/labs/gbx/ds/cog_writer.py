@@ -63,6 +63,8 @@ class CogGbxWriter(DataSourceWriter):
         cog_compression="DEFLATE",
         name_col=None,
         ext="tif",
+        cog_subdataset=None,
+        cog_skip_if_exists=True,
     ):
         assert_path_schema(schema)
         self.out_dir = _listing.to_local_path(path)
@@ -72,6 +74,8 @@ class CogGbxWriter(DataSourceWriter):
         self.cog_compression = cog_compression
         self.name_col = name_col
         self.ext = ext
+        self.cog_subdataset = cog_subdataset
+        self.cog_skip_if_exists = cog_skip_if_exists
         if overwrite and os.path.isdir(self.out_dir):
             for stale in glob.glob(os.path.join(self.out_dir, f"*.{ext}")):
                 try:
@@ -94,6 +98,16 @@ class CogGbxWriter(DataSourceWriter):
             stem = os.path.splitext(base)[0]
             out_path = os.path.join(self.out_dir, f"{stem}.{self.ext}")
 
+            # Skip when the output already exists (idempotent resume).
+            if self.cog_skip_if_exists and os.path.exists(out_path):
+                written.append(out_path)
+                continue
+
+            # Build a NetCDF subdataset URI when requested.
+            conv_src = src_volume
+            if self.cog_subdataset:
+                conv_src = f'NETCDF:"{src_volume}":{self.cog_subdataset}'
+
             # Pass the source path directly to cog_convert_file. GDAL (via
             # rasterio.shutil.copy driver="COG") reads the source natively
             # block-by-block — no Python-heap copy of the whole file. Only the
@@ -102,7 +116,7 @@ class CogGbxWriter(DataSourceWriter):
             os.close(fd)
             try:
                 cog_convert_file(
-                    src_volume,
+                    conv_src,
                     tmp,
                     compression=self.cog_compression,
                     blocksize=self.cog_blocksize,

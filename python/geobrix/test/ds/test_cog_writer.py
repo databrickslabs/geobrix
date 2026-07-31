@@ -34,7 +34,8 @@ def _write_src(path, w=512, h=512):
 
 # Probe script: writes a 8192×8192 float32 GTiff (~0.25 GiB decoded), runs
 # cog_convert_file on it, and reports peak RSS via ru_maxrss.
-_MEMORY_PROBE = textwrap.dedent("""\
+_MEMORY_PROBE = textwrap.dedent(
+    """\
     import os, sys, resource, json, tempfile
     import numpy as np
     import rasterio
@@ -66,7 +67,8 @@ _MEMORY_PROBE = textwrap.dedent("""\
     delta = after - before
 
     print(json.dumps({"delta_mib": delta, "peak_rss_mib": after}))
-    """)
+    """
+)
 
 _RSS_LIMIT_MIB = 250
 
@@ -100,7 +102,9 @@ def test_cog_convert_file_peak_rss_bounded(tmp_path):
     (cog_convert) would consume ≥256 MiB just for ds.read().  The streaming
     path (rasterio.shutil.copy + GDAL_CACHEMAX=200) should stay well under
     that ceiling.  Threshold: {rss_limit} MiB RSS delta in a fresh subprocess.
-    """.format(rss_limit=_RSS_LIMIT_MIB)
+    """.format(
+        rss_limit=_RSS_LIMIT_MIB
+    )
     result = _run_memory_probe(str(tmp_path), side=8192)
     delta = result["delta_mib"]
     assert delta < _RSS_LIMIT_MIB, (
@@ -202,3 +206,35 @@ def test_writer_prepares_valid_cog(tmp_path):
     with open(produced[0], "rb") as fh:
         info = gbxcog.sniff_header(fh.read())
     assert info.is_cog is True and info.overview_levels >= 1
+
+
+def test_writer_skip_if_exists_default_skips(tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "scene.tif").write_bytes(b"sentinel")  # ext default "tif" → <stem>.tif
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(
+        str(out), schema, overwrite=False, cog_blocksize=256, cog_skip_if_exists=True
+    )
+    w.write(iter([{"path": str(src)}]))
+    # untouched sentinel — skipped, not reconverted
+    assert (out / "scene.tif").read_bytes() == b"sentinel"
+
+
+def test_writer_skip_if_exists_false_reconverts(tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "scene.tif").write_bytes(b"sentinel")
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(
+        str(out), schema, overwrite=False, cog_blocksize=256, cog_skip_if_exists=False
+    )
+    w.write(iter([{"path": str(src)}]))
+    with open(out / "scene.tif", "rb") as fh:
+        assert gbxcog.sniff_header(fh.read()).is_cog is True  # real COG now

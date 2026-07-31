@@ -43,4 +43,7 @@ class CogGbxDataSource(RasterGbxDataSource):
             cog_compression=self.options.get("cogCompression", "DEFLATE"),
             name_col=self.options.get("nameCol"),
             ext=self.options.get("ext", "tif"),
+            cog_subdataset=self.options.get("cogSubdataset"),
+            cog_skip_if_exists=self.options.get("cogSkipIfExists", "true").lower()
+            == "true",
         )

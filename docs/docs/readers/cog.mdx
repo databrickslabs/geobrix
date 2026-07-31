@@ -14,7 +14,7 @@ reader issues HTTP range-requests (or FUSE range-reads) that fetch only the
 bytes that intersect the AOI, skipping the rest of the file entirely.
 
 This makes `cog_gbx` the natural read path after COG preparation with the
-`cog_gbx` writer — the halo-mode pipeline:
+`cog_gbx` writer — the prepare-then-read pipeline:
 
 1. **List** source files with `file_gbx`.
 2. **Prepare** — convert each to a master COG with the `cog_gbx` writer
@@ -84,7 +84,7 @@ The clipped tile carries the CRS and geotransform of the clipped window, not
 the full source file. Downstream `rst_*` functions consume it identically to
 any other tile.
 
-## Full halo-mode pipeline
+## Full prepare-then-read pipeline
 
 <CodeFromTest code={cogExamples} language="python" functionName="COG_PREPARE"
   source="docs/tests/python/readers/cog_gbx_examples.py" />

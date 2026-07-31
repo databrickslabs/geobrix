@@ -111,10 +111,10 @@ a large run.
 
 ### `cog_gbx` writer with `driverMode`
 
-The `cog_gbx` writer integrates preparation into a DataFrame write. Its default
-mode converts per partition (suitable for moderate files); its opt-in
-`driverMode` routes conversion to the driver via `prepare_cogs`, which is the
-mode for large files:
+The [`cog_gbx` writer](../writers/cog) integrates preparation into a DataFrame
+write. Its default mode converts per partition (suitable for moderate files);
+its opt-in [`driverMode`](../writers/cog#drivermode-preparing-large-files) routes
+conversion to the driver via `prepare_cogs`, which is the mode for large files:
 
 ```python
 (spark.read.format("file_gbx").load(input_dir)
@@ -187,5 +187,8 @@ materializing pixels only when an operation needs them — are covered in a late
 release, along with the tile representation that supports them. Prepare your
 COGs now; the reading side builds on exactly the files this page produces.
 
-See also the [COG reader](../readers/cog) and [File lister](../readers/file) for
-the current windowed read and file-listing entry points.
+## See also
+
+- [COG writer (`cog_gbx`)](../writers/cog) — the DataFrame-write entry point for preparation, including `driverMode`
+- [COG reader (`cog_gbx`)](../readers/cog) — windowed, bbox-clipped reads from prepared COGs
+- [File lister (`file_gbx`)](../readers/file) — enumerate source files (paths only) to feed preparation

@@ -24,6 +24,12 @@ A master COG carries:
 The output is a directory of `.tif` files that can be read back with the
 `cog_gbx` reader for windowed (bbox-clipped) access.
 
+It converts per partition by default (for moderate files) and offers an opt-in
+[`driverMode`](#drivermode-preparing-large-files) that prepares large files on
+the driver. For the concepts behind COG preparation — striped vs. tiled layout,
+overviews, BigTIFF, and the memory model — see
+[Large Rasters](../api/large-rasters).
+
 :::note Lightweight only
 `cog_gbx` is a pure-Python lightweight DataSource (no JAR). It uses GDAL's
 `driver="COG"` creation path internally, which produces spec-compliant COGs
@@ -53,6 +59,11 @@ set `nameCol="path"` to use the basename of the path as the output filename.
 | `cogBlockSize` | `"512"` | Internal tile size in pixels for the COG grid. |
 | `cogOverviewResampling` | `"AVERAGE"` | Resampling algorithm for overview levels. Any GDAL-supported value: `AVERAGE`, `NEAREST`, `BILINEAR`, `CUBICSPLINE`, `LANCZOS`, … |
 | `cogCompression` | `"DEFLATE"` | Compression applied to each block: `DEFLATE`, `LZW`, `ZSTD`, `NONE`, … |
+| `cogSubdataset` | none | Subdataset to select from a multi-subdataset source (e.g. a NetCDF variable). |
+| `cogSkipIfExists` | `"true"` | Skip a source whose output already exists — idempotent resume after an interrupted run. |
+| `cogBigTiff` | `"YES"` | BigTIFF policy: `YES` (always — required for outputs over ~4 GiB), `IF_SAFER`/`IF_NEEDED` (size-adaptive), `NO` (force classic TIFF, fails past ~4 GiB). See the [BigTIFF note](../api/large-rasters#raster-formats-striped-tiled-and-cog). |
+| `driverMode` | `"false"` | Route conversion to the **driver** instead of per-partition workers — the mode for large single files. See [driverMode](#drivermode-preparing-large-files) below. |
+| `driverModeVerbose` | `"true"` | In `driverMode`, print per-file progress from the driver. |
 | `nameCol` | `"name"` | Column whose value becomes the output filename (without extension). Defaults to the `name` column emitted by `file_gbx`. |
 
 ## Register
@@ -77,7 +88,7 @@ Each output file passes `rio_cogeo.cogeo.cog_validate` — the `cog_gbx` writer
 uses GDAL's `driver="COG"` creation path, which produces a genuine, spec-valid COG
 in a single encode pass.
 
-## Halo-mode: prepare then read
+## Prepare then read
 
 The `cog_gbx` writer and reader are designed to work together as a two-step
 preparation + windowed-read pattern:
@@ -93,23 +104,45 @@ After preparation, read with bbox clip:
 <CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
   source="docs/tests/python/readers/cog_gbx_examples.py" />
 
-## Large single files and Serverless
+## `driverMode`: preparing large files
 
-The `cog_gbx` writer converts each source **inside a distributed write task**.
-On Databricks Serverless, a write task runs in a sandbox with a tight per-task
-memory envelope, and GDAL's overview build for a **very large single source**
-(roughly 1 GiB or more, especially a striped GeoTIFF) can exceed it.
+By default `cog_gbx` converts each source **inside a distributed write task**
+(per partition). On Databricks Serverless a write task runs under a fixed
+per-task memory ceiling (on the order of 1 GB) that no instance size raises, and
+GDAL's overview build for a **very large single source** (roughly 1 GiB or more,
+especially a striped GeoTIFF) can exceed it. The default per-partition mode is
+therefore intended for **moderate files**.
 
-- **Moderate source files** convert cleanly on Serverless — GDAL reads the
-  source natively (block-by-block), so the whole file never passes through
-  memory at once.
-- **Very large single files** should be prepared on a **classic cluster** (its
-  per-task memory headroom is much larger), or via a driver-orchestrated
-  preparation step. This mirrors the guidance for the single-file vector
-  writers.
+Set **`driverMode="true"`** to prepare large files. In this mode the write step
+on the workers only gathers the source paths (no conversion), and the actual
+conversion runs on the **driver**, which is not under the per-task worker
+ceiling:
 
-This is a property of the write-task memory envelope, not a code limit — the
-converter itself streams and never decodes the whole raster into an array.
+```python
+(spark.read.format("file_gbx").load(input_dir)
+   .write.format("cog_gbx")
+   .option("driverMode", "true")
+   .option("cogSkipIfExists", "true")
+   .mode("overwrite")
+   .save(output_dir))
+```
+
+Driver-orchestrated preparation streams block-by-block and processes one file at
+a time, so peak memory stays flat (~2 GiB in testing) regardless of source size
+or batch count — a **standard Serverless driver handles multi-gigabyte sources**;
+no classic cluster is required. See
+[Large Rasters → memory footprint](../api/large-rasters#memory-footprint-and-staying-on-standard-serverless)
+for the full explanation.
+
+:::warning Long driverMode writes: call `prepare_cogs` directly
+In `driverMode` the conversion runs inside the `.save()` call. A write that
+blocks for many minutes — a large batch, or very large files (roughly 1 GB/min)
+— can have its connection cancelled and fail even though the conversion is fine.
+If you hit this, prepare the files by calling `prepare_cogs` **directly** in your
+notebook instead of through the writer — it is plain Python on the driver with
+no such connection, and it is idempotent so re-running resumes cleanly. See
+[Large Rasters → Writing COGs](../api/large-rasters#writing-cogs-and-why).
+:::
 
 ## When to use `cog_gbx` writer vs `gtiff_gbx` writer with `cog=true`
 
@@ -125,6 +158,7 @@ files on disk that need preparation before distributed reading, use `cog_gbx`.
 
 ## Next steps
 
+- [Large Rasters](../api/large-rasters) — formats, BigTIFF, the memory model, and `prepare_cogs`
 - [File Lister](../readers/file) — list source files before preparation
 - [COG Reader](../readers/cog) — windowed read from prepared COGs
 - [Raster Reader](../readers/raster) — decode rasters into the `(source, tile)` schema

@@ -14,6 +14,7 @@ import resource
 import shutil
 import sys
 import tempfile
+import time
 from typing import Dict, List, Optional, Tuple
 
 
@@ -77,7 +78,8 @@ def prepare_cog(
         os.close(fd)
         try:
             cog_convert_file(
-                src, tmp,
+                src,
+                tmp,
                 compression=compression,
                 blocksize=blocksize,
                 overview_resampling=resampling,
@@ -115,7 +117,8 @@ def prepare_cog_measured(
     side by collecting this value (worker markers are unreliable on Serverless).
     """
     out_path, status = prepare_cog(
-        path, out_dir,
+        path,
+        out_dir,
         blocksize=blocksize,
         resampling=resampling,
         compression=compression,
@@ -187,3 +190,111 @@ def _resolve_sources(
             _add(local, "not-found")
 
     return out
+
+
+def _stage_local_if_needed(path: str) -> Tuple[str, bool]:
+    """Return (local_path, is_temp). If path is already a plain local file, pass
+    it through (is_temp=False). Otherwise (or always, for FUSE safety) copy it to
+    a local temp via sequential copyfileobj and return (temp, True).
+
+    GDAL cannot open a /Volumes FUSE striped TIFF directly; staging to local disk
+    first is required. Heuristic: stage anything under /Volumes or /dbfs.
+    """
+    needs_stage = path.startswith("/Volumes") or path.startswith("/dbfs")
+    if not needs_stage:
+        return path, False
+    fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".tif")
+    os.close(fd)
+    with open(path, "rb") as _src, open(tmp, "wb") as _dst:
+        shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
+    return tmp, True
+
+
+def prepare_cogs(
+    sources,
+    out_dir: str,
+    blocksize: int = 512,
+    resampling: str = "AVERAGE",
+    compression: str = "DEFLATE",
+    subdataset: Optional[str] = None,
+    skip_if_exists: bool = True,
+    recursive: bool = True,
+    extensions=DEFAULT_RASTER_EXTS,
+    verbose: bool = True,
+) -> Dict[str, object]:
+    """Prepare one master COG per source, driver-side, with live progress + summary.
+
+    ``sources`` may be a directory, a single file, or an iterable freely mixing
+    dirs and files. See _resolve_sources for resolution rules. Returns a summary
+    dict (keys: total, ok, skipped, error, out_dir, peak_rss_mib, elapsed_s, results).
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    resolved = _resolve_sources(sources, recursive=recursive, extensions=extensions)
+    total = len(resolved)
+    results: List[Dict[str, object]] = []
+    counts = {"ok": 0, "skipped": 0, "error": 0}
+    peak = 0.0
+    t0 = time.time()
+
+    for i, (src, err) in enumerate(resolved, start=1):
+        f_t0 = time.time()
+        if err == "not-found":
+            status, out_path = "error:not-found", None
+        else:
+            original_base = os.path.basename(src)
+            local_src, is_temp = _stage_local_if_needed(src)
+            try:
+                out_path, status = prepare_cog(
+                    local_src,
+                    out_dir,
+                    blocksize=blocksize,
+                    resampling=resampling,
+                    compression=compression,
+                    subdataset=subdataset,
+                    skip_if_exists=skip_if_exists,
+                    out_name=original_base,
+                )
+            finally:
+                if is_temp and os.path.exists(local_src):
+                    os.remove(local_src)
+        f_elapsed = round(time.time() - f_t0, 2)
+        rss = _peak_rss_mib()
+        peak = max(peak, rss)
+        key = status.split(":", 1)[0]
+        counts[key] = counts.get(key, 0) + 1
+        results.append(
+            {
+                "index": i,
+                "source": src,
+                "output_path": out_path,
+                "status": status,
+                "peak_rss_mib": rss,
+                "elapsed_s": f_elapsed,
+            }
+        )
+        if verbose:
+            left = total - i
+            arrow = f" -> {os.path.basename(out_path)}" if out_path else ""
+            print(
+                f"[{i}/{total}] {key:<7} {os.path.basename(src)}{arrow} "
+                f"({left} left, {f_elapsed}s, peak {rss:.0f} MiB)",
+                flush=True,
+            )
+
+    elapsed = round(time.time() - t0, 2)
+    if verbose:
+        print(
+            f"done: {counts['ok']} ok, {counts['skipped']} skipped, "
+            f"{counts['error']} error of {total} (peak {peak:.0f} MiB, {elapsed}s total)",
+            flush=True,
+        )
+    return {
+        "total": total,
+        "ok": counts["ok"],
+        "skipped": counts["skipped"],
+        "error": counts["error"],
+        "out_dir": out_dir,
+        "peak_rss_mib": peak,
+        "elapsed_s": elapsed,
+        "results": results,
+    }

@@ -11,6 +11,7 @@ from databricks.labs.gbx.pyrx.core.preparer import (
     cog_output_name,
     prepare_cog,
     prepare_cog_measured,
+    prepare_cogs,
 )
 
 
@@ -203,3 +204,67 @@ def test_resolve_explicit_file_bypasses_extension_filter(tmp_path):
     _touch_tif(weird)  # but it IS a real GeoTIFF on disk
     # named explicitly → included despite extension
     assert _resolve_sources(str(weird)) == [(str(weird), None)]
+
+
+def test_prepare_cogs_dir_summary_and_valid_cogs(tmp_path):
+    d = tmp_path / "corpus"
+    _touch_tif(d / "a.tif")
+    _touch_tif(d / "b.tif")
+    out = tmp_path / "out"
+    summary = prepare_cogs(str(d), str(out), blocksize=256, verbose=False)
+    assert summary["total"] == 2
+    assert summary["ok"] == 2 and summary["skipped"] == 0 and summary["error"] == 0
+    assert summary["out_dir"] == str(out)
+    assert isinstance(summary["peak_rss_mib"], float)
+    assert isinstance(summary["elapsed_s"], float)
+    names = sorted(os.path.basename(r["output_path"]) for r in summary["results"])
+    assert names == ["a.tif.cog", "b.tif.cog"]
+    for r in summary["results"]:
+        assert r["status"] == "ok"
+        with open(r["output_path"], "rb") as fh:
+            assert gbxcog.sniff_header(fh.read()).is_cog is True
+
+
+def test_prepare_cogs_list_mixed_with_error_and_skip(tmp_path):
+    d = tmp_path / "corpus"
+    _touch_tif(d / "a.tif")
+    out = tmp_path / "out"
+    out.mkdir()
+    # Pre-create b's output so it is skipped.
+    _touch_tif(tmp_path / "b.tif")
+    (out / "b.tif.cog").write_bytes(b"sentinel")
+    missing = str(tmp_path / "ghost.tif")
+    summary = prepare_cogs(
+        [str(d), str(tmp_path / "b.tif"), missing],
+        str(out),
+        blocksize=256,
+        verbose=False,
+    )
+    by_status = {}
+    for r in summary["results"]:
+        by_status.setdefault(r["status"].split(":", 1)[0], []).append(r)
+    assert summary["ok"] == 1  # a.tif
+    assert summary["skipped"] == 1  # b.tif (pre-existing output)
+    assert summary["error"] == 1  # ghost.tif not-found
+    assert summary["total"] == 3
+    # not-found surfaced as an error record with null output_path
+    nf = [r for r in summary["results"] if r["status"] == "error:not-found"]
+    assert len(nf) == 1 and nf[0]["output_path"] is None
+
+
+def test_prepare_cogs_verbose_prints_progress(tmp_path, capsys):
+    d = tmp_path / "corpus"
+    _touch_tif(d / "a.tif")
+    out = tmp_path / "out"
+    prepare_cogs(str(d), str(out), blocksize=256, verbose=True)
+    captured = capsys.readouterr().out
+    assert "[1/1]" in captured
+    assert "done:" in captured
+
+
+def test_prepare_cogs_verbose_false_silent(tmp_path, capsys):
+    d = tmp_path / "corpus"
+    _touch_tif(d / "a.tif")
+    out = tmp_path / "out"
+    prepare_cogs(str(d), str(out), blocksize=256, verbose=False)
+    assert capsys.readouterr().out == ""

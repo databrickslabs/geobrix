@@ -15,6 +15,7 @@ unwinds in reverse (close dataset, close MemoryFile, remove staged temp) only
 after the caller exits. This avoids the "dataset closed" trap of yielding out of
 a nested ``with`` that has already closed.
 """
+
 import os
 from contextlib import ExitStack, contextmanager
 from typing import Iterator, Optional, Tuple
@@ -73,11 +74,25 @@ def _warp_window_bytes(src, window: Window, want_epsg: int) -> bytes:
 
 
 def _empty_dataset_bytes(ref) -> bytes:
-    """A valid 1x1 NoData GTiff mirroring ref's band count / dtype (disjoint clip)."""
-    profile = ref.profile.copy()
-    profile.update(driver="GTiff", width=1, height=1)
+    """A valid 1x1 NoData GTiff mirroring ref's band count / dtype (disjoint clip).
+
+    Built from a CLEAN minimal profile — the source's tiling keys
+    (tiled/blockxsize/blockysize) make no sense at 1x1 and copying them risks a
+    GDAL GTiff-creation warning/error, so they are deliberately dropped.
+    """
     nodata = ref.nodata if ref.nodata is not None else 0
-    arr = np.full((ref.count, 1, 1), nodata, dtype=ref.dtypes[0])
+    dtype = ref.dtypes[0]
+    profile = dict(
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=ref.count,
+        dtype=dtype,
+        crs=ref.crs,
+        nodata=nodata,
+        transform=ref.transform,  # source origin; valid georeference for the 1x1
+    )
+    arr = np.full((ref.count, 1, 1), nodata, dtype=dtype)
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(arr)

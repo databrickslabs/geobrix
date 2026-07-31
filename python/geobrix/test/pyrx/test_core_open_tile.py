@@ -84,6 +84,27 @@ def test_warpedvrt_probe_reprojects_window(layouts):
         assert ds.width > 0 and ds.height > 0
 
 
+def test_disjoint_clip_yields_valid_empty_1x1(layouts):
+    # Clip polygon far from the tile's geographic footprint -> clip_dataset
+    # returns None -> open_tile must yield a VALID, readable 1x1 NoData dataset
+    # (not an error), created from a clean minimal profile (no source tiling).
+    far = box(1000.0, 1000.0, 1001.0, 1001.0)  # nowhere near origin (10, 50)
+    tile = VirtualTile(
+        cellid=6,
+        path=layouts["cog"],
+        window=WINDOW,
+        clip_polygon=shapely.wkb.dumps(far),
+        clip_crs="EPSG:4326",
+    )
+    with rasterio.open(layouts["cog"]) as src:
+        src_nodata = src.nodata
+    with ot.open_tile(tile) as ds:
+        assert ds.width == 1 and ds.height == 1
+        arr = ds.read()  # must succeed
+        assert arr.shape[-2:] == (1, 1)
+        assert arr.flat[0] == src_nodata
+
+
 def test_materialize_returns_array_transform_profile(layouts):
     arr, transform, profile = ot.materialize(
         VirtualTile(cellid=5, path=layouts["striped"], window=WINDOW)

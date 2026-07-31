@@ -113,6 +113,7 @@ const sidebars = {
           link: { type: 'doc', id: 'api/raster-functions' },
           items: [
             'api/rasterio-distributed',
+            'api/large-rasters',
             'api/h3-raster-tessellation',
           ],
         },

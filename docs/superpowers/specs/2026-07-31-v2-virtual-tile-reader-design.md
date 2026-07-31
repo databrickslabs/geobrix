@@ -74,6 +74,7 @@ struct<
   path:         string  (nullable),
   window:       struct<col_off:int, row_off:int, width:int, height:int>  (nullable),
   clip_polygon: binary  (nullable),   -- WKB/EWKB (WKT/EWKT accepted on input)
+  clip_crs:     string  (nullable),   -- authoritative CRS of clip_polygon (e.g. "EPSG:4326")
   crs:          string  (nullable),   -- working/target CRS; distinct from source's native CRS
   metadata:     map<string,string>
 >
@@ -93,6 +94,12 @@ Field rules:
   geographic clip *within* the read (need not align to blocks). Two-stage lazy pipeline: read
   `window`@`path` (block-efficient) → clip to `clip_polygon` (exact AOI) → tile pixels. Stays
   virtual until a pixel-producing op.
+- **`clip_crs` is nullable** — the authoritative CRS of `clip_polygon` as a string (e.g.
+  `"EPSG:4326"`, future-proof for WKT2/PROJ strings), decoupling the polygon's CRS from its
+  encoding. It lets a plain WKB/WKT clip still declare its CRS, and an EWKB/EWKT clip populate it
+  from the embedded SRID. Resolution precedence (see Unit C): explicit `clip_crs` wins; else the
+  SRID embedded in an EWKB/EWKT; else assume the source raster's CRS. Never reprojects the raster —
+  only the polygon.
 - **`crs` is nullable** — the working/target CRS, **distinct** from the backing source's native CRS
   (discoverable from `path`). Null or equal to source CRS → no warp. Differs → misalignment is
   *recorded*; `open_tile` warps `window`→`crs` at read time (lazy warp). `window` and
@@ -139,11 +146,12 @@ the windowed-read mechanics already exist. What is new is the *bytes-free repres
 
 - `clip_to_polygon(ds_or_array, transform, source_crs, clip_polygon) -> (array, transform, envelope_window, empty)`.
   Uses `rasterio.mask.mask`.
-- **SRID resolution** (consistent with the WKB/EWKB/WKT/EWKT geometry-input convention):
-  - **WKT or WKB** (no SRID) → assume the polygon is already in the **raster's CRS**; no reproject.
-  - **EWKT or EWKB** (SRID present) → read SRID; if == source CRS, mask directly; if ≠, **reproject
-    the polygon** (SRID → source CRS, via pyproj / `shapely.ops.transform`) then mask; SRID 0/unset
-    → treat as no-SRID (assume source CRS).
+- **CRS resolution precedence** (consistent with the WKB/EWKB/WKT/EWKT geometry-input convention):
+  1. **explicit `clip_crs`** (e.g. `"EPSG:4326"`) → authoritative; overrides any embedded SRID.
+  2. else **SRID embedded in EWKB/EWKT** (if > 0).
+  3. else **assume the polygon is already in the raster's CRS** (plain WKB/WKT, or SRID 0/unset).
+  - Once the polygon CRS is resolved: if == source raster CRS, mask directly; if ≠, **reproject the
+    polygon** (polygon CRS → source CRS, via `rasterio.warp.transform_geom`) then mask.
   - We reproject the **polygon**, never the raster pixels — clipping stays virtual; only an explicit
     transform op moves pixels.
 - **Per-tile intersection is the normal case.** The polygon is a global/shared AOI; the unit of work

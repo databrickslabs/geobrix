@@ -16,9 +16,22 @@ DEFAULT (per-partition, ``driverMode=false``):
 driverMode (``driverMode=true``):
   write() on executors gathers only the source path strings (cap-safe, no GDAL,
   no pixels); commit() on the DRIVER runs prepare_cogs over the full list. The
-  driver is NOT under the ~1 GB per-UDF cap (validated: 10 GiB striped source →
-  valid COG at ~2 GiB driver RSS), so this handles large single files and large
-  batches one-at-a-time.
+  driver is NOT under the ~1 GB per-UDF cap, so this handles large single files
+  and large batches one-at-a-time.
+
+  MEMORY FOOTPRINT (why standard Serverless is enough):
+    COG generation streams block-by-block (bounded GDAL cache) and processes one
+    file at a time, so peak memory is dominated by GDAL's overview-build transient
+    and is essentially FLAT regardless of source size OR batch count — measured
+    ~2.0-2.1 GiB RSS for 1.5 GiB, 10x1.5 GiB, and a single 10 GiB source alike.
+    That fits comfortably under a STANDARD Serverless driver (~16 GiB), so no
+    special compute is needed. A HIGH-MEMORY Serverless driver (~32 GiB) only buys
+    extra headroom for much larger single files / more margin — useful, not
+    required. Crucially there is NO memory tier that helps the SPARK (worker)
+    profile: worker tasks are capped at ~1 GB per PySpark UDF regardless of
+    instance size — which is exactly why the distributed paths (this writer's
+    default per-partition mode, and a scalar-UDF approach) OOM on large files
+    while DRIVER-orchestrated preparation does not.
 
   ⚠ COMMIT TIMEOUT — Spark Connect channel cancellation:
     commit() runs the conversion INSIDE the ``.save()`` gRPC call. On Databricks

@@ -50,6 +50,10 @@ def prepare_cog(
       * ``(None, "error:<reason>")``          — convert failed (does NOT raise)
 
     OOM is uncatchable and will kill the task rather than return "error:".
+
+    ``path`` must be a native filesystem / FUSE path (e.g. ``/Volumes/...``);
+    callers holding a scheme-qualified URI (``dbfs:/...``, ``file:/...``) must
+    strip it first (see ``ds._listing.to_local_path``).
     """
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 

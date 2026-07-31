@@ -160,6 +160,44 @@ def prepare_cogs(
 ) -> Dict[str, object]:
 ```
 
+## `cog_gbx` `driverMode` integration
+
+Add an opt-in `driverMode` option to the existing `cog_gbx` DS-V2 writer that routes conversion
+to the **driver** via `prepare_cogs`, escaping the ~1 GB per-PySpark-UDF cap that OOMs the
+default per-partition path on multi-GiB sources.
+
+**Mechanism (keyed off which DS-V2 methods run where):**
+- **`write(iterator)` — runs on EXECUTORS, per partition.** When `driverMode=true`, does **no
+  conversion**: iterates the partition's rows, collects the `path` strings (tiny, no pixels),
+  returns them in `CogCommitMessage(paths=[...])`. Cheap and cap-safe (no GDAL, no bytes on the
+  worker). When `driverMode=false` (default), unchanged per-partition conversion.
+- **`commit(messages)` — runs on the DRIVER.** When `driverMode=true`, flattens every partition's
+  collected paths into one list and calls `prepare_cogs(all_paths, out_dir, blocksize=…,
+  resampling=…, compression=…, skip_if_exists=…)`. Conversion happens on the driver → escapes the
+  cap; `prepare_cogs` live progress prints surface in the notebook.
+- **`abort(messages)`** — unchanged cleanup (removes any partial outputs).
+
+**Why this is the only viable shape:** a DS-V2 writer's `write(iterator)` is invoked by Spark on
+executors — there is no flag that relocates it to the driver. `commit`/`abort` are the driver-side
+methods. So "driver mode" must be `write()` gathers references + `commit()` does the driver-side
+work. This is the same "carry references, not pixels" discipline used elsewhere.
+
+**Option surface:**
+`df.write.format("cog_gbx").option("driverMode","true").save(out_dir)`. The existing
+`cogBlockSize` / `cogOverviewResampling` / `cogCompression` / `nameCol` options thread straight
+into the `prepare_cogs` call. Input schema is unchanged — still the path-bearing rows from
+`file_gbx`; `assert_path_schema` still applies.
+
+**Default = `false`** — clearly opt-in. The default preserves today's distributed per-partition
+`write()` conversion (the moderate-file path). A user must explicitly set
+`.option("driverMode","true")` to move conversion onto the driver (the large-file path).
+
+**Honest caveats (documented in the writer docstring + `writers/cog.mdx`):**
+- Heavy work is **driver-serial in `commit()`** — a `.write` that isn't distributed. Correct and
+  OOM-safe, but unidiomatic; docs must say so plainly.
+- **No per-partition Spark retry** for the conversion; if the driver dies mid-commit the whole
+  batch re-runs — but `skip_if_exists=true` makes re-runs cheap (already-written `.cog`s skip).
+
 ## Testing strategy (local-first)
 
 - **Local (Docker via `gbx:test:python`), unit tests** in
@@ -175,9 +213,17 @@ def prepare_cogs(
     output yields `skipped`.
   - progress `verbose=False` suppresses prints (assert via capsys); `verbose=True` prints one
     line per file + final summary line.
-- **Serverless (final gate):** extend/add a throwaway notebook that calls `prepare_cogs` over the
-  `large-raster/corpus` directory on the driver, captures the summary via
-  `dbutils.notebook.exit`. Confirms multi-file driver-side batch prep on Serverless.
+- **`cog_gbx` driverMode (local, in `python/geobrix/test/ds/test_cog_writer.py`):** with
+  `driverMode=true`, `write(iterator)` returns a `CogCommitMessage` whose `paths` are the input
+  source paths and produces NO `.cog` files by itself (no conversion on the worker path);
+  `commit([...])` then produces valid COGs for every path (assert via `sniff_header`). With
+  `driverMode=false` (default), behavior is unchanged (per-partition conversion). `assert_path_schema`
+  still enforced in both modes.
+- **Serverless (final gate):** extend/add a throwaway notebook that (a) calls `prepare_cogs` over
+  the `large-raster/corpus` directory on the driver, and (b) exercises
+  `df.write.format("cog_gbx").option("driverMode","true")` over the same corpus — both capturing the
+  summary via `dbutils.notebook.exit`. Confirms multi-file driver-side batch prep AND the writer's
+  driverMode both clear the ceiling on Serverless.
 - **Non-wired throughout:** NO catalog registration, NO `registered_functions.txt` /
   `function-info.json` / `functions.py` binding / Scala entries. Keeps binding-parity + QC green.
 
@@ -189,4 +235,5 @@ def prepare_cogs(
   driver-orchestrated. (Parallelism across files is a possible future follow-on, but driver-serial
   is correct and OOM-safe first.)
 - No swath/warp support; no heavy-tier parity.
-- No change to the DS-V2 `cog_gbx` writer (stays the moderate-file path).
+- No change to the DS-V2 `cog_gbx` writer's DEFAULT behavior (per-partition conversion stays the
+  default; `driverMode` is opt-in and additive).

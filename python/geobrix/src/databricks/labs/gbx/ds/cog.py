@@ -46,4 +46,9 @@ class CogGbxDataSource(RasterGbxDataSource):
             cog_subdataset=self.options.get("cogSubdataset"),
             cog_skip_if_exists=self.options.get("cogSkipIfExists", "true").lower()
             == "true",
+            driver_mode=self.options.get("driverMode", "false").lower()
+            == "true",
+            driver_mode_verbose=self.options.get("driverModeVerbose", "true")
+            .lower()
+            == "true",
         )

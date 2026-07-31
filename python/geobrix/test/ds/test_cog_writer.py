@@ -238,3 +238,55 @@ def test_writer_skip_if_exists_false_reconverts(tmp_path):
     w.write(iter([{"path": str(src)}]))
     with open(out / "scene.tif", "rb") as fh:
         assert gbxcog.sniff_header(fh.read()).is_cog is True  # real COG now
+
+
+def test_driver_mode_write_gathers_paths_no_conversion(tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(
+        str(out), schema, overwrite=True, cog_blocksize=256, driver_mode=True
+    )
+    msg = w.write(iter([{"path": str(src)}]))
+    # write() gathered the source path, no conversion on executor
+    assert list(msg.paths) == [str(src)]
+    assert not glob.glob(os.path.join(str(out), "*"))
+
+
+def test_driver_mode_commit_prepares_cogs(tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(
+        str(out),
+        schema,
+        overwrite=True,
+        cog_blocksize=256,
+        driver_mode=True,
+        driver_mode_verbose=False,
+    )
+    msg = w.write(iter([{"path": str(src)}]))
+    w.commit([msg])
+    produced = glob.glob(os.path.join(str(out), "*.cog"))
+    assert len(produced) == 1
+    with open(produced[0], "rb") as fh:
+        assert gbxcog.sniff_header(fh.read()).is_cog is True
+    assert os.path.basename(produced[0]) == "scene.tif.cog"  # source naming
+
+
+def test_default_mode_unchanged(tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    schema = StructType([StructField("path", StringType(), False)])
+    w = CogGbxWriter(
+        str(out), schema, overwrite=True, cog_blocksize=256
+    )  # driver_mode default False
+    w.write(iter([{"path": str(src)}]))
+    # default path converts in write() → <stem>.tif exists
+    assert glob.glob(os.path.join(str(out), "*.tif"))

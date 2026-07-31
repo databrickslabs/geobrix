@@ -65,6 +65,8 @@ class CogGbxWriter(DataSourceWriter):
         ext="tif",
         cog_subdataset=None,
         cog_skip_if_exists=True,
+        driver_mode=False,
+        driver_mode_verbose=True,
     ):
         assert_path_schema(schema)
         self.out_dir = _listing.to_local_path(path)
@@ -76,6 +78,8 @@ class CogGbxWriter(DataSourceWriter):
         self.ext = ext
         self.cog_subdataset = cog_subdataset
         self.cog_skip_if_exists = cog_skip_if_exists
+        self.driver_mode = driver_mode
+        self.driver_mode_verbose = driver_mode_verbose
         if overwrite and os.path.isdir(self.out_dir):
             for stale in glob.glob(os.path.join(self.out_dir, f"*.{ext}")):
                 try:
@@ -84,6 +88,12 @@ class CogGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        if self.driver_mode:
+            # Gather source path strings only — NO conversion on the executor
+            # (cap-safe: no GDAL, no pixels). Conversion happens on driver.
+            paths = [str(row["path"]) for row in iterator]
+            return CogCommitMessage(paths=paths)
+
         from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
         os.makedirs(self.out_dir, exist_ok=True)
@@ -130,6 +140,24 @@ class CogGbxWriter(DataSourceWriter):
         return CogCommitMessage(paths=written)
 
     def commit(self, messages: List[Optional[WriterCommitMessage]]) -> None:
+        if self.driver_mode:
+            from databricks.labs.gbx.ds._listing import to_local_path
+            from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+
+            all_paths = []
+            for m in messages:
+                if isinstance(m, CogCommitMessage):
+                    all_paths.extend(to_local_path(p) for p in m.paths)
+            prepare_cogs(
+                all_paths,
+                self.out_dir,
+                blocksize=self.cog_blocksize,
+                resampling=self.cog_overview_resampling,
+                compression=self.cog_compression,
+                subdataset=self.cog_subdataset,
+                skip_if_exists=self.cog_skip_if_exists,
+                verbose=self.driver_mode_verbose,
+            )
         return None
 
     def abort(self, messages: List[Optional[WriterCommitMessage]]) -> None:

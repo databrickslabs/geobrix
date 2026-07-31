@@ -59,11 +59,34 @@ def _read_ifd(buf, off, endian):
     return tags, next_off
 
 
+def _read_ifd_big(buf, off, endian):
+    """BigTIFF variant of _read_ifd: 8-byte entry count, 20-byte entries
+    (tag:2, type:2, count:8, value/offset:8), 8-byte next-IFD offset.
+
+    Returns (tags: dict[tag]->(type,count,value_or_offset), next_ifd_off).
+    The inline value is read as an 8-byte word; for SHORT/LONG values stored
+    inline this yields the correct number on little-endian (GDAL's output).
+    """
+    (n,) = struct.unpack_from(endian + "Q", buf, off)
+    tags = {}
+    p = off + 8
+    for _ in range(n):
+        tag, typ = struct.unpack_from(endian + "HH", buf, p)
+        (count,) = struct.unpack_from(endian + "Q", buf, p + 4)
+        (value,) = struct.unpack_from(endian + "Q", buf, p + 12)
+        tags[tag] = (typ, count, value)
+        p += 20
+    (next_off,) = struct.unpack_from(endian + "Q", buf, p)
+    return tags, next_off
+
+
 def sniff_header(raster_bytes: bytes) -> CogInfo:
     """Classify raster bytes by TIFF header/IFD structure only (no pixel decode).
 
     A COG here = internally tiled AND has >=1 reduced-resolution overview IFD.
-    Any parse failure (non-TIFF, truncated, BigTIFF we don't walk) -> non-COG.
+    Both Classic TIFF (magic 42) and BigTIFF (magic 43, used for COG outputs
+    larger than ~4 GiB) are walked. Any parse failure (non-TIFF, truncated) ->
+    non-COG.
 
     **Heuristic limitation:** "tiled + >=1 overview IFD" is a necessary but NOT
     sufficient condition for a spec-valid COG.  A GeoTIFF built with
@@ -89,16 +112,25 @@ def sniff_header(raster_bytes: bytes) -> CogInfo:
         else:
             return _NON_COG
         (magic,) = struct.unpack_from(endian + "H", buf, 2)
-        if magic != 42:  # 43 = BigTIFF; not walked here -> treated as non-COG
+        if magic == 42:  # Classic TIFF: 32-bit offsets, 12-byte entries
+            big = False
+            (ifd_off,) = struct.unpack_from(endian + "I", buf, 4)
+        elif magic == 43:  # BigTIFF: 64-bit offsets, 20-byte entries
+            big = True
+            # bytes 4-5 = offset bytesize (8), 6-7 = 0; first IFD offset at byte 8.
+            (ifd_off,) = struct.unpack_from(endian + "Q", buf, 8)
+        else:
             return _NON_COG
-        (ifd_off,) = struct.unpack_from(endian + "I", buf, 4)
 
         tiled = False
         blocksize = None
         overview_levels = 0
         ifd_index = 0
         while ifd_off != 0 and ifd_index < 64:
-            tags, ifd_off = _read_ifd(buf, ifd_off, endian)
+            if big:
+                tags, ifd_off = _read_ifd_big(buf, ifd_off, endian)
+            else:
+                tags, ifd_off = _read_ifd(buf, ifd_off, endian)
             if ifd_index == 0:
                 if _TAG_TILE_WIDTH in tags:
                     tiled = True

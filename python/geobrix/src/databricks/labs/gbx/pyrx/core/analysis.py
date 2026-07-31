@@ -272,6 +272,12 @@ def cog_convert_file(
     creation = dict(
         blocksize=int(blocksize),
         overview_resampling=str(overview_resampling).upper(),
+        # A COG whose output exceeds ~4 GiB overflows the Classic TIFF 32-bit
+        # directory-offset limit ("TIFFRewriteDirectory: ... exceeds 32 bit range
+        # allowed for Classic TIFF") and must be written as BigTIFF. IF_SAFER lets
+        # GDAL pick BigTIFF automatically when the estimated size needs it, while
+        # keeping Classic TIFF for small outputs (max compatibility).
+        bigtiff="IF_SAFER",
     )
     comp = str(compression).upper()
     if comp != "RAW":

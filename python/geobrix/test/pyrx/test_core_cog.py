@@ -94,3 +94,37 @@ def test_detect_and_stamp_agree():
     stamped = cog.stamp_format_metadata(b, None)
     assert cog.detect_cog(stamped, b"garbage").is_cog is True
     assert cog.detect_cog(None, b).is_cog is True
+
+
+def _bigtiff_cog_bytes(w=512, h=512):
+    """A small COG forced to BigTIFF layout (magic 43, 64-bit offsets).
+
+    Uses GDAL's COG driver with BIGTIFF=YES so we get a spec-valid, BigTIFF-
+    structured COG without needing a >4 GiB file. Exercises the BigTIFF IFD walk
+    in sniff_header (regression: BigTIFF COGs, e.g. any COG output >4 GiB, were
+    previously misreported as non-COG).
+    """
+    import rasterio.shutil as rio_shutil
+
+    with MemoryFile(_plain_gtiff_bytes(w, h, tiled=False)) as mf, mf.open() as ds:
+        with MemoryFile() as out:
+            rio_shutil.copy(
+                ds,
+                out.name,
+                driver="COG",
+                blocksize=128,
+                overview_resampling="AVERAGE",
+                compress="DEFLATE",
+                bigtiff="YES",
+            )
+            return out.read()
+
+
+def test_sniff_bigtiff_cog_is_detected():
+    raw = _bigtiff_cog_bytes()
+    # Confirm it really is BigTIFF (magic 43) so the test guards the right path.
+    assert raw[2] == 43 or raw[3] == 43, "fixture is not BigTIFF"
+    info = cog.sniff_header(raw)
+    assert info.is_cog is True, "BigTIFF COG must be detected as a COG"
+    assert info.tiled is True
+    assert info.overview_levels >= 1

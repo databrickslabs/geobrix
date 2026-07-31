@@ -49,4 +49,5 @@ class CogGbxDataSource(RasterGbxDataSource):
             driver_mode=self.options.get("driverMode", "false").lower() == "true",
             driver_mode_verbose=self.options.get("driverModeVerbose", "true").lower()
             == "true",
+            cog_bigtiff=self.options.get("cogBigTiff", "YES"),
         )

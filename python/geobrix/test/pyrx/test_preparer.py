@@ -306,3 +306,45 @@ def test_prepare_cogs_staging_error_isolation(tmp_path, monkeypatch):
     assert len(bad_results) == 1
     assert bad_results[0]["status"].startswith("error:stage")
     assert bad_results[0]["output_path"] is None
+
+
+def test_prepare_cog_bigtiff_default_is_yes_valid_cog(tmp_path):
+    """Default bigtiff='YES' produces a valid COG (BigTIFF-structured)."""
+    src = tmp_path / "in" / "b.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    out_path, status = prepare_cog(str(src), str(out), blocksize=256)  # default bigtiff
+    assert status == "ok"
+    with open(out_path, "rb") as fh:
+        raw = fh.read()
+    # magic 43 = BigTIFF
+    assert raw[2] == 43 or raw[3] == 43
+    assert gbxcog.sniff_header(raw).is_cog is True
+
+
+def test_prepare_cog_bigtiff_no_is_classic(tmp_path):
+    """bigtiff='NO' forces Classic TIFF (magic 42) for a small output."""
+    src = tmp_path / "in" / "c.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    out_path, status = prepare_cog(str(src), str(out), blocksize=256, bigtiff="NO")
+    assert status == "ok"
+    with open(out_path, "rb") as fh:
+        raw = fh.read()
+    assert raw[2] == 42 or raw[3] == 42  # Classic TIFF
+    assert gbxcog.sniff_header(raw).is_cog is True
+
+
+def test_cog_convert_file_rejects_bad_bigtiff(tmp_path):
+    """cog_convert_file validates the bigtiff value."""
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+    src = tmp_path / "s.tif"
+    _write_src(str(src))
+    try:
+        cog_convert_file(str(src), str(tmp_path / "o.cog"), bigtiff="MAYBE")
+        assert False, "expected ValueError for bad bigtiff"
+    except ValueError:
+        pass

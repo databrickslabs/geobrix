@@ -43,6 +43,7 @@ def prepare_cog(
     subdataset: Optional[str] = None,
     skip_if_exists: bool = True,
     out_name: Optional[str] = None,
+    bigtiff: str = "YES",
 ) -> Tuple[Optional[str], str]:
     """Prepare ONE master COG from ``path`` into ``out_dir`` as ``<basename>.cog``.
 
@@ -61,6 +62,9 @@ def prepare_cog(
     When provided, output is ``<out_dir>/<out_name>.cog``; when ``None``,
     derives from ``os.path.basename(path)`` (existing behavior). Useful for
     callers that stage to a temp path but want the original source name.
+
+    ``bigtiff`` (default ``"YES"``) is the GDAL BIGTIFF creation option; outputs
+    larger than ~4 GiB MUST be BigTIFF (see ``cog_convert_file``).
     """
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
@@ -83,6 +87,7 @@ def prepare_cog(
                 compression=compression,
                 blocksize=blocksize,
                 overview_resampling=resampling,
+                bigtiff=bigtiff,
             )
             shutil.copyfile(tmp, out_path)  # bytes-only → FUSE-safe
         finally:
@@ -109,6 +114,7 @@ def prepare_cog_measured(
     compression: str = "DEFLATE",
     subdataset: Optional[str] = None,
     skip_if_exists: bool = True,
+    bigtiff: str = "YES",
 ) -> Dict[str, object]:
     """prepare_cog + peak-RSS capture, returning a driver-collectable dict.
 
@@ -124,6 +130,7 @@ def prepare_cog_measured(
         compression=compression,
         subdataset=subdataset,
         skip_if_exists=skip_if_exists,
+        bigtiff=bigtiff,
     )
     return {
         "output_path": out_path,
@@ -226,12 +233,16 @@ def prepare_cogs(
     recursive: bool = True,
     extensions=DEFAULT_RASTER_EXTS,
     verbose: bool = True,
+    bigtiff: str = "YES",
 ) -> Dict[str, object]:
     """Prepare one master COG per source, driver-side, with live progress + summary.
 
     ``sources`` may be a directory, a single file, or an iterable freely mixing
     dirs and files. See _resolve_sources for resolution rules. Returns a summary
     dict (keys: total, ok, skipped, error, out_dir, peak_rss_mib, elapsed_s, results).
+
+    ``bigtiff`` (default ``"YES"``) is the GDAL BIGTIFF creation option applied to
+    every output; outputs larger than ~4 GiB MUST be BigTIFF.
     """
     os.makedirs(out_dir, exist_ok=True)
     resolved = _resolve_sources(sources, recursive=recursive, extensions=extensions)
@@ -265,6 +276,7 @@ def prepare_cogs(
                         subdataset=subdataset,
                         skip_if_exists=skip_if_exists,
                         out_name=original_base,
+                        bigtiff=bigtiff,
                     )
                 finally:
                     if is_temp and os.path.exists(local_src):

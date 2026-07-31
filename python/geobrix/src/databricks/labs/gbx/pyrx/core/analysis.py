@@ -233,12 +233,20 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
         os.unlink(tmp.name)
 
 
+# Allowed BIGTIFF creation-option values (GDAL). Default YES: every GeoBrix
+# COG is BigTIFF (one predictable format, no ~4 GiB boundary risk, universally
+# readable by GDAL/rasterio). IF_SAFER = Classic for small outputs, BigTIFF when
+# size needs it. NO = force Classic (fails past ~4 GiB — advanced/compat only).
+_BIGTIFF_VALUES = frozenset({"YES", "NO", "IF_NEEDED", "IF_SAFER"})
+
+
 def cog_convert_file(
     src_path: str,
     dst_path: str,
     compression: str = "DEFLATE",
     blocksize: int = 512,
     overview_resampling: str = "AVERAGE",
+    bigtiff: str = "YES",
 ) -> None:
     """Convert a raster file to COG layout using streaming block-by-block copy.
 
@@ -257,6 +265,12 @@ def cog_convert_file(
         compression:         COG compression name (case-insensitive, e.g. "DEFLATE").
         blocksize:           Internal tile size in pixels (square, must be > 0).
         overview_resampling: Overview resampling algorithm (e.g. "AVERAGE").
+        bigtiff:             GDAL BIGTIFF creation option (case-insensitive):
+                             ``YES`` (default — always BigTIFF), ``IF_SAFER`` /
+                             ``IF_NEEDED`` (size-adaptive), or ``NO`` (force
+                             Classic TIFF, which FAILS for outputs past ~4 GiB).
+                             A COG exceeding ~4 GiB overflows the Classic TIFF
+                             32-bit directory-offset limit and MUST be BigTIFF.
     """
     blocksize = int(blocksize)
     if blocksize <= 0:
@@ -265,6 +279,12 @@ def cog_convert_file(
         raise ValueError("cog_convert_file: compression must be non-empty")
     if overview_resampling is None or str(overview_resampling).strip() == "":
         raise ValueError("cog_convert_file: overview_resampling must be non-empty")
+    bigtiff_val = str(bigtiff).upper()
+    if bigtiff_val not in _BIGTIFF_VALUES:
+        raise ValueError(
+            f"cog_convert_file: bigtiff must be one of {sorted(_BIGTIFF_VALUES)}; "
+            f"got {bigtiff!r}"
+        )
 
     import rasterio
     import rasterio.shutil as rio_shutil
@@ -272,12 +292,7 @@ def cog_convert_file(
     creation = dict(
         blocksize=int(blocksize),
         overview_resampling=str(overview_resampling).upper(),
-        # A COG whose output exceeds ~4 GiB overflows the Classic TIFF 32-bit
-        # directory-offset limit ("TIFFRewriteDirectory: ... exceeds 32 bit range
-        # allowed for Classic TIFF") and must be written as BigTIFF. IF_SAFER lets
-        # GDAL pick BigTIFF automatically when the estimated size needs it, while
-        # keeping Classic TIFF for small outputs (max compatibility).
-        bigtiff="IF_SAFER",
+        bigtiff=bigtiff_val,
     )
     comp = str(compression).upper()
     if comp != "RAW":

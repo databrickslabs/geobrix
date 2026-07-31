@@ -67,6 +67,7 @@ class CogGbxWriter(DataSourceWriter):
         cog_skip_if_exists=True,
         driver_mode=False,
         driver_mode_verbose=True,
+        cog_bigtiff="YES",
     ):
         assert_path_schema(schema)
         self.out_dir = _listing.to_local_path(path)
@@ -80,6 +81,7 @@ class CogGbxWriter(DataSourceWriter):
         self.cog_skip_if_exists = cog_skip_if_exists
         self.driver_mode = driver_mode
         self.driver_mode_verbose = driver_mode_verbose
+        self.cog_bigtiff = cog_bigtiff
         if overwrite and os.path.isdir(self.out_dir):
             for stale in glob.glob(os.path.join(self.out_dir, f"*.{ext}")):
                 try:
@@ -131,6 +133,7 @@ class CogGbxWriter(DataSourceWriter):
                     compression=self.cog_compression,
                     blocksize=self.cog_blocksize,
                     overview_resampling=self.cog_overview_resampling,
+                    bigtiff=self.cog_bigtiff,
                 )
                 shutil.copyfile(tmp, out_path)  # bytes-only → FUSE-safe on /Volumes
             finally:
@@ -157,6 +160,7 @@ class CogGbxWriter(DataSourceWriter):
                 subdataset=self.cog_subdataset,
                 skip_if_exists=self.cog_skip_if_exists,
                 verbose=self.driver_mode_verbose,
+                bigtiff=self.cog_bigtiff,
             )
         return None
 

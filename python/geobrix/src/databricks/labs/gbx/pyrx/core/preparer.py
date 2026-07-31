@@ -41,6 +41,7 @@ def prepare_cog(
     compression: str = "DEFLATE",
     subdataset: Optional[str] = None,
     skip_if_exists: bool = True,
+    out_name: Optional[str] = None,
 ) -> Tuple[Optional[str], str]:
     """Prepare ONE master COG from ``path`` into ``out_dir`` as ``<basename>.cog``.
 
@@ -54,10 +55,16 @@ def prepare_cog(
     ``path`` must be a native filesystem / FUSE path (e.g. ``/Volumes/...``);
     callers holding a scheme-qualified URI (``dbfs:/...``, ``file:/...``) must
     strip it first (see ``ds._listing.to_local_path``).
+
+    ``out_name`` (optional) overrides the basename used for the ``.cog`` output.
+    When provided, output is ``<out_dir>/<out_name>.cog``; when ``None``,
+    derives from ``os.path.basename(path)`` (existing behavior). Useful for
+    callers that stage to a temp path but want the original source name.
     """
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
-    name = cog_output_name(os.path.basename(path))
+    base = out_name if out_name is not None else os.path.basename(path)
+    name = cog_output_name(base)
     out_path = os.path.join(out_dir, name)
 
     if skip_if_exists and os.path.exists(out_path):

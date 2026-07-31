@@ -121,3 +121,28 @@ def test_prepare_cog_measured_skipped_status(tmp_path):
     r = prepare_cog_measured(str(src), str(out))
     assert r["status"] == "skipped"
     assert r["output_path"] == str(out / "scene.tiff.cog")
+
+
+def test_prepare_cog_out_name_overrides_basename(tmp_path):
+    src = tmp_path / "in" / "staged_tmp12345.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    # out_name mimics prepare_cogs passing the ORIGINAL basename while the input
+    # path is a staged temp.
+    out_path, status = prepare_cog(
+        str(src), str(out), blocksize=256, out_name="scene_original.tif"
+    )
+    assert status == "ok"
+    assert out_path == str(out / "scene_original.tif.cog")
+    assert os.path.exists(out_path)
+
+
+def test_prepare_cog_out_name_none_uses_basename(tmp_path):
+    src = tmp_path / "in" / "plain.tif"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    out_path, status = prepare_cog(str(src), str(out), blocksize=256)
+    assert status == "ok"
+    assert out_path == str(out / "plain.tif.cog")

@@ -7,6 +7,7 @@ import rasterio
 
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
 from . import _layouts
 from .conftest import make_geotiff_bytes
 

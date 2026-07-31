@@ -6,6 +6,7 @@ from shapely.geometry import box
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
+
 from .conftest import make_geotiff_bytes
 
 
@@ -46,8 +47,8 @@ def test_clip_disjoint_returns_none():
 def test_clip_crs_overrides_and_reprojects():
     # UTM raster; polygon given in lon/lat via explicit clip_crs must reproject
     # and clip successfully (not raise "do not overlap").
-    from rasterio.transform import from_origin
     from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
     from rasterio.warp import transform_bounds
 
     tr = from_origin(500000.0, 5000000.0, 100.0, 100.0)

@@ -30,7 +30,7 @@ def _peak_kib(path):
     return arr, peak // 1024
 
 
-def test_windowed_read_smaller_than_full(tmp_path, capsys):
+def test_windowed_read_smaller_than_full(tmp_path):
     cog = _layouts.write_cog(str(tmp_path / "a.cog.tif"), W, H, BS)
     striped = _layouts.write_striped_gtiff(str(tmp_path / "a.striped.tif"), W, H)
     arr_c, peak_c = _peak_kib(cog)

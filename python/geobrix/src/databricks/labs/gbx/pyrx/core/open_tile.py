@@ -150,6 +150,32 @@ def _safe_remove(path: str) -> None:
         pass
 
 
+def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
+    """Convert a (possibly virtual) tile to a v2-materialized tile: run open_tile
+    on the light side (which CAN read /Volumes), capture the window+warp+clip
+    result into `raster`, keep provenance. Output is heavy-consumable. This is
+    the single sanctioned light->heavy crossing for virtual tiles.
+    """
+    with open_tile(tile) as ds:
+        data = ds.read()
+        profile = ds.profile.copy()
+        profile.update(driver="GTiff")
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(data)
+            raster = mf.read()
+    return VirtualTile(
+        cellid=tile.cellid,
+        raster=raster,
+        path=tile.path,
+        window=tile.window,
+        clip_polygon=tile.clip_polygon,
+        clip_crs=tile.clip_crs,
+        crs=tile.crs,
+        metadata=dict(tile.metadata),
+    )
+
+
 def materialize(tile: VirtualTile) -> Tuple[np.ndarray, "rasterio.Affine", dict]:
     """Convenience wrapper: (array, transform, profile) from open_tile."""
     with open_tile(tile) as ds:

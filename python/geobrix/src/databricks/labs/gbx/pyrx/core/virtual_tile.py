@@ -83,6 +83,16 @@ class VirtualTile:
         }
 
     @classmethod
+    def from_v1(cls, cellid, raster, metadata=None):
+        """Widen a v1 tile (cellid, raster, metadata) to v2-materialized.
+
+        All provenance fields (path/window/clip_polygon/clip_crs/crs) are null.
+        Lossless: open_tile's raster-precedence path treats it identically to a
+        v1 tile, which is the 'v1 supported indefinitely' contract.
+        """
+        return cls(cellid=cellid, raster=raster, metadata=dict(metadata or {}))
+
+    @classmethod
     def from_row(cls, row) -> "VirtualTile":
         d = row.asDict() if hasattr(row, "asDict") else dict(row)
         win = d.get("window")

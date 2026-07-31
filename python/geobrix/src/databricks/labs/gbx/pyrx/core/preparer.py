@@ -205,8 +205,13 @@ def _stage_local_if_needed(path: str) -> Tuple[str, bool]:
         return path, False
     fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".tif")
     os.close(fd)
-    with open(path, "rb") as _src, open(tmp, "wb") as _dst:
-        shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
+    try:
+        with open(path, "rb") as _src, open(tmp, "wb") as _dst:
+            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
+    except Exception:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     return tmp, True
 
 
@@ -242,21 +247,28 @@ def prepare_cogs(
             status, out_path = "error:not-found", None
         else:
             original_base = os.path.basename(src)
-            local_src, is_temp = _stage_local_if_needed(src)
             try:
-                out_path, status = prepare_cog(
-                    local_src,
-                    out_dir,
-                    blocksize=blocksize,
-                    resampling=resampling,
-                    compression=compression,
-                    subdataset=subdataset,
-                    skip_if_exists=skip_if_exists,
-                    out_name=original_base,
+                local_src, is_temp = _stage_local_if_needed(src)
+            except Exception as exc:  # noqa: BLE001 — per-file isolation
+                status, out_path = (
+                    f"error:stage: {type(exc).__name__}: {exc}"[:300],
+                    None,
                 )
-            finally:
-                if is_temp and os.path.exists(local_src):
-                    os.remove(local_src)
+            else:
+                try:
+                    out_path, status = prepare_cog(
+                        local_src,
+                        out_dir,
+                        blocksize=blocksize,
+                        resampling=resampling,
+                        compression=compression,
+                        subdataset=subdataset,
+                        skip_if_exists=skip_if_exists,
+                        out_name=original_base,
+                    )
+                finally:
+                    if is_temp and os.path.exists(local_src):
+                        os.remove(local_src)
         f_elapsed = round(time.time() - f_t0, 2)
         rss = _peak_rss_mib()
         peak = max(peak, rss)

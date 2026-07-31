@@ -240,9 +240,6 @@ def test_prepare_cogs_list_mixed_with_error_and_skip(tmp_path):
         blocksize=256,
         verbose=False,
     )
-    by_status = {}
-    for r in summary["results"]:
-        by_status.setdefault(r["status"].split(":", 1)[0], []).append(r)
     assert summary["ok"] == 1  # a.tif
     assert summary["skipped"] == 1  # b.tif (pre-existing output)
     assert summary["error"] == 1  # ghost.tif not-found
@@ -268,3 +265,44 @@ def test_prepare_cogs_verbose_false_silent(tmp_path, capsys):
     out = tmp_path / "out"
     prepare_cogs(str(d), str(out), blocksize=256, verbose=False)
     assert capsys.readouterr().out == ""
+
+
+def test_prepare_cogs_staging_error_isolation(tmp_path, monkeypatch):
+    """Staging failure on one source doesn't abort batch; others still succeed."""
+    from databricks.labs.gbx.pyrx.core import preparer as preparer_module
+
+    d = tmp_path / "corpus"
+    _touch_tif(d / "good.tif")
+    bad = d / "bad.tif"
+    _touch_tif(bad)
+    out = tmp_path / "out"
+
+    # Monkeypatch _stage_local_if_needed to fail for "bad.tif" only.
+    original_stage = preparer_module._stage_local_if_needed
+
+    def mock_stage(path):
+        if "bad.tif" in path:
+            raise IOError("Simulated FUSE read error")
+        return original_stage(path)
+
+    monkeypatch.setattr(preparer_module, "_stage_local_if_needed", mock_stage)
+
+    summary = prepare_cogs(str(d), str(out), blocksize=256, verbose=False)
+
+    # Batch must not abort; good.tif converts, bad.tif errors, counts correct.
+    assert summary["total"] == 2
+    assert summary["ok"] == 1, f"Expected 1 ok, got {summary['ok']}"
+    assert summary["error"] == 1, f"Expected 1 error, got {summary['error']}"
+    assert summary["skipped"] == 0
+
+    # good.tif succeeded.
+    good_results = [r for r in summary["results"] if "good.tif" in r["source"]]
+    assert len(good_results) == 1
+    assert good_results[0]["status"] == "ok"
+    assert good_results[0]["output_path"] is not None
+
+    # bad.tif got error:stage, output_path None.
+    bad_results = [r for r in summary["results"] if "bad.tif" in r["source"]]
+    assert len(bad_results) == 1
+    assert bad_results[0]["status"].startswith("error:stage")
+    assert bad_results[0]["output_path"] is None

@@ -38,3 +38,12 @@ def test_materialize_to_bytes_produces_heavy_useful_tile(tmp_path):
         full = ds.read(1)
     c, r, w, h = WINDOW
     assert np.array_equal(got, full[r:r + h, c:c + w])
+
+
+def test_materialize_to_bytes_none_metadata(tmp_path):
+    """materialize_to_bytes must not TypeError when tile.metadata is None."""
+    path = _layouts.write_tiled_gtiff(str(tmp_path / "b.tif"), 512, 512, 256)
+    virt = VirtualTile(cellid=9, path=path, window=WINDOW, metadata=None)
+    mat = ot.materialize_to_bytes(virt)
+    assert mat.raster is not None
+    assert isinstance(mat.metadata, dict)

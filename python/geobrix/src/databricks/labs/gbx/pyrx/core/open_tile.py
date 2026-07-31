@@ -172,7 +172,7 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
         clip_polygon=tile.clip_polygon,
         clip_crs=tile.clip_crs,
         crs=tile.crs,
-        metadata=dict(tile.metadata),
+        metadata=dict(tile.metadata or {}),
     )
 
 

@@ -9,6 +9,7 @@ from databricks.labs.gbx.pyrx.core.preparer import (
     cog_output_name,
     _subdataset_uri,
     prepare_cog,
+    prepare_cog_measured,
 )
 
 
@@ -88,3 +89,35 @@ def test_prepare_cog_error_isolation_returns_status(tmp_path):
     out_path, status = prepare_cog(str(tmp_path / "missing.tif"), str(out))
     assert out_path is None
     assert status.startswith("error:")
+
+
+def test_prepare_cog_measured_ok_has_rss(tmp_path):
+    src = tmp_path / "in" / "scene.tiff"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    r = prepare_cog_measured(str(src), str(out), blocksize=256)
+    assert r["status"] == "ok"
+    assert r["output_path"] == str(out / "scene.tiff.cog")
+    assert isinstance(r["peak_rss_mib"], float) and r["peak_rss_mib"] > 0
+
+
+def test_prepare_cog_measured_error_passthrough(tmp_path):
+    out = tmp_path / "out"
+    r = prepare_cog_measured(str(tmp_path / "missing.tif"), str(out))
+    assert r["output_path"] is None
+    assert r["status"].startswith("error:")
+    # RSS is still reported (measured around the attempt).
+    assert isinstance(r["peak_rss_mib"], float)
+
+
+def test_prepare_cog_measured_skipped_status(tmp_path):
+    src = tmp_path / "in" / "scene.tiff"
+    src.parent.mkdir()
+    _write_src(str(src))
+    out = tmp_path / "out"
+    out.mkdir()
+    (out / "scene.tiff.cog").write_bytes(b"sentinel")
+    r = prepare_cog_measured(str(src), str(out))
+    assert r["status"] == "skipped"
+    assert r["output_path"] == str(out / "scene.tiff.cog")

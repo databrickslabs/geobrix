@@ -10,9 +10,11 @@ registered as a gbx_* function.
 from __future__ import annotations
 
 import os
+import resource
 import shutil
+import sys
 import tempfile
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 
 def cog_output_name(source_basename: str) -> str:
@@ -76,3 +78,41 @@ def prepare_cog(
         return out_path, "ok"
     except Exception as exc:  # noqa: BLE001 — per-row isolation is the contract
         return None, f"error:{type(exc).__name__}: {exc}"[:300]
+
+
+def _peak_rss_mib() -> float:
+    """Process high-water RSS in MiB (darwin reports bytes, linux KiB)."""
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        return rss / (1024 * 1024)
+    return rss / 1024
+
+
+def prepare_cog_measured(
+    path: str,
+    out_dir: str,
+    blocksize: int = 512,
+    resampling: str = "AVERAGE",
+    compression: str = "DEFLATE",
+    subdataset: Optional[str] = None,
+    skip_if_exists: bool = True,
+) -> Dict[str, object]:
+    """prepare_cog + peak-RSS capture, returning a driver-collectable dict.
+
+    Keys: output_path (str|None), peak_rss_mib (float), status (str). This is the
+    exact per-row payload the scalar UDF returns; RSS is captured on the DRIVER
+    side by collecting this value (worker markers are unreliable on Serverless).
+    """
+    out_path, status = prepare_cog(
+        path, out_dir,
+        blocksize=blocksize,
+        resampling=resampling,
+        compression=compression,
+        subdataset=subdataset,
+        skip_if_exists=skip_if_exists,
+    )
+    return {
+        "output_path": out_path,
+        "peak_rss_mib": _peak_rss_mib(),
+        "status": status,
+    }

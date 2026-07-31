@@ -239,6 +239,17 @@ def run_one(
     for t in r.tasks or []:
         ts = t.state.result_state if t.state else None
         print(f"    task {t.task_key}: {ts}  page={t.run_page_url}", flush=True)
+        # The jobs API does NOT expose serverless notebook stdout; a notebook that
+        # ends with dbutils.notebook.exit(<json>) surfaces its result here. Print
+        # it so experiment summaries are captured client-side (reliable, not stdout).
+        try:
+            out = w.jobs.get_run_output(run_id=t.run_id)
+            nb_out = getattr(out, "notebook_output", None)
+            payload = getattr(nb_out, "result", None) if nb_out else None
+            if payload:
+                print(f"    task {t.task_key} notebook_output: {payload}", flush=True)
+        except Exception as exc:  # noqa: BLE001 — output fetch is best-effort
+            print(f"    (no notebook_output for {t.task_key}: {exc})", flush=True)
 
     from databricks.sdk.service.jobs import RunResultState
     ok = (result == RunResultState.SUCCESS)

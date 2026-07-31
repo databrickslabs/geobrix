@@ -183,10 +183,38 @@ methods. So "driver mode" must be `write()` gathers references + `commit()` does
 work. This is the same "carry references, not pixels" discipline used elsewhere.
 
 **Option surface:**
-`df.write.format("cog_gbx").option("driverMode","true").save(out_dir)`. The existing
-`cogBlockSize` / `cogOverviewResampling` / `cogCompression` / `nameCol` options thread straight
-into the `prepare_cogs` call. Input schema is unchanged — still the path-bearing rows from
-`file_gbx`; `assert_path_schema` still applies.
+`df.write.format("cog_gbx").option("driverMode","true").save(out_dir)`. Input schema is unchanged
+— still the path-bearing rows from `file_gbx`; `assert_path_schema` still applies.
+
+Option mapping (each `prepare_cogs` param classified by whether it applies in the DEFAULT
+per-partition path or only in driverMode):
+
+| Concept | `cog_gbx` option | Default | Applies to |
+|---|---|---|---|
+| block size | `cogBlockSize` (existing) | `512` | both paths |
+| overview resampling | `cogOverviewResampling` (existing) | `AVERAGE` | both paths |
+| compression | `cogCompression` (existing) | `DEFLATE` | both paths |
+| output name column | `nameCol` (existing) | `name` | both paths |
+| **subdataset URI** | **`cogSubdataset`** (NEW) | none | **both paths** |
+| **skip if output exists** | **`cogSkipIfExists`** (NEW) | `true` | **both paths** |
+| driver-mode toggle | **`driverMode`** (NEW) | `false` | — |
+| live per-file progress print | **`driverModeVerbose`** (NEW) | `true` | **driverMode only** |
+| directory recursion | — (N/A) | — | not exposed |
+| directory extension filter | — (N/A) | — | not exposed |
+
+Rationale for the split:
+- **`cogSubdataset` / `cogSkipIfExists` are GENERAL** conversion concepts (build a NetCDF
+  subdataset URI; skip when the `.cog` output already exists) — they are wired into BOTH the
+  default per-partition `write()` conversion AND driverMode's `prepare_cogs` call. Unprefixed
+  because they are not driver-specific. This means the default `write()` path gains a per-row
+  `skip_if_exists` existence check and subdataset-URI construction (small additions).
+- **`driverModeVerbose` is driverMode-ONLY** — live per-file progress prints only surface from
+  the DRIVER (`commit()`); on executors (`write()`) stdout does not reliably surface. Prefixed to
+  make the driver-specificity explicit; ignored when `driverMode=false`.
+- **`recursive` / `extensions` are OMITTED** — they are directory-LISTING params in
+  `prepare_cogs`, but `cog_gbx`'s input is an already-resolved DataFrame of file-path rows
+  (`file_gbx` did the listing upstream). By the time `commit()` calls `prepare_cogs(all_paths,…)`
+  it passes an explicit file list, so these never engage. Exposing them would be dead options.
 
 **Default = `false`** — clearly opt-in. The default preserves today's distributed per-partition
 `write()` conversion (the moderate-file path). A user must explicitly set
@@ -213,12 +241,14 @@ into the `prepare_cogs` call. Input schema is unchanged — still the path-beari
     output yields `skipped`.
   - progress `verbose=False` suppresses prints (assert via capsys); `verbose=True` prints one
     line per file + final summary line.
-- **`cog_gbx` driverMode (local, in `python/geobrix/test/ds/test_cog_writer.py`):** with
-  `driverMode=true`, `write(iterator)` returns a `CogCommitMessage` whose `paths` are the input
+- **`cog_gbx` driverMode + new options (local, in `python/geobrix/test/ds/test_cog_writer.py`):**
+  with `driverMode=true`, `write(iterator)` returns a `CogCommitMessage` whose `paths` are the input
   source paths and produces NO `.cog` files by itself (no conversion on the worker path);
   `commit([...])` then produces valid COGs for every path (assert via `sniff_header`). With
   `driverMode=false` (default), behavior is unchanged (per-partition conversion). `assert_path_schema`
-  still enforced in both modes.
+  still enforced in both modes. `cogSkipIfExists` (both modes): a pre-existing `.cog` output is not
+  reconverted. `cogSubdataset` (both modes): threads the subdataset name into conversion.
+  `driverModeVerbose=false` suppresses the driver progress prints.
 - **Serverless (final gate):** extend/add a throwaway notebook that (a) calls `prepare_cogs` over
   the `large-raster/corpus` directory on the driver, and (b) exercises
   `df.write.format("cog_gbx").option("driverMode","true")` over the same corpus — both capturing the

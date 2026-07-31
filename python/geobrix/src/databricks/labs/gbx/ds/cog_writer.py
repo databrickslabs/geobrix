@@ -1,26 +1,45 @@
-"""cog_gbx writer — master-COG file preparation.
+"""cog_gbx writer — master-COG file preparation. Two modes:
 
-Accepts PATH-bearing rows (from file_gbx), converts each source to ONE master
-COG (internally tiled + overviews, no split) via cog_convert_file
-(rasterio.shutil.copy driver="COG"), and writes it FUSE-safe to the output
-Volume. GDAL reads the source natively (cloud-native sequential read over FUSE)
-— the source never passes through the Python heap. The COG output is written to
-a worker-local temp file, then copied bytes-only to the output Volume. Pixels
-never ride in a Spark column — accumulation-proof for the per-partition path.
+DEFAULT (per-partition, ``driverMode=false``):
+  Accepts PATH-bearing rows (from file_gbx) and converts each source to ONE
+  master COG via cog_convert_file (rasterio.shutil.copy driver="COG") on the
+  EXECUTOR. GDAL reads the source natively; the COG is written to a worker-local
+  temp then copied bytes-only to the output Volume. Pixels never ride a Spark
+  column (accumulation-proof).
+  CEILING: a single very large source (~1+ GiB) cannot be converted inside the
+  Serverless DS-V2 write task — the worker's tight per-task memory envelope
+  (~1 GB per-PySpark-UDF cap) is exhausted by GDAL's overview-build transient
+  (confirmed: Python copyfileobj / GDAL-direct read both OOM; WorkspaceClient/
+  dbutils cannot even be constructed in a worker). Inherent to the DS-V2 write
+  sandbox. So the default mode is for MODERATE files.
 
-MEMORY CEILING (large single files on Serverless):
-  A single very large source (~1+ GiB striped GeoTIFF) cannot be COG-converted
-  INSIDE a Databricks Serverless DataSource-V2 write task: the serverless
-  worker's tight memory envelope (~312 MiB baseline) is exhausted by GDAL's
-  overview-build transient on such a source, and EVERY in-worker read/copy
-  mechanism was exhausted proving this (Python copyfileobj → OOM; GDAL-direct
-  read over FUSE → OOM; WorkspaceClient/dbutils cannot even be constructed in a
-  serverless worker). It is NOT a patchable code layer — it is inherent to the
-  DS-V2 write sandbox. This writer is validated for moderate files. For very
-  large single COGs, prepare them on a classic cluster (roomier per-task
-  memory) or via a driver-orchestrated path. Multi-GiB-on-Serverless is a
-  tracked follow-on (candidate: an rst_* file-preparation function callable
-  outside the DS-V2 write sandbox).
+driverMode (``driverMode=true``):
+  write() on executors gathers only the source path strings (cap-safe, no GDAL,
+  no pixels); commit() on the DRIVER runs prepare_cogs over the full list. The
+  driver is NOT under the ~1 GB per-UDF cap (validated: 10 GiB striped source →
+  valid COG at ~2 GiB driver RSS), so this handles large single files and large
+  batches one-at-a-time.
+
+  ⚠ COMMIT TIMEOUT — Spark Connect channel cancellation:
+    commit() runs the conversion INSIDE the ``.save()`` gRPC call. On Databricks
+    Serverless (Spark Connect), a commit() that blocks for many minutes can have
+    its channel cancelled — surfacing as
+    ``UnknownException: (java.nio.channels.CancelledKeyException)`` and a FAILED
+    run — even though nothing is wrong with the conversion itself. Risk grows
+    with corpus size / per-file convert time (rough throughput ~1 GB/min).
+    HOW TO AVOID IT: skip the writer and call the lower-level driver function
+    directly from your notebook — it is plain Python on the driver with NO Spark
+    RPC, so there is no channel to cancel:
+
+        from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+        # `sources` = a dir, a file, or a list mixing both (file_gbx not required)
+        summary = prepare_cogs(sources, out_dir, blocksize=512, verbose=True)
+
+    prepare_cogs is the robust path for large / long-running preparation; the
+    driverMode writer is a convenience wrapper best used for smaller/faster
+    batches where the .save() call completes well within the channel timeout.
+    prepare_cogs is idempotent (skip_if_exists), so re-running after a timeout
+    only fills the gaps.
 """
 
 from __future__ import annotations
@@ -144,6 +163,11 @@ class CogGbxWriter(DataSourceWriter):
 
     def commit(self, messages: List[Optional[WriterCommitMessage]]) -> None:
         if self.driver_mode:
+            # NOTE: this runs INSIDE the .save() Spark Connect RPC. A long-blocking
+            # commit (large corpus / big files, ~1 GB/min) can have its channel
+            # cancelled → java.nio.channels.CancelledKeyException + a FAILED run.
+            # If you hit that, bypass the writer and call prepare_cogs directly on
+            # the driver (plain Python, no Spark RPC) — see this module's docstring.
             from databricks.labs.gbx.ds._listing import to_local_path
             from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
 

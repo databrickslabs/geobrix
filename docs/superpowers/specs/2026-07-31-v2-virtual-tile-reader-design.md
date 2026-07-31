@@ -107,8 +107,48 @@ Field rules:
   pending warp is what reconciles them to `crs`.
 
 Back-compat: a v1 tile `(cellid, raster, metadata)` is still expressible with `path`/`window`/
-`clip_polygon`/`crs` null. v1 is supported **indefinitely** (hard back-compat), because it flows the
-raster-set path through the same `open_tile` chokepoint with zero per-function effort.
+`clip_polygon`/`clip_crs`/`crs` null. v1 is supported **indefinitely** (hard back-compat), because it
+flows the raster-set path through the same `open_tile` chokepoint with zero per-function effort.
+
+## Tile-shape lattice: conversions & tier interop
+
+Tile shape forms a widening lattice — `v1 (cellid,raster,metadata)` ⊂ `v2-materialized (raster
+non-null + provenance)` ⊂ `v2-virtual (raster null, path+window)`. Three conversions matter:
+
+**(1) v1 → v2 (widen, lossless).** A v1 tile *is* a v2-materialized tile with
+`path/window/clip_polygon/clip_crs/crs` all null. Conversion = conform a v1 DataFrame to
+`V2_TILE_SCHEMA` (add null columns) or `VirtualTile.from_v1(cellid, raster, metadata)`. Because
+`open_tile` gives `raster`-present precedence, a widened v1 tile behaves identically — this *is* the
+"v1 supported indefinitely" contract. Narrowing v2 → v1 is possible only when `raster` is non-null
+(materialized) and drops provenance (lossy, but valid for interop).
+
+*Note — widen ≠ dematerialize.* `from_v1` only adds null provenance columns; the bytes stay in
+`raster` (still a materialized tile). Actually converting bytes **to a virtual tile** (raster null,
+referencing a durable `path`) is a distinct **dematerialize** operation — the inverse of (3):
+externalize the bytes to a durable path (write once, e.g. a COG on a Volume), then reference
+`path` + a full-extent `window`. It is only valid for a **durable** destination (Volume originals /
+staged COGs), never a temp/derived path (referential-lifecycle constraint). **Deferred to Inc 2**:
+the reader-emit mode already produces virtual tiles directly from durable paths, so a standalone
+`dematerialize_to_virtual(tile, out_dir, as_cog=True)` converter is likely redundant — evaluate then
+whether it is still needed as a public op.
+
+**(2) v2-virtual on the heavy tier — NOT supported (behavioral rule); struct adoption deferred.**
+The heavy JVM cannot lazily read `/Volumes` (the UC credential lives in the Python worker), so the
+deferred `path`@`window` read is impossible in-JVM. Therefore **heavy can never consume a v2-virtual
+tile** — virtual tiles are **light-tier only**. Any heavy handoff requires materialization first
+(conversion 3). This behavioral boundary holds regardless of the still-open question of *whether
+heavy adopts the v2 struct at all* (schema-parity vs v1-only): that decision is **deferred** to
+heavy-tier parity work (gated on the light-vs-heavy large-raster bench, per existing sequencing). If
+heavy later adopts the v2 struct, its functions still REQUIRE `raster` non-null and a virtual tile
+handed to heavy must raise a clear "materialize first" error rather than attempt an in-JVM lazy read.
+
+**(3) v2-virtual → heavy-useful (materialize).** The inverse of the lazy read: run `open_tile` on the
+virtual tile on the **light** side (which can read `/Volumes`), writing the resulting window+warp+clip
+bytes into `raster`, keeping `window`/`clip_polygon` as provenance. Per the resolution rule, `raster`
+non-null now IS exactly that window's result. Output = a v2-materialized tile = heavy-consumable.
+Helper `materialize_to_bytes(tile) -> VirtualTile` (raster set) is a thin wrapper over `open_tile`,
+available once increment 1 lands. This is the single sanctioned light→heavy crossing for virtual
+tiles.
 
 ## Components
 

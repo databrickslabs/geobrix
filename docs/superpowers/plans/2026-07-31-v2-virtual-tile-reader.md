@@ -777,7 +777,145 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 5: Partial-clip reassembly probe (precondition for lazy mosaic)
+### Task 5: Tile-shape conversions — `from_v1` widen + `materialize_to_bytes`
+
+**Files:**
+- Modify: `python/geobrix/src/databricks/labs/gbx/pyrx/core/virtual_tile.py` (add `from_v1` classmethod)
+- Modify: `python/geobrix/src/databricks/labs/gbx/pyrx/core/open_tile.py` (add `materialize_to_bytes`)
+- Test: `python/geobrix/test/pyrx/test_core_virtual_convert.py`
+
+**Interfaces:**
+- Consumes: `VirtualTile` (Task 1), `open_tile` (Task 4), `_layouts` (test), `_serde.open_tile`.
+- Produces:
+  - `VirtualTile.from_v1(cellid: int, raster: bytes, metadata: Optional[dict] = None) -> VirtualTile` — widen a v1 tile to v2-materialized (all provenance null). Lossless.
+  - `open_tile.materialize_to_bytes(tile: VirtualTile) -> VirtualTile` — run `open_tile`, capture the resulting GTiff bytes into `raster`, keep `path`/`window`/`clip_polygon`/`clip_crs`/`crs` as provenance, preserve `cellid`/`metadata`. Output is v2-materialized (raster non-null) → heavy-consumable. This is the single sanctioned light→heavy crossing for virtual tiles.
+
+**Design note:** conversion (1) v1→v2 and (3) virtual→heavy-useful from the spec's tile-shape lattice. (2) "virtual on heavy" is a deferred *behavioral rule* (heavy can't lazily read /Volumes → virtual is light-only, materialize first); no code here — documented in the spec, enforced when heavy-tier parity is scheduled.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# python/geobrix/test/pyrx/test_core_virtual_convert.py
+"""Tile-shape conversions: v1->v2 widen (lossless) and virtual->materialized
+(heavy-useful). The virtual->materialized output must round-trip through the
+raster-precedence path identically to reading the source window directly.
+"""
+import numpy as np
+import rasterio
+
+from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from . import _layouts
+from .conftest import make_geotiff_bytes
+
+WINDOW = (128, 64, 200, 300)
+
+
+def test_from_v1_widens_losslessly():
+    b = make_geotiff_bytes(width=4, height=3)
+    t = VirtualTile.from_v1(cellid=7, raster=b, metadata={"driver": "GTiff"})
+    assert t.raster == b
+    assert t.path is None and t.window is None and t.clip_polygon is None
+    assert t.clip_crs is None and t.crs is None
+    assert not t.is_virtual()
+    assert t.metadata == {"driver": "GTiff"}
+
+
+def test_materialize_to_bytes_produces_heavy_useful_tile(tmp_path):
+    path = _layouts.write_tiled_gtiff(str(tmp_path / "a.tif"), 512, 512, 256)
+    virt = VirtualTile(cellid=8, path=path, window=WINDOW, metadata={"k": "v"})
+    mat = ot.materialize_to_bytes(virt)
+    # materialized: raster set, provenance preserved
+    assert mat.raster is not None and not mat.is_virtual()
+    assert mat.path == path and mat.window == WINDOW
+    assert mat.cellid == 8 and mat.metadata == {"k": "v"}
+    # raster-precedence path yields exactly the window's pixels
+    with ot.open_tile(mat) as ds:
+        got = ds.read(1)
+    with rasterio.open(path) as ds:
+        full = ds.read(1)
+    c, r, w, h = WINDOW
+    assert np.array_equal(got, full[r:r + h, c:c + w])
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/pyrx/test_core_virtual_convert.py --log convert.log`
+Expected: FAIL — `AttributeError: type object 'VirtualTile' has no attribute 'from_v1'`.
+
+- [ ] **Step 3: Write minimal implementation**
+
+Add to `virtual_tile.py` (inside the `VirtualTile` class):
+
+```python
+    @classmethod
+    def from_v1(cls, cellid, raster, metadata=None):
+        """Widen a v1 tile (cellid, raster, metadata) to v2-materialized.
+
+        All provenance fields (path/window/clip_polygon/clip_crs/crs) are null.
+        Lossless: open_tile's raster-precedence path treats it identically to a
+        v1 tile, which is the 'v1 supported indefinitely' contract.
+        """
+        return cls(cellid=cellid, raster=raster, metadata=dict(metadata or {}))
+```
+
+Add to `open_tile.py`:
+
+```python
+from rasterio.io import MemoryFile  # already imported
+
+def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
+    """Convert a (possibly virtual) tile to a v2-materialized tile: run open_tile
+    on the light side (which CAN read /Volumes), capture the window+warp+clip
+    result into `raster`, keep provenance. Output is heavy-consumable. This is
+    the single sanctioned light->heavy crossing for virtual tiles.
+    """
+    with open_tile(tile) as ds:
+        data = ds.read()
+        profile = ds.profile.copy()
+        profile.update(driver="GTiff")
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(data)
+            raster = mf.read()
+    return VirtualTile(
+        cellid=tile.cellid,
+        raster=raster,
+        path=tile.path,
+        window=tile.window,
+        clip_polygon=tile.clip_polygon,
+        clip_crs=tile.clip_crs,
+        crs=tile.crs,
+        metadata=dict(tile.metadata),
+    )
+```
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/pyrx/test_core_virtual_convert.py --log convert.log`
+Expected: PASS (2 tests).
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add python/geobrix/src/databricks/labs/gbx/pyrx/core/virtual_tile.py \
+        python/geobrix/src/databricks/labs/gbx/pyrx/core/open_tile.py \
+        python/geobrix/test/pyrx/test_core_virtual_convert.py
+git commit -m "feat(pyrx): tile-shape conversions from_v1 + materialize_to_bytes
+
+from_v1 widens a v1 tile to v2-materialized (lossless, all provenance
+null). materialize_to_bytes runs open_tile on the light side and
+captures the result into raster (heavy-consumable) while keeping
+provenance -- the single sanctioned light->heavy crossing for virtual
+tiles. (Heavy consuming a *virtual* tile stays unsupported: no in-JVM
+/Volumes lazy read; struct adoption deferred to heavy-parity work.)
+
+Co-authored-by: Isaac"
+```
+
+---
+
+### Task 6: Partial-clip reassembly probe (precondition for lazy mosaic)
 
 **Files:**
 - Test: `python/geobrix/test/pyrx/test_core_virtual_reassembly.py`
@@ -842,7 +980,7 @@ Expected: FAIL initially if seam math is off — adjust the concat/index math un
 
 - [ ] **Step 3: Make it pass**
 
-No new source expected — this validates Task 4. If it fails due to clip envelope rounding (partial pixel at the polygon edge), align the expected slice bounds to the integer pixel window rasterio actually returns (read `ds.width`/`ds.transform` of each clipped tile to compute the true column span), keeping the invariant "the two partials cover exactly cols 100..400 with no gap/overlap."
+No new source expected — this validates Task 4 (`open_tile`). If it fails due to clip envelope rounding (partial pixel at the polygon edge), align the expected slice bounds to the integer pixel window rasterio actually returns (read `ds.width`/`ds.transform` of each clipped tile to compute the true column span), keeping the invariant "the two partials cover exactly cols 100..400 with no gap/overlap."
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -864,7 +1002,7 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 6: Peak-RSS probe — COG-overview vs striped inflation (local)
+### Task 7: Peak-RSS probe — COG-overview vs striped inflation (local)
 
 **Files:**
 - Test: `python/geobrix/test/pyrx/test_core_virtual_memory_probe.py`
@@ -934,7 +1072,7 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 7: Serverless experiment — open_tile across 3 layouts on a Volume
+### Task 8: Serverless experiment — open_tile across 3 layouts on a Volume
 
 **Files:**
 - Create: `prompts/features/2026-07-31-virtual-tile-serverless-experiment.py` (gitignored scratch: notebook body + runner invocation notes)
@@ -1044,19 +1182,21 @@ Append the JSON + interpretation to `prompts/features/2026-07-31-virtual-tile-se
 - WarpedVRT lazy-warp probe → Task 4 (`test_warpedvrt_probe_reprojects_window`). ✓
 - 3-layout corpus (COG/tiled/striped, identical pixels) → Task 2. ✓
 - Multi-block window → Task 4 (WINDOW crosses the 256 boundary; `test_windowed_read_equals_full_slice`). ✓
-- Partial-clip reassembly probe → Task 5. ✓
-- Peak-RSS COG vs striped probe → Task 6. ✓
-- Serverless proof (worker-side materialize, jobs.submit + env v5, self-report) → Task 7. ✓
+- Tile-shape conversions: v1→v2 widen (`from_v1`) + virtual→materialized (`materialize_to_bytes`) → Task 5. Dematerialize-to-virtual + heavy struct adoption deferred (spec §lattice). ✓
+- Partial-clip reassembly probe → Task 6. ✓
+- Peak-RSS COG vs striped probe → Task 7. ✓
+- Serverless proof (worker-side materialize, jobs.submit + env v5, self-report) → Task 8. ✓
 - Exploratory/non-wired (no registration) → Global Constraints; no task touches registered_functions.txt/function-info.json/bindings. ✓
 - `crs` field defined + minimally exercised (probe only; full rst_transform deferred) → Task 1 (field) + Task 4 (probe). ✓
 
 **2. Placeholder scan:** No "TBD/TODO/handle edge cases". Every code step has real code. Task 5/6 note where expected values may need alignment to rasterio's actual clip envelope — that's a real instruction (align to measured pixel window), not a placeholder.
 
-**3. Type consistency:** `VirtualTile(cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata)` used identically in Tasks 1,3,4,5,6,7. `Window4` = (col_off,row_off,width,height) consistent. `clip_dataset(ds, clip_polygon, clip_crs)` signature matches between Task 3 def and Task 4 call. `open_tile(tile)` (VirtualTile) is distinct from `_serde.open_tile(bytes)` and delegates to it — noted in Task 4. `materialize(tile) -> (array, transform, profile)` matches Task 6 usage.
+**3. Type consistency:** `VirtualTile(cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata)` used identically across Tasks 1,3,4,5,6,7,8. `Window4` = (col_off,row_off,width,height) consistent. `clip_dataset(ds, clip_polygon, clip_crs)` signature matches between Task 3 def and Task 4 call. `open_tile(tile)` (VirtualTile) is distinct from `_serde.open_tile(bytes)` and delegates to it — noted in Task 4. `materialize(tile) -> (array, transform, profile)` matches Task 7 usage. Conversions `from_v1` + `materialize_to_bytes` in Task 5; dematerialize-to-virtual deferred to Inc 2 (reader emits virtual tiles from durable paths directly).
 
 ## Deferred to later increments (tracked, NOT built here)
 
-- Inc 2: reader `virtualTiles` emit mode (default one-block window @ optional overview `z`).
+- Inc 2: reader `virtualTiles` emit mode (default one-block window @ optional overview `z`). Also evaluate whether a standalone `dematerialize_to_virtual` (bytes → durable COG path → virtual tile) is still needed once the reader emits virtual tiles from durable paths directly.
+- Heavy tier + v2: heavy can NEVER consume a virtual tile (no in-JVM /Volumes lazy read) — virtual is light-only; heavy handoff requires `materialize_to_bytes` first. Whether heavy adopts the v2 struct (schema parity) vs stays v1-only is deferred to heavy-tier parity work (gated on the light-vs-heavy large-raster bench).
 - Inc 3: window taxonomy — overlapPercent / user-bounds-array / user x,y tiling.
 - Inc 4: all `rst_*` functions routed through `open_tile`.
-- Inc 5: `rst_transform` triple-provenance (raster + window + clip_polygon) + mosaic/stack combinators. Task 5 is the reassembly precondition; the WarpedVRT model (B default, C escape hatch) decision uses Task 4/6/7 numbers.
+- Inc 5: `rst_transform` triple-provenance (raster + window + clip_polygon) + mosaic/stack combinators. Task 6 is the reassembly precondition; the WarpedVRT model (B default, C escape hatch) decision uses Task 4/7/8 numbers.

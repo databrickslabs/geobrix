@@ -6,8 +6,9 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx.core import cog as gbxcog
 from databricks.labs.gbx.pyrx.core.preparer import (
-    cog_output_name,
+    _resolve_sources,
     _subdataset_uri,
+    cog_output_name,
     prepare_cog,
     prepare_cog_measured,
 )
@@ -15,8 +16,13 @@ from databricks.labs.gbx.pyrx.core.preparer import (
 
 def _write_src(path, w=512, h=512):
     profile = dict(
-        driver="GTiff", width=w, height=h, count=1, dtype="uint8",
-        crs="EPSG:4326", transform=from_origin(0, 60, 0.01, 0.01),
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 60, 0.01, 0.01),
     )
     with rasterio.open(path, "w", **profile) as ds:
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w))
@@ -148,9 +154,6 @@ def test_prepare_cog_out_name_none_uses_basename(tmp_path):
     assert out_path == str(out / "plain.tif.cog")
 
 
-from databricks.labs.gbx.pyrx.core.preparer import _resolve_sources, DEFAULT_RASTER_EXTS
-
-
 def _touch_tif(p):
     p.parent.mkdir(parents=True, exist_ok=True)
     _write_src(str(p))
@@ -181,7 +184,9 @@ def test_resolve_list_mixes_files_and_dirs_dedup(tmp_path):
     _touch_tif(tmp_path / "d" / "a.tif")
     f = tmp_path / "d" / "a.tif"  # same file, also named explicitly
     _touch_tif(tmp_path / "standalone.tif")
-    resolved = _resolve_sources([str(tmp_path / "d"), str(f), str(tmp_path / "standalone.tif")])
+    resolved = _resolve_sources(
+        [str(tmp_path / "d"), str(f), str(tmp_path / "standalone.tif")]
+    )
     paths = [p for p, e in resolved]
     # a.tif appears once (dir + explicit), plus standalone.tif
     assert paths.count(str(f)) == 1
@@ -194,7 +199,7 @@ def test_resolve_missing_path_is_not_found(tmp_path):
 
 
 def test_resolve_explicit_file_bypasses_extension_filter(tmp_path):
-    weird = tmp_path / "data.bin"       # not in DEFAULT_RASTER_EXTS
-    _touch_tif(weird)                    # but it IS a real GeoTIFF on disk
+    weird = tmp_path / "data.bin"  # not in DEFAULT_RASTER_EXTS
+    _touch_tif(weird)  # but it IS a real GeoTIFF on disk
     # named explicitly → included despite extension
     assert _resolve_sources(str(weird)) == [(str(weird), None)]

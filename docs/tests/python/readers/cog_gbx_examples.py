@@ -3,7 +3,7 @@
 Code shown in docs/docs/readers/file.mdx and docs/docs/readers/cog.mdx is
 imported from here.  Tests exercise the halo-mode pipeline:
 
-  file_gbx  ->  cog_gbx writer  ->  cog_gbx reader (bbox clip)
+  file_gbx  ->  cog_gbx writer  ->  cog_gbx reader (clipPolygons/windows AOI)
 """
 
 import os
@@ -65,17 +65,20 @@ OUT = "/Volumes/main/geobrix_samples/cog-prepared/nyc-sentinel2"
 )
 print("COGs written to", OUT)"""
 
-COG_BBOX_READ = r"""# Step 3 — windowed read: clip to a bounding box (WGS84).
-# bbox = "xmin,ymin,xmax,ymax" in the CRS given by bboxCrs (default EPSG:4326).
-# Only tiles whose footprint intersects the box are fetched.
+COG_BBOX_READ = r"""# Step 3 — windowed read: clip to an area of interest.
+# clipPolygons takes a WKT/EWKT string (or, for a list, a JSON array string).
+# clipCrs gives the CRS of polygons that don't carry an embedded SRID
+# (precedence: embedded EWKB/EWKT SRID -> clipCrs -> raster CRS).
+# One tile is emitted per polygon whose envelope intersects the raster.
+aoi_wkt = "POLYGON((-74.05 40.65,-73.90 40.65,-73.90 40.80,-74.05 40.80,-74.05 40.65))"
 cog_df = (
     spark.read.format("cog_gbx")
-         .option("bbox", "-74.05,40.65,-73.90,40.80")   # NYC area
-         .option("bboxCrs", "EPSG:4326")
+         .option("clipPolygons", aoi_wkt)   # NYC area (WGS84)
+         .option("clipCrs", "EPSG:4326")
          .load(OUT)
 )
 cog_df.show()
-# source | tile
+# source | tile   (tile.raster is pre-clipped to the polygon; masked pixels are NoData)
 # The reader issues range-reads that fetch only the intersecting blocks."""
 
 # ---------------------------------------------------------------------------
@@ -166,10 +169,10 @@ def halo_mode_bbox_read(spark, src_path=None):
     COGs with the cog_gbx writer, then read them back with the cog_gbx reader and
     confirm the (source, tile) schema is present with non-null raster bytes.
 
-    Note: bbox clipping is not exercised here — the sentinel2 minimal-bundle sample
-    has non-standard native CRS bounds that cause a NYC bbox window to return empty.
-    Bbox clipping is unit-tested in python/geobrix/test/ds/test_raster_bbox.py and
-    test_cog_reader.py.
+    Note: clip selection is not exercised here — the sentinel2 minimal-bundle sample
+    has non-standard native CRS bounds that cause a NYC AOI window to return empty.
+    clipPolygons/windows selection is unit-tested in
+    python/geobrix/test/ds/test_raster_clip.py with synthetic data.
     """
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE
@@ -179,8 +182,8 @@ def halo_mode_bbox_read(spark, src_path=None):
     with tempfile.TemporaryDirectory() as out_dir:
         refs.write.format("cog_gbx").mode("overwrite").save(out_dir)
 
-        # Read the prepared COG back (whole file — bbox clipping is unit-tested
-        # in python/geobrix/test/ds/test_raster_bbox.py with synthetic data).
+        # Read the prepared COG back (whole file — clipPolygons/windows selection
+        # is unit-tested in python/geobrix/test/ds/test_raster_clip.py).
         cog_df = spark.read.format("cog_gbx").load(out_dir)
         rows = cog_df.collect()
         assert len(rows) >= 1, "cog_gbx reader must return at least one tile"

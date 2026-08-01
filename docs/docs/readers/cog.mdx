@@ -9,9 +9,10 @@ import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_example
 # COG Reader
 
 `cog_gbx` reads Cloud-Optimized GeoTIFFs (COGs) into the shared `(source, tile)`
-schema. Its defining feature is **bbox clipping**: pass a bounding box and the
-reader issues HTTP range-requests (or FUSE range-reads) that fetch only the
-bytes that intersect the AOI, skipping the rest of the file entirely.
+schema. Its defining feature is **area-of-interest clipping**: pass one or more
+clip polygons and the reader issues HTTP range-requests (or FUSE range-reads)
+that fetch only the bytes that intersect each AOI, skipping the rest of the file
+entirely.
 
 This makes `cog_gbx` the natural read path after COG preparation with the
 `cog_gbx` writer — the prepare-then-read pipeline:
@@ -19,7 +20,7 @@ This makes `cog_gbx` the natural read path after COG preparation with the
 1. **List** source files with `file_gbx`.
 2. **Prepare** — convert each to a master COG with the `cog_gbx` writer
    (internal tiling + overview levels baked in).
-3. **Read** — clip to any AOI with `cog_gbx` + `bbox`, pulling only the
+3. **Read** — clip to any AOI with `cog_gbx` + `clipPolygons`, pulling only the
    required tiles and overview levels.
 
 :::note Lightweight only
@@ -31,8 +32,9 @@ This makes `cog_gbx` the natural read path after COG preparation with the
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `bbox` | _none_ | Clip window: `"xmin,ymin,xmax,ymax"` string. When set, only tiles that intersect the box are read. |
-| `bboxCrs` | `"EPSG:4326"` | CRS of the `bbox` coordinates. Passed as an EPSG authority string (e.g. `"EPSG:27700"`). The reader reprojects internally. |
+| `clipPolygons` | _none_ | Area(s) of interest: one WKT/EWKT string, or a JSON-array string for a list, e.g. `'["POLYGON((...))","POLYGON((...))"]'`. One tile per polygon whose envelope intersects the COG; only the intersecting blocks/overviews are fetched. Materialized tiles are pre-clipped (NoData outside the polygon); virtual tiles defer the clip. Mutually exclusive with `windows`. |
+| `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`. |
+| `clipCrs` | _none_ | CRS for `clipPolygons` lacking an embedded SRID (e.g. `"EPSG:27700"`). Precedence: embedded EWKB/EWKT SRID → `clipCrs` → the COG's CRS. The reader reprojects the polygon internally. |
 | `splitStrategy` | `"none"` | Split large COGs: `none` (default — one tile per file), `serverless`, `classic`, or `auto`. Splitting respects the COG's internal tile grid. |
 | `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile budget in MiB. `-1` defers to `splitStrategy`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
@@ -61,7 +63,7 @@ df = spark.read.format("cog_gbx").load("/Volumes/main/.../cog-prepared/nyc-senti
 df.show()
 ```
 
-## Read with bbox clip
+## Read with AOI clip
 
 <CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
   source="docs/tests/python/readers/cog_gbx_examples.py"
@@ -76,13 +78,20 @@ root
  |-- source: string   — path to the source COG file
  |-- tile: struct
  |    |-- cellid: bigint (nullable)
- |    |-- raster: binary — clipped tile bytes (GeoTIFF)
+ |    |-- raster: binary (nullable) — clipped tile bytes (GeoTIFF); null for virtual tiles
+ |    |-- path: string (nullable) — source path (provenance / virtual read target)
+ |    |-- window: struct<col_off,row_off,width,height> (nullable) — pixel window read
+ |    |-- clip_polygon: binary (nullable) — the AOI applied (materialized) or to apply (virtual)
+ |    |-- clip_crs: string (nullable) — CRS of clip_polygon
+ |    |-- crs: string (nullable) — working/target CRS
  |    |-- metadata: map<string,string> — driver, CRS, extent, …
 ```
 
-The clipped tile carries the CRS and geotransform of the clipped window, not
-the full source file. Downstream `rst_*` functions consume it identically to
-any other tile.
+For a materialized tile the `raster` bytes carry the CRS and geotransform of the
+clipped window (not the full source file), and `window`/`clip_polygon`/`clip_crs`
+are provenance of what was applied. A virtual tile (from `.option("virtualTiles",
+"true")`) leaves `raster` null and carries those fields as a deferred instruction.
+Downstream `rst_*` functions consume either identically.
 
 ## Full prepare-then-read pipeline
 

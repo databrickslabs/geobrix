@@ -47,8 +47,9 @@ prepare-then-read pipeline.
 | `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one whole-image tile per file), `auto` (resolve to `serverless` or `classic` by environment), `serverless` (opt-in, 64 MiB decoded budget per tile), `classic` (opt-in, 1 536 MiB decoded budget per tile). |
 | `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB. A positive value implies opt-in split regardless of `splitStrategy`. `-1` = defer to `splitStrategy`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
-| `bbox` | _none_ | Clip window: `"xmin,ymin,xmax,ymax"`. When set, only the intersecting window is read. See also the [COG Reader](./cog), which pairs naturally with `bbox`. |
-| `bboxCrs` | `"EPSG:4326"` | CRS of the `bbox` coordinates (e.g. `"EPSG:27700"`). |
+| `clipPolygons` | _none_ | Area(s) of interest to clip to. One WKT/EWKT string for a single polygon, or a JSON-array string for a list, e.g. `'["POLYGON((...))","POLYGON((...))"]'` (raw WKB/EWKB bytes are accepted only from programmatic callers). One tile is emitted per polygon whose envelope intersects the raster; a polygon that misses the raster emits no tile. Materialized tiles are pre-clipped (pixels outside the polygon are NoData); virtual tiles carry the clip as a deferred instruction. Mutually exclusive with `windows`. Pairs naturally with the [COG Reader](./cog). |
+| `windows` | _none_ | Pixel window(s) to read. A JSON 4-int array `"[col,row,w,h]"` for one, or a JSON array of them `"[[..],[..]]"` for a list. One tile per window; partial windows clip to the raster extent, fully-outside windows are skipped. Mutually exclusive with `clipPolygons`. |
+| `clipCrs` | _none_ | CRS for `clipPolygons` that lack an embedded SRID (e.g. `"EPSG:27700"`). Precedence: an EWKB/EWKT polygon's embedded SRID → `clipCrs` → the raster's CRS. |
 
 :::note Default changed from `auto` to `none`
 Prior to this release the reader defaulted to `splitStrategy=auto`, which

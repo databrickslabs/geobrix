@@ -175,12 +175,12 @@ uses `gdal` / `gtiff_gdal` (native GDAL in the JVM). Run with
 `gbx:bench:cluster --readers-only --spark-warmup 0 --spark-measured 1`.
 
 :::note Large-raster benchmark profile (coming)
-A dedicated benchmark profile for the large-raster auto-split path (`splitStrategy=auto`) is
-planned and will land in a follow-on update. It will measure the split-and-COG-encode
-throughput for files that exceed the decoded-memory budget, comparing `serverless` and
-`classic` budget modes, and will verify COG-output parity (band values and overview level
-count) against the no-split whole-image path. Results will be added to this section once
-the profile lands.
+A dedicated benchmark profile for large-raster splitting is planned and will land in a
+follow-on update. It will measure the split-and-COG-encode throughput for files that exceed
+the decoded-memory budget when splitting is opted into with `splitStrategy=serverless` or
+`splitStrategy=classic`, and will verify COG-output parity (band values and overview level
+count) against the no-split whole-image path (the default). Results will be added to this
+section once the profile lands.
 :::
 
 > **Environment:** Databricks · DBR 17.3 LTS · 1,000 × 1024² GeoTIFF tiles · whole-job

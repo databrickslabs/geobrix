@@ -23,17 +23,27 @@ carries the clip into the tile struct so downstream trimming is exact.
 2. **Add `clipPolygons`** — single geometry OR list of geometries, documented as "one value or a
    list." Per raster, emit one tile per polygon whose envelope intersects the raster; a polygon whose
    envelope misses the raster → no tile; a polygon that masks out all pixels in its window → no tile.
-   - **Accepted geometry encodings by call surface:** Spark `.option()` values are string-typed, so on
-     the `.option("clipPolygons", ...)` surface pass **WKT or EWKT strings** (EWKT carries the SRID).
-     Raw **WKB/EWKB bytes** are only accepted from **programmatic callers** that pass a Python list via
-     the DataSource options dict — a `bytes` value handed to `.option()` is `str()`-repr'd by Spark and
-     will fail to parse. Documented explicitly; no hex/base64 decoding is added this increment.
-     `parse_geom` handles WKB/EWKB/WKT/EWKT for the programmatic/list path.
+   - **List encoding over `.option()` (critical — Spark options are `Map<String,String>`):** a Python
+     list handed to `.option()`/`.options()` is `str()`-repr'd by Spark and does NOT survive as a
+     list. So a **list is supplied as a JSON-array string**, auto-detected: the parser tries
+     `json.loads(value)` and, **if it yields a list**, uses that list; **otherwise the bare string is
+     treated as one geometry**. So a single polygon stays a plain WKT/EWKT string (never valid JSON →
+     falls through to single), and a list is `'["<wkt1>","<wkt2>"]'`. Example:
+     `.option("clipPolygons", json.dumps([wkt1, wkt2]))` for a list, or
+     `.option("clipPolygons", wkt1)` for one. Programmatic callers may still pass a real Python list.
+   - **Geometry encodings:** on the `.option()` surface pass **WKT or EWKT strings** (EWKT carries the
+     SRID). Raw **WKB/EWKB bytes** are accepted only from **programmatic callers** passing a real
+     Python list via the DataSource options dict (a `bytes` value handed to `.option()` fails to
+     parse). No hex/base64 decoding this increment. `parse_geom` handles WKB/EWKB/WKT/EWKT for the
+     programmatic/list path.
 3. **Add `clipCrs`** — single value, nullable. Per-polygon CRS resolution (see below); governs only
    plain-geometry members.
 4. **Add `windows`** — single pixel window `(col,row,w,h)` OR list, documented as "one value or a
    list." Per raster, emit one tile per window; a window partly outside the extent is clipped to the
-   extent; a window fully outside → no tile.
+   extent; a window fully outside → no tile. Over `.option()` a single window is a JSON 4-int array
+   `"[0,0,256,256]"`; a list is a JSON array of 4-int arrays
+   `"[[0,0,256,256],[256,0,256,256]]"` (auto-detected via `json.loads` → list-of-lists vs a single
+   4-int list). Programmatic callers may pass a real list of 4-int tuples.
 5. **`clipPolygons` and `windows` are mutually exclusive** — supplying both raises a clear error.
    Supplying neither = whole-file behavior (unchanged from Inc 2).
 6. Both selection modes work in **materialized** (default) and **virtual** (`virtualTiles=true`)

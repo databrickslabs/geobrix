@@ -18,12 +18,16 @@ COG creation is a writer concern; the reader always emits plain GTiff tiles.
 AOI selection (mutually exclusive, single value or list of values):
   - ``clipPolygons`` — one tile per polygon whose envelope intersects the raster
     (materialized tiles are pre-clipped to the polygon; virtual tiles carry the
-    clip as an instruction). On the ``.option()`` surface pass **WKT/EWKT
-    strings** (Spark options are string-typed; EWKT carries the SRID). Raw
-    WKB/EWKB bytes are accepted only from programmatic callers passing a Python
-    list via the options dict.
+    clip as an instruction). Spark options are string-typed, so pass a **single
+    WKT/EWKT string** for one polygon, or a **JSON-array string** for a list,
+    e.g. ``json.dumps([wkt1, wkt2])`` -> ``'["<wkt1>","<wkt2>"]'`` (auto-detected:
+    a value that ``json.loads`` to a list is a list; a bare WKT is one geometry).
+    Raw WKB/EWKB bytes are accepted only from programmatic callers passing a
+    Python list via the options dict.
   - ``windows`` — one tile per pixel window ``(col,row,w,h)``; partial windows
-    clip to the raster extent, fully-outside windows are skipped.
+    clip to the raster extent, fully-outside windows are skipped. Over
+    ``.option()`` a single window is a JSON 4-int array ``"[0,0,256,256]"``; a
+    list is a JSON array of them ``"[[0,0,256,256],[256,0,256,256]]"``.
   - ``clipCrs`` — CRS for clipPolygons lacking an embedded SRID (precedence:
     embedded EWKB/EWKT SRID → clipCrs → raster CRS).
 
@@ -56,6 +60,7 @@ reader; tracked as a follow-up.
 from __future__ import annotations
 
 import atexit
+import json
 import logging
 import os
 import shutil
@@ -565,18 +570,39 @@ def _plan_partitions_for_file(
 
 
 def _as_geom_list(val) -> list:
-    """Normalize a clipPolygons option to a list of geometry inputs (bytes/str)."""
+    """Normalize a clipPolygons option to a list of geometry inputs.
+
+    Spark ``.option()`` values are strings, so a list is passed as a JSON-array
+    string ``'["<wkt1>","<wkt2>"]'`` and auto-detected: ``json.loads`` that
+    yields a list is used as the list; anything else (a bare WKT/EWKT string,
+    which is never valid JSON) is treated as ONE geometry. Programmatic callers
+    may pass a real Python list (used as-is) or single bytes/str.
+    """
     if val is None or val == "":
         return []
-    if isinstance(val, (bytes, bytearray, str)):
+    if isinstance(val, (bytes, bytearray)):
         return [val]
-    return list(val)  # already a sequence of geometry inputs
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+        except (ValueError, TypeError):
+            return [val]  # bare WKT/EWKT (not JSON) -> single geometry
+        return list(parsed) if isinstance(parsed, list) else [val]
+    return list(val)  # already a sequence of geometry inputs (programmatic)
 
 
 def _as_window_list(val) -> list:
-    """Normalize a windows option to a list of (col,row,w,h) int tuples."""
+    """Normalize a windows option to a list of (col,row,w,h) int tuples.
+
+    Over ``.option()`` a single window is a JSON 4-int array ``"[0,0,256,256]"``
+    and a list is a JSON array of 4-int arrays ``"[[..],[..]]"`` (auto-detected
+    via ``json.loads``: list-of-lists -> many; flat 4-int list -> one).
+    Programmatic callers may pass a 4-int tuple/list or a list of them.
+    """
     if val is None or val == "":
         return []
+    if isinstance(val, str):
+        val = json.loads(val)  # JSON 4-int array or array-of-4-int-arrays
     # single (c,r,w,h)?
     if (
         isinstance(val, (tuple, list))

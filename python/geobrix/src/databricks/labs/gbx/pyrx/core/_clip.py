@@ -3,8 +3,8 @@
 Thin adapter over pyrx.core.edit.clip_to_geom, which already: reprojects a
 cutline carrying a positive SRID to the raster CRS, masks with crop=True (the
 intersection envelope), and returns None on non-overlap. This adds clip_crs
-precedence: an explicit clip_crs string (e.g. "EPSG:4326") is authoritative and
-is stamped onto the geometry's SRID before delegating, so a plain WKB/WKT can
+precedence: embedded SRID (EWKB/EWKT with SRID > 0) wins; clip_crs only applies
+when the geometry carries no embedded SRID (SRID == 0), so a plain WKB/WKT can
 declare its CRS. Reprojects the polygon, never the raster.
 """
 
@@ -31,9 +31,10 @@ def clip_dataset(ds, clip_polygon: bytes, clip_crs: Optional[str]) -> Optional[b
     geom = parse_geom(clip_polygon)
     if geom is None:
         return None
-    if clip_crs:
+    # clip_crs applies ONLY when the geometry carries no embedded SRID.
+    # embedded SRID (>0) -> clip_crs -> raster CRS (edit.clip_to_geom's own fallback).
+    if clip_crs and shapely.get_srid(geom) <= 0:
         code = _epsg_int(clip_crs)
         if code is not None:
-            geom = shapely.set_srid(geom, code)  # authoritative override
-    # else: leave embedded SRID (EWKB) or 0 (plain WKB -> edit assumes raster CRS)
+            geom = shapely.set_srid(geom, code)
     return edit.clip_to_geom(ds, geom)

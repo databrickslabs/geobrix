@@ -80,3 +80,43 @@ def test_clip_crs_overrides_and_reprojects():
     assert out is not None
     with _open(out) as ds2:
         assert ds2.crs.to_epsg() == 32633  # raster CRS unchanged; polygon moved
+
+
+def test_embedded_srid_wins_over_clip_crs():
+    # UTM raster; polygon carries embedded SRID 4326 (lon/lat covering the raster).
+    # A mismatched clip_crs="EPSG:3857" must NOT override the embedded 4326 —
+    # the clip still succeeds because the true CRS (4326) is used.
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+    from rasterio.warp import transform_bounds
+    from shapely.geometry import box
+
+    tr = from_origin(500000.0, 5000000.0, 100.0, 100.0)
+    prof = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32633",
+        transform=tr,
+        nodata=-9999.0,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
+        utm_bytes = mf.read()
+
+    minx, miny, maxx, maxy = transform_bounds(
+        "EPSG:32633", "EPSG:4326", 500000, 4999200, 500800, 5000000
+    )
+    g = shapely.set_srid(box(minx, miny, maxx, maxy), 4326)
+    ewkb = shapely.wkb.dumps(g, include_srid=True)
+
+    with _open(utm_bytes) as ds:
+        # clip_crs deliberately WRONG (3857); embedded 4326 must win -> clip succeeds
+        out = _clip.clip_dataset(ds, ewkb, clip_crs="EPSG:3857")
+    assert out is not None
+    with _open(out) as ds2:
+        assert ds2.crs.to_epsg() == 32633  # raster CRS unchanged

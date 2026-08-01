@@ -458,6 +458,29 @@ def _plan_partitions_for_file(
     ]
 
 
+def _as_geom_list(val) -> list:
+    """Normalize a clipPolygons option to a list of geometry inputs (bytes/str)."""
+    if val is None or val == "":
+        return []
+    if isinstance(val, (bytes, bytearray, str)):
+        return [val]
+    return list(val)  # already a sequence of geometry inputs
+
+
+def _as_window_list(val) -> list:
+    """Normalize a windows option to a list of (col,row,w,h) int tuples."""
+    if val is None or val == "":
+        return []
+    # single (c,r,w,h)?
+    if (
+        isinstance(val, (tuple, list))
+        and len(val) == 4
+        and all(isinstance(v, (int, float)) for v in val)
+    ):
+        return [tuple(int(v) for v in val)]
+    return [tuple(int(v) for v in w) for w in val]  # list of windows
+
+
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
         self.path = options.get("path")
@@ -470,21 +493,16 @@ class RasterGbxReader(DataSourceReader):
         # or splitStrategy=classic, or sizeInMB>0. COG creation is a writer concern;
         # split tiles are always emitted as plain GTiff.
         self.strategy = budget.resolve_strategy(options.get("splitStrategy", "none"))
-        # Optional AOI window-on-read. `bbox` is "minx,miny,maxx,maxy" in the source
-        # CRS by default; `bboxCrs` (e.g. "EPSG:4326") declares the bbox CRS and the
-        # window primitive reprojects it. None = read the whole raster (prior behavior).
-        bbox_opt = options.get("bbox")
-        if bbox_opt:
-            parts = [float(v) for v in str(bbox_opt).split(",")]
-            if len(parts) != 4:
-                raise ValueError(
-                    "raster bbox option must be 'minx,miny,maxx,maxy'; got "
-                    f"'{bbox_opt}'"
-                )
-            self.bbox = tuple(parts)
-        else:
-            self.bbox = None
-        self.bbox_crs = options.get("bboxCrs")
+        # AOI selection (mutually exclusive): clipPolygons (arbitrary geometry,
+        # single or list) OR windows (pixel (col,row,w,h), single or list).
+        self.clip_polygons = _as_geom_list(options.get("clipPolygons"))
+        self.windows = _as_window_list(options.get("windows"))
+        self.clip_crs = options.get("clipCrs")
+        if self.clip_polygons and self.windows:
+            raise ValueError(
+                "raster_gbx: 'clipPolygons' and 'windows' are mutually exclusive; "
+                "supply one, not both."
+            )
         self.emit_virtual = str(options.get("virtualTiles", "false")).lower() == "true"
 
     def partitions(self) -> Sequence[InputPartition]:

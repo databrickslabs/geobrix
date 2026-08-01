@@ -38,9 +38,11 @@ Inherits the [lightweight `raster_gbx` options](./raster#options). Key options:
 |--------|---------|-------------|
 | `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one tile per file), `auto`, `serverless`, `classic`. See [Raster Options](./raster#options). |
 | `sizeInMB` | `"-1"` | Power-user budget override in MiB (positive value). `-1` = use `splitStrategy`. |
-| `clipPolygons` | _none_ | Area(s) of interest: one WKT/EWKT string, or a JSON-array string for a list. One tile per intersecting polygon; mutually exclusive with `windows`. See [Raster Options](./raster#options). |
-| `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`. |
+| `clipPolygons` | _none_ | Area(s) of interest: one WKT/EWKT string, or a JSON-array string for a list. One tile per intersecting polygon; mutually exclusive with `windows`/`tileSize`. See [Raster Options](./raster#options). |
+| `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`/`tileSize`. |
 | `clipCrs` | _none_ | CRS for `clipPolygons` lacking an embedded SRID (embedded SRID → `clipCrs` → raster CRS). |
+| `tileSize` | _none_ | Regular fixed-size grid: `"w,h"` or a single `"n"` (square). One tile per cell; mutually exclusive with `clipPolygons`/`windows`. Materialized cells guarded to ~2 GB; virtual unguarded. See [Raster Options](./raster#options). |
+| `overlapPercent` | `0` | Overlap % between `tileSize` cells (`tileSize`-only). See [Raster Options](./raster#options). |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
 
 :::note COG output is a writer concern

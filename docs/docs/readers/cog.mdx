@@ -33,10 +33,12 @@ This makes `cog_gbx` the natural read path after COG preparation with the
 | Option | Default | Description |
 |--------|---------|-------------|
 | `clipPolygons` | _none_ | Area(s) of interest: one WKT/EWKT string, or a JSON-array string for a list, e.g. `'["POLYGON((...))","POLYGON((...))"]'`. One tile per polygon whose envelope intersects the COG; only the intersecting blocks/overviews are fetched. Materialized tiles are pre-clipped (NoData outside the polygon); virtual tiles defer the clip. Mutually exclusive with `windows`. |
-| `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`. |
+| `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`/`tileSize`. |
 | `clipCrs` | _none_ | CRS for `clipPolygons` lacking an embedded SRID (e.g. `"EPSG:27700"`). Precedence: embedded EWKB/EWKT SRID → `clipCrs` → the COG's CRS. The reader reprojects the polygon internally. |
 | `splitStrategy` | `"none"` | Split large COGs: `none` (default — one tile per file), `serverless`, `classic`, or `auto`. Splitting respects the COG's internal tile grid. |
 | `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile budget in MiB. `-1` defers to `splitStrategy`. |
+| `tileSize` | _none_ | Regular fixed-size grid over the COG: `"w,h"` or a single `"n"` (square). One tile per cell; mutually exclusive with `clipPolygons`/`windows`. Materialized cells guarded to ~2 GB; virtual unguarded. See [Raster Options](./raster#options). |
+| `overlapPercent` | `0` | Overlap % between `tileSize` cells (`tileSize`-only). See [Raster Options](./raster#options). |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
 
 :::tip Default is no-split

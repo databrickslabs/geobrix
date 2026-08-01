@@ -150,6 +150,51 @@ def _safe_remove(path: str) -> None:
         pass
 
 
+def _to_virtual_tile(tile) -> VirtualTile:
+    """Normalize any tile shape to VirtualTile.
+
+    Accepted shapes:
+    - ``VirtualTile`` → passthrough.
+    - ``bytes`` / ``bytearray`` → materialized tile with ``cellid=0``.
+    - dict/Row with a ``path`` or ``window`` key → v2 struct (``VirtualTile.from_row``).
+    - dict/Row with a ``raster`` key (no ``path``) → v1 struct (``VirtualTile.from_v1``).
+    """
+    if isinstance(tile, VirtualTile):
+        return tile
+    if isinstance(tile, (bytes, bytearray)):
+        return VirtualTile(cellid=0, raster=bytes(tile))
+    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
+    if "path" in d or "window" in d:
+        return VirtualTile.from_row(d)
+    return VirtualTile.from_v1(d.get("cellid", 0), d["raster"], d.get("metadata"))
+
+
+@contextmanager
+def _open(tile):
+    """Context manager that yields an open ``DatasetReader`` for any tile shape.
+
+    Accepts a ``VirtualTile``, raw bytes/bytearray, a v1 dict/Row
+    ``{cellid, raster, metadata}``, or a v2 dict/Row (8-field struct).
+    Normalises to ``VirtualTile`` via ``_to_virtual_tile`` then delegates to
+    ``open_tile``; all lifecycle management (MemoryFile, staged temps) is
+    handled there.
+    """
+    with open_tile(_to_virtual_tile(tile)) as ds:
+        yield ds
+
+
+@contextmanager
+def _open_all(tiles):
+    """Context manager that yields a list of open ``DatasetReader`` objects.
+
+    Opens each tile in *tiles* under a single ``ExitStack`` so all datasets
+    stay valid for the caller's entire ``with`` block and are closed together
+    on exit. Useful for multi-input operations (map-algebra, aggregation).
+    """
+    with ExitStack() as stack:
+        yield [stack.enter_context(open_tile(_to_virtual_tile(t))) for t in tiles]
+
+
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     """Convert a (possibly virtual) tile to a v2-materialized tile: run open_tile
     on the light side (which CAN read /Volumes), capture the window+warp+clip

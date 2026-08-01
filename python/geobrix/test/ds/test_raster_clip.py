@@ -12,6 +12,7 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.cog import GBX_FORMAT, sniff_header
@@ -166,6 +167,35 @@ def test_box_clip_emits_plain_gtiff(spark, tmp_path):
     assert (
         not info.is_cog
     ), f"bytes sniff says is_cog={info.is_cog}; expected plain GTiff, not COG"
+
+
+def test_gtiff_gbx_parity_clip(spark, tmp_path):
+    """gtiff_gbx and raster_gbx produce geometrically identical tiles for the
+    same GTiff + same clipPolygons box selection.
+
+    This is a regression tripwire: a format-registration test only proves the
+    format string resolves to a class; this test proves both sources emit tiles
+    with the same spatial geometry (bounds + pixel dimensions).
+    """
+    p = _write_small(tmp_path)
+    spark.dataSource.register(RasterGbxDataSource)
+    spark.dataSource.register(GTiffGbxDataSource)
+    opt = ("clipPolygons", _box_wkt(10.5, 49.0, 11.5, 50.0))
+    r1 = (
+        spark.read.format("raster_gbx")
+        .option(*opt)
+        .option("clipCrs", "EPSG:4326")
+        .load(p)
+        .collect()[0]
+    )
+    r2 = (
+        spark.read.format("gtiff_gbx")
+        .option(*opt)
+        .option("clipCrs", "EPSG:4326")
+        .load(p)
+        .collect()[0]
+    )
+    assert _tile_bounds(r1) == _tile_bounds(r2)
 
 
 def _tri_wkt():

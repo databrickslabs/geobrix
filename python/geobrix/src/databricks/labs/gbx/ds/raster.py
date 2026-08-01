@@ -340,6 +340,59 @@ def _resolve_clip_crs(geom, reader_clip_crs):
     return reader_clip_crs or None
 
 
+def _clip_partitions(
+    file_path: str,
+    clip_polygons: Sequence,
+    clip_crs: Optional[str],
+    *,
+    emit_virtual: bool,
+) -> list:
+    """One _TilePartition per clipPolygon whose envelope intersects the raster
+    (skip disjoint). Shared by the virtual and materialized planning branches;
+    the two differ only by the ``emit_virtual`` flag on the emitted partition.
+
+    Fields: window=envelope, clip_polygon=<WKB bytes>, clip_crs=<resolved>.
+    """
+    import rasterio
+    import shapely.wkb
+
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.ds._window import window_for_geom
+
+    parts: list = []
+    with rasterio.open(file_path) as ds:
+        for raw in clip_polygons:
+            geom = parse_geom(raw)
+            if geom is None:
+                raise ValueError(f"raster_gbx: unparseable clipPolygons entry: {raw!r}")
+            resolved = _resolve_clip_crs(geom, clip_crs)
+            win = window_for_geom(ds, geom, geom_crs=resolved)
+            if win is None:
+                continue  # envelope disjoint -> no tile
+            parts.append(
+                _TilePartition(
+                    file_path=file_path,
+                    window=(
+                        int(win.col_off),
+                        int(win.row_off),
+                        int(win.width),
+                        int(win.height),
+                    ),
+                    is_passthrough=False,
+                    is_whole=True,
+                    emit_fmt="gtiff",
+                    emit_virtual=emit_virtual,
+                    clip_polygon=(
+                        raw
+                        if isinstance(raw, (bytes, bytearray))
+                        else shapely.wkb.dumps(geom)
+                    ),
+                    clip_crs=resolved,
+                )
+            )
+    return parts
+
+
 def _plan_partitions_for_file(
     file_path: str,
     budget_bytes: int,
@@ -365,45 +418,9 @@ def _plan_partitions_for_file(
     # ------------------------------------------------------------------
     if emit_virtual:
         if clip_polygons:
-            import shapely.wkb
-
-            from databricks.labs.gbx._geom import parse_geom
-            from databricks.labs.gbx.ds._window import window_for_geom
-
-            parts = []
-            with rasterio.open(file_path) as ds:
-                for raw in clip_polygons:
-                    geom = parse_geom(raw)
-                    if geom is None:
-                        raise ValueError(
-                            f"raster_gbx: unparseable clipPolygons entry: {raw!r}"
-                        )
-                    resolved = _resolve_clip_crs(geom, clip_crs)
-                    win = window_for_geom(ds, geom, geom_crs=resolved)
-                    if win is None:
-                        continue  # envelope disjoint -> no tile
-                    parts.append(
-                        _TilePartition(
-                            file_path=file_path,
-                            window=(
-                                int(win.col_off),
-                                int(win.row_off),
-                                int(win.width),
-                                int(win.height),
-                            ),
-                            is_passthrough=False,
-                            is_whole=True,
-                            emit_fmt="gtiff",
-                            emit_virtual=True,
-                            clip_polygon=(
-                                raw
-                                if isinstance(raw, (bytes, bytearray))
-                                else shapely.wkb.dumps(geom)
-                            ),
-                            clip_crs=resolved,
-                        )
-                    )
-            return parts
+            return _clip_partitions(
+                file_path, clip_polygons, clip_crs, emit_virtual=True
+            )
 
         with rasterio.open(file_path) as ds:
             width, height = ds.width, ds.height
@@ -422,44 +439,7 @@ def _plan_partitions_for_file(
     # clipPolygons: one tile per polygon whose envelope intersects the raster.
     # ------------------------------------------------------------------
     if clip_polygons:
-        import shapely.wkb
-
-        from databricks.labs.gbx._geom import parse_geom
-        from databricks.labs.gbx.ds._window import window_for_geom
-
-        parts = []
-        with rasterio.open(file_path) as ds:
-            for raw in clip_polygons:
-                geom = parse_geom(raw)
-                if geom is None:
-                    raise ValueError(
-                        f"raster_gbx: unparseable clipPolygons entry: {raw!r}"
-                    )
-                resolved = _resolve_clip_crs(geom, clip_crs)
-                win = window_for_geom(ds, geom, geom_crs=resolved)
-                if win is None:
-                    continue  # envelope disjoint -> no tile
-                parts.append(
-                    _TilePartition(
-                        file_path=file_path,
-                        window=(
-                            int(win.col_off),
-                            int(win.row_off),
-                            int(win.width),
-                            int(win.height),
-                        ),
-                        is_passthrough=False,
-                        is_whole=True,
-                        emit_fmt="gtiff",
-                        clip_polygon=(
-                            raw
-                            if isinstance(raw, (bytes, bytearray))
-                            else shapely.wkb.dumps(geom)
-                        ),
-                        clip_crs=resolved,
-                    )
-                )
-        return parts
+        return _clip_partitions(file_path, clip_polygons, clip_crs, emit_virtual=False)
 
     # ------------------------------------------------------------------
     # windows: one tile per pixel window, clipped to extent (skip fully-outside).

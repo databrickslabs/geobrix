@@ -237,6 +237,7 @@ class _TilePartition(InputPartition):
         "is_passthrough",
         "is_whole",
         "emit_fmt",
+        "emit_virtual",
         "cog_blocksize",
         "cog_overview_resampling",
         "all_parents",
@@ -254,6 +255,7 @@ class _TilePartition(InputPartition):
         is_passthrough: bool = False,
         is_whole: bool = False,
         emit_fmt: str = "gtiff",
+        emit_virtual: bool = False,
         cog_blocksize: int = 512,
         cog_overview_resampling: str = "AVERAGE",
         all_parents: str = "",
@@ -267,6 +269,7 @@ class _TilePartition(InputPartition):
         self.is_passthrough = is_passthrough
         self.is_whole = is_whole
         self.emit_fmt = emit_fmt
+        self.emit_virtual = emit_virtual
         self.cog_blocksize = cog_blocksize
         self.cog_overview_resampling = cog_overview_resampling
         self.all_parents = all_parents
@@ -325,6 +328,7 @@ def _plan_partitions_for_file(
     budget_bytes: int,
     bbox: Optional[Tuple[float, float, float, float]],
     bbox_crs: Optional[str],
+    emit_virtual: bool = False,
 ) -> Sequence["_TilePartition"]:
     """Driver-side: open a raster header and return one _TilePartition per tile.
 
@@ -332,6 +336,23 @@ def _plan_partitions_for_file(
     (file, window) pair.
     """
     import rasterio
+
+    # ------------------------------------------------------------------
+    # virtualTiles short-circuit: one bytes-free whole-file partition.
+    # ------------------------------------------------------------------
+    if emit_virtual:
+        with rasterio.open(file_path) as ds:
+            width, height = ds.width, ds.height
+        return [
+            _TilePartition(
+                file_path=file_path,
+                window=(0, 0, width, height),
+                is_passthrough=False,
+                is_whole=True,
+                emit_fmt="gtiff",
+                emit_virtual=True,
+            )
+        ]
 
     size_bytes = os.path.getsize(file_path)
 
@@ -464,6 +485,7 @@ class RasterGbxReader(DataSourceReader):
         else:
             self.bbox = None
         self.bbox_crs = options.get("bboxCrs")
+        self.emit_virtual = str(options.get("virtualTiles", "false")).lower() == "true"
 
     def partitions(self) -> Sequence[InputPartition]:
         files = _listing.list_files(self.path, self.filter_regex)
@@ -482,6 +504,7 @@ class RasterGbxReader(DataSourceReader):
                     budget_bytes=resolved_budget,
                     bbox=self.bbox,
                     bbox_crs=self.bbox_crs,
+                    emit_virtual=self.emit_virtual,
                 )
             )
         return result
@@ -507,6 +530,32 @@ class RasterGbxReader(DataSourceReader):
             return
 
         source = _listing.to_spark_uri(partition.file_path)
+
+        # ------------------------------------------------------------------
+        # Virtual tile: bytes-free emission (path + whole-file window).
+        # No staging, no encode — header opened locally for metadata.
+        # ------------------------------------------------------------------
+        if getattr(partition, "emit_virtual", False):
+            with rasterio.open(partition.file_path) as ds:
+                meta = {
+                    "sourcePath": partition.file_path,
+                    "driver": ds.driver,
+                    "format": ("cog" if ds.driver == "COG" else "gtiff"),
+                    "width": str(ds.width),
+                    "height": str(ds.height),
+                    "count": str(ds.count),
+                }
+            yield (
+                source,
+                _v2_tile_row(
+                    _encode.CELLID_FRESH,
+                    None,
+                    path=partition.file_path,
+                    window=partition.window,
+                    metadata=meta,
+                ),
+            )
+            return
 
         # ------------------------------------------------------------------
         # Passthrough tile: emit original file bytes, no decode.

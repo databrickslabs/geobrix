@@ -417,6 +417,8 @@ def _plan_partitions_for_file(
     clip_polygons: Sequence = (),
     clip_crs: Optional[str] = None,
     windows: Sequence = (),
+    tile_size=None,
+    overlap_percent: int = 0,
     emit_virtual: bool = False,
 ) -> Sequence["_TilePartition"]:
     """Driver-side: open a raster header and return one _TilePartition per tile.
@@ -489,6 +491,43 @@ def _plan_partitions_for_file(
                     )
                 )
         return parts
+
+    # ------------------------------------------------------------------
+    # tileSize: plan a regular grid of (tw x th) windows using
+    # plan_grid_windows.  Materialized tiles are guarded against the
+    # ~2 GB Spark cell limit at plan time; virtual tiles are bytes-free
+    # so no guard is applied (it fires later at materialize time if ever).
+    # ------------------------------------------------------------------
+    if tile_size:
+        from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
+
+        tw, th = int(tile_size[0]), int(tile_size[1])
+        with rasterio.open(file_path) as ds:
+            W, H = ds.width, ds.height
+            bands = ds.count
+            itemsize = _numpy_itemsize(ds.dtypes[0])
+        if not emit_virtual:
+            # materialized-only guard: the nominal cell must fit the ~2 GB Spark
+            # cell limit (overlap changes stride, not tile size). Virtual tiles
+            # carry no bytes -> no guard here (fires later at materialize time).
+            cell = tw * th * max(bands, 1) * itemsize
+            if cell > _MAX_TILE_BYTES:
+                raise ValueError(
+                    f"raster_gbx: tileSize {tw}x{th} materialized cell is "
+                    f"~{cell // (1024 * 1024)} MB, exceeding the ~2 GB Spark cell "
+                    f"limit; use a smaller tileSize or virtualTiles=true."
+                )
+        return [
+            _TilePartition(
+                file_path=file_path,
+                window=(c, r, w, h),
+                is_passthrough=False,
+                is_whole=True,
+                emit_fmt="gtiff",
+                emit_virtual=emit_virtual,
+            )
+            for c, r, w, h in plan_grid_windows(W, H, tw, th, overlap_percent)
+        ]
 
     size_bytes = os.path.getsize(file_path)
 
@@ -653,7 +692,8 @@ class RasterGbxReader(DataSourceReader):
         # split tiles are always emitted as plain GTiff.
         self.strategy = budget.resolve_strategy(options.get("splitStrategy", "none"))
         # AOI selection (mutually exclusive): clipPolygons (arbitrary geometry,
-        # single or list) OR windows (pixel (col,row,w,h), single or list).
+        # single or list) OR windows (pixel (col,row,w,h), single or list) OR
+        # tileSize (regular grid, (tw,th) in pixels, optional overlapPercent).
         self.clip_polygons = _as_geom_list(options.get("clipPolygons"))
         self.windows = _as_window_list(options.get("windows"))
         self.clip_crs = options.get("clipCrs")
@@ -698,6 +738,8 @@ class RasterGbxReader(DataSourceReader):
                     clip_polygons=self.clip_polygons,
                     clip_crs=self.clip_crs,
                     windows=self.windows,
+                    tile_size=self.tile_size,
+                    overlap_percent=self.overlap_percent,
                     emit_virtual=self.emit_virtual,
                 )
             )

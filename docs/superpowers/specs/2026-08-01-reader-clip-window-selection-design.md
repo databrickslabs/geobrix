@@ -71,9 +71,15 @@ Consequences:
   they are assumed to already be in the raster's CRS (no error — the graceful fallback).
 - Mixed-CRS lists are supported: EWKB members use their own SRID, plain members use `clipCrs`/raster.
 
-Note the layering: reader-level `clipCrs` is a **default/fallback** (embedded SRID overrides it),
-whereas a tile-struct `clip_crs` set programmatically downstream stays authoritative for that tile.
-Different layers, stated explicitly so they do not contradict.
+**Unified precedence across all layers (change to Inc-1 `_clip`).** Historically
+`_clip.clip_dataset` treated an explicit `clip_crs` arg as *authoritative over* any embedded SRID
+(it unconditionally `set_srid`'d the geometry). That contradicts the reader rule above. We align
+`_clip.clip_dataset` to the SAME rule: `clip_crs` applies **only when the geometry carries no
+embedded SRID** (i.e. plain WKB/WKT); an EWKB/EWKT with SRID > 0 keeps its own SRID. So the ordering
+is identical everywhere — embedded SRID → `clip_crs` → raster CRS — at the reader, in `_clip`, and
+for a tile-struct `clip_crs`. No layer contradicts another; a caller sets `clip_crs` only to give a
+CRS to geometries that lack one. (Safe: all existing Inc-1 `_clip` tests pass plain WKB, so their
+behavior is unchanged — plain WKB + `clip_crs` still reprojects.)
 
 ## Architecture
 

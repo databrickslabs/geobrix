@@ -13,7 +13,7 @@
 - **Light tier only:** rasterio/shapely only, NO `osgeo.gdal`; NO `spark.conf.set`/`_jvm`/`.rdd` in library code.
 - **Exploratory / non-wired:** reader options only. NO catalog / `registered_functions.txt` / `function-info.json` / bindings changes.
 - **DRY / reuse:** `pyrx._geom.parse_geom` (WKB/EWKB/WKT/EWKT), `pyrx.core._clip.clip_dataset` (mask + cutline reproject; returns clipped GTiff bytes or None on non-overlap), `_v2_tile_row` (Inc 2 assembly), `_get_or_stage_file`. Do NOT reimplement clip/mask/reproject.
-- **CRS precedence (reader-level, per-polygon):** embedded EWKB/EWKT SRID (>0) → reader `clipCrs` → assume raster CRS. NOTE: `clip_dataset`'s own logic treats an explicit `clip_crs` arg as *authoritative over* the embedded SRID — the OPPOSITE order. So the reader MUST resolve the per-polygon CRS itself and pass `clip_dataset` a `clip_crs` that reflects that resolution (see Task 3/4 for the exact rule), never just hand it the raw reader `clipCrs`.
+- **CRS precedence (UNIFIED everywhere — reader, `_clip`, tile field):** embedded EWKB/EWKT SRID (>0) → `clipCrs` → raster CRS. `clip_crs` applies ONLY to geometries with no embedded SRID (plain WKB/WKT). Task 1 aligns `_clip.clip_dataset` to this (it previously overrode embedded SRID with `clip_crs`). So the reader can pass its `clipCrs` straight through to `_clip` and both do the same thing; no per-layer contradiction.
 - **Reference-vs-instruction:** materialized tile (`raster` non-null) → `window`/`clip_polygon`/`clip_crs` are provenance of what was ALREADY applied. Virtual tile (`raster` null) → they are pending instructions.
 - **Skip semantics:** polygon envelope disjoint from raster → no tile; clip masking out all window pixels (`clip_dataset` returns None) → no tile; `windows` entry fully outside extent → no tile; partly-outside window → clip to extent.
 - **Mutually exclusive:** `clipPolygons` and `windows` both set → `ValueError` at option parse. Neither → whole-file (Inc 2, unchanged).
@@ -27,7 +27,105 @@
 
 ---
 
-### Task 1: `window_for_geom` — envelope window for an arbitrary geometry
+### Task 1: align `_clip.clip_dataset` CRS rule (embedded SRID wins over clip_crs)
+
+**Files:**
+- Modify: `python/geobrix/src/databricks/labs/gbx/pyrx/core/_clip.py`
+- Test: `python/geobrix/test/pyrx/test_core_virtual_clip.py` (add a case)
+
+**Interfaces:**
+- Consumes: `parse_geom`, shapely, `edit.clip_to_geom` (unchanged).
+- Produces: `clip_dataset(ds, clip_polygon, clip_crs)` unchanged signature/return, but `clip_crs` is now applied ONLY when the parsed geometry has no embedded SRID (`shapely.get_srid(geom) <= 0`). An EWKB/EWKT with SRID > 0 keeps its own SRID even if `clip_crs` is passed.
+
+**Design note:** current body does `if clip_crs: geom = set_srid(geom, code)` unconditionally ("authoritative override"). Change to only `set_srid` when the geom lacks an SRID. All existing tests pass plain WKB (SRID 0), so they still reproject via `clip_crs` — behavior unchanged for them; only the EWKB-with-SRID + clip_crs combination changes (now embedded SRID wins).
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# add to python/geobrix/test/pyrx/test_core_virtual_clip.py
+import shapely
+from shapely import set_srid
+
+
+def test_embedded_srid_wins_over_clip_crs():
+    # UTM raster; polygon carries embedded SRID 4326 (lon/lat covering the raster).
+    # A mismatched clip_crs="EPSG:3857" must NOT override the embedded 4326 —
+    # the clip still succeeds because the true CRS (4326) is used.
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+    from rasterio.warp import transform_bounds
+    from shapely.geometry import box
+
+    tr = from_origin(500000.0, 5000000.0, 100.0, 100.0)
+    prof = dict(driver="GTiff", width=8, height=8, count=1, dtype="float32",
+                crs="EPSG:32633", transform=tr, nodata=-9999.0)
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
+        utm_bytes = mf.read()
+
+    minx, miny, maxx, maxy = transform_bounds("EPSG:32633", "EPSG:4326",
+                                              500000, 4999200, 500800, 5000000)
+    g = set_srid(box(minx, miny, maxx, maxy), 4326)
+    ewkb = shapely.wkb.dumps(g, include_srid=True)
+
+    from databricks.labs.gbx.pyrx import _serde
+    from databricks.labs.gbx.pyrx.core import _clip
+    with _serde.open_tile(utm_bytes) as ds:
+        # clip_crs deliberately WRONG (3857); embedded 4326 must win -> clip succeeds
+        out = _clip.clip_dataset(ds, ewkb, clip_crs="EPSG:3857")
+    assert out is not None
+    with _serde.open_tile(out) as ds2:
+        assert ds2.crs.to_epsg() == 32633  # raster CRS unchanged
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/pyrx/test_core_virtual_clip.py --log clipcrs.log`
+Expected: FAIL — current code overrides embedded 4326 with 3857 → `edit.clip_to_geom` reprojects from the wrong CRS → non-overlap → None (or wrong clip).
+
+- [ ] **Step 3: Implement**
+
+In `_clip.clip_dataset`, replace the unconditional override:
+
+```python
+    geom = parse_geom(clip_polygon)
+    if geom is None:
+        return None
+    # clip_crs applies ONLY when the geometry carries no embedded SRID.
+    # embedded SRID (>0) -> clip_crs -> raster CRS (edit.clip_to_geom's own fallback).
+    if clip_crs and shapely.get_srid(geom) <= 0:
+        code = _epsg_int(clip_crs)
+        if code is not None:
+            geom = shapely.set_srid(geom, code)
+    return edit.clip_to_geom(ds, geom)
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/pyrx/test_core_virtual_clip.py --log clipcrs.log`
+Expected: PASS (the new case + all prior clip tests — they use plain WKB so are unaffected).
+
+- [ ] **Step 5: Lint + commit**
+
+```bash
+.venv-pyrx/bin/isort python/geobrix/src/databricks/labs/gbx/pyrx/core/_clip.py python/geobrix/test/pyrx/test_core_virtual_clip.py
+.venv-pyrx/bin/black --line-length 88 python/geobrix/src/databricks/labs/gbx/pyrx/core/_clip.py python/geobrix/test/pyrx/test_core_virtual_clip.py
+git add python/geobrix/src/databricks/labs/gbx/pyrx/core/_clip.py python/geobrix/test/pyrx/test_core_virtual_clip.py
+git commit -m "fix(pyrx): clip_crs applies only when geom lacks embedded SRID
+
+Unifies CRS precedence to embedded SRID -> clip_crs -> raster CRS
+everywhere (reader + _clip). Previously clip_dataset overrode an
+embedded EWKB SRID with clip_crs; now an EWKB/EWKT with SRID>0 keeps
+it. Plain WKB (all existing tests) is unaffected.
+
+Co-authored-by: Isaac"
+```
+
+---
+
+### Task 2: `window_for_geom` — envelope window for an arbitrary geometry
 
 **Files:**
 - Modify: `python/geobrix/src/databricks/labs/gbx/ds/_window.py`
@@ -151,7 +249,7 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 2: option parsing — `clipPolygons` / `windows` / `clipCrs`, drop bbox
+### Task 3: option parsing — `clipPolygons` / `windows` / `clipCrs`, drop bbox
 
 **Files:**
 - Modify: `python/geobrix/src/databricks/labs/gbx/ds/raster.py` (`RasterGbxReader.__init__`)
@@ -262,12 +360,12 @@ def _as_window_list(val) -> list:
     return [tuple(int(v) for v in w) for w in val]  # list of windows
 ```
 
-Delete `self.bbox`/`self.bbox_crs`. (Follow-on tasks fix `partitions()`/planning/`read` which still reference them — the suite will be red until Task 3/4; that is expected within this plan's sequence.)
+Delete `self.bbox`/`self.bbox_crs`. (Follow-on tasks fix `partitions()`/planning/`read` which still reference them — the suite will be red until Task 4/5; that is expected within this plan's sequence.)
 
 - [ ] **Step 4: Run to verify it passes**
 
 Run: `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/ds/test_raster_options.py --log opt.log`
-Expected: PASS (7 tests). Other reader tests may now error on the missing `self.bbox` — that is fixed in Task 3.
+Expected: PASS (7 tests). Other reader tests may now error on the missing `self.bbox` — that is fixed in Task 4.
 
 - [ ] **Step 5: Lint + commit**
 
@@ -286,14 +384,14 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 3: planning branches — clipPolygons → envelope partitions, windows → window partitions
+### Task 4: planning branches — clipPolygons → envelope partitions, windows → window partitions
 
 **Files:**
 - Modify: `python/geobrix/src/databricks/labs/gbx/ds/raster.py` (`_plan_partitions_for_file`, `partitions()`)
 - Test: `python/geobrix/test/ds/test_raster_plan_select.py`
 
 **Interfaces:**
-- Consumes: `window_for_geom` (Task 1), `parse_geom`, shapely, `self.clip_polygons`/`windows`/`clip_crs` (Task 2).
+- Consumes: `window_for_geom` (Task 2), `parse_geom`, shapely, `self.clip_polygons`/`windows`/`clip_crs` (Task 3).
 - Produces: `_plan_partitions_for_file(file_path, budget_bytes, *, clip_polygons, clip_crs, windows, emit_virtual=False)` — replaces `bbox`/`bbox_crs` params. Branch order after `emit_virtual`: clipPolygons → per-polygon `_TilePartition(window=envelope, clip_polygon=<wkb>, clip_crs=<resolved crs str or None>)` (skip disjoint); windows → per-window `_TilePartition(window=clipped, clip_polygon=None)` (skip fully-outside); neither → normal whole/split path.
 - Per-polygon CRS resolution helper `_resolve_clip_crs(geom, reader_clip_crs) -> Optional[str]`: if `shapely.get_srid(geom) > 0` → `f"EPSG:{srid}"`; elif reader_clip_crs → reader_clip_crs; else None (raster CRS).
 
@@ -469,7 +567,7 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 4: emission — materialized pre-clip (Choice 2) + virtual instructions; drop legacy bbox
+### Task 5: emission — materialized pre-clip (Choice 2) + virtual instructions; drop legacy bbox
 
 **Files:**
 - Modify: `python/geobrix/src/databricks/labs/gbx/ds/raster.py` (`read()` encode branch, `_read_legacy` bbox branch removal)
@@ -590,7 +688,7 @@ Expected: FAIL — clip not applied in read (materialized tile not pre-clipped) 
 ```
 (`_encode.metadata_for` does NOT exist — reuse the `meta` returned by the `encode_tile` call above [it returns `(cellid, raster_bytes, meta)`], which is the correct provenance for this source/window. `raster` bytes = the clipped GTiff from `clip_dataset`. `MemoryFile` is imported at top of `raster.py` or import locally.)
 
-(c) `_read_legacy`: delete the `self.bbox` branch (lines 623-648) entirely; the legacy path keeps only its whole/split behavior. If any legacy test depended on bbox, it is migrated in Task 5.
+(c) `_read_legacy`: delete the `self.bbox` branch (lines 623-648) entirely; the legacy path keeps only its whole/split behavior. If any legacy test depended on bbox, it is migrated in Task 6.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -615,7 +713,7 @@ Co-authored-by: Isaac"
 
 ---
 
-### Task 5: migrate bbox tests + full regression + Serverless
+### Task 6: migrate bbox tests + full regression + Serverless
 
 **Files:**
 - Modify/Remove: `python/geobrix/test/ds/test_raster_bbox.py` → migrate to `test_raster_clip.py` equivalents (box-as-clipPolygon) or delete bbox-only cases; sweep `test_raster_datasource.py` for any `bbox` references.
@@ -671,22 +769,23 @@ Co-authored-by: Isaac"
 ## Self-Review
 
 **1. Spec coverage:**
-- Drop bbox/bboxCrs → Task 2 (parse) + Task 3 (planning) + Task 4 (legacy). ✓
-- clipPolygons single/list → Task 2 normalize + Task 3 plan + Task 4 emit. ✓
-- clipCrs + per-polygon precedence (embedded → clipCrs → raster) → Task 3 `_resolve_clip_crs`. ✓
-- windows single/list, clip-partial/skip-outside → Task 3. ✓
-- Mutually exclusive → Task 2. ✓
-- Materialized pre-clip (Choice 2) + skip all-nodata → Task 4. ✓
-- Virtual clip = instructions + round-trip via open_tile → Task 4. ✓
-- Reference-vs-instruction principle → realized by Task 4 (materialized applies, virtual defers). ✓
-- window_for_geom envelope → Task 1. ✓
-- Migrate test_raster_bbox → Task 5. ✓
-- Serverless (mixed CRS, both tiers, worker-side) → Task 5. ✓
+- Unified CRS precedence (embedded SRID → clipCrs → raster) in `_clip` → Task 1. ✓
+- Drop bbox/bboxCrs → Task 3 (parse) + Task 4 (planning) + Task 5 (legacy). ✓
+- clipPolygons single/list → Task 3 normalize + Task 4 plan + Task 5 emit. ✓
+- clipCrs + per-polygon precedence → Task 4 `_resolve_clip_crs` (records the resolved CRS on the tile for provenance/virtual-instruction). ✓
+- windows single/list, clip-partial/skip-outside → Task 4. ✓
+- Mutually exclusive → Task 3. ✓
+- Materialized pre-clip (Choice 2) + skip all-nodata → Task 5. ✓
+- Virtual clip = instructions + round-trip via open_tile → Task 5. ✓
+- Reference-vs-instruction principle → realized by Task 5 (materialized applies, virtual defers). ✓
+- window_for_geom envelope → Task 2. ✓
+- Migrate test_raster_bbox → Task 6. ✓
+- Serverless (mixed CRS, both tiers, worker-side) → Task 6. ✓
 - Non-wired → no task touches registration files. ✓
 
-**2. Placeholder scan:** No TBD/TODO. Task 4's metadata-helper note ("reuse whatever exists or build the lightweight dict") is a concrete instruction with a defined fallback, not a placeholder. Test-geometry adjustment notes (Task 4 Step 4) are real guidance preserving a stated invariant.
+**2. Placeholder scan:** No TBD/TODO. Task 5's metadata note now reuses the real `encode_tile` `meta` return (verified `_encode.metadata_for` does not exist). Test-geometry adjustment notes (Task 5 Step 4) are real guidance preserving a stated invariant.
 
-**3. Type consistency:** `_plan_partitions_for_file(..., *, clip_polygons, clip_crs, windows, emit_virtual)` signature consistent between Task 3 def and `partitions()` call. `_TilePartition(clip_polygon=, clip_crs=)` fields exist from Inc 2, populated in Task 3, consumed in Task 4. `_v2_tile_row(..., clip_polygon=, clip_crs=)` matches Inc-2 signature. `window_for_geom(src, geom, geom_crs=None)` matches Task 1 def and Task 3 call. `_resolve_clip_crs(geom, reader_clip_crs) -> Optional[str]` consistent. `clip_dataset(ds, clip_polygon, clip_crs) -> Optional[bytes]` used per its real signature.
+**3. Type consistency:** `_plan_partitions_for_file(..., *, clip_polygons, clip_crs, windows, emit_virtual)` signature consistent between Task 4 def and `partitions()` call. `_TilePartition(clip_polygon=, clip_crs=)` fields exist from Inc 2, populated in Task 4, consumed in Task 5. `_v2_tile_row(..., clip_polygon=, clip_crs=)` matches Inc-2 signature. `window_for_geom(src, geom, geom_crs=None)` matches Task 2 def and Task 4 call. `_resolve_clip_crs(geom, reader_clip_crs) -> Optional[str]` consistent. `clip_dataset(ds, clip_polygon, clip_crs) -> Optional[bytes]` signature unchanged; Task 1 only changes its internal SRID rule. Note: with the unified rule, the reader could pass `clipCrs` straight to `_clip`, but it still calls `_resolve_clip_crs` to STAMP the resolved CRS onto the tile's `clip_crs` field (provenance for materialized, instruction for virtual) — the resolver's role is recording, not avoiding a contradiction.
 
 ## Deferred (tracked, not built here)
 

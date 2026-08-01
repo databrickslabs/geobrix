@@ -357,9 +357,54 @@ def _plan_partitions_for_file(
     import rasterio
 
     # ------------------------------------------------------------------
-    # virtualTiles short-circuit: one bytes-free whole-file partition.
+    # virtualTiles short-circuit: bytes-free partitions.
+    #  - no clip: one whole-file partition.
+    #  - clipPolygons: one bytes-free partition per polygon whose envelope
+    #    intersects the raster, carrying the clip as instructions that
+    #    open_tile applies at read time (raster stays null).
     # ------------------------------------------------------------------
     if emit_virtual:
+        if clip_polygons:
+            import shapely.wkb
+
+            from databricks.labs.gbx._geom import parse_geom
+            from databricks.labs.gbx.ds._window import window_for_geom
+
+            parts = []
+            with rasterio.open(file_path) as ds:
+                for raw in clip_polygons:
+                    geom = parse_geom(raw)
+                    if geom is None:
+                        raise ValueError(
+                            f"raster_gbx: unparseable clipPolygons entry: {raw!r}"
+                        )
+                    resolved = _resolve_clip_crs(geom, clip_crs)
+                    win = window_for_geom(ds, geom, geom_crs=resolved)
+                    if win is None:
+                        continue  # envelope disjoint -> no tile
+                    parts.append(
+                        _TilePartition(
+                            file_path=file_path,
+                            window=(
+                                int(win.col_off),
+                                int(win.row_off),
+                                int(win.width),
+                                int(win.height),
+                            ),
+                            is_passthrough=False,
+                            is_whole=True,
+                            emit_fmt="gtiff",
+                            emit_virtual=True,
+                            clip_polygon=(
+                                raw
+                                if isinstance(raw, (bytes, bytearray))
+                                else shapely.wkb.dumps(geom)
+                            ),
+                            clip_crs=resolved,
+                        )
+                    )
+            return parts
+
         with rasterio.open(file_path) as ds:
             width, height = ds.width, ds.height
         return [
@@ -641,6 +686,50 @@ class RasterGbxReader(DataSourceReader):
                     path=partition.file_path,
                     window=partition.window,
                     metadata=meta,
+                    clip_polygon=partition.clip_polygon,
+                    clip_crs=partition.clip_crs,
+                ),
+            )
+            return
+
+        # ------------------------------------------------------------------
+        # Materialized clip tile (Choice 2): stage + encode the envelope window,
+        # then pre-clip via _clip.clip_dataset. A None return (all-nodata /
+        # non-overlap) means SKIP -> emit nothing. Otherwise emit the clipped
+        # GTiff bytes with clip_polygon/clip_crs kept as a reference to what was
+        # applied. Runs BEFORE the generic encode branch.
+        # ------------------------------------------------------------------
+        if partition.clip_polygon is not None:
+            from rasterio.io import MemoryFile
+
+            from databricks.labs.gbx.pyrx.core import _clip
+
+            local_path = _get_or_stage_file(partition.file_path)
+            with rasterio.Env(GDAL_CACHEMAX=128):
+                with rasterio.open(local_path) as ds:
+                    _cellid, win_bytes, meta = _encode.encode_tile(
+                        ds,
+                        window=partition.window,
+                        source_path=partition.file_path,
+                        all_parents=partition.all_parents,
+                        tile_format="gtiff",
+                    )
+            with MemoryFile(win_bytes) as mf, mf.open() as wds:
+                clipped = _clip.clip_dataset(
+                    wds, partition.clip_polygon, partition.clip_crs
+                )
+            if clipped is None:
+                return  # all-nodata / non-overlap -> skip (no tile)
+            yield (
+                source,
+                _v2_tile_row(
+                    _encode.CELLID_FRESH,
+                    clipped,
+                    path=partition.file_path,
+                    window=partition.window,
+                    metadata=meta,
+                    clip_polygon=partition.clip_polygon,
+                    clip_crs=partition.clip_crs,
                 ),
             )
             return
@@ -707,52 +796,6 @@ class RasterGbxReader(DataSourceReader):
         import rasterio
 
         source = _listing.to_spark_uri(partition.file_path)
-
-        # bbox path
-        if self.bbox is not None:
-            from databricks.labs.gbx.ds._window import window_for_bbox
-
-            staged_dir = tempfile.mkdtemp(prefix="gbx_raster_")
-            try:
-                local_path = os.path.join(
-                    staged_dir,
-                    os.path.basename(partition.file_path) or "raster.tif",
-                )
-                with (
-                    open(partition.file_path, "rb") as _src,
-                    open(local_path, "wb") as _dst,
-                ):
-                    shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-                with rasterio.open(local_path) as ds:
-                    win = window_for_bbox(ds, self.bbox, self.bbox_crs)
-                    if win is None:
-                        return
-                    bbox_window = (
-                        int(win.col_off),
-                        int(win.row_off),
-                        int(win.width),
-                        int(win.height),
-                    )
-                    cellid, raster_bytes, meta = _encode.encode_tile(
-                        ds,
-                        window=bbox_window,
-                        source_path=partition.file_path,
-                        all_parents="",
-                        tile_format="gtiff",
-                    )
-                    yield (
-                        source,
-                        _v2_tile_row(
-                            cellid,
-                            raster_bytes,
-                            path=partition.file_path,
-                            window=bbox_window,
-                            metadata=meta,
-                        ),
-                    )
-            finally:
-                shutil.rmtree(staged_dir, ignore_errors=True)
-            return
 
         size_bytes = os.path.getsize(partition.file_path)
         with rasterio.open(partition.file_path) as ds:

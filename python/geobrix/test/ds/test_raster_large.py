@@ -75,8 +75,11 @@ def test_optin_split_emits_gtiff_not_cog(tmp_path):
     rows = list(r.read(part))
     assert len(rows) > 1
     # Split tiles must be plain GTiff (not COG — COG is a writer concern).
+    # read() now yields a raw v2 tile tuple in V2_TILE_SCHEMA order
+    # (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata);
+    # metadata is the last field.
     _, tile = rows[0]
-    cellid, raster_bytes, md = tile
+    md = tile[-1]
     assert md[cog.GBX_FORMAT] == "gtiff"
 
 

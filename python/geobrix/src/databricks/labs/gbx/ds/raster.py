@@ -241,6 +241,9 @@ class _TilePartition(InputPartition):
         "cog_blocksize",
         "cog_overview_resampling",
         "all_parents",
+        # clipPolygons selection: the clip geometry (WKB) and its resolved CRS.
+        "clip_polygon",
+        "clip_crs",
         # Kept for backward compat with tests that still inspect budget_bytes.
         "budget_bytes",
         "size_mib",
@@ -259,6 +262,8 @@ class _TilePartition(InputPartition):
         cog_blocksize: int = 512,
         cog_overview_resampling: str = "AVERAGE",
         all_parents: str = "",
+        clip_polygon: Optional[bytes] = None,
+        clip_crs: Optional[str] = None,
         # Legacy fields so old tests that pass _FilePartition kwargs still work.
         budget_bytes: int = 0,
         size_mib: int = -1,
@@ -273,6 +278,8 @@ class _TilePartition(InputPartition):
         self.cog_blocksize = cog_blocksize
         self.cog_overview_resampling = cog_overview_resampling
         self.all_parents = all_parents
+        self.clip_polygon = clip_polygon
+        self.clip_crs = clip_crs
         self.budget_bytes = budget_bytes
         self.size_mib = size_mib
         self.tile_format = tile_format
@@ -323,11 +330,23 @@ class _FilePartition(_TilePartition):
         )
 
 
+def _resolve_clip_crs(geom, reader_clip_crs):
+    """Reader CRS precedence: embedded SRID > reader clipCrs > raster CRS (None)."""
+    import shapely
+
+    srid = shapely.get_srid(geom)
+    if srid and srid > 0:
+        return f"EPSG:{srid}"
+    return reader_clip_crs or None
+
+
 def _plan_partitions_for_file(
     file_path: str,
     budget_bytes: int,
-    bbox: Optional[Tuple[float, float, float, float]],
-    bbox_crs: Optional[str],
+    *,
+    clip_polygons: Sequence = (),
+    clip_crs: Optional[str] = None,
+    windows: Sequence = (),
     emit_virtual: bool = False,
 ) -> Sequence["_TilePartition"]:
     """Driver-side: open a raster header and return one _TilePartition per tile.
@@ -354,32 +373,82 @@ def _plan_partitions_for_file(
             )
         ]
 
-    size_bytes = os.path.getsize(file_path)
-
     # ------------------------------------------------------------------
-    # bbox path: single windowed tile.  No splitting.
+    # clipPolygons: one tile per polygon whose envelope intersects the raster.
     # ------------------------------------------------------------------
-    if bbox is not None:
-        from databricks.labs.gbx.ds._window import window_for_bbox
+    if clip_polygons:
+        import shapely.wkb
 
+        from databricks.labs.gbx._geom import parse_geom
+        from databricks.labs.gbx.ds._window import window_for_geom
+
+        parts = []
         with rasterio.open(file_path) as ds:
-            win = window_for_bbox(ds, bbox, bbox_crs)
-        if win is None:
-            return []  # source does not overlap AOI
-        return [
-            _TilePartition(
-                file_path=file_path,
-                window=(
-                    int(win.col_off),
-                    int(win.row_off),
-                    int(win.width),
-                    int(win.height),
-                ),
-                is_passthrough=False,
-                is_whole=True,
-                emit_fmt="gtiff",
-            )
-        ]
+            for raw in clip_polygons:
+                geom = parse_geom(raw)
+                if geom is None:
+                    raise ValueError(
+                        f"raster_gbx: unparseable clipPolygons entry: {raw!r}"
+                    )
+                resolved = _resolve_clip_crs(geom, clip_crs)
+                win = window_for_geom(ds, geom, geom_crs=resolved)
+                if win is None:
+                    continue  # envelope disjoint -> no tile
+                parts.append(
+                    _TilePartition(
+                        file_path=file_path,
+                        window=(
+                            int(win.col_off),
+                            int(win.row_off),
+                            int(win.width),
+                            int(win.height),
+                        ),
+                        is_passthrough=False,
+                        is_whole=True,
+                        emit_fmt="gtiff",
+                        clip_polygon=(
+                            raw
+                            if isinstance(raw, (bytes, bytearray))
+                            else shapely.wkb.dumps(geom)
+                        ),
+                        clip_crs=resolved,
+                    )
+                )
+        return parts
+
+    # ------------------------------------------------------------------
+    # windows: one tile per pixel window, clipped to extent (skip fully-outside).
+    # ------------------------------------------------------------------
+    if windows:
+        from rasterio.windows import Window as _W
+
+        parts = []
+        with rasterio.open(file_path) as ds:
+            full = _W(0, 0, ds.width, ds.height)
+            for c, r, w, h in windows:
+                try:
+                    iw = _W(c, r, w, h).intersection(full)
+                except Exception:
+                    continue  # disjoint
+                if iw.width < 1 or iw.height < 1:
+                    continue
+                parts.append(
+                    _TilePartition(
+                        file_path=file_path,
+                        window=(
+                            int(iw.col_off),
+                            int(iw.row_off),
+                            int(iw.width),
+                            int(iw.height),
+                        ),
+                        is_passthrough=False,
+                        is_whole=True,
+                        emit_fmt="gtiff",
+                    )
+                )
+        return parts
+
+    size_bytes = os.path.getsize(file_path)
 
     # ------------------------------------------------------------------
     # Normal path: read header metadata, decide whole vs split.
@@ -520,8 +589,9 @@ class RasterGbxReader(DataSourceReader):
                 _plan_partitions_for_file(
                     file_path=f,
                     budget_bytes=resolved_budget,
-                    bbox=self.bbox,
-                    bbox_crs=self.bbox_crs,
+                    clip_polygons=self.clip_polygons,
+                    clip_crs=self.clip_crs,
+                    windows=self.windows,
                     emit_virtual=self.emit_virtual,
                 )
             )

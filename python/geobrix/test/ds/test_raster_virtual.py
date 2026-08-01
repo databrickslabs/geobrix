@@ -1,6 +1,7 @@
 """virtualTiles emit mode: bytes-free (path, whole-file window) tiles that
 round-trip through open_tile to the correct pixels.
 """
+
 import numpy as np
 import rasterio
 from rasterio.transform import from_origin
@@ -102,9 +103,7 @@ def test_virtual_row_round_trips_through_open_tile(spark, tmp_path):
     _write3(tmp_path)
     tiled_path = str(tmp_path / "a.tiled.tif")
     rows = (
-        spark.read.format("raster_gbx")
-        .option("virtualTiles", "true")
-        .load(tiled_path)
+        spark.read.format("raster_gbx").option("virtualTiles", "true").load(tiled_path)
     ).collect()
     assert len(rows) == 1
     t = rows[0]["tile"]

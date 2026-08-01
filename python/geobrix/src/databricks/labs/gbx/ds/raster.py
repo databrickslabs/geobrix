@@ -434,8 +434,10 @@ def _plan_partitions_for_file(
     #  - clipPolygons: one bytes-free partition per polygon whose envelope
     #    intersects the raster, carrying the clip as instructions that
     #    open_tile applies at read time (raster stays null).
+    # tileSize takes precedence: if tile_size is set, fall through to the
+    # tileSize grid-planning branch which threads emit_virtual correctly.
     # ------------------------------------------------------------------
-    if emit_virtual:
+    if emit_virtual and not tile_size:
         if clip_polygons:
             return _clip_partitions(
                 file_path, clip_polygons, clip_crs, emit_virtual=True

@@ -6,6 +6,7 @@ with ``raster`` set is materialized (v1-compatible). The struct is the same
 across both cases so parity locks once; ``path``/``window``/``clip_polygon``/
 ``clip_crs``/``crs`` are null for a plain v1 tile.
 """
+
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 

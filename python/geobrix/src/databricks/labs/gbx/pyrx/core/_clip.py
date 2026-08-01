@@ -7,6 +7,7 @@ precedence: an explicit clip_crs string (e.g. "EPSG:4326") is authoritative and
 is stamped onto the geometry's SRID before delegating, so a plain WKB/WKT can
 declare its CRS. Reprojects the polygon, never the raster.
 """
+
 from typing import Optional
 
 import shapely

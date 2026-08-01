@@ -3,6 +3,7 @@
 The struct is deliberately full (path, window, clip_polygon, clip_crs, crs)
 so parity locks once; the reader does not emit it yet (later increment).
 """
+
 import pytest
 
 from databricks.labs.gbx.pyrx.core import virtual_tile as vt
@@ -53,5 +54,12 @@ def test_row_roundtrip_materialized_null_window():
 def test_schema_has_v2_fields():
     names = set(V.name for V in vt.V2_TILE_SCHEMA.fields)
     assert names == {
-        "cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata"
+        "cellid",
+        "raster",
+        "path",
+        "window",
+        "clip_polygon",
+        "clip_crs",
+        "crs",
+        "metadata",
     }

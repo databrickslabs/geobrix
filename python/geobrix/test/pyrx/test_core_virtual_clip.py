@@ -1,4 +1,5 @@
 """clip_dataset: clip_crs precedence, per-tile intersection, disjoint->None."""
+
 import numpy as np
 import shapely
 import shapely.wkb
@@ -30,7 +31,9 @@ def test_clip_partial_returns_slice():
     poly = box(10.0, 48.0, 11.0, 50.0)
     wkb = shapely.wkb.dumps(poly)
     with _open(make_geotiff_bytes(width=4, height=3, epsg=4326)) as ds:
-        out = _clip.clip_dataset(ds, wkb, clip_crs=None)  # plain WKB -> assume raster CRS
+        out = _clip.clip_dataset(
+            ds, wkb, clip_crs=None
+        )  # plain WKB -> assume raster CRS
     assert out is not None
     with _open(out) as ds2:
         assert ds2.width < 4  # clipped narrower than source
@@ -52,8 +55,16 @@ def test_clip_crs_overrides_and_reprojects():
     from rasterio.warp import transform_bounds
 
     tr = from_origin(500000.0, 5000000.0, 100.0, 100.0)
-    prof = dict(driver="GTiff", width=8, height=8, count=1, dtype="float32",
-                crs="EPSG:32633", transform=tr, nodata=-9999.0)
+    prof = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32633",
+        transform=tr,
+        nodata=-9999.0,
+    )
     with MemoryFile() as mf:
         with mf.open(**prof) as d:
             d.write(np.arange(64, dtype="float32").reshape(8, 8), 1)

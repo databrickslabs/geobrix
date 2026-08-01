@@ -2,6 +2,7 @@
 form. This self-test pins that invariant so downstream open_tile tests can trust
 'same window -> same pixels across layouts'.
 """
+
 import numpy as np
 import rasterio
 
@@ -14,7 +15,11 @@ def test_three_layouts_same_pixels(tmp_path):
     tiled = _layouts.write_tiled_gtiff(str(tmp_path / "a.tiled.tif"), w, h)
     striped = _layouts.write_striped_gtiff(str(tmp_path / "a.striped.tif"), w, h)
 
-    with rasterio.open(cog) as c, rasterio.open(tiled) as t, rasterio.open(striped) as s:
+    with (
+        rasterio.open(cog) as c,
+        rasterio.open(tiled) as t,
+        rasterio.open(striped) as s,
+    ):
         assert c.profile["tiled"] is True
         assert t.profile["tiled"] is True
         assert s.profile.get("tiled", False) is False

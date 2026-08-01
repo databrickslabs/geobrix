@@ -2,6 +2,7 @@
 (heavy-useful). The virtual->materialized output must round-trip through the
 raster-precedence path identically to reading the source window directly.
 """
+
 import numpy as np
 import rasterio
 
@@ -38,7 +39,7 @@ def test_materialize_to_bytes_produces_heavy_useful_tile(tmp_path):
     with rasterio.open(path) as ds:
         full = ds.read(1)
     c, r, w, h = WINDOW
-    assert np.array_equal(got, full[r:r + h, c:c + w])
+    assert np.array_equal(got, full[r : r + h, c : c + w])
 
 
 def test_materialize_to_bytes_none_metadata(tmp_path):

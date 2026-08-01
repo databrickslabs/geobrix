@@ -8,6 +8,7 @@ systematically undercount real native allocation cost. The array-nbytes
 assertions (not the tracemalloc bounds) are the load-bearing proof that
 a window materializes a block-sized array, not the whole raster.
 """
+
 import tracemalloc
 
 import numpy as np
@@ -47,9 +48,9 @@ def test_windowed_read_smaller_than_full(tmp_path):
     full_nbytes = W * H * 4  # float32
     block_nbytes = BS * BS * 4
     assert arr_c.nbytes == block_nbytes
-    assert arr_c.nbytes < full_nbytes, (
-        f"window array ({arr_c.nbytes}B) should be smaller than full raster ({full_nbytes}B)"
-    )
+    assert (
+        arr_c.nbytes < full_nbytes
+    ), f"window array ({arr_c.nbytes}B) should be smaller than full raster ({full_nbytes}B)"
 
     # (c) pixel equality: same pixels regardless of COG vs striped layout
     assert np.array_equal(arr_c, arr_s), "COG and striped windowed reads diverge"

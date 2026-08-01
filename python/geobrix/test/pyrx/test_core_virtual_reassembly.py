@@ -43,8 +43,8 @@ W, H, BS = 512, 256, 256
 
 # Target column range (the polygon covers exactly these source columns).
 # We aim for cols 128..383 (256 total, 128 per tile).
-_COL_START = 128   # first included column
-_COL_END = 384     # one-past-last included column (source cols 128..383)
+_COL_START = 128  # first included column
+_COL_END = 384  # one-past-last included column (source cols 128..383)
 
 # Tiny inset (0.1 * pixel_size) keeps polygon bounds off pixel edges so
 # rasterio.mask never includes a boundary pixel as nodata.
@@ -56,7 +56,7 @@ def _build_polygon(src_transform):
     px = abs(src_transform.a)
     minx = src_transform.c + _COL_START * px + _INSET
     maxx = src_transform.c + _COL_END * px - _INSET
-    maxy = src_transform.f                              # top of the raster
+    maxy = src_transform.f  # top of the raster
     miny = src_transform.f - H * abs(src_transform.e)  # bottom (all H rows)
     return shapely.wkb.dumps(box(minx, miny, maxx, maxy))
 
@@ -116,9 +116,9 @@ def test_adjacent_tiles_reassemble(tmp_path):
     assert right_arr.shape[1] > 0, "right partial is zero-width"
 
     # (b) Heights must match so hstack is valid.
-    assert left_arr.shape[0] == right_arr.shape[0], (
-        f"Height mismatch: {left_arr.shape[0]} vs {right_arr.shape[0]}"
-    )
+    assert (
+        left_arr.shape[0] == right_arr.shape[0]
+    ), f"Height mismatch: {left_arr.shape[0]} vs {right_arr.shape[0]}"
 
     # (c) Contiguous at seam — no gap, no overlap.
     assert left_span[1] == right_span[0], (
@@ -133,9 +133,9 @@ def test_adjacent_tiles_reassemble(tmp_path):
     col_end = right_span[1]
     expected = full[0 : left_arr.shape[0], col_start:col_end]
 
-    assert reassembled.shape == expected.shape, (
-        f"Shape mismatch: reassembled {reassembled.shape} vs expected {expected.shape}"
-    )
+    assert (
+        reassembled.shape == expected.shape
+    ), f"Shape mismatch: reassembled {reassembled.shape} vs expected {expected.shape}"
     assert np.array_equal(reassembled, expected), (
         "Pixel values differ after reassembly — tiles are not contiguous or misaligned.\n"
         f"  left span:  cols {left_span[0]}..{left_span[1]}  shape={left_arr.shape}\n"

@@ -3,6 +3,7 @@
 All three writers emit identical pixels + georeference so 'read window W from
 any layout' yields the same slice. Origin (10, 50), 0.001 deg pixels (EPSG:4326).
 """
+
 import numpy as np
 import rasterio
 from rasterio.transform import from_origin

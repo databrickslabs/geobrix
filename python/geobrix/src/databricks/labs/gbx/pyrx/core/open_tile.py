@@ -192,7 +192,7 @@ def _open_all(tiles):
     on exit. Useful for multi-input operations (map-algebra, aggregation).
     """
     with ExitStack() as stack:
-        yield [stack.enter_context(open_tile(_to_virtual_tile(t))) for t in tiles]
+        yield [stack.enter_context(_open(t)) for t in tiles]
 
 
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:

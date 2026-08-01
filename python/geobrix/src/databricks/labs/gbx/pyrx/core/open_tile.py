@@ -17,6 +17,8 @@ a nested ``with`` that has already closed.
 """
 
 import os
+import shutil
+import tempfile
 from contextlib import ExitStack, contextmanager
 from typing import Iterator, Optional, Tuple
 
@@ -260,3 +262,96 @@ def materialize(tile: VirtualTile) -> Tuple[np.ndarray, "rasterio.Affine", dict]
     """Convenience wrapper: (array, transform, profile) from open_tile."""
     with open_tile(tile) as ds:
         return ds.read(), ds.transform, ds.profile.copy()
+
+
+def shape_output(
+    tile,
+    *,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> VirtualTile:
+    """Force the output shape of a tile.
+
+    Accepted input: any tile shape (VirtualTile, bytes, v1/v2 dict/Row);
+    normalised via ``_to_virtual_tile`` before processing.
+
+    Rules
+    -----
+    ``virtualize_dir`` and ``materialize=True`` are mutually exclusive.
+
+    ``virtualize_dir`` set:
+      - Tile already virtual (``raster`` is None) → return as-is (no-op).
+      - Tile materialized → write bytes to
+        ``<dir>/[<prefix>_]<cellid>_<col>_<row>_<w>_<h>.tif`` (overwrite),
+        FUSE-safe (local temp → shutil.copyfile), return a VirtualTile with
+        ``raster=None`` and provenance metadata.
+
+    ``materialize=True``:
+      - Tile virtual → read via ``open_tile`` (lazy), capture bytes,
+        return a materialized VirtualTile (delegates to
+        ``materialize_to_bytes``).
+      - Tile already materialized → no-op (return as-is).
+
+    Neither → return the tile as-is (auto).
+    """
+    vt = _to_virtual_tile(tile)
+
+    if virtualize_dir is not None and materialize:
+        raise ValueError(
+            "shape_output: virtualize_dir and materialize=True are mutually exclusive"
+        )
+
+    if virtualize_dir is not None:
+        # Already virtual — nothing to do.
+        if vt.is_virtual():
+            return vt
+
+        # Determine (col, row, w, h) for the filename.
+        if vt.window is not None:
+            col, row, w, h = vt.window
+        else:
+            # Read only the header to get dimensions.
+            with _serde.open_tile(vt.raster) as ds:
+                w, h = ds.width, ds.height
+            col, row = 0, 0
+
+        parts = [str(vt.cellid), str(col), str(row), str(w), str(h)]
+        base = "_".join(parts) + ".tif"
+        if virtualize_prefix:
+            base = f"{virtualize_prefix}_{base}"
+
+        os.makedirs(virtualize_dir, exist_ok=True)
+        out_path = os.path.join(virtualize_dir, base)
+
+        # FUSE-safe write: write to a local temp, then copy into place.
+        fd, tmp = tempfile.mkstemp(suffix=".tif")
+        try:
+            os.close(fd)
+            with open(tmp, "wb") as f:
+                f.write(vt.raster)
+            shutil.copyfile(tmp, out_path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+        meta = dict(vt.metadata or {})
+        meta["shape_output"] = "virtualized"
+        return VirtualTile(
+            cellid=vt.cellid,
+            raster=None,
+            path=out_path,
+            window=(col, row, w, h),
+            clip_polygon=vt.clip_polygon,
+            clip_crs=vt.clip_crs,
+            crs=vt.crs,
+            metadata=meta,
+        )
+
+    if materialize:
+        if not vt.is_virtual():
+            return vt
+        return materialize_to_bytes(vt)
+
+    # Auto: return as-is.
+    return vt

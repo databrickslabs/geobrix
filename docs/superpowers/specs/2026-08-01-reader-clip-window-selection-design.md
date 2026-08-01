@@ -20,10 +20,15 @@ carries the clip into the tile struct so downstream trimming is exact.
 
 1. **Drop `bbox` and `bboxCrs` options entirely** (breaking; beta, no aliases). The internal
    `window_for_bbox` primitive stays (reused), but is no longer reachable via an option.
-2. **Add `clipPolygons`** — single geometry OR list of geometries (WKB/EWKB/WKT/EWKT), documented as
-   "one value or a list." Per raster, emit one tile per polygon whose envelope intersects the raster;
-   a polygon whose envelope misses the raster → no tile; a polygon that masks out all pixels in its
-   window → no tile.
+2. **Add `clipPolygons`** — single geometry OR list of geometries, documented as "one value or a
+   list." Per raster, emit one tile per polygon whose envelope intersects the raster; a polygon whose
+   envelope misses the raster → no tile; a polygon that masks out all pixels in its window → no tile.
+   - **Accepted geometry encodings by call surface:** Spark `.option()` values are string-typed, so on
+     the `.option("clipPolygons", ...)` surface pass **WKT or EWKT strings** (EWKT carries the SRID).
+     Raw **WKB/EWKB bytes** are only accepted from **programmatic callers** that pass a Python list via
+     the DataSource options dict — a `bytes` value handed to `.option()` is `str()`-repr'd by Spark and
+     will fail to parse. Documented explicitly; no hex/base64 decoding is added this increment.
+     `parse_geom` handles WKB/EWKB/WKT/EWKT for the programmatic/list path.
 3. **Add `clipCrs`** — single value, nullable. Per-polygon CRS resolution (see below); governs only
    plain-geometry members.
 4. **Add `windows`** — single pixel window `(col,row,w,h)` OR list, documented as "one value or a

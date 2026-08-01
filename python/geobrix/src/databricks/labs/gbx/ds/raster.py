@@ -12,8 +12,20 @@ Split strategy (``splitStrategy`` option, default ``none``):
   - ``classic``    — 1 536 MiB decoded budget per tile (opt-in split).
 
 **Halo mode** (recommended for large rasters): prepare a master COG via
-``cog_gbx`` writer, then read windows with ``bbox``/``splitStrategy``.
+``cog_gbx`` writer, then read windows with ``splitStrategy``.
 COG creation is a writer concern; the reader always emits plain GTiff tiles.
+
+AOI selection (mutually exclusive, single value or list of values):
+  - ``clipPolygons`` — one tile per polygon whose envelope intersects the raster
+    (materialized tiles are pre-clipped to the polygon; virtual tiles carry the
+    clip as an instruction). On the ``.option()`` surface pass **WKT/EWKT
+    strings** (Spark options are string-typed; EWKT carries the SRID). Raw
+    WKB/EWKB bytes are accepted only from programmatic callers passing a Python
+    list via the options dict.
+  - ``windows`` — one tile per pixel window ``(col,row,w,h)``; partial windows
+    clip to the raster extent, fully-outside windows are skipped.
+  - ``clipCrs`` — CRS for clipPolygons lacking an embedded SRID (precedence:
+    embedded EWKB/EWKT SRID → clipCrs → raster CRS).
 
 Power-user override: ``sizeInMB`` (positive integer) overrides the budget in
 MiB, bypassing the strategy-derived budget. Implies opt-in split.

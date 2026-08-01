@@ -156,6 +156,51 @@ def reader_schema() -> StructType:
     )
 
 
+def reader_schema_v2() -> StructType:
+    """(source, tile) — tile is the v2 VirtualTile struct (raster nullable)."""
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    return StructType(
+        [
+            StructField("source", StringType(), nullable=False),
+            StructField("tile", V2_TILE_SCHEMA, nullable=False),
+        ]
+    )
+
+
+def _v2_tile_row(
+    cellid,
+    raster,
+    path,
+    window,
+    metadata,
+    clip_polygon=None,
+    clip_crs=None,
+    crs=None,
+) -> tuple:
+    """Assemble one v2 tile tuple in V2_TILE_SCHEMA field order.
+
+    ``window`` is a (col_off, row_off, width, height) tuple or None; it is
+    serialized to the nested struct dict Spark expects (or None). This is the
+    SINGLE place the reader assembles a v2 tile — both the virtual and
+    materialized paths route through it.
+    """
+    win = None
+    if window is not None:
+        c, r, w, h = window
+        win = {"col_off": int(c), "row_off": int(r), "width": int(w), "height": int(h)}
+    return (
+        int(cellid),
+        raster,
+        path,
+        win,
+        clip_polygon,
+        clip_crs,
+        crs,
+        metadata,
+    )
+
+
 def _resolve_emit_format(tile_format: str, split: bool) -> str:
     """Resolve the actual emit format for a tile.
 

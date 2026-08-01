@@ -36,10 +36,13 @@ Three consumption capabilities + writer round-trip + docs:
    materialize the window.
 3. **Force-output params** on tile-returning functions — `virtualize_dir`, `virtualize_prefix`,
    `materialize` — via one shared `shape_output(...)` helper applied at each function's return.
-4. **Writer round-trip (fixes a pre-existing regression).** `raster_gbx`/`gtiff_gbx`/`cog_gbx`
-   writers accept a v1 **or** v2 input envelope (dual-accept) and normalize internally; virtual tiles
-   are auto-materialized on write (writing is a materialization boundary); `cog_gbx` path-direct
-   converts whole-file virtual tiles with no bytes round-trip.
+4. **Writer round-trip (fixes a pre-existing regression).** Writers emit raster **files** (GTiff/COG
+   on disk) — a writer never "writes a tile struct"; the tile (v1 or v2) is only the in-DataFrame
+   *input*. So this is purely about INPUT acceptance: `raster_gbx`/`gtiff_gbx`/`cog_gbx` writers
+   dual-accept a v1 **or** v2 tile-envelope DataFrame, then internally obtain the bytes to write —
+   auto-materializing a virtual tile (writing is a materialization boundary), or, for `cog_gbx`,
+   path-direct converting a whole-file virtual tile with no bytes round-trip. Output is always a
+   format file, unchanged.
 5. **Docs.** A per-function override note on every light `rst_*` doc; a Light-vs-Heavy blurb; content
    for the queued Virtual Tiles page; the virtual↔materialized advice (the class taxonomy).
 
@@ -123,8 +126,9 @@ The single output-shaping helper (semantics above). Reuses `materialize_to_bytes
 
 ### Unit D — writers (`ds/writer.py`, `ds/cog_writer.py`)
 
-- `assert_write_schema` accepts v1 **or** v2 envelope (dual-accept input); the write path normalizes
-  each tile to a `VirtualTile` internally and writes the v2 model.
+- `assert_write_schema` accepts v1 **or** v2 envelope (dual-accept INPUT); the write path normalizes
+  each tile to a `VirtualTile` internally to obtain bytes, then emits format files as before (the
+  writer's on-disk output — GTiff/COG — is unchanged; only input acceptance widens).
 - `RasterGbxWriter.write`: normalize → if virtual, `materialize_to_bytes` → existing `tile_to_bytes`
   write. Removes the `bytes(None)` crash (Inc-2 deferred item) AND the v1-only schema rejection
   (pre-existing round-trip regression).
@@ -133,12 +137,19 @@ The single output-shaping helper (semantics above). Reuses `materialize_to_bytes
   or materialized** → materialize then convert. Existing top-level-`path` (file_gbx) input still
   works.
 
-### Proving before catalog-wide swap
+### Two phases within this increment
 
-The three helpers are built + tested against a **representative function per family** end-to-end
-(a header accessor, a pixel accessor, `rst_clip`, `rst_slope`, an aggregator, a UDTF) including
-Serverless, before the mechanical `_serde.open_tile → _open` swap is applied catalog-wide. The uniform
-pattern is verified on a few before touching 100+ call sites.
+Inc 4 runs in two phases (both in-increment, not a separate increment):
+
+- **Phase A — front-door + proof.** Build the three shared helpers (`_open`, `open_header`,
+  `shape_output`), the writer dual-accept + auto-materialize + cog path-direct, and the docs
+  scaffolding, wiring + testing them against a **representative function per family** end-to-end
+  (a header accessor, a pixel accessor, `rst_clip`, `rst_slope`, an aggregator, a UDTF) including a
+  Serverless run. This validates the uniform pattern on a handful before touching the rest.
+- **Phase B — full catalog sweep.** Apply the mechanical `_serde.open_tile(bytes(tile["raster"])) →
+  _open(tile)` swap across the remaining ~100 call sites, the header-only-vs-pixel accessor split
+  across all accessors, and the force-output param passthrough across all tile-returning wrappers.
+  Phase B is pure repetition of the Phase-A pattern; it starts only after Phase A is green.
 
 ## Data flow (the payoff)
 

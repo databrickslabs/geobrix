@@ -74,6 +74,27 @@ def _overlap_steps(tile_width, tile_height, overlap):
     return tw, th, max(1, tw - overlap_w), max(1, th - overlap_h)
 
 
+def plan_grid_windows(width, height, tile_width, tile_height, overlap=0):
+    """Enumerate a regular grid of (col_off, row_off, w, h) windows over
+    ``width x height``, stepping by the overlap-adjusted stride and clamping
+    each window to the extent. Pure window planning -- no dataset, no bytes.
+    Overlap semantics match ``_iter_window_tiles`` / ``rst_tooverlappingtiles``.
+    """
+    tw, th, step_x, step_y = _overlap_steps(tile_width, tile_height, overlap)
+    windows = []
+    row = 0
+    while row < height:
+        col = 0
+        while col < width:
+            w = min(tw, width - col)
+            h = min(th, height - row)
+            if w > 0 and h > 0:
+                windows.append((col, row, w, h))
+            col += step_x
+        row += step_y
+    return windows
+
+
 def iter_to_overlapping_tiles(ds, tile_width, tile_height, overlap):
     tw, th, sx, sy = _overlap_steps(tile_width, tile_height, overlap)
     return _iter_window_tiles(ds, tw, th, sx, sy)

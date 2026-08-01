@@ -1,7 +1,47 @@
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import tiling
+from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
 
 from .conftest import make_geotiff_bytes
+
+
+def test_plan_grid_windows_no_overlap_exact_grid():
+    # 512x512 into 256x256, no overlap -> 4 cells at (0,0),(256,0),(0,256),(256,256)
+    wins = plan_grid_windows(512, 512, 256, 256, 0)
+    assert sorted(wins) == [
+        (0, 0, 256, 256),
+        (0, 256, 256, 256),
+        (256, 0, 256, 256),
+        (256, 256, 256, 256),
+    ]
+
+
+def test_plan_grid_windows_overlap_matches_step_contract():
+    # 512x512, tile 256, overlap 25% -> overlap_px=64, step=192.
+    # col/row offsets: 0,192,384 (384+256 clamps to 512 -> w=128). 3x3 = 9 windows.
+    wins = plan_grid_windows(512, 512, 256, 256, 25)
+    offs = {(c, r) for c, r, _, _ in wins}
+    assert offs == {(c, r) for r in (0, 192, 384) for c in (0, 192, 384)}
+    assert len(wins) == 9
+    # clamped edge window at col 384 has width 512-384=128
+    edge = [w for c, r, w, h in wins if c == 384]
+    assert all(w == 128 for w in edge)
+
+
+def test_plan_grid_windows_tile_larger_than_raster_single_clamped():
+    wins = plan_grid_windows(300, 200, 512, 512, 0)
+    assert wins == [(0, 0, 300, 200)]
+
+
+def test_plan_grid_windows_complete_coverage():
+    # every source pixel is covered by at least one window
+    import numpy as np
+
+    W, H = 100, 80
+    covered = np.zeros((H, W), dtype=bool)
+    for c, r, w, h in plan_grid_windows(W, H, 32, 32, 10):
+        covered[r : r + h, c : c + w] = True
+    assert covered.all()
 
 
 def test_separate_bands():

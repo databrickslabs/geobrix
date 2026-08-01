@@ -15,6 +15,22 @@ from rasterio.windows import Window
 from rasterio.windows import from_bounds as _from_bounds
 
 
+def window_for_geom(
+    src,
+    geom,
+    geom_crs: Optional[str] = None,
+) -> Optional[Window]:
+    """Clipped, integer, in-bounds Window of ``src`` covering ``geom``'s envelope.
+
+    ``geom`` is a shapely geometry in ``geom_crs`` (or ``src.crs`` if None). The
+    geometry's bounds are reprojected to ``src.crs`` and turned into a whole-pixel
+    window clipped to the dataset; returns None if it does not overlap. Same
+    clip-safe contract as ``window_for_bbox`` (window and window_transform agree).
+    """
+    minx, miny, maxx, maxy = geom.bounds
+    return window_for_bbox(src, (minx, miny, maxx, maxy), geom_crs)
+
+
 def window_for_bbox(
     src,
     bbox: Tuple[float, float, float, float],

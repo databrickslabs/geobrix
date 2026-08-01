@@ -195,6 +195,41 @@ def _open_all(tiles):
         yield [stack.enter_context(_open(t)) for t in tiles]
 
 
+@contextmanager
+def open_header(tile) -> Iterator[DatasetReader]:
+    """Context manager yielding an open dataset for **header/metadata access only**.
+
+    Unlike ``open_tile`` / ``_open``, this function never materialises a pixel
+    window.  Callers may safely inspect ``.width``, ``.height``, ``.crs``,
+    ``.transform``, ``.bounds``, ``.profile``, etc.  They must NOT call
+    ``ds.read()`` — that would materialise pixels and defeats the purpose.
+
+    Accepted tile shapes:
+    - bytes / bytearray / v1 dict (``raster`` set) → open the bytes via the
+      MemoryFile path (``_open``).  The bytes already contain the full result so
+      header is trivially available; no window read is performed by this call.
+    - virtual dict / v2 struct / VirtualTile (``raster`` None) → stage the path
+      local if needed (e.g. /Volumes FUSE), open the **full source** file with a
+      plain ``rasterio.open`` (lazy, no pixel I/O), yield the dataset.  The
+      ExitStack cleans up the staged temp on exit.
+    """
+    vt = _to_virtual_tile(tile)
+
+    if not vt.is_virtual():
+        # Bytes path: delegate to _open; no pixel read is performed here.
+        with _open(vt) as ds:
+            yield ds
+        return
+
+    # Virtual path: open the full source header — no window slicing, no read.
+    with ExitStack() as stack:
+        local_path, is_temp = _stage_local_if_needed(vt.path)
+        if is_temp:
+            stack.callback(_safe_remove, local_path)
+        ds = stack.enter_context(rasterio.open(local_path))
+        yield ds
+
+
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     """Convert a (possibly virtual) tile to a v2-materialized tile: run open_tile
     on the light side (which CAN read /Volumes), capture the window+warp+clip

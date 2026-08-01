@@ -523,7 +523,16 @@ class RasterGbxReader(DataSourceReader):
                 all_parents=partition.all_parents,
                 compression=compression,
             )
-            yield (source, (cellid, raster_bytes, meta))
+            yield (
+                source,
+                _v2_tile_row(
+                    cellid,
+                    raster_bytes,
+                    path=partition.file_path,
+                    window=(0, 0, width, height),
+                    metadata=meta,
+                ),
+            )
             return
 
         # ------------------------------------------------------------------
@@ -542,7 +551,16 @@ class RasterGbxReader(DataSourceReader):
                     cog_blocksize=partition.cog_blocksize,
                     cog_overview_resampling=partition.cog_overview_resampling,
                 )
-        yield (source, (cellid, raster_bytes, meta))
+        yield (
+            source,
+            _v2_tile_row(
+                cellid,
+                raster_bytes,
+                path=partition.file_path,
+                window=partition.window,
+                metadata=meta,
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Legacy path (backward compat with tests that use _FilePartition directly)
@@ -572,19 +590,29 @@ class RasterGbxReader(DataSourceReader):
                     win = window_for_bbox(ds, self.bbox, self.bbox_crs)
                     if win is None:
                         return
+                    bbox_window = (
+                        int(win.col_off),
+                        int(win.row_off),
+                        int(win.width),
+                        int(win.height),
+                    )
                     cellid, raster_bytes, meta = _encode.encode_tile(
                         ds,
-                        window=(
-                            int(win.col_off),
-                            int(win.row_off),
-                            int(win.width),
-                            int(win.height),
-                        ),
+                        window=bbox_window,
                         source_path=partition.file_path,
                         all_parents="",
                         tile_format="gtiff",
                     )
-                    yield (source, (cellid, raster_bytes, meta))
+                    yield (
+                        source,
+                        _v2_tile_row(
+                            cellid,
+                            raster_bytes,
+                            path=partition.file_path,
+                            window=bbox_window,
+                            metadata=meta,
+                        ),
+                    )
             finally:
                 shutil.rmtree(staged_dir, ignore_errors=True)
             return
@@ -618,7 +646,16 @@ class RasterGbxReader(DataSourceReader):
                     all_parents="",
                     compression=compression,
                 )
-                yield (source, (cellid, raster_bytes, meta))
+                yield (
+                    source,
+                    _v2_tile_row(
+                        cellid,
+                        raster_bytes,
+                        path=partition.file_path,
+                        window=(0, 0, width, height),
+                        metadata=meta,
+                    ),
+                )
                 return
             tiled = bool(ds.profile.get("tiled", False))
             blockxsize = ds.profile.get("blockxsize")
@@ -664,7 +701,16 @@ class RasterGbxReader(DataSourceReader):
                         all_parents="",
                         tile_format="gtiff",
                     )
-                    yield (source, (cellid, raster_bytes, meta))
+                    yield (
+                        source,
+                        _v2_tile_row(
+                            cellid,
+                            raster_bytes,
+                            path=partition.file_path,
+                            window=(col, row, w, h),
+                            metadata=meta,
+                        ),
+                    )
         finally:
             shutil.rmtree(staged_dir, ignore_errors=True)
 
@@ -675,7 +721,7 @@ class RasterGbxDataSource(DataSource):
         return "raster_gbx"
 
     def schema(self) -> StructType:
-        return reader_schema()
+        return reader_schema_v2()
 
     def reader(self, schema: StructType) -> DataSourceReader:
         return RasterGbxReader(self.options)

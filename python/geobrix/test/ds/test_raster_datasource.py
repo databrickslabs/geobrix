@@ -38,13 +38,31 @@ def _write_sample(path, width=4, height=3):
         ds.write(data, 1)
 
 
-def test_schema_matches_tile_schema():
-    from databricks.labs.gbx.pyrx import _serde
+def test_schema_is_v2_tile():
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
     ds = RasterGbxDataSource(options={"path": "/tmp/none"})
     schema = ds.schema()
     assert [f.name for f in schema.fields] == ["source", "tile"]
-    assert schema["tile"].dataType == _serde.TILE_SCHEMA
+    assert schema["tile"].dataType == V2_TILE_SCHEMA
+
+
+def test_materialized_row_is_v2_with_populated_raster(spark, tmp_path):
+    f = tmp_path / "sample.tif"
+    _write_sample(str(f))
+    spark.dataSource.register(RasterGbxDataSource)
+    row = spark.read.format("raster_gbx").load(str(f)).collect()[0]
+    tile = row["tile"]
+    assert tile["cellid"] == -1
+    assert tile["raster"] is not None  # materialized: bytes present
+    assert tile["path"] is not None  # provenance populated
+    # whole-file GTiff passthrough -> window is the whole file
+    assert tile["window"]["width"] > 0 and tile["window"]["height"] > 0
+    # new v2 clip/crs fields are null for a plain materialized tile
+    assert tile["clip_polygon"] is None and tile["crs"] is None
+    # pixels still decode
+    with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as out:
+        assert out.width > 0
 
 
 def test_read_single_file_yields_one_row(spark, tmp_path):
@@ -297,7 +315,8 @@ def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
 
     for p in parts:
         for _, tile in reader.read(p):
-            _, _, md = tile
+            # read() emits a raw v2 tuple in V2_TILE_SCHEMA order; metadata is last.
+            md = tile[-1]
             assert (
                 md.get(cog_mod.GBX_FORMAT) == "gtiff"
             ), f"split tiles must be plain gtiff; got {md.get(cog_mod.GBX_FORMAT)!r}"

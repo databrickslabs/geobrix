@@ -591,6 +591,27 @@ def _as_geom_list(val) -> list:
     return list(val)  # already a sequence of geometry inputs (programmatic)
 
 
+def _as_tile_size(val):
+    """Parse a tileSize option ("w,h" or bare "n" -> (n,n)) to (w,h) or None."""
+    if val is None or val == "":
+        return None
+    if isinstance(val, (tuple, list)) and len(val) == 2:
+        w, h = int(val[0]), int(val[1])
+    else:
+        parts = [p for p in str(val).split(",") if p.strip() != ""]
+        if len(parts) == 1:
+            w = h = int(parts[0])
+        elif len(parts) == 2:
+            w, h = int(parts[0]), int(parts[1])
+        else:
+            raise ValueError(
+                f"raster_gbx: 'tileSize' must be 'w,h' or a single int; got {val!r}"
+            )
+    if w <= 0 or h <= 0:
+        raise ValueError(f"raster_gbx: 'tileSize' must be positive; got {val!r}")
+    return (w, h)
+
+
 def _as_window_list(val) -> list:
     """Normalize a windows option to a list of (col,row,w,h) int tuples.
 
@@ -636,10 +657,26 @@ class RasterGbxReader(DataSourceReader):
         self.clip_polygons = _as_geom_list(options.get("clipPolygons"))
         self.windows = _as_window_list(options.get("windows"))
         self.clip_crs = options.get("clipCrs")
-        if self.clip_polygons and self.windows:
+        self.tile_size = _as_tile_size(options.get("tileSize"))
+        self.overlap_percent = int(options.get("overlapPercent", "0"))
+        if not (0 <= self.overlap_percent < 100):
             raise ValueError(
-                "raster_gbx: 'clipPolygons' and 'windows' are mutually exclusive; "
-                "supply one, not both."
+                f"raster_gbx: 'overlapPercent' must be 0..99; got {self.overlap_percent}"
+            )
+        _selectors = [
+            bool(self.clip_polygons),
+            bool(self.windows),
+            bool(self.tile_size),
+        ]
+        if sum(_selectors) > 1:
+            raise ValueError(
+                "raster_gbx: 'clipPolygons', 'windows', and 'tileSize' are mutually "
+                "exclusive; supply at most one."
+            )
+        if self.overlap_percent > 0 and not self.tile_size:
+            raise ValueError(
+                "raster_gbx: 'overlapPercent' requires 'tileSize' (it modifies the "
+                "regular tiling grid only)."
             )
         self.emit_virtual = str(options.get("virtualTiles", "false")).lower() == "true"
 

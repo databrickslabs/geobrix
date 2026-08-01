@@ -97,3 +97,52 @@ def test_non_json_windows_string_raises_clear_error():
     # a comma-string (old bbox habit) is not JSON -> clear ValueError, not raw JSONDecodeError
     with pytest.raises(ValueError, match="windows.*JSON"):
         RasterGbxReader({"path": "/x", "windows": "0,0,256,256"})
+
+
+# --- tileSize / overlapPercent option parsing ---
+
+
+def test_tile_size_wh_string():
+    r = RasterGbxReader({"path": "/x", "tileSize": "512,256"})
+    assert r.tile_size == (512, 256)
+    assert r.overlap_percent == 0
+
+
+def test_tile_size_square_shorthand():
+    r = RasterGbxReader({"path": "/x", "tileSize": "512"})
+    assert r.tile_size == (512, 512)
+
+
+def test_overlap_percent_parsed():
+    r = RasterGbxReader({"path": "/x", "tileSize": "256", "overlapPercent": "25"})
+    assert r.overlap_percent == 25
+
+
+def test_tile_size_mutually_exclusive_with_windows():
+    with pytest.raises(ValueError):
+        RasterGbxReader({"path": "/x", "tileSize": "256", "windows": "[0,0,8,8]"})
+
+
+def test_tile_size_mutually_exclusive_with_clip_polygons():
+    with pytest.raises(ValueError):
+        RasterGbxReader({"path": "/x", "tileSize": "256", "clipPolygons": _WKT1})
+
+
+def test_overlap_without_tile_size_raises():
+    with pytest.raises(ValueError, match="overlapPercent"):
+        RasterGbxReader({"path": "/x", "overlapPercent": "25"})
+
+
+def test_bad_tile_size_raises():
+    with pytest.raises(ValueError):
+        RasterGbxReader({"path": "/x", "tileSize": "abc"})
+
+
+def test_overlap_out_of_range_raises():
+    with pytest.raises(ValueError):
+        RasterGbxReader({"path": "/x", "tileSize": "256", "overlapPercent": "150"})
+
+
+def test_no_tile_size_default():
+    r = RasterGbxReader({"path": "/x"})
+    assert r.tile_size is None and r.overlap_percent == 0

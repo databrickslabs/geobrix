@@ -106,7 +106,7 @@ def test_disjoint_clip_yields_valid_empty_1x1(layouts):
 
 
 def test_materialize_returns_array_transform_profile(layouts):
-    arr, transform, profile = ot.materialize(
+    arr, transform, profile = ot.materialize_array(
         VirtualTile(cellid=5, path=layouts["striped"], window=WINDOW)
     )
     assert arr.shape[-2:] == (WINDOW[3], WINDOW[2])

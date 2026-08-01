@@ -258,7 +258,7 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     )
 
 
-def materialize(tile: VirtualTile) -> Tuple[np.ndarray, "rasterio.Affine", dict]:
+def materialize_array(tile: VirtualTile) -> Tuple[np.ndarray, "rasterio.Affine", dict]:
     """Convenience wrapper: (array, transform, profile) from open_tile."""
     with open_tile(tile) as ds:
         return ds.read(), ds.transform, ds.profile.copy()

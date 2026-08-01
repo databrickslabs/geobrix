@@ -237,8 +237,8 @@ def _resolve_emit_format(tile_format: str, split: bool) -> str:
 class _TilePartition(InputPartition):
     """One (source file, tile window) = one partition (picklable).
 
-    ``window`` is ``None`` for passthrough tiles (whole-file GTiff fast path)
-    or bbox-clipped single-window tiles.  For split tiles it is
+    ``window`` is ``None`` for passthrough tiles (whole-file GTiff fast path).
+    For split, clipPolygons, and windows tiles it is
     ``(col_off, row_off, win_w, win_h)``.
 
     ``is_passthrough`` signals the whole-file GTiff fast path (no decode/
@@ -602,7 +602,13 @@ def _as_window_list(val) -> list:
     if val is None or val == "":
         return []
     if isinstance(val, str):
-        val = json.loads(val)  # JSON 4-int array or array-of-4-int-arrays
+        try:
+            val = json.loads(val)  # JSON 4-int array or array-of-4-int-arrays
+        except ValueError as exc:
+            raise ValueError(
+                "raster_gbx: 'windows' must be a JSON 4-int array '[c,r,w,h]' or a "
+                f"JSON array of them '[[..],[..]]'; got {val!r}"
+            ) from exc
     # single (c,r,w,h)?
     if (
         isinstance(val, (tuple, list))
@@ -668,7 +674,7 @@ class RasterGbxReader(DataSourceReader):
         _env.configure_gdal_env()
 
         # Spark's Python DataSource V2 can call read(None) when the partition
-        # list is empty (e.g. bbox misses all files). Guard and emit nothing.
+        # list is empty (e.g. all clip polygons miss). Guard and emit nothing.
         if partition is None:
             return
 

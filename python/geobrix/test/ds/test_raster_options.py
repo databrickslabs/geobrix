@@ -91,3 +91,9 @@ def test_single_window_json_string():
 def test_list_windows_json_string():
     r = RasterGbxReader({"path": "/x", "windows": "[[0,0,256,256],[256,0,256,256]]"})
     assert r.windows == [(0, 0, 256, 256), (256, 0, 256, 256)]
+
+
+def test_non_json_windows_string_raises_clear_error():
+    # a comma-string (old bbox habit) is not JSON -> clear ValueError, not raw JSONDecodeError
+    with pytest.raises(ValueError, match="windows.*JSON"):
+        RasterGbxReader({"path": "/x", "windows": "0,0,256,256"})

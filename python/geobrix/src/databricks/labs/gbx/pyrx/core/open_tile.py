@@ -357,11 +357,17 @@ def shape_output(
     ``virtualize_dir`` and ``materialize=True`` are mutually exclusive.
 
     ``virtualize_dir`` set:
-      - Tile already virtual (``raster`` is None) → return as-is (no-op).
-      - Tile materialized → write bytes to
+      - The tile is already a REFERENCE to backing pixels (``raster`` is None —
+        header reads, reader selection, identity transform): return as-is.
+        ``virtualize_dir`` is a no-op here because the tile already references
+        real, self-consistent bytes on a backing store.
+      - The tile carries PRODUCED pixels (``raster`` set — a pixel-producing op
+        such as reproject/merge/combineavg/frombands materialized its result):
+        write bytes to
         ``<dir>/[<prefix>_]<cellid>_<col>_<row>_<w>_<h>.tif`` (overwrite),
-        FUSE-safe (local temp → shutil.copyfile), return a VirtualTile with
-        ``raster=None`` and provenance metadata.
+        FUSE-safe (local temp -> shutil.copyfile), return a VirtualTile with
+        ``raster=None`` referencing the written file. This is the ONLY way a
+        pixel-producer returns a virtual tile.
 
     ``materialize=True``:
       - Tile virtual → read via ``open_tile`` (lazy), capture bytes,

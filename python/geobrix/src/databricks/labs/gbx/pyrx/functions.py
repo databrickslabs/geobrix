@@ -922,6 +922,12 @@ def rst_transform(
 ) -> Column:
     """Reproject the raster to the target SRID (EPSG code).
 
+    Identity (``target_srid`` == the source CRS's EPSG code) is a passthrough:
+    no resample, no re-encode; the tile stays a reference/passthrough (so
+    ``virtualize_dir`` is a no-op on an already-virtual input). A non-identity
+    reproject PRODUCES new pixels and materializes; pass ``virtualize_dir`` to
+    write the reprojected result to a durable path and get a light virtual row.
+
     Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
     result to a durable path and returns a light virtual tile; ``materialize=True``
     forces raster bytes (mutually exclusive with ``virtualize_dir``).

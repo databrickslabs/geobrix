@@ -377,15 +377,21 @@ def test_reproject_identity_returns_source_bytes_verbatim(tmp_path):
 def test_reproject_no_epsg_source_still_warps(tmp_path):
     """A source CRS with no EPSG code never mis-short-circuits: the identity
     check compares EPSG codes, so a codeless CRS always falls through to warp."""
-    from databricks.labs.gbx.pyrx.core import warp
     import rasterio.crs
+
+    from databricks.labs.gbx.pyrx.core import warp
 
     p = str(tmp_path / "esri.tif")
     # ESRI:54008 (World Sinusoidal) has no EPSG code.
     prof = dict(
-        driver="GTiff", width=8, height=8, count=1, dtype="float32",
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="float32",
         crs=rasterio.crs.CRS.from_string("ESRI:54008"),
-        transform=from_origin(0.0, 8.0, 1000.0, 1000.0), nodata=-9999.0,
+        transform=from_origin(0.0, 8.0, 1000.0, 1000.0),
+        nodata=-9999.0,
     )
     with rasterio.open(p, "w", **prof) as ds:
         ds.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
@@ -494,7 +500,9 @@ def test_identity_transform_preserves_merge_overlap_winner():
     # the ORIGINAL bytes verbatim (no re-encode). If the _transform_bytes identity
     # short-circuit is reverted to warp.reproject_to_srid, the bytes change and this
     # fails — this is the assertion that actually guards the raw-bytes sort key.
-    assert bytes(ta["raster"]) == a, "identity _transform_udf must return verbatim original bytes"
+    assert (
+        bytes(ta["raster"]) == a
+    ), "identity _transform_udf must return verbatim original bytes"
     tb = prx._transform_udf.func(b_tile, 4326)
     got = prx._merge_udf.func([ta, tb])
     # SECONDARY: merge winner must also match the raw-bytes sort key.

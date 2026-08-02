@@ -48,10 +48,14 @@ An unrecognized format raises `ValueError`.
 |--------|-------------|-------------|
 | [Raster Reader](./raster) | `raster_gbx` | Pure-Python catch-all raster reader (no JAR; DataSource V2) |
 | [GeoTIFF Reader](./geotiff) | `gtiff_gbx` | Pure-Python GeoTIFF reader (preset `driver="GTiff"`) |
+| [COG Reader](./cog) | `cog_gbx` | Pure-Python cloud-optimized GeoTIFF reader — windowed/overview-aware reads |
+| [NetCDF Reader](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF reader — CF grids (raster) or CF-DSG points (vector) |
+| [File Reader](./file) | `file_gbx` | Pure-Python file lister — enumerates matching paths as rows (read-only) |
 | [PMTiles Reader](./pmtiles) | `pmtiles_gbx` | Pure-Python PMTiles reader — mosaic pyramid from rasters (`source="raster"`) or tiles from an archive (`source="archive"`) |
 | [Vector Reader](./vector) | `vector_gbx` | Pure-Python catch-all vector reader (pyogrio; same OGR schema) |
 | [Shapefile Reader](./shapefile) | `shapefile_gbx` | Pure-Python Shapefile reader (preset OGR driver) |
 | [GeoJSON Reader](./geojson) | `geojson_gbx` | Pure-Python GeoJSON reader (preset OGR driver) |
+| [GeoJSONL Reader](../writers/geojsonl) | `geojsonl_gbx` | Pure-Python newline-delimited GeoJSONL reader — reads GeoJSONSeq shard directories |
 | [GeoPackage Reader](./geopackage) | `gpkg_gbx` | Pure-Python GeoPackage reader (preset OGR driver) |
 | [GeoDatabase Reader](./filegdb) | `file_gdb_gbx` | Pure-Python File Geodatabase reader (preset OGR driver) |
 
@@ -85,6 +89,7 @@ Heavyweight readers are implemented as Spark DataSource V2 connectors backed by 
 | Reader | Format Name | Description |
 |--------|-------------|-------------|
 | [Raster Reader](./raster) | `gdal` / `gtiff_gdal` | GDAL-backed raster readers (generic and GeoTIFF named) |
+| [NetCDF Reader](./netcdf) | `netcdf_gdal` | GDAL-backed named reader for NetCDF grids (raster) |
 
 ### Vector Readers (OGR-based)
 
@@ -95,6 +100,7 @@ Heavyweight readers are implemented as Spark DataSource V2 connectors backed by 
 | [GeoJSON Reader](./geojson) | `geojson_ogr` | Named reader for GeoJSON/GeoJSONSeq |
 | [GeoPackage Reader](./geopackage) | `gpkg_ogr` | Named reader for GeoPackage |
 | [FileGDB Reader](./filegdb) | `file_gdb_ogr` | Named reader for ESRI File Geodatabase |
+| [NetCDF Reader](./netcdf) | `netcdf_ogr` | OGR-backed named reader for NetCDF as vector features (CF-DSG points) |
 
 ## Basic Usage
 

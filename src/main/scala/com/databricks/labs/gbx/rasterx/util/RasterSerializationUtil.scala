@@ -93,6 +93,26 @@ object RasterSerializationUtil {
         )
     }
 
+    /** Reshape a v1 (3-field) OR v2 (8-field) tile InternalRow to the canonical v2 8-field
+      * layout WITHOUT opening / re-encoding the raster. v2 rows pass through unchanged; v1
+      * rows are widened: (cellid, raster, metadata) → (cellid, raster, null×5, metadata).
+      *
+      * Use this at aggregator update() time so every buffered row is 8-field, making the
+      * size==1 fast-path passthrough and the serialize UnsafeProjection (which is created
+      * over the 8-field dataType) both safe on v1 input.
+      */
+    def normalizeToV2Row(row: InternalRow): InternalRow = {
+        val lyt = tileLayout(row)
+        if (lyt.isV2) row
+        else {
+            // v1: cellid@0, raster@1, metadata@2 → v2: cellid@0, raster@1, [null×5], metadata@7
+            val cellid   = row.getLong(lyt.cellid)
+            val raster   = if (row.isNullAt(lyt.raster))   null else row.getBinary(lyt.raster)
+            val metadata = if (row.isNullAt(lyt.metadata)) null else row.getMap(lyt.metadata)
+            InternalRow.fromSeq(Seq(cellid, raster, null, null, null, null, null, metadata))
+        }
+    }
+
     /** Deserialize an array of tile structs to (cellId, Dataset, metadata); caller must release each Dataset.
       *
       * @param elementFieldCount the declared field count of the element StructType (3 for v1, 8 for v2).

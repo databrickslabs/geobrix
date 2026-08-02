@@ -16,9 +16,9 @@ spectral indices, …) materialize the window and return bytes. Pass `virtualize
 the computed result as a light virtual row.
 
 **Heavy tier has none of these params.** The heavyweight (`rasterx`) tier does not accept
-`virtualize_dir`, `virtualize_prefix`, or `materialize`, and raises an error when handed a virtual
-tile. For most raster work the lightweight tier covers the full function set and is the recommended
-default. If you specifically need a heavyweight function, materialize the tile first with
-`materialize=True` (or write via a writer, which always materializes) before passing it. See
+`virtualize_dir`, `virtualize_prefix`, or `materialize`, and consumes only **materialized** tiles
+(raster bytes present). For most raster work the lightweight tier covers the full function set and is
+the recommended default. If you specifically need a heavyweight function, materialize the tile first
+(`materialize=True`, or write via a writer, which always materializes) before passing it. See
 [Virtual tiles and the light→heavy bridge](./execution-tiers#light-heavy-bridge) for details.
 :::

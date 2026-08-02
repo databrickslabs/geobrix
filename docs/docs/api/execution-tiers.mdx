@@ -57,7 +57,7 @@ heavy.register(spark)                       # all heavy gbx_rst_*
 light.register(spark, only=["rst_slope"])   # gbx_rst_slope now lightweight
 ```
 
-The reverse — re-registering a few **heavy** functions over a lightweight session — is not yet available; `only=` is currently a lightweight-tier feature (heavy registers its full set). Mixing works because both tiers use the same tile struct and GTiff payload, so a tile produced by one tier flows into a function from the other.
+The reverse — re-registering a few **heavy** functions over a lightweight session — is not yet available; `only=` is currently a lightweight-tier feature (heavy registers its full set). Mixing works for **materialized** tiles (raster bytes present) — both tiers share the same GTiff payload, so a bytes-carrying tile produced by one tier flows into a function from the other. A lightweight **virtual** tile (bytes-free path+window) must be materialized before a heavyweight function can use it; see [Virtual tiles and the light→heavy bridge](#light-heavy-bridge).
 
 ## Tradeoffs
 
@@ -113,12 +113,12 @@ See the [Raster Functions](./raster-functions) availability section for what eac
 The **lightweight tier** introduces a bytes-free tile representation called a **virtual tile** — a
 reference to a source path and a pixel window, rather than a self-contained in-memory raster payload.
 Virtual tiles are a lightweight-tier concept: they are created, consumed, and manipulated entirely
-within the Python worker. The heavyweight tier does not support them — passing a virtual tile to a
-heavyweight function raises an error, because the JVM cannot lazily read from a Unity Catalog Volume
-path the way a Python worker can.
+within the Python worker. The heavyweight tier consumes only **materialized** tiles (raster bytes
+present) — the JVM cannot lazily read from a Unity Catalog Volume path the way a Python worker can,
+so a bytes-free virtual tile is not usable by heavy functions without first converting it to bytes.
 
-**If you get an error passing a tile to a heavyweight function**, the tile is likely virtual. You have
-two options:
+**If a heavy function does not produce the expected result from a light-tier tile**, the tile may be
+virtual (no bytes). You have two options:
 
 - **Stay in the lightweight tier.** For most raster work, `pyrx` covers the full function set and runs
   everywhere (serverless, standard clusters, ARM). If you don't specifically need the JVM execution
@@ -145,7 +145,7 @@ pixels, and which can stay lazy?**
 | **Deferrable tile ops** (`rst_clip`, `rst_setsrid`, transform-intent) | Stay virtual when input is virtual | Chain them for free — no pixels touched |
 | **Pixel-producing tile ops** (slope, aspect, hillshade, terrain, focal, mapalgebra, spectral indices, rasterize, resample, …) | Materialize the window and return bytes | Pass `virtualize_dir` to write the computed result to a durable path and return a light virtual row instead |
 | **Writers** (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) | Always a materialization boundary | A virtual DataFrame is directly writable — writers auto-materialize; `cog_gbx` converts whole-file virtual tiles path-direct (no bytes round-trip) |
-| **Crossing to heavy** | Error if tile is virtual | Heavy raises an error on a virtual tile — stay in light (recommended), or materialize first (`materialize=True`, or write + read back) before handing off |
+| **Crossing to heavy** | Materialize first | Heavy consumes only materialized tiles — stay in light (recommended), or materialize first (`materialize=True`, or write + read back) before handing off |
 
 **Short rule:** chain deferrable ops as long as you like; when you need pixels (or need to cross to
 heavy), materialize at that point — not before.

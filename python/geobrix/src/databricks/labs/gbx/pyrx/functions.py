@@ -26,13 +26,7 @@ from pyspark.sql.types import (
 
 from databricks.labs.gbx import _register
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx._udf import (
-    ColLike,
-    _col,
-    _raster_field,
-    sql_scalar_udf2,
-    tile_scalar_udf2,
-)
+from databricks.labs.gbx.pyrx._udf import ColLike, _col, _raster_field
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
@@ -305,10 +299,30 @@ def _metadata_udf(tile):
         return accessors.metadata(ds)
 
 
-_u_r2w_x = tile_scalar_udf2(coords.raster_to_world_x, DoubleType())
-_u_r2w_y = tile_scalar_udf2(coords.raster_to_world_y, DoubleType())
-_u_w2r_x = tile_scalar_udf2(coords.world_to_raster_x, IntegerType())
-_u_w2r_y = tile_scalar_udf2(coords.world_to_raster_y, IntegerType())
+# Coordinate transforms are HEADER-ONLY (ds.xy / ds.index — no pixel read), so
+# build them like the other header accessors: struct-accepting (a virtual tile's
+# ``path`` is reachable) + open_header. The pre-sweep tile_scalar_udf2 builders
+# took only the raster subfield, which is None for a virtual tile -> silent NULL.
+def _header_accessor_udf2(core_fn, return_type):
+    """Struct-accepting header-only 2-arg accessor UDF (open_header, no pixel read)."""
+
+    @f.udf(return_type)
+    def _udf(tile, a, b):
+        if _tile_is_empty(tile):
+            return None
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot.open_header(tile) as ds:
+            return core_fn(ds, a, b)
+
+    return _udf
+
+
+_u_r2w_x = _header_accessor_udf2(coords.raster_to_world_x, DoubleType())
+_u_r2w_y = _header_accessor_udf2(coords.raster_to_world_y, DoubleType())
+_u_w2r_x = _header_accessor_udf2(coords.world_to_raster_x, IntegerType())
+_u_w2r_y = _header_accessor_udf2(coords.world_to_raster_y, IntegerType())
 
 
 # --- Group 1: per-band statistics & accessor UDFs ---------------------------
@@ -3897,28 +3911,30 @@ def rst_getnodata(tile: ColLike) -> Column:
 
 
 # --- Tier 1: coordinate transforms -----------------------------------------
+# HEADER-ONLY accessors: pass the FULL tile struct (not the raster subfield) so
+# a virtual tile's ``path`` is reachable; the UDF resolves via open_header.
 def rst_rastertoworldcoordx(
     tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
 ) -> Column:
-    return _u_r2w_x(_raster_field(_col(tile)), _col(pixel_x), _col(pixel_y))
+    return _u_r2w_x(_col(tile), _col(pixel_x), _col(pixel_y))
 
 
 def rst_rastertoworldcoordy(
     tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
 ) -> Column:
-    return _u_r2w_y(_raster_field(_col(tile)), _col(pixel_x), _col(pixel_y))
+    return _u_r2w_y(_col(tile), _col(pixel_x), _col(pixel_y))
 
 
 def rst_worldtorastercoordx(
     tile: ColLike, world_x: ColLike, world_y: ColLike
 ) -> Column:
-    return _u_w2r_x(_raster_field(_col(tile)), _col(world_x), _col(world_y))
+    return _u_w2r_x(_col(tile), _col(world_x), _col(world_y))
 
 
 def rst_worldtorastercoordy(
     tile: ColLike, world_x: ColLike, world_y: ColLike
 ) -> Column:
-    return _u_w2r_y(_raster_field(_col(tile)), _col(world_x), _col(world_y))
+    return _u_w2r_y(_col(tile), _col(world_x), _col(world_y))
 
 
 def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
@@ -5889,18 +5905,13 @@ _sql_accessors = {
     "gbx_rst_metadata": _metadata_udf,
     "gbx_rst_type": _u_type,
     "gbx_rst_getnodata": _u_getnodata,
-    "gbx_rst_rastertoworldcoordx": sql_scalar_udf2(
-        coords.raster_to_world_x, DoubleType()
-    ),
-    "gbx_rst_rastertoworldcoordy": sql_scalar_udf2(
-        coords.raster_to_world_y, DoubleType()
-    ),
-    "gbx_rst_worldtorastercoordx": sql_scalar_udf2(
-        coords.world_to_raster_x, IntegerType()
-    ),
-    "gbx_rst_worldtorastercoordy": sql_scalar_udf2(
-        coords.world_to_raster_y, IntegerType()
-    ),
+    # Virtual-aware header-only coord transforms (same UDF the Column API uses;
+    # single-tile-struct + 2 scalar args, so the registered signature/arity is
+    # unchanged).
+    "gbx_rst_rastertoworldcoordx": _u_r2w_x,
+    "gbx_rst_rastertoworldcoordy": _u_r2w_y,
+    "gbx_rst_worldtorastercoordx": _u_w2r_x,
+    "gbx_rst_worldtorastercoordy": _u_w2r_y,
     # Group 1 per-band statistics & scalar accessors (struct-accepting).
     "gbx_rst_avg": _u_avg,
     "gbx_rst_min": _u_min,

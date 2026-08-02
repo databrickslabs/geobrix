@@ -1,21 +1,26 @@
-"""Guard test: functions.py must route tile opens through the ``_open`` /
-``open_header`` front-door, not the raw v1 ``_serde.open_tile(bytes(tile[...]))``
-pattern.
+"""Guard test: rst_* functions must route tile opens through the ``_open`` /
+``open_header`` front-door, not a raw v1 bytes-only path.
 
 Increment 4 (Phase B) swept every ``rst_*`` function so it consumes a tile via
 the shared virtual-aware chokepoint (``open_tile._open`` / ``open_tile.open_header``).
-This test greps the functions.py source and asserts no ``_serde.open_tile(`` call
-survives outside a small allowlist of legitimate byte-first constructors — it
+This test greps the *source* of the modules a registered function can reach and
+asserts no v1 bytes-only tile open survives outside an explicit allowlist — it
 fails loudly if a future edit reintroduces the bytes-only pattern (which would
-silently break virtual-tile consumption for that function).
+silently return NULL / nothing on a virtual-tile input).
+
+It grep BOTH ``functions.py`` (the UDF bodies) AND ``_udf.py`` (the shared UDF
+builders). The original guard grepped only functions.py, which is exactly why
+the ``_udf.py`` v1 builders — used by the 4 coord x/y accessors — were invisible
+until a whole-branch review. The widened guard would have caught that miss.
 """
 
 import re
 from pathlib import Path
 
+import databricks.labs.gbx.pyrx._udf as udf_module
 import databricks.labs.gbx.pyrx.functions as functions_module
 
-# Each allowed call site is keyed by the enclosing function/class and a one-line
+# Each allowed call site is keyed by the exact call form and a one-line
 # justification. These open ALREADY-MATERIALIZED bytes that the code obtained via
 # the front-door itself (or a byte-length contract), so they are not v1 leaks.
 _ALLOWLIST = {
@@ -28,9 +33,25 @@ _ALLOWLIST = {
     "_serde.open_tile(raster)": 1,
 }
 
+# The v1 shared UDF builders in _udf.py. Every registered rst_* function was
+# swept off these onto the virtual-aware front-door; functions.py must not
+# reference any of them (a reference means some function silently NULLs on a
+# virtual tile, as the coord x/y accessors did before the coord-fix wave).
+_V1_BUILDER_NAMES = (
+    "tile_scalar_udf",
+    "tile_scalar_udf2",
+    "sql_scalar_udf",
+    "sql_scalar_udf2",
+)
+
 
 def _functions_source() -> str:
     path = Path(functions_module.__file__)
+    return path.read_text()
+
+
+def _udf_source() -> str:
+    path = Path(udf_module.__file__)
     return path.read_text()
 
 
@@ -73,3 +94,51 @@ def test_front_door_helpers_are_used():
     assert (
         "ot.open_header(" in src
     ), "expected ot.open_header(...) usage in functions.py"
+
+
+def test_functions_do_not_use_v1_udf_builders():
+    """functions.py must not reference the v1 bytes-only UDF builders from _udf.py.
+
+    ``tile_scalar_udf`` / ``sql_scalar_udf`` (and the /2 arg forms) take only the
+    raster subfield, so they return NULL on a virtual tile. Every registered
+    rst_* function was swept off them onto the virtual-aware front-door. A
+    reference here = a function silently NULLing on virtual input (the exact bug
+    the coord x/y accessors had before the coord-fix wave). Comments are stripped
+    so an explanatory mention in prose doesn't trip the guard.
+    """
+    src = _functions_source()
+    code = "\n".join(
+        line.split("#", 1)[0] for line in src.splitlines()
+    )  # drop comments
+    offenders = [name for name in _V1_BUILDER_NAMES if re.search(rf"\b{name}\b", code)]
+    assert not offenders, (
+        f"functions.py references v1 UDF builder(s) {offenders} from _udf.py. "
+        "Route the function through a struct-accepting @f.udf that opens via "
+        "ot._open (pixel) or ot.open_header (header-only) instead."
+    )
+
+
+def test_udf_module_v1_opens_are_only_in_the_builders():
+    """Every ``_serde.open_tile(bytes(`` in _udf.py lives inside a v1 builder def.
+
+    The v1 builders remain defined in _udf.py (they are the documented shape the
+    sweep migrated OFF of) but must not be reachable by any registered function —
+    ``test_functions_do_not_use_v1_udf_builders`` enforces that. This test just
+    pins that the only v1 bytes-opens in _udf.py are the four builder bodies, so a
+    NEW v1 open added elsewhere in _udf.py is caught.
+    """
+    src = _udf_source()
+    v1_opens = re.findall(r"_serde\.open_tile\(bytes\(", src)
+    # Exactly the four builder bodies (tile_scalar_udf, tile_scalar_udf2,
+    # sql_scalar_udf, sql_scalar_udf2) each open bytes once.
+    assert len(v1_opens) == 4, (
+        f"Expected exactly 4 v1 `_serde.open_tile(bytes(` opens in _udf.py "
+        f"(the four legacy builders), found {len(v1_opens)}. A new one was added "
+        "outside the known builders — route it through the front-door instead."
+    )
+
+
+# escape.py intentionally keeps v1 opens: tile_to_numpy / rst_apply are
+# documented Python-only escape hatches (NOT registered rst_* functions), so a
+# user passing raw bytes is expected. They are deliberately NOT covered by this
+# guard — only registered-function-reachable paths (functions.py + _udf.py) are.

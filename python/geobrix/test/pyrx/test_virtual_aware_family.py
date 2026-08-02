@@ -124,6 +124,43 @@ def test_rst_sample_virtual_returns_pixel_value(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# rst_rastertoworldcoord{x,y} / rst_worldtorastercoord{x,y} — HEADER-ONLY
+# coord accessors: correct value on a VIRTUAL input (no pixel read), matching
+# the materialized-equivalent. Regression guard: the pre-sweep coord x/y
+# accessors used the v1 tile_scalar_udf2 (raster-only) builder, which returns
+# None on a virtual tile (raster None). They now use open_header.
+# ---------------------------------------------------------------------------
+def test_rst_coord_xy_virtual_header_only(tmp_path):
+    # 8x8 ramp DEM, origin (0,8), px=1. Pixel (col=3, row=2) has centre world
+    # coord x = 0 + 3.5 = 3.5, y = 8 - 2.5 = 5.5. Round-trips both directions.
+    tile = _virtual_tile(tmp_path)
+
+    no_read = unittest.mock.patch.object(
+        rasterio.io.DatasetReader,
+        "read",
+        side_effect=AssertionError("coord accessors must not read pixels"),
+    )
+    with no_read:
+        wx = prx._u_r2w_x.func(tile, 3, 2)
+        wy = prx._u_r2w_y.func(tile, 3, 2)
+        px = prx._u_w2r_x.func(tile, 3.5, 5.5)
+        py = prx._u_w2r_y.func(tile, 3.5, 5.5)
+
+    assert wx is not None and wy is not None, "virtual tile must NOT return None"
+    assert wx == pytest.approx(3.5)
+    assert wy == pytest.approx(5.5)
+    assert (px, py) == (3, 2)
+
+    # Matches the materialized-equivalent tile (same file, opened as bytes).
+    with open(tile["path"], "rb") as fh:
+        mat_tile = {"cellid": 5, "raster": fh.read(), "metadata": {}}
+    assert prx._u_r2w_x.func(mat_tile, 3, 2) == pytest.approx(wx)
+    assert prx._u_r2w_y.func(mat_tile, 3, 2) == pytest.approx(wy)
+    assert prx._u_w2r_x.func(mat_tile, 3.5, 5.5) == px
+    assert prx._u_w2r_y.func(mat_tile, 3.5, 5.5) == py
+
+
+# ---------------------------------------------------------------------------
 # rst_slope — pixel tile op: auto / virtualize_dir / materialize / conflict
 # ---------------------------------------------------------------------------
 def _slope_array_from_row(row):

@@ -435,3 +435,36 @@ def test_transform_reproject_stamps_target_crs(tmp_path):
     assert out is not None and out["raster"] is not None
     with _serde.open_tile(bytes(out["raster"])) as ds:
         assert ds.crs.to_epsg() == 4326
+
+
+# ---------------------------------------------------------------------------
+# virtualize_dir result coherence (Increment 5, Task 3)
+# ---------------------------------------------------------------------------
+def test_merge_virtualize_dir_result_is_coherent(tmp_path):
+    """A merge virtualize_dir result opens + matches the materialized merge's
+    CRS/dims (proves crs=None on the emitted row is safe — the file embeds it)."""
+    left = _virtual_tile(tmp_path, name="l.tif", ulx=0.0, uly=8.0, epsg=32633)
+    right = _virtual_tile(tmp_path, name="r.tif", ulx=8.0, uly=8.0, epsg=32633)
+
+    # Materialized reference (auto shape).
+    mat = prx._merge_udf.func([left, right])
+    with _serde.open_tile(bytes(mat["raster"])) as ds:
+        exp_epsg, exp_w, exp_h = ds.crs.to_epsg(), ds.width, ds.height
+
+    out_dir = str(tmp_path / "mcoh")
+    row = prx._merge_v2_udf.func([left, right], out_dir, None, None)
+    assert row["raster"] is None and row["path"] is not None
+    with ot._open(row) as ds:
+        assert ds.crs.to_epsg() == exp_epsg
+        assert ds.width == exp_w and ds.height == exp_h
+
+
+def test_transform_virtualize_dir_result_is_coherent(tmp_path):
+    """A reproject virtualize_dir result opens in the TARGET crs (self-consistent
+    despite crs=None on the emitted row)."""
+    tile = _virtual_tile(tmp_path, name="tc.tif", epsg=32633)
+    out_dir = str(tmp_path / "tcoh")
+    row = prx._transform_v2_udf.func(tile, 4326, out_dir, None, None)
+    assert row["raster"] is None and row["path"] is not None
+    with ot._open(row) as ds:
+        assert ds.crs.to_epsg() == 4326

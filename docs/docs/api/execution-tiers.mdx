@@ -110,12 +110,17 @@ See the [Raster Functions](./raster-functions) availability section for what eac
 
 ## Virtual tiles and the light→heavy bridge {#light-heavy-bridge}
 
-The **lightweight tier** introduces a bytes-free tile representation called a **virtual tile** — a
-reference to a source path and a pixel window, rather than a self-contained in-memory raster payload.
-Virtual tiles are a lightweight-tier concept: they are created, consumed, and manipulated entirely
-within the Python worker. The heavyweight tier consumes only **materialized** tiles (raster bytes
-present) — the JVM cannot lazily read from a Unity Catalog Volume path the way a Python worker can,
-so a bytes-free virtual tile is not usable by heavy functions without first converting it to bytes.
+**The lightweight tier is for light (virtual) raster tiles; the heavyweight tier is for heavy
+(binary) raster tiles.** Both tiers share the same v2 tile struct — the difference is in the
+`raster` field: a virtual tile has `raster = null` (bytes-free, path + window backed); a
+materialized tile carries raster bytes (`raster` is not null).
+
+The **heavyweight tier** accepts both v1 and v2 **materialized** tiles as input and always emits
+the v2 tile struct. Passing a **virtual** tile (bytes-free, path-backed) to a heavyweight function
+raises a clear error telling you to materialize it in the lightweight tier first — either with
+`materialize=True`, or by writing via any raster writer and reading the output back. The JVM cannot
+lazily read from a Unity Catalog Volume FUSE path the way a Python worker can, so the materialization
+step is required before crossing the tier boundary.
 
 **If a heavy function does not produce the expected result from a light-tier tile**, the tile may be
 virtual (no bytes). You have two options:

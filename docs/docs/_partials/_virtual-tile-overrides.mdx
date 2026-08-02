@@ -17,10 +17,14 @@ data rather than computing fresh values, so they are the low-cost class. Pixel-p
 for these, `virtualize_dir` is the **only** way to get a virtual tile back — it writes the computed
 result to a durable path and returns a light virtual row.
 
-**Heavy tier has none of these params.** The heavyweight (`rasterx`) tier does not accept
-`virtualize_dir`, `virtualize_prefix`, or `materialize`, and consumes only **materialized** tiles
-(raster bytes present). For most raster work the lightweight tier covers the full function set and is
-the recommended default. If you specifically need a heavyweight function, materialize the tile first
-(`materialize=True`, or write via a writer, which always materializes) before passing it. See
-[Virtual tiles and the light→heavy bridge](./execution-tiers#light-heavy-bridge) for details.
+**The lightweight tier is for light (virtual) raster tiles; the heavyweight tier is for heavy
+(binary) raster tiles.** The heavyweight (`rasterx`) tier does not accept `virtualize_dir`,
+`virtualize_prefix`, or `materialize`, and accepts only **materialized** tiles (raster bytes
+present) as input — both v1 and v2 materialized tiles are accepted; the result is always the v2
+tile struct. Passing a **virtual** tile to a heavyweight function raises a clear error directing
+you to materialize it first. For most raster work the lightweight tier covers the full function
+set and is the recommended default. If you specifically need a heavyweight function, materialize
+the tile first (`materialize=True`, or write via a writer, which always materializes) before
+passing it. See [Virtual tiles and the light→heavy bridge](./execution-tiers#light-heavy-bridge)
+for details.
 :::

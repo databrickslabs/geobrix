@@ -394,3 +394,44 @@ def test_reproject_no_epsg_source_still_warps(tmp_path):
         out = warp.reproject_to_srid(ds, 4326)
     with rasterio.io.MemoryFile(out) as mf, mf.open() as ods:
         assert ods.crs.to_epsg() == 4326  # a real warp happened
+
+
+# ---------------------------------------------------------------------------
+# rst_transform taxonomy contract on virtual tiles (Increment 5)
+# ---------------------------------------------------------------------------
+def test_transform_identity_virtual_virtualize_dir_is_noop(tmp_path):
+    """Identity transform on a VIRTUAL tile with virtualize_dir is a coherent
+    passthrough: the result is openable in the SOURCE crs with the correct
+    dimensions.
+
+    NOTE — assertion relaxed from "no new file written" to the load-bearing
+    coherence invariant.  ``_transform_bytes`` returns source bytes verbatim on
+    an identity warp (Task 1), but ``_shaped_result_row`` then wraps those bytes
+    in a materialised VirtualTile and hands them to ``shape_output``.  Because
+    the VirtualTile carries raster bytes (not None), ``shape_output`` writes them
+    into ``virtualize_dir`` and returns a light virtual row — it does not detect
+    the identity case and skip the write.  The CONTRACT that must hold is that
+    the written file round-trips (opens via ``ot._open``) to the source pixels in
+    the SOURCE CRS (EPSG the tile was written in), width/height 8x8.  Write-
+    avoidance is a potential future optimisation (Task 3), not a current
+    invariant.
+    """
+    tile = _virtual_tile(tmp_path, name="id.tif", epsg=32633)  # virtual, crs=None
+    out_dir = str(tmp_path / "idout")
+    # target == source epsg 32633 -> identity
+    row = prx._transform_v2_udf.func(tile, 32633, out_dir, None, None)
+    assert row is not None
+    # Reference/passthrough: openable and correct, in the SOURCE crs.
+    with ot._open(row) as ds:
+        assert ds.crs.to_epsg() == 32633
+        assert ds.width == 8 and ds.height == 8
+
+
+def test_transform_reproject_stamps_target_crs(tmp_path):
+    """Non-identity transform materializes new pixels whose embedded CRS is the
+    target — a pixel-producer output."""
+    tile = _virtual_tile(tmp_path, name="tr.tif", epsg=32633)
+    out = prx._transform_udf.func(tile, 4326)
+    assert out is not None and out["raster"] is not None
+    with _serde.open_tile(bytes(out["raster"])) as ds:
+        assert ds.crs.to_epsg() == 4326

@@ -299,6 +299,30 @@ def test_auto_noop():
 
 ## PHASE B — full-catalog mechanical sweep (after Phase A green)
 
+### Task 6.5: `open_header` returns WINDOW dims for a windowed virtual tile (prereq for the accessor sweep)
+
+**Files:**
+- Modify: `python/geobrix/src/databricks/labs/gbx/pyrx/core/open_tile.py` (`open_header`)
+- Test: `python/geobrix/test/pyrx/test_core_open_header.py` (add windowed cases)
+
+**Why:** Task 6's review surfaced that `open_header` opens the FULL source for a virtual tile, so a header accessor (rst_width/height/boundingbox/scale/origin) on a SUB-WINDOWED virtual tile returns the full-source dims, not the window's — inconsistent with the pixel path (`_open`, which respects the window) and with the materialized-equivalent tile. Task 7 wires ALL header accessors, so this must be consistent FIRST. Decision (user): a header accessor on a windowed virtual tile returns the WINDOW's dims/extent (== materialized-equivalent), still header-only (no pixel read).
+
+**Interfaces:** `open_header(tile)` unchanged signature. For a virtual tile WITH a sub-window (window present AND not full-extent), yield a dataset whose reported width/height/transform/bounds reflect the WINDOW — derived from the window offset/size + the source's transform (a `rasterio.vrt.WarpedVRT`-free, read-free adjustment: open the source header, compute `window_transform`, and present window dims). Simplest robust impl: open the source header (as today), then wrap so `.width/.height` = window w/h and `.transform` = `src.window_transform(Window(*window))` and `.bounds` follow — WITHOUT reading pixels. If a clean wrapper is hard, an acceptable alternative that stays header-only: open the source, and have the accessor-facing values computed from window+src.transform via a tiny shim object exposing `.width/.height/.count/.crs/.transform/.bounds/.profile/.nodata/.dtypes` (a "header view"), never `.read`. Whole-file virtual (window None or == full extent) and materialized/bytes tiles: unchanged.
+
+- [ ] **Step 1: Write the failing test** — extend `test_core_open_header.py`:
+  - `test_open_header_windowed_virtual_reports_window_dims`: a virtual tile over a 2048×2048 source with window `(100, 50, 512, 384)` → `open_header` yields ds with `width==512, height==384`, and `transform`/`bounds` equal `src.window_transform` of that window; assert `.read` NOT called (class-level patch). This is the discriminating test — current code returns 2048 and FAILS.
+  - keep the existing whole-file test (window full → still full dims), and the bytes test.
+
+- [ ] **Step 2: Run → FAIL** (`--path python/geobrix/test/pyrx/test_core_open_header.py`), current returns 2048 for the windowed case.
+
+- [ ] **Step 3: Implement** the window-view in `open_header` (header-only; no `.read()`), per Interfaces. Ensure `boundingbox`/`scalex`/`upperleftx` accessors (which read `.transform`/`.bounds`) get window-correct values.
+
+- [ ] **Step 4: Run → PASS.** Also run `test_virtual_aware_family.py` (rst_width family test) to confirm no regression.
+
+- [ ] **Step 5: Lint + commit** (`feat(pyrx): open_header reports window dims for a windowed virtual tile`).
+
+---
+
 ### Task 7: swap all remaining `_serde.open_tile → _open` + header/pixel accessor split + params passthrough
 
 **Files:**

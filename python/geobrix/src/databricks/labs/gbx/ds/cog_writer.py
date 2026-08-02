@@ -86,9 +86,7 @@ def _is_v2_envelope(schema: StructType) -> bool:
     names = [f.name for f in schema.fields]
     if names != ["source", "tile"]:
         return False
-    from pyspark.sql.types import StructType as _ST
-
-    return isinstance(schema["tile"].dataType, _ST)
+    return isinstance(schema["tile"].dataType, StructType)
 
 
 def assert_path_schema(schema: StructType) -> None:
@@ -225,24 +223,36 @@ class CogGbxWriter(DataSourceWriter):
         return os.path.join(self.out_dir, f"{stem}.{self.ext}")
 
     def _is_whole_file_virtual(self, vt) -> bool:
-        """A virtual tile that covers the FULL source extent with no clip.
+        """A virtual tile that covers the FULL source extent with no pending
+        clip or reprojection.
 
-        Whole-file ⟺ raster is None AND clip_polygon is None AND the window is
-        None (implicit whole-file) OR equals (0, 0, srcW, srcH). Such a tile can
-        be path-direct converted (no pixels through the Python heap). A sub-window
-        or a clip must be materialized first so the output honors it.
+        Whole-file ⟺ raster is None AND clip_polygon is None AND crs is None
+        (a pending warp would be silently dropped by a path-direct convert)
+        AND the window is None (implicit whole-file) OR equals (0, 0, srcW, srcH).
+        Such a tile can be path-direct converted (no pixels through the Python
+        heap). A sub-window, a clip, or a pending warp must be materialized first
+        so the output honors it.
+
+        Source dims come from the reader-stamped ``metadata["width"]/["height"]``
+        (strings) — NO staging/opening of the source just to read dims. If those
+        are absent (a non-reader-produced virtual tile), we conservatively return
+        False (materialize) so a windowed tile is never wrongly path-converted.
         """
-        if not vt.is_virtual() or vt.clip_polygon is not None:
+        if not vt.is_virtual() or vt.clip_polygon is not None or vt.crs is not None:
             return False
         if vt.window is None:
             return True
         col_off, row_off, width, height = vt.window
         if col_off != 0 or row_off != 0:
             return False
-        from databricks.labs.gbx.pyrx.core.open_tile import open_header
-
-        with open_header(vt) as ds:
-            return width == ds.width and height == ds.height
+        meta = vt.metadata or {}
+        try:
+            src_w = int(meta["width"])
+            src_h = int(meta["height"])
+        except (KeyError, TypeError, ValueError):
+            # Dims unknown → do NOT path-direct; materialize is always safe.
+            return False
+        return width == src_w and height == src_h
 
     def _bytes_to_cog(self, raster_bytes: bytes, out_path: str) -> None:
         """Convert in-memory raster bytes to a COG at *out_path* (FUSE-safe)."""

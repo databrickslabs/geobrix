@@ -39,11 +39,13 @@ def _write_src(path, w=512, h=512):
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w) % 251)
 
 
-def _v2_row(cellid, *, path=None, raster=None, window=None):
+def _v2_row(cellid, *, path=None, raster=None, window=None, crs=None, metadata=None):
     """A minimal v2 (source, tile) envelope row (dicts, subscriptable like a Row).
 
     ``window`` is a 4-tuple ``(col_off, row_off, width, height)`` or None; it is
-    emitted as the nested struct dict the v2 schema uses.
+    emitted as the nested struct dict the v2 schema uses. ``metadata`` mirrors the
+    reader's stamped source dims (e.g. ``{"width": "512", "height": "512"}``) —
+    whole-file detection reads these instead of staging/opening the source.
     """
     win = None
     if window is not None:
@@ -56,10 +58,15 @@ def _v2_row(cellid, *, path=None, raster=None, window=None):
         "window": win,
         "clip_polygon": None,
         "clip_crs": None,
-        "crs": None,
-        "metadata": {},
+        "crs": crs,
+        "metadata": dict(metadata or {}),
     }
     return {"source": path or "", "tile": tile}
+
+
+def _dims_meta(w, h):
+    """Reader-style metadata carrying source width/height as strings."""
+    return {"sourcePath": "", "width": str(w), "height": str(h), "count": "1"}
 
 
 def _v2_schema():
@@ -125,17 +132,47 @@ def test_whole_file_virtual_is_path_direct(tmp_path, monkeypatch):
     monkeypatch.setattr(_cw, "cog_convert_file", _spy_convert, raising=False)
     monkeypatch.setattr(_analysis, "cog_convert_file", _spy_convert)
 
+    # Whole-file detection must read dims from metadata — NOT stage/open the
+    # source. Spy _stage_local_if_needed (what open_header would call) and assert
+    # it is never invoked during detection.
+    stage_calls = []
+    from databricks.labs.gbx.pyrx.core import open_tile as _ot2
+    from databricks.labs.gbx.pyrx.core import preparer as _preparer
+
+    real_stage = _preparer._stage_local_if_needed
+
+    def _spy_stage(p):
+        stage_calls.append(p)
+        return real_stage(p)
+
+    monkeypatch.setattr(_preparer, "_stage_local_if_needed", _spy_stage)
+    monkeypatch.setattr(_ot2, "_stage_local_if_needed", _spy_stage, raising=False)
+
     src = tmp_path / "in" / "whole.tif"
     src.parent.mkdir()
     _write_src(str(src), w=512, h=512)
     out = tmp_path / "out"
 
     w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=256)
-    # whole-file virtual: full-extent window (a virtual tile always carries a
-    # window; full extent == whole-file → path-direct).
-    msg = w.write(iter([_v2_row(0, path=str(src), window=(0, 0, 512, 512))]))
+    # whole-file virtual: full-extent window + reader-stamped dims → path-direct.
+    msg = w.write(
+        iter(
+            [
+                _v2_row(
+                    0,
+                    path=str(src),
+                    window=(0, 0, 512, 512),
+                    metadata=_dims_meta(512, 512),
+                )
+            ]
+        )
+    )
 
     assert materialize_calls == [], "whole-file virtual must NOT materialize bytes"
+    assert stage_calls == [], (
+        "whole-file detection must read dims from metadata, not stage the source; "
+        f"_stage_local_if_needed was called with {stage_calls}"
+    )
     assert seen_src == [
         str(src)
     ], f"path-direct convert expected src path; got {seen_src}"
@@ -171,7 +208,18 @@ def test_whole_file_virtual_full_window_is_path_direct(tmp_path, monkeypatch):
     out = tmp_path / "out"
 
     w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=256)
-    msg = w.write(iter([_v2_row(0, path=str(src), window=(0, 0, 400, 300))]))
+    msg = w.write(
+        iter(
+            [
+                _v2_row(
+                    0,
+                    path=str(src),
+                    window=(0, 0, 400, 300),
+                    metadata=_dims_meta(400, 300),
+                )
+            ]
+        )
+    )
 
     assert materialize_calls == [], "full-extent window must NOT materialize"
     assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
@@ -221,6 +269,83 @@ def test_windowed_virtual_materializes(tmp_path, monkeypatch):
         ), f"output must hold only the window extent; got {ds.width}x{ds.height}"
     info = gbxcog.sniff_header(open(msg.paths[0], "rb").read())
     assert info.is_cog is True
+
+
+def test_crs_set_does_not_path_direct(tmp_path, monkeypatch):
+    """A whole-file-extent virtual tile carrying a pending reprojection (crs set)
+    must NOT be path-direct converted — that would silently drop the warp. It is
+    materialized instead (open_tile applies the warp)."""
+    import databricks.labs.gbx.ds.cog_writer as _cw
+    from databricks.labs.gbx.pyrx.core import open_tile as _ot
+
+    materialize_calls = []
+    real_mat = _ot.materialize_to_bytes
+
+    def _spy_mat(tile):
+        materialize_calls.append(tile)
+        return real_mat(tile)
+
+    monkeypatch.setattr(_ot, "materialize_to_bytes", _spy_mat)
+    monkeypatch.setattr(_cw, "materialize_to_bytes", _spy_mat, raising=False)
+
+    src = tmp_path / "in" / "reproj.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    out = tmp_path / "out"
+
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=256)
+    msg = w.write(
+        iter(
+            [
+                _v2_row(
+                    0,
+                    path=str(src),
+                    window=(0, 0, 512, 512),
+                    crs="EPSG:3857",  # pending warp
+                    metadata=_dims_meta(512, 512),
+                )
+            ]
+        )
+    )
+
+    assert (
+        len(materialize_calls) == 1
+    ), "crs set must materialize (warp), not path-direct"
+    assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
+    with open(msg.paths[0], "rb") as fh:
+        assert gbxcog.sniff_header(fh.read()).is_cog is True
+
+
+def test_missing_dims_metadata_materializes(tmp_path, monkeypatch):
+    """A full-extent-looking window with NO dims in metadata is ambiguous: without
+    source dims we cannot prove it is whole-file, so we conservatively materialize
+    (never wrongly path-convert a windowed tile)."""
+    import databricks.labs.gbx.ds.cog_writer as _cw
+    from databricks.labs.gbx.pyrx.core import open_tile as _ot
+
+    materialize_calls = []
+    real_mat = _ot.materialize_to_bytes
+
+    def _spy_mat(tile):
+        materialize_calls.append(tile)
+        return real_mat(tile)
+
+    monkeypatch.setattr(_ot, "materialize_to_bytes", _spy_mat)
+    monkeypatch.setattr(_cw, "materialize_to_bytes", _spy_mat, raising=False)
+
+    src = tmp_path / "in" / "nodims.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    out = tmp_path / "out"
+
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=256)
+    # window covers the full extent, but metadata omits width/height.
+    msg = w.write(iter([_v2_row(0, path=str(src), window=(0, 0, 512, 512))]))
+
+    assert len(materialize_calls) == 1, "unknown dims must materialize (safe default)"
+    assert len(msg.paths) == 1 and os.path.exists(msg.paths[0])
+    with open(msg.paths[0], "rb") as fh:
+        assert gbxcog.sniff_header(fh.read()).is_cog is True
 
 
 # ---------------------------------------------------------------------------

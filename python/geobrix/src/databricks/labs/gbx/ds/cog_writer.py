@@ -75,13 +75,34 @@ class CogCommitMessage(WriterCommitMessage):
     paths: List[str]
 
 
-def assert_path_schema(schema: StructType) -> None:
-    """cog_gbx writer requires a 'path' column (the file_gbx output)."""
+def _is_v2_envelope(schema: StructType) -> bool:
+    """True when *schema* is a (source, tile) envelope whose ``tile`` is a struct.
+
+    Accepts either the v1 tile struct (``cellid, raster, metadata``) or the v2
+    virtual struct (8 fields). ``_to_virtual_tile`` normalizes both, so the
+    writer only needs to know it is receiving a tile envelope (not a top-level
+    ``path`` column).
+    """
     names = [f.name for f in schema.fields]
-    if "path" not in names:
-        raise ValueError(
-            f"cog_gbx writer requires a 'path' column (file_gbx output); got {names}"
-        )
+    if names != ["source", "tile"]:
+        return False
+    from pyspark.sql.types import StructType as _ST
+
+    return isinstance(schema["tile"].dataType, _ST)
+
+
+def assert_path_schema(schema: StructType) -> None:
+    """cog_gbx writer accepts EITHER a top-level 'path' column (file_gbx output)
+    OR a (source, tile) v1/v2 envelope (a virtual-tile DataFrame)."""
+    names = [f.name for f in schema.fields]
+    if "path" in names:
+        return
+    if _is_v2_envelope(schema):
+        return
+    raise ValueError(
+        "cog_gbx writer requires a top-level 'path' column (file_gbx output) "
+        f"or a (source, tile) tile envelope; got {names}"
+    )
 
 
 class CogGbxWriter(DataSourceWriter):
@@ -102,6 +123,7 @@ class CogGbxWriter(DataSourceWriter):
         cog_bigtiff="YES",
     ):
         assert_path_schema(schema)
+        self.tile_envelope = _is_v2_envelope(schema)
         self.out_dir = _listing.to_local_path(path)
         self.overwrite = overwrite
         self.cog_blocksize = int(cog_blocksize)
@@ -122,6 +144,20 @@ class CogGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        if self.tile_envelope:
+            # v2 (source, tile) envelope. driverMode over v2 tiles is a follow-on
+            # (see module docstring / task-5): the path-gather-then-driver-convert
+            # path only makes sense for whole-file virtual tiles, and windowed/
+            # clipped/materialized tiles would need bytes on the driver. For now
+            # v2-tile input runs in DEFAULT (per-partition) mode only.
+            if self.driver_mode:
+                raise ValueError(
+                    "cog_gbx driverMode does not yet support (source, tile) tile "
+                    "input; use a top-level 'path' column (file_gbx) with "
+                    "driverMode, or DEFAULT mode with a tile DataFrame."
+                )
+            return self._write_tiles(iterator)
+
         if self.driver_mode:
             # Gather source path strings only — NO conversion on the executor
             # (cap-safe: no GDAL, no pixels). Conversion happens on driver.
@@ -171,6 +207,119 @@ class CogGbxWriter(DataSourceWriter):
             finally:
                 if os.path.exists(tmp):
                     os.remove(tmp)
+            written.append(out_path)
+        return CogCommitMessage(paths=written)
+
+    def _out_path_for(self, vt, row) -> str:
+        """Output COG path for a v2 tile row (name_col > tile.path > source > cellid)."""
+        base = None
+        if self.name_col and row[self.name_col] is not None:
+            base = os.path.basename(str(row[self.name_col]))
+        elif vt.path:
+            base = os.path.basename(str(vt.path))
+        elif "source" in row and row["source"]:
+            base = os.path.basename(str(row["source"]))
+        if not base:
+            base = str(vt.cellid)
+        stem = os.path.splitext(base)[0]
+        return os.path.join(self.out_dir, f"{stem}.{self.ext}")
+
+    def _is_whole_file_virtual(self, vt) -> bool:
+        """A virtual tile that covers the FULL source extent with no clip.
+
+        Whole-file ⟺ raster is None AND clip_polygon is None AND the window is
+        None (implicit whole-file) OR equals (0, 0, srcW, srcH). Such a tile can
+        be path-direct converted (no pixels through the Python heap). A sub-window
+        or a clip must be materialized first so the output honors it.
+        """
+        if not vt.is_virtual() or vt.clip_polygon is not None:
+            return False
+        if vt.window is None:
+            return True
+        col_off, row_off, width, height = vt.window
+        if col_off != 0 or row_off != 0:
+            return False
+        from databricks.labs.gbx.pyrx.core.open_tile import open_header
+
+        with open_header(vt) as ds:
+            return width == ds.width and height == ds.height
+
+    def _bytes_to_cog(self, raster_bytes: bytes, out_path: str) -> None:
+        """Convert in-memory raster bytes to a COG at *out_path* (FUSE-safe)."""
+        from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+        fd, tmp_src = tempfile.mkstemp(suffix=f".{self.ext}")
+        os.close(fd)
+        fd2, tmp_out = tempfile.mkstemp(suffix=f".{self.ext}")
+        os.close(fd2)
+        try:
+            with open(tmp_src, "wb") as fh:
+                fh.write(raster_bytes)
+            cog_convert_file(
+                tmp_src,
+                tmp_out,
+                compression=self.cog_compression,
+                blocksize=self.cog_blocksize,
+                overview_resampling=self.cog_overview_resampling,
+                bigtiff=self.cog_bigtiff,
+            )
+            shutil.copyfile(tmp_out, out_path)  # bytes-only → FUSE-safe on /Volumes
+        finally:
+            for t in (tmp_src, tmp_out):
+                if os.path.exists(t):
+                    os.remove(t)
+
+    def _write_tiles(self, iterator: Iterator) -> WriterCommitMessage:
+        """DEFAULT-mode conversion for a v2 (source, tile) envelope.
+
+        Whole-file virtual tile → PATH-DIRECT convert (cog_convert_file on the
+        source path, no bytes round-trip). Windowed/clipped virtual tile →
+        materialize the window/clip to bytes, then convert those bytes.
+        Materialized tile (raster set) → materialize_to_bytes is a no-op; convert
+        its bytes.
+        """
+        from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+        from databricks.labs.gbx.pyrx.core.open_tile import (
+            _to_virtual_tile,
+            materialize_to_bytes,
+        )
+
+        os.makedirs(self.out_dir, exist_ok=True)
+        written: List[str] = []
+        for row in iterator:
+            vt = _to_virtual_tile(row["tile"])
+            out_path = self._out_path_for(vt, row)
+
+            if self.cog_skip_if_exists and os.path.exists(out_path):
+                written.append(out_path)
+                continue
+
+            if self._is_whole_file_virtual(vt):
+                # PATH-DIRECT: GDAL reads the source natively block-by-block; no
+                # pixels touch the Python heap (same as the file_gbx path).
+                src_local = _listing.to_local_path(str(vt.path))
+                fd, tmp = tempfile.mkstemp(suffix=f".{self.ext}")
+                os.close(fd)
+                try:
+                    cog_convert_file(
+                        src_local,
+                        tmp,
+                        compression=self.cog_compression,
+                        blocksize=self.cog_blocksize,
+                        overview_resampling=self.cog_overview_resampling,
+                        bigtiff=self.cog_bigtiff,
+                    )
+                    shutil.copyfile(tmp, out_path)
+                finally:
+                    if os.path.exists(tmp):
+                        os.remove(tmp)
+            else:
+                # Windowed/clipped virtual → materialize the window/clip; a
+                # materialized tile → materialize_to_bytes is a no-op. Convert
+                # the resulting bytes to a COG.
+                raster_bytes = materialize_to_bytes(vt).raster
+                self._bytes_to_cog(raster_bytes, out_path)
+
             written.append(out_path)
         return CogCommitMessage(paths=written)
 

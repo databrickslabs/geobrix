@@ -30,9 +30,7 @@ from databricks.labs.gbx.pyrx._udf import (
     ColLike,
     _col,
     _raster_field,
-    sql_scalar_udf,
     sql_scalar_udf2,
-    tile_scalar_udf,
     tile_scalar_udf2,
 )
 from databricks.labs.gbx.pyrx.core import accessors
@@ -205,6 +203,15 @@ def _validate_force_output(virtualize_dir, materialize) -> None:
         raise ValueError("virtualize_dir and materialize=True are mutually exclusive")
 
 
+def _force_output_lits(virtualize_dir, virtualize_prefix, materialize):
+    """The 3 trailing force-output literal Columns for a v2 UDF invocation."""
+    return (
+        f.lit(virtualize_dir),
+        f.lit(virtualize_prefix),
+        f.lit(materialize),
+    )
+
+
 def _shaped_result_row(
     new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
 ):
@@ -227,35 +234,74 @@ def _shaped_result_row(
     return shaped.to_row()
 
 
+# --- Virtual-aware accessor UDF factories (Increment 4) ---------------------
+# Accessors take the FULL tile struct (not just the raster subfield) so a
+# virtual tile's ``path`` is reachable. HEADER-ONLY accessors answer from the
+# file header via ``open_header`` (no pixel read; window-correct for windowed
+# virtual tiles); PIXEL accessors materialise the window via ``_open``. The
+# core accessor math is never touched.
+def _header_accessor_udf(core_fn, return_type):
+    """Struct-accepting header-only accessor UDF (open_header, no pixel read)."""
+
+    @f.udf(return_type)
+    def _udf(tile):
+        if _tile_is_empty(tile):
+            return None
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot.open_header(tile) as ds:
+            return core_fn(ds)
+
+    return _udf
+
+
+def _pixel_accessor_udf(core_fn, return_type):
+    """Struct-accepting pixel accessor UDF (_open, materialises the window)."""
+
+    @f.udf(return_type)
+    def _udf(tile):
+        if _tile_is_empty(tile):
+            return None
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot._open(tile) as ds:
+            return core_fn(ds)
+
+    return _udf
+
+
 # --- Module-level UDF singletons (built once at import) ---------------------
-# rst_width / rst_avg use the virtual-aware struct-accepting UDFs
-# (_width_header_udf / _avg_pixel_udf) defined below instead of these
-# raster-bytes pandas_udf singletons.
-_u_height = tile_scalar_udf(accessors.height, IntegerType())
-_u_numbands = tile_scalar_udf(accessors.numbands, IntegerType())
-_u_srid = tile_scalar_udf(accessors.srid, IntegerType())
-_u_pixelwidth = tile_scalar_udf(accessors.pixelwidth, DoubleType())
-_u_pixelheight = tile_scalar_udf(accessors.pixelheight, DoubleType())
-_u_upperleftx = tile_scalar_udf(accessors.upperleftx, DoubleType())
-_u_upperlefty = tile_scalar_udf(accessors.upperlefty, DoubleType())
-_u_boundingbox = tile_scalar_udf(accessors.boundingbox, BinaryType())
-_u_scalex = tile_scalar_udf(accessors.scalex, DoubleType())
-_u_scaley = tile_scalar_udf(accessors.scaley, DoubleType())
-_u_isempty = tile_scalar_udf(accessors.isempty, BooleanType())
-_u_type = tile_scalar_udf(accessors.type, ArrayType(StringType()))
-_u_getnodata = tile_scalar_udf(accessors.getnodata, ArrayType(DoubleType()))
+# Header-only accessors (open_header — answer from the header, no pixel read;
+# a virtual tile is resolved from its ``path``).
+_u_height = _header_accessor_udf(accessors.height, IntegerType())
+_u_numbands = _header_accessor_udf(accessors.numbands, IntegerType())
+_u_srid = _header_accessor_udf(accessors.srid, IntegerType())
+_u_pixelwidth = _header_accessor_udf(accessors.pixelwidth, DoubleType())
+_u_pixelheight = _header_accessor_udf(accessors.pixelheight, DoubleType())
+_u_upperleftx = _header_accessor_udf(accessors.upperleftx, DoubleType())
+_u_upperlefty = _header_accessor_udf(accessors.upperlefty, DoubleType())
+_u_boundingbox = _header_accessor_udf(accessors.boundingbox, BinaryType())
+_u_scalex = _header_accessor_udf(accessors.scalex, DoubleType())
+_u_scaley = _header_accessor_udf(accessors.scaley, DoubleType())
+_u_type = _header_accessor_udf(accessors.type, ArrayType(StringType()))
+_u_getnodata = _header_accessor_udf(accessors.getnodata, ArrayType(DoubleType()))
+# Pixel accessors (_open — materialise the window).
+_u_isempty = _pixel_accessor_udf(accessors.isempty, BooleanType())
 
 
-# metadata: pandas_udf rejects MapType in some Arrow builds; fall back to
-# a regular Python UDF for this one function only.
+# metadata: HEADER-ONLY accessor. Struct-accepting (so a virtual tile's ``path``
+# is reachable) and MapType-returning (plain @f.udf; pandas_udf rejects MapType
+# on some Arrow builds).
 @f.udf(MapType(StringType(), StringType()))
-def _metadata_udf(raster):
-    if raster is None:
+def _metadata_udf(tile):
+    if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env, _serde
+    from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(raster)) as ds:
+    with ot.open_header(tile) as ds:
         return accessors.metadata(ds)
 
 
@@ -266,40 +312,23 @@ _u_w2r_y = tile_scalar_udf2(coords.world_to_raster_y, IntegerType())
 
 
 # --- Group 1: per-band statistics & accessor UDFs ---------------------------
-_u_min = tile_scalar_udf(accessors.minimum, ArrayType(DoubleType()))
-_u_max = tile_scalar_udf(accessors.maximum, ArrayType(DoubleType()))
-_u_median = tile_scalar_udf(accessors.median, ArrayType(DoubleType()))
-_u_pixelcount = tile_scalar_udf(accessors.pixelcount, ArrayType(LongType()))
-_u_rotation = tile_scalar_udf(accessors.rotation, DoubleType())
-_u_skewx = tile_scalar_udf(accessors.skewx, DoubleType())
-_u_skewy = tile_scalar_udf(accessors.skewy, DoubleType())
-_u_format = tile_scalar_udf(accessors.format, StringType())
+# PIXEL accessors (_open — need the window pixels).
+_u_min = _pixel_accessor_udf(accessors.minimum, ArrayType(DoubleType()))
+_u_max = _pixel_accessor_udf(accessors.maximum, ArrayType(DoubleType()))
+_u_median = _pixel_accessor_udf(accessors.median, ArrayType(DoubleType()))
+_u_pixelcount = _pixel_accessor_udf(accessors.pixelcount, ArrayType(LongType()))
+_u_avg = _pixel_accessor_udf(accessors.avg, ArrayType(DoubleType()))
+# HEADER-only accessors (open_header — answer from the header, no pixel read).
+_u_rotation = _header_accessor_udf(accessors.rotation, DoubleType())
+_u_skewx = _header_accessor_udf(accessors.skewx, DoubleType())
+_u_skewy = _header_accessor_udf(accessors.skewy, DoubleType())
+_u_format = _header_accessor_udf(accessors.format, StringType())
+_u_width = _header_accessor_udf(accessors.width, IntegerType())
 
-
-# Virtual-aware accessor UDFs (struct-accepting). Unlike the raster-bytes
-# pandas_udf singletons above, these take the FULL tile struct so a virtual
-# tile's ``path`` is reachable. rst_width is a HEADER accessor (open_header,
-# no pixel read); rst_avg is a PIXEL accessor (_open, materialises the window).
-@f.udf(IntegerType())
-def _width_header_udf(tile):
-    if _tile_is_empty(tile):
-        return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with ot.open_header(tile) as ds:
-        return accessors.width(ds)
-
-
-@f.udf(ArrayType(DoubleType()))
-def _avg_pixel_udf(tile):
-    if _tile_is_empty(tile):
-        return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with ot._open(tile) as ds:
-        return accessors.avg(ds)
+# Back-compat aliases: rst_width/rst_avg were wired to explicit UDF singletons
+# in Task 6; keep the names pointing at the factory-built virtual-aware UDFs.
+_width_header_udf = _u_width
+_avg_pixel_udf = _u_avg
 
 
 # memsize: works off the raw raster bytes (no rasterio open needed) — mirror
@@ -322,53 +351,57 @@ def _memsize_struct_udf(tile):
 
 # MapType return paths use plain @f.udf (pandas_udf rejects MapType on some
 # Arrow builds), matching the existing _metadata_udf fallback.
+# georeference / bandmetadata / subdatasets: HEADER-ONLY accessors (open_header,
+# no pixel read). MapType returns use plain @f.udf (pandas_udf rejects MapType
+# on some Arrow builds).
 @f.udf(MapType(StringType(), DoubleType()))
 def _georeference_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot.open_header(tile) as ds:
         return accessors.georeference(ds)
 
 
 @f.udf(MapType(StringType(), StringType()))
 def _bandmetadata_udf(tile, band):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot.open_header(tile) as ds:
         return accessors.bandmetadata(ds, int(band))
 
 
 @f.udf(MapType(StringType(), StringType()))
 def _subdatasets_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot.open_header(tile) as ds:
         return accessors.subdatasets(ds)
 
 
+# summary / histogram / getsubdataset: PIXEL accessors (_open — need the window).
 @f.udf(StringType())
 def _summary_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         return accessors.summary(ds)
 
 
 @f.udf(MapType(StringType(), ArrayType(LongType())))
 def _histogram_udf(tile, n_buckets, min_val, max_val, include_nodata):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
@@ -377,20 +410,20 @@ def _histogram_udf(tile, n_buckets, min_val, max_val, include_nodata):
     lo = None if min_val is None else float(min_val)
     hi = None if max_val is None else float(max_val)
     inc = bool(include_nodata) if include_nodata is not None else False
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         return accessors.histogram(ds, nb, lo, hi, inc)
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _getsubdataset_udf(tile, name):
-    if tile is None or tile["raster"] is None or name is None:
+    if _tile_is_empty(tile) or name is None:
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         new_bytes = accessors.getsubdataset(ds, str(name))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 # --- Group 2: struct coordinate UDFs ----------------------------------------
@@ -432,23 +465,23 @@ _BBOX_SCHEMA = StructType(
 
 @f.udf(_R2W_COORD_SCHEMA)
 def _rastertoworldcoord_udf(tile, x, y):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         return coords.raster_to_world_coord(ds, int(x), int(y))
 
 
 @f.udf(_W2R_COORD_SCHEMA)
 def _worldtorastercoord_udf(tile, x, y):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         return coords.world_to_raster_coord(ds, float(x), float(y))
 
 
@@ -617,24 +650,60 @@ def rst_merge(
 # Mirrors gbx_rst_combineavg: NoData-aware per-pixel mean across the stack
 # (reuses core.agg.combineavg_tiles). cellid follows the heavyweight rule —
 # head's cellid if every element shares it, else -1.
+def _combineavg_bytes(tiles):
+    """Shared combineavg body: collect each input's GTiff bytes + resolve cellid.
+
+    Materialized inputs pass their ORIGINAL bytes verbatim (no re-encode); only
+    a VIRTUAL input (raster None) is materialized via the front-door. Returns
+    ``(new_bytes, cellid)`` or ``None`` on an empty array."""
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    elems = [t for t in tiles if t is not None and not _tile_is_empty(t)]
+    if not elems:
+        return None
+    rasters = []
+    for t in elems:
+        vt = ot._to_virtual_tile(t)
+        if vt.is_virtual():
+            rasters.append(ot.materialize_to_bytes(vt).raster)
+        else:
+            rasters.append(bytes(vt.raster))
+    cellids = {_tile_cellid(t) for t in elems}
+    cellid = _tile_cellid(elems[0]) if len(cellids) == 1 else -1
+    return agg_core.combineavg_tiles(rasters), cellid
+
+
 @f.udf(_serde.TILE_SCHEMA)
 def _combineavg_udf(tiles):
     if not tiles:
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    elems = [t for t in tiles if t is not None and t["raster"] is not None]
-    if not elems:
+    result = _combineavg_bytes(tiles)
+    if result is None:
         return None
-    rasters = [bytes(t["raster"]) for t in elems]
-    cellids = {int(t["cellid"]) for t in elems}
-    cellid = int(elems[0]["cellid"]) if len(cellids) == 1 else -1
-    new_bytes = agg_core.combineavg_tiles(rasters)
+    new_bytes, cellid = result
     return _serde.build_tile(new_bytes, "GTiff", cellid)
 
 
-def rst_combineavg(tiles: ColLike) -> Column:
+@f.udf(V2_TILE_SCHEMA)
+def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
+    if not tiles:
+        return None
+    result = _combineavg_bytes(tiles)
+    if result is None:
+        return None
+    new_bytes, cellid = result
+    return _shaped_result_row(
+        new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_combineavg(
+    tiles: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """NoData-aware per-pixel mean across an ARRAY of aligned tiles.
 
     Mirrors the heavyweight ``gbx_rst_combineavg``: ``tiles`` is a single column
@@ -648,10 +717,21 @@ def rst_combineavg(tiles: ColLike) -> Column:
 
     Args:
         tiles: Column of ARRAY<tile struct> (same-grid).
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Tile struct of per-pixel means, or NULL on an empty array.
     """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _combineavg_v2_udf(
+            _col(tiles),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _combineavg_udf(_col(tiles))
 
 
@@ -659,26 +739,61 @@ def rst_combineavg(tiles: ColLike) -> Column:
 # Mirrors gbx_rst_frombands: array ORDER is band order (element 0 -> band 1).
 # Reuses core.agg.frombands_tiles by pairing each element with its 0-based
 # position as the band_index, so the reducer's ascending sort preserves order.
+def _frombands_bytes(bands):
+    """Shared frombands body: pair each input's GTiff bytes with its 0-based
+    position (band index), assemble, resolve cellid.
+
+    Materialized inputs pass their ORIGINAL bytes verbatim (no re-encode); only
+    a VIRTUAL input (raster None) is materialized via the front-door. Returns
+    ``(new_bytes, cellid)`` or ``None`` on an empty array."""
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    indexed = []
+    for i, t in enumerate(bands):
+        if t is None or _tile_is_empty(t):
+            continue
+        vt = ot._to_virtual_tile(t)
+        raster = (
+            ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
+        )
+        indexed.append((i, raster))
+    if not indexed:
+        return None
+    cellid = _tile_cellid(bands[0]) if bands[0] is not None else 0
+    return agg_core.frombands_tiles(indexed), cellid
+
+
 @f.udf(_serde.TILE_SCHEMA)
 def _frombands_udf(bands):
     if not bands:
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    indexed = [
-        (i, bytes(t["raster"]))
-        for i, t in enumerate(bands)
-        if t is not None and t["raster"] is not None
-    ]
-    if not indexed:
+    result = _frombands_bytes(bands)
+    if result is None:
         return None
-    cellid = int(bands[0]["cellid"]) if bands[0] is not None else 0
-    new_bytes = agg_core.frombands_tiles(indexed)
+    new_bytes, cellid = result
     return _serde.build_tile(new_bytes, "GTiff", cellid)
 
 
-def rst_frombands(bands: ColLike) -> Column:
+@f.udf(V2_TILE_SCHEMA)
+def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
+    if not bands:
+        return None
+    result = _frombands_bytes(bands)
+    if result is None:
+        return None
+    new_bytes, cellid = result
+    return _shaped_result_row(
+        new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_frombands(
+    bands: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Assemble an ARRAY of single-band tiles into one multi-band tile.
 
     Mirrors the heavyweight ``gbx_rst_frombands``: ``bands`` is a single column
@@ -688,100 +803,242 @@ def rst_frombands(bands: ColLike) -> Column:
 
     Args:
         bands: Column of ARRAY<single-band tile struct>, in band order.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Multi-band tile struct, or NULL on an empty array.
     """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _frombands_v2_udf(
+            _col(bands),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _frombands_udf(_col(bands))
 
 
 # --- Tier 1b: tile-returning warp UDFs -------------------------------------
-@f.udf(_serde.TILE_SCHEMA)
-def _transform_udf(tile, target_srid):
-    if tile is None or tile["raster"] is None:
-        return None
+def _transform_bytes(tile, target_srid):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = warp.reproject_to_srid(ds, int(target_srid))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return warp.reproject_to_srid(ds, int(target_srid))
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _transform_udf(tile, target_srid):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _transform_bytes(tile, target_srid)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _transform_v2_udf(
+    tile, target_srid, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _transform_bytes(tile, target_srid)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _to_webmercator_bytes(tile, resampling):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return warp.reproject_to_srid(ds, 3857, resampling=str(resampling))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _to_webmercator_udf(tile, resampling):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = warp.reproject_to_srid(ds, 3857, resampling=str(resampling))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    new_bytes = _to_webmercator_bytes(tile, resampling)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-def rst_transform(tile: ColLike, target_srid: ColLike) -> Column:
-    """Reproject the raster to the target SRID (EPSG code)."""
+@f.udf(V2_TILE_SCHEMA)
+def _to_webmercator_v2_udf(
+    tile, resampling, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _to_webmercator_bytes(tile, resampling)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_transform(
+    tile: ColLike,
+    target_srid: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Reproject the raster to the target SRID (EPSG code).
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
+    """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _transform_v2_udf(
+            _col(tile),
+            _col(target_srid),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _transform_udf(_col(tile), _col(target_srid))
 
 
-def rst_to_webmercator(tile: ColLike, resampling: ColLike = "bilinear") -> Column:
-    """Reproject the tile to EPSG:3857 (web mercator). resampling defaults to 'bilinear'."""
+def rst_to_webmercator(
+    tile: ColLike,
+    resampling: ColLike = "bilinear",
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Reproject the tile to EPSG:3857 (web mercator). resampling defaults to 'bilinear'.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
+    """
     resampling_col = (
         f.lit(resampling) if isinstance(resampling, str) else _col(resampling)
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _to_webmercator_v2_udf(
+            _col(tile),
+            resampling_col,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _to_webmercator_udf(_col(tile), resampling_col)
 
 
 # --- Tier 1c: tile-returning resample UDFs ----------------------------------
-@f.udf(_serde.TILE_SCHEMA)
-def _resample_udf(tile, factor, algorithm):
-    if tile is None or tile["raster"] is None:
-        return None
+def _resample_bytes(tile, factor, algorithm):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = resample.resample_by_factor(ds, float(factor), str(algorithm))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return resample.resample_by_factor(ds, float(factor), str(algorithm))
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _resample_udf(tile, factor, algorithm):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _resample_bytes(tile, factor, algorithm)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _resample_v2_udf(
+    tile, factor, algorithm, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _resample_bytes(tile, factor, algorithm)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _resample_to_size_bytes(tile, width_px, height_px, algorithm):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return resample.resample_to_size(
+            ds, int(width_px), int(height_px), str(algorithm)
+        )
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _resample_to_size_udf(tile, width_px, height_px, algorithm):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
+    new_bytes = _resample_to_size_bytes(tile, width_px, height_px, algorithm)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _resample_to_size_v2_udf(
+    tile, width_px, height_px, algorithm, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _resample_to_size_bytes(tile, width_px, height_px, algorithm)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _resample_to_res_bytes(tile, x_res, y_res, algorithm):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = resample.resample_to_size(
-            ds, int(width_px), int(height_px), str(algorithm)
-        )
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return resample.resample_to_res(ds, float(x_res), float(y_res), str(algorithm))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _resample_to_res_udf(tile, x_res, y_res, algorithm):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env
+    new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = resample.resample_to_res(
-            ds, float(x_res), float(y_res), str(algorithm)
-        )
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+
+@f.udf(V2_TILE_SCHEMA)
+def _resample_to_res_v2_udf(
+    tile, x_res, y_res, algorithm, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 def rst_resample(
-    tile: ColLike, factor: ColLike, algorithm: ColLike = "bilinear"
+    tile: ColLike,
+    factor: ColLike,
+    algorithm: ColLike = "bilinear",
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Resample a raster tile by a multiplicative factor (>1 upsamples, 0<factor<1 downsamples).
 
     CRS and geographic extent are preserved; only the pixel grid changes.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
     """
     alg = f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _resample_v2_udf(
+            _col(tile),
+            _col(factor),
+            alg,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _resample_udf(_col(tile), _col(factor), alg)
 
 
@@ -790,12 +1047,28 @@ def rst_resample_to_size(
     width_px: ColLike,
     height_px: ColLike,
     algorithm: ColLike = "bilinear",
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Resample a raster tile to exact pixel dimensions (width_px x height_px).
 
     CRS and geographic extent are preserved; only the pixel grid changes.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
     """
     alg = f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _resample_to_size_v2_udf(
+            _col(tile),
+            _col(width_px),
+            _col(height_px),
+            alg,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _resample_to_size_udf(_col(tile), _col(width_px), _col(height_px), alg)
 
 
@@ -804,12 +1077,28 @@ def rst_resample_to_res(
     x_res: ColLike,
     y_res: ColLike,
     algorithm: ColLike = "bilinear",
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Resample a raster tile to a target ground resolution in CRS units.
 
     CRS and geographic extent are preserved; pixel count is derived from extent / resolution.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
     """
     alg = f.lit(algorithm) if isinstance(algorithm, str) else _col(algorithm)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _resample_to_res_v2_udf(
+            _col(tile),
+            _col(x_res),
+            _col(y_res),
+            alg,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _resample_to_res_udf(_col(tile), _col(x_res), _col(y_res), alg)
 
 
@@ -856,28 +1145,56 @@ def _clip_v2_udf(
     )
 
 
-@f.udf(_serde.TILE_SCHEMA)
-def _update_type_udf(tile, new_type):
-    if tile is None or tile["raster"] is None:
-        return None
+def _update_type_bytes(tile, new_type):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = edit.update_type(ds, str(new_type))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return edit.update_type(ds, str(new_type))
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _update_type_udf(tile, new_type):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _update_type_bytes(tile, new_type)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _update_type_v2_udf(tile, new_type, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _update_type_bytes(tile, new_type)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _init_nodata_bytes(tile):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return edit.init_nodata(ds)
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _init_nodata_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env
+    new_bytes = _init_nodata_bytes(tile)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = edit.init_nodata(ds)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+
+@f.udf(V2_TILE_SCHEMA)
+def _init_nodata_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _init_nodata_bytes(tile)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 def rst_clip(
@@ -909,13 +1226,47 @@ def rst_clip(
     return _clip_udf(_col(tile), _col(clip), _col(cutline_all_touched))
 
 
-def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
-    """Cast all raster bands to a new GDAL data type (e.g. 'Int32', 'Float64')."""
+def rst_updatetype(
+    tile: ColLike,
+    new_type: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Cast all raster bands to a new GDAL data type (e.g. 'Int32', 'Float64').
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
+    """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _update_type_v2_udf(
+            _col(tile),
+            _col(new_type),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _update_type_udf(_col(tile), _col(new_type))
 
 
-def rst_initnodata(tile: ColLike) -> Column:
-    """Ensure a NoData value is set on the raster tile; uses -9999.0 if not already set."""
+def rst_initnodata(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Ensure a NoData value is set on the raster tile; uses -9999.0 if not already set.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
+    """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _init_nodata_v2_udf(
+            _col(tile),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _init_nodata_udf(_col(tile))
 
 
@@ -923,62 +1274,129 @@ def rst_initnodata(tile: ColLike) -> Column:
 # buildoverviews, sample) ----------------------------------------------------
 @f.udf(BooleanType())
 def _tryopen_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return False
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    return ops_core.try_open(bytes(tile["raster"]))
+    # Virtual-aware: a materialized tile validates its bytes directly; a virtual
+    # tile is proven openable through the front-door (any failure -> False).
+    vt = ot._to_virtual_tile(tile)
+    if not vt.is_virtual():
+        return ops_core.try_open(bytes(vt.raster))
+    try:
+        with ot._open(vt):
+            return True
+    except Exception:
+        return False
+
+
+def _setsrid_bytes(tile, srid):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return edit.set_srid(ds, int(srid))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _setsrid_udf(tile, srid):
-    if tile is None or tile["raster"] is None or srid is None:
+    if _tile_is_empty(tile) or srid is None:
         return None
+    new_bytes = _setsrid_bytes(tile, srid)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _setsrid_v2_udf(tile, srid, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile) or srid is None:
+        return None
+    new_bytes = _setsrid_bytes(tile, srid)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _band_bytes(tile, band_index):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = edit.set_srid(ds, int(srid))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return edit.band(ds, int(band_index))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _band_udf(tile, band_index):
-    if tile is None or tile["raster"] is None or band_index is None:
+    if _tile_is_empty(tile) or band_index is None:
         return None
+    new_bytes = _band_bytes(tile, band_index)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _band_v2_udf(tile, band_index, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile) or band_index is None:
+        return None
+    new_bytes = _band_bytes(tile, band_index)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _asformat_bytes(tile, new_format):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = edit.band(ds, int(band_index))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return ops_core.as_format(ds, str(new_format))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _asformat_udf(tile, new_format):
-    if tile is None or tile["raster"] is None or new_format is None:
+    if _tile_is_empty(tile) or new_format is None:
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = ops_core.as_format(ds, str(new_format))
+    new_bytes = _asformat_bytes(tile, new_format)
     # metadata.driver must reflect the requested output format.
-    return _serde.build_tile(new_bytes, str(new_format), tile["cellid"])
+    return _serde.build_tile(new_bytes, str(new_format), _tile_cellid(tile))
 
 
-@f.udf(_serde.TILE_SCHEMA)
-def _buildoverviews_udf(tile, levels, resampling):
-    if tile is None or tile["raster"] is None:
+@f.udf(V2_TILE_SCHEMA)
+def _asformat_v2_udf(tile, new_format, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile) or new_format is None:
         return None
+    new_bytes = _asformat_bytes(tile, new_format)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _buildoverviews_bytes(tile, levels, resampling):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     resamp = "average" if resampling is None else str(resampling)
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = ops_core.build_overviews(ds, list(levels), resamp)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return ops_core.build_overviews(ds, list(levels), resamp)
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _buildoverviews_udf(tile, levels, resampling):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _buildoverviews_bytes(tile, levels, resampling)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _buildoverviews_v2_udf(
+    tile, levels, resampling, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _buildoverviews_bytes(tile, levels, resampling)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 @f.udf(ArrayType(DoubleType()))
@@ -994,23 +1412,45 @@ def _sample_udf(tile, geom_wkb):
     geom = parse_geom(geom_wkb)
     if geom is None:
         return None
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         return ops_core.sample(ds, geom)
 
 
-@f.udf(_serde.TILE_SCHEMA)
-def _proximity_udf(tile, target_values, distunits, max_distance):
-    if tile is None or tile["raster"] is None:
-        return None
+def _proximity_bytes(tile, target_values, distunits, max_distance):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     units = "GEO" if distunits is None else str(distunits)
     tv = None if target_values is None else str(target_values)
     md = None if max_distance is None else float(max_distance)
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = analysis_core.proximity(ds, tv, units, md)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return analysis_core.proximity(ds, tv, units, md)
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _proximity_udf(tile, target_values, distunits, max_distance):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _proximity_bytes(tile, target_values, distunits, max_distance)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _proximity_v2_udf(
+    tile,
+    target_values,
+    distunits,
+    max_distance,
+    virtualize_dir,
+    virtualize_prefix,
+    materialize,
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _proximity_bytes(tile, target_values, distunits, max_distance)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 # rst_contour: tile + levels (ARRAY<DOUBLE>) + interval/base/attr_field ->
@@ -1027,7 +1467,7 @@ _CONTOUR_SCHEMA = ArrayType(
 
 @f.udf(_CONTOUR_SCHEMA)
 def _contour_udf(tile, levels, interval, base, attr_field):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env
 
@@ -1036,14 +1476,11 @@ def _contour_udf(tile, levels, interval, base, attr_field):
     iv = 0.0 if interval is None else float(interval)
     bs = 0.0 if base is None else float(base)
     attr = "elev" if attr_field is None else str(attr_field)
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         return analysis_core.contour(ds, lvls, iv, bs, attr)
 
 
-@f.udf(_serde.TILE_SCHEMA)
-def _viewshed_udf(tile, observer_geom, observer_height, target_height, max_distance):
-    if tile is None or tile["raster"] is None or observer_geom is None:
-        return None
+def _viewshed_bytes(tile, observer_geom, observer_height, target_height, max_distance):
     from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env
 
@@ -1059,7 +1496,7 @@ def _viewshed_udf(tile, observer_geom, observer_height, target_height, max_dista
     oh = 0.0 if observer_height is None else float(observer_height)
     th = 0.0 if target_height is None else float(target_height)
     md = None if max_distance is None else float(max_distance)
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         # CRS-align the observer: if the point carries a positive SRID and the
         # raster has a CRS, reproject EPSG:srid -> raster CRS so a 4326 observer
         # over a UTM DEM lands correctly. Heavy RST_Viewshed assumes a pre-aligned
@@ -1080,24 +1517,78 @@ def _viewshed_udf(tile, observer_geom, observer_height, target_height, max_dista
                     ox, oy = xs[0], ys[0]
             except Exception:
                 ox, oy = geom.x, geom.y
-        new_bytes = analysis_core.viewshed(ds, ox, oy, oh, th, md)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+        return analysis_core.viewshed(ds, ox, oy, oh, th, md)
 
 
 @f.udf(_serde.TILE_SCHEMA)
-def _cog_convert_udf(tile, compression, blocksize, overview_resampling):
-    if tile is None or tile["raster"] is None:
+def _viewshed_udf(tile, observer_geom, observer_height, target_height, max_distance):
+    if _tile_is_empty(tile) or observer_geom is None:
         return None
+    new_bytes = _viewshed_bytes(
+        tile, observer_geom, observer_height, target_height, max_distance
+    )
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _viewshed_v2_udf(
+    tile,
+    observer_geom,
+    observer_height,
+    target_height,
+    max_distance,
+    virtualize_dir,
+    virtualize_prefix,
+    materialize,
+):
+    if _tile_is_empty(tile) or observer_geom is None:
+        return None
+    new_bytes = _viewshed_bytes(
+        tile, observer_geom, observer_height, target_height, max_distance
+    )
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _cog_convert_bytes(tile, compression, blocksize, overview_resampling):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     comp = "DEFLATE" if compression is None else str(compression)
     bs = 512 if blocksize is None else int(blocksize)
     resamp = "AVERAGE" if overview_resampling is None else str(overview_resampling)
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = analysis_core.cog_convert(ds, comp, bs, resamp)
+    with ot._open(tile) as ds:
+        return analysis_core.cog_convert(ds, comp, bs, resamp)
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _cog_convert_udf(tile, compression, blocksize, overview_resampling):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _cog_convert_bytes(tile, compression, blocksize, overview_resampling)
     # COG is a GTiff variant on disk; downstream readers see driver "GTiff".
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _cog_convert_v2_udf(
+    tile,
+    compression,
+    blocksize,
+    overview_resampling,
+    virtualize_dir,
+    virtualize_prefix,
+    materialize,
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _cog_convert_bytes(tile, compression, blocksize, overview_resampling)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 def rst_tryopen(tile: ColLike) -> Column:
@@ -1109,7 +1600,13 @@ def rst_tryopen(tile: ColLike) -> Column:
     return _tryopen_udf(_col(tile))
 
 
-def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
+def rst_setsrid(
+    tile: ColLike,
+    srid: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Stamp the CRS as ``EPSG:<srid>`` WITHOUT reprojecting the pixels.
 
     Equivalent to ``gdal_edit.py -a_srs``: pixel values and the GeoTransform
@@ -1119,14 +1616,32 @@ def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
     Args:
         tile: Tile struct column.
         srid: Positive EPSG code to stamp.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Tile with the same pixels/transform but CRS = EPSG:srid.
     """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _setsrid_v2_udf(
+            _col(tile),
+            _col(srid),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _setsrid_udf(_col(tile), _col(srid))
 
 
-def rst_band(tile: ColLike, band_index: ColLike) -> Column:
+def rst_band(
+    tile: ColLike,
+    band_index: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Extract a single 1-based band as a new single-band tile.
 
     Equivalent to ``gdal_translate -b <band_index>``: the extracted tile
@@ -1136,14 +1651,32 @@ def rst_band(tile: ColLike, band_index: ColLike) -> Column:
     Args:
         tile:       Tile struct column.
         band_index: 1-based band index in ``[1 .. numbands]``.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Single-band tile struct.
     """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _band_v2_udf(
+            _col(tile),
+            _col(band_index),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _band_udf(_col(tile), _col(band_index))
 
 
-def rst_asformat(tile: ColLike, new_format: ColLike) -> Column:
+def rst_asformat(
+    tile: ColLike,
+    new_format: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Re-encode the raster to another GDAL driver (e.g. 'PNG', 'GTiff').
 
     Mirrors the heavyweight ``gbx_rst_asformat``: the output tile's raster
@@ -1154,16 +1687,33 @@ def rst_asformat(tile: ColLike, new_format: ColLike) -> Column:
     Args:
         tile:       Tile struct column.
         new_format: GDAL driver short name (e.g. 'GTiff', 'PNG').
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Tile struct whose raster bytes are encoded in ``new_format``.
     """
     fmt = f.lit(new_format) if isinstance(new_format, str) else _col(new_format)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _asformat_v2_udf(
+            _col(tile),
+            fmt,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _asformat_udf(_col(tile), fmt)
 
 
 def rst_buildoverviews(
-    tile: ColLike, levels: ColLike, resampling: ColLike = "average"
+    tile: ColLike,
+    levels: ColLike,
+    resampling: ColLike = "average",
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Build internal pyramid overviews at the given decimation ``levels``.
 
@@ -1177,11 +1727,24 @@ def rst_buildoverviews(
         tile:       Tile struct column.
         levels:     ARRAY<INT> of decimation factors (e.g. ``f.array(...)``).
         resampling: Overview resampling algorithm. Defaults to "average".
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Tile struct with internal overviews embedded.
     """
     resamp = f.lit(resampling) if isinstance(resampling, str) else _col(resampling)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _buildoverviews_v2_udf(
+            _col(tile),
+            _col(levels),
+            resamp,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _buildoverviews_udf(_col(tile), _col(levels), resamp)
 
 
@@ -1190,6 +1753,9 @@ def rst_proximity(
     target_values: ColLike = None,
     distunits: ColLike = "GEO",
     max_distance: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Compute a proximity raster: each pixel's distance to the nearest source.
 
@@ -1235,6 +1801,15 @@ def rst_proximity(
             else _col(max_distance)
         )
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _proximity_v2_udf(
+            _col(tile),
+            tv_col,
+            units_col,
+            md_col,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _proximity_udf(_col(tile), tv_col, units_col, md_col)
 
 
@@ -1243,6 +1818,9 @@ def rst_cog_convert(
     compression: ColLike = "DEFLATE",
     blocksize: ColLike = 512,
     overview_resampling: ColLike = "AVERAGE",
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Convert a raster tile to a Cloud Optimized GeoTIFF (COG) layout.
 
@@ -1257,6 +1835,11 @@ def rst_cog_convert(
                              LZW, ZSTD, WEBP, JPEG, LERC, RAW).
         blocksize:           Internal tile size in pixels, square (default 512).
         overview_resampling: Overview-pyramid resampling (default "AVERAGE").
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Tile struct whose raster bytes are a COG.
@@ -1280,6 +1863,15 @@ def rst_cog_convert(
             else _col(overview_resampling)
         )
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _cog_convert_v2_udf(
+            _col(tile),
+            comp_col,
+            bs_col,
+            resamp_col,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _cog_convert_udf(_col(tile), comp_col, bs_col, resamp_col)
 
 
@@ -1324,6 +1916,9 @@ def rst_viewshed(
     observer_height: ColLike = 0.0,
     target_height: ColLike = 1.6,
     max_distance: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Compute a binary viewshed (255 visible / 0 invisible) from a DEM tile.
 
@@ -1339,6 +1934,11 @@ def rst_viewshed(
                          Defaults to 0.0.
         max_distance:    Optional analysis-distance cap in CRS ground units
                          (> 0). ``None`` = unlimited.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Single-band uint8 (Byte) tile struct: 255 = visible, 0 = invisible.
@@ -1368,6 +1968,16 @@ def rst_viewshed(
             else _col(max_distance)
         )
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _viewshed_v2_udf(
+            _col(tile),
+            _col(observer_geom),
+            oh,
+            th,
+            md,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md)
 
 
@@ -1390,43 +2000,94 @@ def rst_sample(tile: ColLike, geom_wkb: ColLike) -> Column:
 
 
 # --- Tier 1d3: band-math / focal UDFs --------------------------------------
-@f.udf(_serde.TILE_SCHEMA)
-def _threshold_udf(tile, op, value):
-    if tile is None or tile["raster"] is None:
-        return None
+def _threshold_bytes(tile, op, value):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = edit.threshold(ds, op, value)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return edit.threshold(ds, op, value)
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _threshold_udf(tile, op, value):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _threshold_bytes(tile, op, value)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _threshold_v2_udf(tile, op, value, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _threshold_bytes(tile, op, value)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _filter_bytes(tile, kernel_size, operation):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return focal.filt(ds, int(kernel_size), str(operation))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _filter_udf(tile, kernel_size, operation):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
+    new_bytes = _filter_bytes(tile, kernel_size, operation)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _filter_v2_udf(
+    tile, kernel_size, operation, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _filter_bytes(tile, kernel_size, operation)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _convolve_bytes(tile, kernel):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = focal.filt(ds, int(kernel_size), str(operation))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return focal.convolve(ds, kernel)
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _convolve_udf(tile, kernel):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = focal.convolve(ds, kernel)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    new_bytes = _convolve_bytes(tile, kernel)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-def rst_threshold(tile: ColLike, op: ColLike = None, value: ColLike = None) -> Column:
+@f.udf(V2_TILE_SCHEMA)
+def _convolve_v2_udf(tile, kernel, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _convolve_bytes(tile, kernel)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_threshold(
+    tile: ColLike,
+    op: ColLike = None,
+    value: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Keep pixels satisfying the comparison; others become NoData.
 
     Args:
@@ -1434,6 +2095,11 @@ def rst_threshold(tile: ColLike, op: ColLike = None, value: ColLike = None) -> C
         op:    Comparison operator: ">", "<", ">=", "<=", "==", "!=".
                Defaults to ">".
         value: Threshold scalar.  Defaults to 0.0.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Tile with the same dtype and band count; failing pixels set to NoData.
@@ -1446,55 +2112,139 @@ def rst_threshold(tile: ColLike, op: ColLike = None, value: ColLike = None) -> C
         if value is None
         else (f.lit(value) if isinstance(value, (int, float)) else _col(value))
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _threshold_v2_udf(
+            _col(tile),
+            op_col,
+            val_col,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _threshold_udf(_col(tile), op_col, val_col)
 
 
-def rst_filter(tile: ColLike, kernel_size: ColLike, operation: ColLike) -> Column:
+def rst_filter(
+    tile: ColLike,
+    kernel_size: ColLike,
+    operation: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Apply a focal filter over a square window per band.
 
     Args:
         tile:        Tile struct column.
         kernel_size: Side length of the square neighbourhood (odd integer).
         operation:   One of "min", "max", "mean", "median".
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Filtered tile; same band count.  "mean" returns Float32; others
         preserve the input dtype.
     """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _filter_v2_udf(
+            _col(tile),
+            _col(kernel_size),
+            _col(operation),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _filter_udf(_col(tile), _col(kernel_size), _col(operation))
 
 
-def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
+def rst_convolve(
+    tile: ColLike,
+    kernel: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Convolve each band with a 2-D kernel (ARRAY<ARRAY<DOUBLE>>).
 
     Args:
         tile:   Tile struct column.
         kernel: 2-D array column of floats (e.g. built with ``f.array``).
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Convolved tile with dtype Float64.
     """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _convolve_v2_udf(
+            _col(tile),
+            _col(kernel),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _convolve_udf(_col(tile), _col(kernel))
 
 
 # --- Tier 1d4: map algebra UDF ----------------------------------------------
+def _mapalgebra_bytes(tiles, expression):
+    """Shared map-algebra body: collect each input tile's GTiff bytes (array
+    order preserved), evaluate the expression, return the produced GTiff bytes.
+
+    Materialized inputs pass their ORIGINAL bytes verbatim (no re-encode); only
+    a VIRTUAL input (raster None) is materialized via the front-door."""
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    elems = [t for t in tiles if t is not None and not _tile_is_empty(t)]
+    if not elems:
+        return None
+    rasters = []
+    for t in elems:
+        vt = ot._to_virtual_tile(t)
+        if vt.is_virtual():
+            rasters.append(ot.materialize_to_bytes(vt).raster)
+        else:
+            rasters.append(bytes(vt.raster))
+    return mapalgebra_core.mapalgebra(rasters, str(expression))
+
+
 @f.udf(_serde.TILE_SCHEMA)
 def _mapalgebra_udf(tiles, expression):
     if tiles is None or expression is None:
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    rasters = [
-        bytes(t["raster"]) for t in tiles if t is not None and t["raster"] is not None
-    ]
-    if not rasters:
+    new_bytes = _mapalgebra_bytes(tiles, expression)
+    if new_bytes is None:
         return None
-    new_bytes = mapalgebra_core.mapalgebra(rasters, str(expression))
-    return _serde.build_tile(new_bytes, "GTiff", tiles[0]["cellid"])
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tiles[0]))
 
 
-def rst_mapalgebra(tiles: ColLike, expression: ColLike) -> Column:
+@f.udf(V2_TILE_SCHEMA)
+def _mapalgebra_v2_udf(
+    tiles, expression, virtualize_dir, virtualize_prefix, materialize
+):
+    if tiles is None or expression is None:
+        return None
+    new_bytes = _mapalgebra_bytes(tiles, expression)
+    return _shaped_result_row(
+        new_bytes,
+        _tile_cellid(tiles[0]) if tiles else 0,
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
+
+
+def rst_mapalgebra(
+    tiles: ColLike,
+    expression: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Apply a map-algebra expression across an array of tiles.
 
     Band 1 of each tile (in array order) binds to A, B, C, …; the expression is
@@ -1504,28 +2254,63 @@ def rst_mapalgebra(tiles: ColLike, expression: ColLike) -> Column:
     Args:
         tiles:      Column of ARRAY<tile struct> (e.g. ``f.array("ta", "tb")``).
         expression: Math expression string, e.g. ``"(A - B) / (A + B)"``.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Single-band Float32 tile struct.
     """
     expr_col = f.lit(expression) if isinstance(expression, str) else _col(expression)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _mapalgebra_v2_udf(
+            _col(tiles),
+            expr_col,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _mapalgebra_udf(_col(tiles), expr_col)
 
 
 # --- Tier 1d3: generic named-index dispatcher (rst_index) -------------------
-@f.udf(_serde.TILE_SCHEMA)
-def _index_udf(tile, formula_name, band_map):
-    if tile is None or tile["raster"] is None or formula_name is None:
-        return None
+def _index_bytes(tile, formula_name, band_map):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = indices.index(ds, str(formula_name), dict(band_map or {}))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return indices.index(ds, str(formula_name), dict(band_map or {}))
 
 
-def rst_index(tile: ColLike, formula_name: ColLike, band_map: ColLike) -> Column:
+@f.udf(_serde.TILE_SCHEMA)
+def _index_udf(tile, formula_name, band_map):
+    if _tile_is_empty(tile) or formula_name is None:
+        return None
+    new_bytes = _index_bytes(tile, formula_name, band_map)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _index_v2_udf(
+    tile, formula_name, band_map, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile) or formula_name is None:
+        return None
+    new_bytes = _index_bytes(tile, formula_name, band_map)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_index(
+    tile: ColLike,
+    formula_name: ColLike,
+    band_map: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Compute a named spectral index via a band-map (mirrors ``gbx_rst_index``).
 
     ``formula_name`` (case-insensitive) selects a built-in formula; ``band_map``
@@ -1539,6 +2324,11 @@ def rst_index(tile: ColLike, formula_name: ColLike, band_map: ColLike) -> Column
         tile:         Tile struct column.
         formula_name: Built-in index name (string literal or column).
         band_map:     MAP<STRING, INT> column (e.g. ``map('red', 1, 'nir', 2)``).
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Single-band Float32 tile struct.
@@ -1546,67 +2336,136 @@ def rst_index(tile: ColLike, formula_name: ColLike, band_map: ColLike) -> Column
     name_col = (
         f.lit(formula_name) if isinstance(formula_name, str) else _col(formula_name)
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _index_v2_udf(
+            _col(tile),
+            name_col,
+            _col(band_map),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _index_udf(_col(tile), name_col, _col(band_map))
 
 
 # --- Tier 1d2: spectral index UDFs -----------------------------------------
-@f.udf(_serde.TILE_SCHEMA)
-def _ndvi_udf(tile, red_band, nir_band):
-    if tile is None or tile["raster"] is None:
-        return None
+def _ndvi_bytes(tile, red_band, nir_band):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = indices.ndvi(ds, int(red_band), int(nir_band))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return indices.ndvi(ds, int(red_band), int(nir_band))
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _ndvi_udf(tile, red_band, nir_band):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _ndvi_bytes(tile, red_band, nir_band)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _ndvi_v2_udf(
+    tile, red_band, nir_band, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _ndvi_bytes(tile, red_band, nir_band)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _ndwi_bytes(tile, green_idx, nir_idx):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return indices.ndwi(ds, int(green_idx), int(nir_idx))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _ndwi_udf(tile, green_idx, nir_idx):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
+    new_bytes = _ndwi_bytes(tile, green_idx, nir_idx)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _ndwi_v2_udf(
+    tile, green_idx, nir_idx, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _ndwi_bytes(tile, green_idx, nir_idx)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _nbr_bytes(tile, nir_idx, swir_idx):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = indices.ndwi(ds, int(green_idx), int(nir_idx))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return indices.nbr(ds, int(nir_idx), int(swir_idx))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _nbr_udf(tile, nir_idx, swir_idx):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
+    new_bytes = _nbr_bytes(tile, nir_idx, swir_idx)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _nbr_v2_udf(
+    tile, nir_idx, swir_idx, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _nbr_bytes(tile, nir_idx, swir_idx)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _savi_bytes(tile, red_idx, nir_idx, l_val):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = indices.nbr(ds, int(nir_idx), int(swir_idx))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return indices.savi(ds, int(red_idx), int(nir_idx), l=float(l_val))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _savi_udf(tile, red_idx, nir_idx, l_val):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
+    new_bytes = _savi_bytes(tile, red_idx, nir_idx, l_val)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _savi_v2_udf(
+    tile, red_idx, nir_idx, l_val, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _savi_bytes(tile, red_idx, nir_idx, l_val)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _evi_bytes(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = indices.savi(ds, int(red_idx), int(nir_idx), l=float(l_val))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
-
-
-@f.udf(_serde.TILE_SCHEMA)
-def _evi_udf(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
-    if tile is None or tile["raster"] is None:
-        return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = indices.evi(
+    with ot._open(tile) as ds:
+        return indices.evi(
             ds,
             int(red_idx),
             int(nir_idx),
@@ -1616,30 +2475,144 @@ def _evi_udf(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
             c2=float(c2),
             g=float(g),
         )
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
 
 
-def rst_ndvi(tile: ColLike, red_band: ColLike, nir_band: ColLike) -> Column:
-    """Compute NDVI = (NIR - Red) / (NIR + Red); single-band Float32 tile."""
-    return _ndvi_udf(_col(tile), _col(red_band), _col(nir_band))
+@f.udf(_serde.TILE_SCHEMA)
+def _evi_udf(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _evi_bytes(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-def rst_ndwi(tile: ColLike, green_idx: ColLike, nir_idx: ColLike) -> Column:
-    """Compute NDWI = (Green - NIR) / (Green + NIR); single-band Float32 tile."""
-    return _ndwi_udf(_col(tile), _col(green_idx), _col(nir_idx))
+@f.udf(V2_TILE_SCHEMA)
+def _evi_v2_udf(
+    tile,
+    red_idx,
+    nir_idx,
+    blue_idx,
+    l_val,
+    c1,
+    c2,
+    g,
+    virtualize_dir,
+    virtualize_prefix,
+    materialize,
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _evi_bytes(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
-def rst_nbr(tile: ColLike, nir_idx: ColLike, swir_idx: ColLike) -> Column:
-    """Compute NBR = (NIR - SWIR) / (NIR + SWIR); single-band Float32 tile."""
-    return _nbr_udf(_col(tile), _col(nir_idx), _col(swir_idx))
+def _index_family_wrapper(
+    udf_v1, udf_v2, tile, arg_cols, virtualize_dir, virtualize_prefix, materialize
+):
+    """Shared dispatch for the fixed-index-family wrappers (ndvi/ndwi/nbr)."""
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return udf_v2(
+            _col(tile),
+            *arg_cols,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
+    return udf_v1(_col(tile), *arg_cols)
+
+
+def rst_ndvi(
+    tile: ColLike,
+    red_band: ColLike,
+    nir_band: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NDVI = (NIR - Red) / (NIR + Red); single-band Float32 tile.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
+    return _index_family_wrapper(
+        _ndvi_udf,
+        _ndvi_v2_udf,
+        tile,
+        (_col(red_band), _col(nir_band)),
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
+
+
+def rst_ndwi(
+    tile: ColLike,
+    green_idx: ColLike,
+    nir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NDWI = (Green - NIR) / (Green + NIR); single-band Float32 tile.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
+    return _index_family_wrapper(
+        _ndwi_udf,
+        _ndwi_v2_udf,
+        tile,
+        (_col(green_idx), _col(nir_idx)),
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
+
+
+def rst_nbr(
+    tile: ColLike,
+    nir_idx: ColLike,
+    swir_idx: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Compute NBR = (NIR - SWIR) / (NIR + SWIR); single-band Float32 tile.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
+    return _index_family_wrapper(
+        _nbr_udf,
+        _nbr_v2_udf,
+        tile,
+        (_col(nir_idx), _col(swir_idx)),
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
 
 
 def rst_savi(
-    tile: ColLike, red_idx: ColLike, nir_idx: ColLike, l: ColLike = 0.5  # noqa: E741
+    tile: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
+    l: ColLike = 0.5,  # noqa: E741
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Compute SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L); single-band Float32 tile."""
+    """Compute SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L); single-band Float32 tile.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
     l_col = f.lit(l) if isinstance(l, (int, float)) else _col(l)
-    return _savi_udf(_col(tile), _col(red_idx), _col(nir_idx), l_col)
+    return _index_family_wrapper(
+        _savi_udf,
+        _savi_v2_udf,
+        tile,
+        (_col(red_idx), _col(nir_idx), l_col),
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
 
 
 def rst_evi(  # noqa: E741
@@ -1651,21 +2624,26 @@ def rst_evi(  # noqa: E741
     c1: ColLike = 6.0,
     c2: ColLike = 7.5,
     g: ColLike = 2.5,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Compute EVI = G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L); single-band Float32 tile."""
+    """Compute EVI = G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L); single-band Float32 tile.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
     l_col = f.lit(l) if isinstance(l, (int, float)) else _col(l)
     c1_col = f.lit(c1) if isinstance(c1, (int, float)) else _col(c1)
     c2_col = f.lit(c2) if isinstance(c2, (int, float)) else _col(c2)
     g_col = f.lit(g) if isinstance(g, (int, float)) else _col(g)
-    return _evi_udf(
-        _col(tile),
-        _col(red_idx),
-        _col(nir_idx),
-        _col(blue_idx),
-        l_col,
-        c1_col,
-        c2_col,
-        g_col,
+    return _index_family_wrapper(
+        _evi_udf,
+        _evi_v2_udf,
+        tile,
+        (_col(red_idx), _col(nir_idx), _col(blue_idx), l_col, c1_col, c2_col, g_col),
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
     )
 
 
@@ -1709,26 +2687,61 @@ def rst_rasterize(
     )
 
 
-@f.udf(_serde.TILE_SCHEMA)
-def _fillnodata_udf(tile, max_search_dist, smoothing_iter):
-    if tile is None or tile["raster"] is None:
-        return None
+def _fillnodata_bytes(tile, max_search_dist, smoothing_iter):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = features.fill_nodata(ds, max_search_dist, smoothing_iter)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return features.fill_nodata(ds, max_search_dist, smoothing_iter)
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _fillnodata_udf(tile, max_search_dist, smoothing_iter):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _fillnodata_bytes(tile, max_search_dist, smoothing_iter)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _fillnodata_v2_udf(
+    tile,
+    max_search_dist,
+    smoothing_iter,
+    virtualize_dir,
+    virtualize_prefix,
+    materialize,
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _fillnodata_bytes(tile, max_search_dist, smoothing_iter)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 def rst_fillnodata(
     tile: ColLike,
     max_search_dist: ColLike = None,
     smoothing_iter: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
-    """Interpolate across NoData gaps in the raster."""
+    """Interpolate across NoData gaps in the raster.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
     msd = f.lit(None) if max_search_dist is None else _col(max_search_dist)
     smi = f.lit(None) if smoothing_iter is None else _col(smoothing_iter)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _fillnodata_v2_udf(
+            _col(tile),
+            msd,
+            smi,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _fillnodata_udf(_col(tile), msd, smi)
 
 
@@ -1948,12 +2961,12 @@ class _RstPolygonizeUDTF:
     """
 
     def eval(self, tile, band, connectedness):
-        if tile is None or tile["raster"] is None:
+        if _tile_is_empty(tile):
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with _serde.open_tile(bytes(tile["raster"])) as ds:
+        with ot._open(tile) as ds:
             for g, v in features.polygonize(ds, int(band), int(connectedness)):
                 yield (g, v)
 
@@ -1989,12 +3002,12 @@ class _RstSeparateBandsUDTF:
     """Streaming UDTF: yield one single-band tile struct per band."""
 
     def eval(self, tile):
-        if tile is None or tile["raster"] is None:
+        if _tile_is_empty(tile):
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with _serde.open_tile(bytes(tile["raster"])) as ds:
+        with ot._open(tile) as ds:
             for i, b in enumerate(tiling.iter_separate_bands(ds)):
                 yield _serde.build_tile(b, "GTiff", i)
 
@@ -2021,12 +3034,12 @@ class _RstToOverlappingTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per overlapping window."""
 
     def eval(self, tile, tile_width, tile_height, overlap):
-        if tile is None or tile["raster"] is None:
+        if _tile_is_empty(tile):
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with _serde.open_tile(bytes(tile["raster"])) as ds:
+        with ot._open(tile) as ds:
             for i, b in enumerate(
                 tiling.iter_to_overlapping_tiles(
                     ds, int(tile_width), int(tile_height), int(overlap)
@@ -2040,12 +3053,18 @@ class _RstMakeTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per power-of-4 split tile."""
 
     def eval(self, tile, size_in_mb):
-        if tile is None or tile["raster"] is None:
+        if _tile_is_empty(tile):
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        raster = bytes(tile["raster"])
+        # iter_make_tiles keys the power-of-4 split count on the encoded byte
+        # length, so obtain the materialized bytes (verbatim for a materialized
+        # tile; front-door materialize for a virtual tile) and open those.
+        vt = ot._to_virtual_tile(tile)
+        raster = (
+            ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
+        )
         with _serde.open_tile(raster) as ds:
             # Pass the encoded byte length so the power-of-4 split count matches
             # heavy BalancedSubdivision (which keys on GDAL's in-memory file size).
@@ -2060,7 +3079,7 @@ class _RstH3TessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping H3 cell."""
 
     def eval(self, tile, resolution, mode=None):
-        if tile is None or tile["raster"] is None or resolution is None:
+        if _tile_is_empty(tile) or resolution is None:
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -2071,7 +3090,7 @@ class _RstH3TessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with _serde.open_tile(bytes(tile["raster"])) as ds:
+        with ot._open(tile) as ds:
             for cellid, raster in tessellate_core.iter_tessellate_h3(
                 ds, int(resolution), mode=effective_mode
             ):
@@ -2181,7 +3200,7 @@ class _RstQuadbinTessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping quadbin cell."""
 
     def eval(self, tile, resolution, mode=None):
-        if tile is None or tile["raster"] is None or resolution is None:
+        if _tile_is_empty(tile) or resolution is None:
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -2192,7 +3211,7 @@ class _RstQuadbinTessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with _serde.open_tile(bytes(tile["raster"])) as ds:
+        with ot._open(tile) as ds:
             for cellid, raster in tessellate_core.iter_tessellate_quadbin(
                 ds, int(resolution), mode=effective_mode
             ):
@@ -2214,7 +3233,7 @@ class _RstBngTessellateUDTF:
     """
 
     def eval(self, tile, resolution, mode=None):
-        if tile is None or tile["raster"] is None or resolution is None:
+        if _tile_is_empty(tile) or resolution is None:
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -2226,7 +3245,7 @@ class _RstBngTessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with _serde.open_tile(bytes(tile["raster"])) as ds:
+        with ot._open(tile) as ds:
             for cellid_str, raster in tessellate_core.iter_tessellate_bng(
                 ds, resolution, mode=effective_mode
             ):
@@ -2361,33 +3380,46 @@ def _slope_v2_udf(
     )
 
 
-@f.udf(_serde.TILE_SCHEMA)
-def _aspect_udf(tile, trigonometric, zero_for_flat):
-    if tile is None or tile["raster"] is None:
-        return None
+def _aspect_bytes(tile, trigonometric, zero_for_flat):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = terrain.aspect(
+    with ot._open(tile) as ds:
+        return terrain.aspect(
             ds,
             trigonometric=bool(trigonometric),
             zero_for_flat=bool(zero_for_flat),
         )
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
 
 
 @f.udf(_serde.TILE_SCHEMA)
-def _hillshade_udf(tile, azimuth, altitude, z_factor, xscale, yscale):
-    if tile is None or tile["raster"] is None:
+def _aspect_udf(tile, trigonometric, zero_for_flat):
+    if _tile_is_empty(tile):
         return None
+    new_bytes = _aspect_bytes(tile, trigonometric, zero_for_flat)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _aspect_v2_udf(
+    tile, trigonometric, zero_for_flat, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _aspect_bytes(tile, trigonometric, zero_for_flat)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _hillshade_bytes(tile, azimuth, altitude, z_factor, xscale, yscale):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     xs = None if xscale is None else float(xscale)
     ys = None if yscale is None else float(yscale)
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = terrain.hillshade(
+    with ot._open(tile) as ds:
+        return terrain.hillshade(
             ds,
             azimuth=float(azimuth),
             altitude=float(altitude),
@@ -2395,7 +3427,34 @@ def _hillshade_udf(tile, azimuth, altitude, z_factor, xscale, yscale):
             xscale=xs,
             yscale=ys,
         )
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _hillshade_udf(tile, azimuth, altitude, z_factor, xscale, yscale):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _hillshade_bytes(tile, azimuth, altitude, z_factor, xscale, yscale)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _hillshade_v2_udf(
+    tile,
+    azimuth,
+    altitude,
+    z_factor,
+    xscale,
+    yscale,
+    virtualize_dir,
+    virtualize_prefix,
+    materialize,
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _hillshade_bytes(tile, azimuth, altitude, z_factor, xscale, yscale)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 def rst_slope(
@@ -2454,6 +3513,9 @@ def rst_aspect(
     tile: ColLike,
     trigonometric: ColLike = False,
     zero_for_flat: ColLike = False,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Compute terrain aspect from a single-band DEM tile (Horn's 3x3 method).
 
@@ -2469,6 +3531,11 @@ def rst_aspect(
         tile:           Tile struct column containing a single-band DEM raster.
         trigonometric:  Return math-convention (CCW from east) instead of compass.
         zero_for_flat:  Return 0 for flat cells instead of -9999.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Single-band Float32 tile; nodata = -9999.
@@ -2479,6 +3546,14 @@ def rst_aspect(
     zff_col = (
         f.lit(zero_for_flat) if isinstance(zero_for_flat, bool) else _col(zero_for_flat)
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _aspect_v2_udf(
+            _col(tile),
+            trig_col,
+            zff_col,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _aspect_udf(_col(tile), trig_col, zff_col)
 
 
@@ -2489,6 +3564,9 @@ def rst_hillshade(
     z_factor: ColLike = 1.0,
     xscale: ColLike = None,
     yscale: ColLike = None,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
 ) -> Column:
     """Compute hillshade from a single-band DEM tile (Horn's 3x3 method).
 
@@ -2502,6 +3580,11 @@ def rst_hillshade(
         z_factor:  Vertical exaggeration applied to gradients (default 1.0).
         xscale:    Optional explicit horizontal scale override (with ``yscale``).
         yscale:    Optional explicit vertical scale override (with ``xscale``).
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Single-band Byte (uint8) tile; values 0..255.
@@ -2511,94 +3594,204 @@ def rst_hillshade(
     zf_col = f.lit(z_factor) if isinstance(z_factor, (int, float)) else _col(z_factor)
     xs_col = f.lit(None) if xscale is None else _col(xscale)
     ys_col = f.lit(None) if yscale is None else _col(yscale)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _hillshade_v2_udf(
+            _col(tile),
+            az_col,
+            alt_col,
+            zf_col,
+            xs_col,
+            ys_col,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _hillshade_udf(_col(tile), az_col, alt_col, zf_col, xs_col, ys_col)
 
 
 # --- Tier 1g: terrain ruggedness UDFs (tri, tpi, roughness) -----------------
-@f.udf(_serde.TILE_SCHEMA)
-def _tri_udf(tile):
-    if tile is None or tile["raster"] is None:
-        return None
+def _ruggedness_bytes(tile, core_fn):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = terrain.tri(ds)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return core_fn(ds)
+
+
+@f.udf(_serde.TILE_SCHEMA)
+def _tri_udf(tile):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _ruggedness_bytes(tile, terrain.tri)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _tri_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _ruggedness_bytes(tile, terrain.tri)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _tpi_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env
+    new_bytes = _ruggedness_bytes(tile, terrain.tpi)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = terrain.tpi(ds)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+
+@f.udf(V2_TILE_SCHEMA)
+def _tpi_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _ruggedness_bytes(tile, terrain.tpi)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _roughness_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = terrain.roughness(ds)
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    new_bytes = _ruggedness_bytes(tile, terrain.roughness)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-def rst_tri(tile: ColLike) -> Column:
+@f.udf(V2_TILE_SCHEMA)
+def _roughness_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _ruggedness_bytes(tile, terrain.roughness)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def _ruggedness_wrapper(
+    tile, udf_v1, udf_v2, virtualize_dir, virtualize_prefix, materialize
+):
+    """Shared single-arg (tile-only) ruggedness wrapper w/ force-output dispatch."""
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return udf_v2(
+            _col(tile),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
+    return udf_v1(_col(tile))
+
+
+def rst_tri(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Compute Terrain Ruggedness Index (TRI) from a single-band DEM tile.
 
     TRI = mean of the absolute differences between the center cell and each of
     its 8 neighbours (Wilson 2007).  Flat terrain yields 0.
 
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
+
     Returns:
         Single-band Float32 tile; nodata = -9999.
     """
-    return _tri_udf(_col(tile))
+    return _ruggedness_wrapper(
+        tile, _tri_udf, _tri_v2_udf, virtualize_dir, virtualize_prefix, materialize
+    )
 
 
-def rst_tpi(tile: ColLike) -> Column:
+def rst_tpi(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Compute Topographic Position Index (TPI) from a single-band DEM tile.
 
     TPI = center - mean(8 neighbours).  Positive = local high; negative = local
     low; flat terrain yields 0.
 
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
+
     Returns:
         Single-band Float32 tile; nodata = -9999.
     """
-    return _tpi_udf(_col(tile))
+    return _ruggedness_wrapper(
+        tile, _tpi_udf, _tpi_v2_udf, virtualize_dir, virtualize_prefix, materialize
+    )
 
 
-def rst_roughness(tile: ColLike) -> Column:
+def rst_roughness(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Compute terrain roughness from a single-band DEM tile.
 
     Roughness = max(3x3 window) - min(3x3 window).  Flat terrain yields 0.
 
+    Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
+    result to a durable path and returns a light virtual tile; ``materialize=True``
+    forces raster bytes (mutually exclusive with ``virtualize_dir``).
+
     Returns:
         Single-band Float32 tile; nodata = -9999.
     """
-    return _roughness_udf(_col(tile))
+    return _ruggedness_wrapper(
+        tile,
+        _roughness_udf,
+        _roughness_v2_udf,
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
+
+
+def _color_relief_bytes(tile, color_table_path):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return terrain.color_relief(ds, str(color_table_path))
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _color_relief_udf(tile, color_table_path):
-    if tile is None or tile["raster"] is None or color_table_path is None:
+    if _tile_is_empty(tile) or color_table_path is None:
         return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = terrain.color_relief(ds, str(color_table_path))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    new_bytes = _color_relief_bytes(tile, color_table_path)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-def rst_color_relief(tile: ColLike, color_table_path: ColLike) -> Column:
+@f.udf(V2_TILE_SCHEMA)
+def _color_relief_v2_udf(
+    tile, color_table_path, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile) or color_table_path is None:
+        return None
+    new_bytes = _color_relief_bytes(tile, color_table_path)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_color_relief(
+    tile: ColLike,
+    color_table_path: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Map a single-band DEM through a gdaldem color table to an RGB(A) Byte tile.
 
     Reads a gdaldem-style color file (elevation R G B [A] per line; ``nv`` for
@@ -2608,6 +3801,11 @@ def rst_color_relief(tile: ColLike, color_table_path: ColLike) -> Column:
     Args:
         tile:             Tile struct column containing a single-band DEM raster.
         color_table_path: Column or string path to a gdaldem color file.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         3-band (RGB) or 4-band (RGBA) Byte tile.
@@ -2617,74 +3815,81 @@ def rst_color_relief(tile: ColLike, color_table_path: ColLike) -> Column:
         if isinstance(color_table_path, str)
         else _col(color_table_path)
     )
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _color_relief_v2_udf(
+            _col(tile),
+            ctp,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _color_relief_udf(_col(tile), ctp)
 
 
 # --- Tier 0: accessors ------------------------------------------------------
+# Accessor wrappers pass the FULL tile struct (not the raster subfield) so a
+# virtual tile's ``path`` is reachable; the header/pixel split is decided by the
+# factory that built each ``_u_*`` UDF (open_header vs _open).
 def rst_width(tile: ColLike) -> Column:
-    # HEADER accessor: answers from the file header (open_header), so a virtual
-    # tile is resolved from its ``path`` with NO pixel read. Passes the full
-    # tile struct (not just the raster subfield) so ``path`` is reachable.
-    return _width_header_udf(_col(tile))
+    return _u_width(_col(tile))
 
 
 def rst_height(tile: ColLike) -> Column:
-    return _u_height(_raster_field(_col(tile)))
+    return _u_height(_col(tile))
 
 
 def rst_numbands(tile: ColLike) -> Column:
-    return _u_numbands(_raster_field(_col(tile)))
+    return _u_numbands(_col(tile))
 
 
 def rst_srid(tile: ColLike) -> Column:
-    return _u_srid(_raster_field(_col(tile)))
+    return _u_srid(_col(tile))
 
 
 def rst_pixelwidth(tile: ColLike) -> Column:
-    return _u_pixelwidth(_raster_field(_col(tile)))
+    return _u_pixelwidth(_col(tile))
 
 
 def rst_pixelheight(tile: ColLike) -> Column:
-    return _u_pixelheight(_raster_field(_col(tile)))
+    return _u_pixelheight(_col(tile))
 
 
 def rst_upperleftx(tile: ColLike) -> Column:
-    return _u_upperleftx(_raster_field(_col(tile)))
+    return _u_upperleftx(_col(tile))
 
 
 def rst_upperlefty(tile: ColLike) -> Column:
-    return _u_upperlefty(_raster_field(_col(tile)))
+    return _u_upperlefty(_col(tile))
 
 
 def rst_boundingbox(tile: ColLike) -> Column:
-    return _u_boundingbox(_raster_field(_col(tile)))
+    return _u_boundingbox(_col(tile))
 
 
 def rst_metadata(tile: ColLike) -> Column:
-    return _metadata_udf(_raster_field(_col(tile)))
+    return _metadata_udf(_col(tile))
 
 
 def rst_scalex(tile: ColLike) -> Column:
-    return _u_scalex(_raster_field(_col(tile)))
+    return _u_scalex(_col(tile))
 
 
 def rst_scaley(tile: ColLike) -> Column:
-    return _u_scaley(_raster_field(_col(tile)))
+    return _u_scaley(_col(tile))
 
 
 def rst_isempty(tile: ColLike) -> Column:
     """True if the raster has no size or every band is entirely NoData; BOOLEAN."""
-    return _u_isempty(_raster_field(_col(tile)))
+    return _u_isempty(_col(tile))
 
 
 def rst_type(tile: ColLike) -> Column:
     """Return the GDAL data-type name per band (e.g. ['Float32', 'Float32'])."""
-    return _u_type(_raster_field(_col(tile)))
+    return _u_type(_col(tile))
 
 
 def rst_getnodata(tile: ColLike) -> Column:
     """Return the NoData value per band as an array of doubles, or null if not set."""
-    return _u_getnodata(_raster_field(_col(tile)))
+    return _u_getnodata(_col(tile))
 
 
 # --- Tier 1: coordinate transforms -----------------------------------------
@@ -2730,7 +3935,7 @@ def rst_avg(tile: ColLike) -> Column:
     """
     # PIXEL accessor: needs the window pixels, so it opens via ``_open`` (which
     # materialises a virtual tile's window). Passes the full tile struct.
-    return _avg_pixel_udf(_col(tile))
+    return _u_avg(_col(tile))
 
 
 def rst_min(tile: ColLike) -> Column:
@@ -2738,7 +3943,7 @@ def rst_min(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return NULL.
     """
-    return _u_min(_raster_field(_col(tile)))
+    return _u_min(_col(tile))
 
 
 def rst_max(tile: ColLike) -> Column:
@@ -2746,7 +3951,7 @@ def rst_max(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return NULL.
     """
-    return _u_max(_raster_field(_col(tile)))
+    return _u_max(_col(tile))
 
 
 def rst_median(tile: ColLike) -> Column:
@@ -2754,7 +3959,7 @@ def rst_median(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return NULL.
     """
-    return _u_median(_raster_field(_col(tile)))
+    return _u_median(_col(tile))
 
 
 def rst_pixelcount(tile: ColLike) -> Column:
@@ -2762,7 +3967,7 @@ def rst_pixelcount(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return 0.
     """
-    return _u_pixelcount(_raster_field(_col(tile)))
+    return _u_pixelcount(_col(tile))
 
 
 def rst_memsize(tile: ColLike) -> Column:
@@ -2772,22 +3977,22 @@ def rst_memsize(tile: ColLike) -> Column:
 
 def rst_rotation(tile: ColLike) -> Column:
     """Rotation angle = atan(skewY / scaleX) in radians; DOUBLE."""
-    return _u_rotation(_raster_field(_col(tile)))
+    return _u_rotation(_col(tile))
 
 
 def rst_skewx(tile: ColLike) -> Column:
     """X skew of the geotransform (gt2); DOUBLE."""
-    return _u_skewx(_raster_field(_col(tile)))
+    return _u_skewx(_col(tile))
 
 
 def rst_skewy(tile: ColLike) -> Column:
     """Y skew of the geotransform (gt4); DOUBLE."""
-    return _u_skewy(_raster_field(_col(tile)))
+    return _u_skewy(_col(tile))
 
 
 def rst_format(tile: ColLike) -> Column:
     """GDAL driver short name of the raster (e.g. 'GTiff'); STRING."""
-    return _u_format(_raster_field(_col(tile)))
+    return _u_format(_col(tile))
 
 
 def rst_georeference(tile: ColLike) -> Column:
@@ -2856,19 +4061,42 @@ def rst_histogram(
 
 
 # --- Tier 1d5: derived-band UDF ---------------------------------------------
-@f.udf(_serde.TILE_SCHEMA)
-def _derivedband_udf(tile, pyfunc, func_name):
-    if tile is None or tile["raster"] is None or pyfunc is None or func_name is None:
-        return None
+def _derivedband_bytes(tile, pyfunc, func_name):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        new_bytes = derivedband_core.derivedband(ds, str(pyfunc), str(func_name))
-    return _serde.build_tile(new_bytes, "GTiff", tile["cellid"])
+    with ot._open(tile) as ds:
+        return derivedband_core.derivedband(ds, str(pyfunc), str(func_name))
 
 
-def rst_derivedband(tile_expr: ColLike, pyfunc: ColLike, func_name: ColLike) -> Column:
+@f.udf(_serde.TILE_SCHEMA)
+def _derivedband_udf(tile, pyfunc, func_name):
+    if _tile_is_empty(tile) or pyfunc is None or func_name is None:
+        return None
+    new_bytes = _derivedband_bytes(tile, pyfunc, func_name)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _derivedband_v2_udf(
+    tile, pyfunc, func_name, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile) or pyfunc is None or func_name is None:
+        return None
+    new_bytes = _derivedband_bytes(tile, pyfunc, func_name)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_derivedband(
+    tile_expr: ColLike,
+    pyfunc: ColLike,
+    func_name: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
     """Apply a user-provided Python function to the raster's bands.
 
     pyfunc follows GDAL's VRT pixel-function signature::
@@ -2888,12 +4116,25 @@ def rst_derivedband(tile_expr: ColLike, pyfunc: ColLike, func_name: ColLike) -> 
         tile_expr: Tile struct column.
         pyfunc:    Python source code (string) defining the function.
         func_name: Name of the callable within ``pyfunc``.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            result to a durable path and return a light virtual tile.
+        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
+        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
+            exclusive with ``virtualize_dir``.
 
     Returns:
         Single-band Float64 tile struct.
     """
     pf = f.lit(pyfunc) if isinstance(pyfunc, str) else _col(pyfunc)
     fn = f.lit(func_name) if isinstance(func_name, str) else _col(func_name)
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _derivedband_v2_udf(
+            _col(tile_expr),
+            pf,
+            fn,
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
     return _derivedband_udf(_col(tile_expr), pf, fn)
 
 
@@ -2903,7 +4144,7 @@ def _tilexyz_udf(tile, z, x, y, format, size, resampling, rescale=None):
     # Mirror heavyweight: rst_tilexyz NEVER returns null — a null/empty tile or
     # any hard failure yields a transparent PNG (slippy-map servers need a 200).
     sz = int(size) if size is not None else 256
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return xyz.transparent_png(sz)
     from databricks.labs.gbx.pyrx import _env
 
@@ -2911,7 +4152,7 @@ def _tilexyz_udf(tile, z, x, y, format, size, resampling, rescale=None):
     fmt = str(format) if format is not None else "PNG"
     resamp = str(resampling) if resampling is not None else "bilinear"
     rsc = rescale if rescale is not None else "auto"
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    with ot._open(tile) as ds:
         return xyz.render_tile(ds, int(z), int(x), int(y), fmt, sz, resamp, rescale=rsc)
 
 
@@ -2939,7 +4180,7 @@ class _RstXyzPyramidUDTF:
     ):
         # Defaults make format/size/resampling/rescale optional in the SQL UDTF call
         # (gbx_rst_xyzpyramid(tile, min_z, max_z)). None maps to PNG/256/bilinear/auto.
-        if tile is None or tile["raster"] is None:
+        if _tile_is_empty(tile):
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -2948,7 +4189,7 @@ class _RstXyzPyramidUDTF:
         sz = int(size) if size is not None else 256
         resamp = str(resampling) if resampling is not None else "bilinear"
         rsc = rescale if rescale is not None else "auto"
-        with _serde.open_tile(bytes(tile["raster"])) as ds:
+        with ot._open(tile) as ds:
             for z, x, y, b in xyz.iter_pyramid(
                 ds, int(min_z), int(max_z), fmt, sz, resamp, rsc
             ):
@@ -3081,12 +4322,12 @@ def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
     @udtf(returnType=flat_schema)
     class _RasterToGridUDTF:
         def eval(self, tile, resolution):
-            if tile is None or tile["raster"] is None:
+            if _tile_is_empty(tile):
                 return
             from databricks.labs.gbx.pyrx import _env
 
             _env.configure_gdal_env()
-            with _serde.open_tile(bytes(tile["raster"])) as ds:
+            with ot._open(tile) as ds:
                 bands_data = gridagg.raster_to_grid(ds, resolution, grid, agg)
             # Yield flat rows (band, cellID, measure) — never buffer full nested list.
             # BNG cellIDs are already formatted strings from gridagg; H3/quadbin
@@ -3608,11 +4849,22 @@ def _tile_raster_bytes(row):
 
     Arrow hands a StructType column to a pandas_udf as a Series whose elements
     are dict-like (mapping field name -> value). Returns None for null rows.
+
+    Virtual-aware: a materialized tile yields its bytes verbatim; a virtual tile
+    (raster None, path set) is materialized through the front-door so grouped-agg
+    reducers never silently drop a bytes-free row. A row missing both raster and
+    path is empty -> None.
     """
     if row is None:
         return None
-    raster = row["raster"]
-    return None if raster is None else bytes(raster)
+    d = row.asDict() if hasattr(row, "asDict") else row
+    raster = d["raster"] if "raster" in d else None
+    if raster is not None:
+        return bytes(raster)
+    # No materialized bytes: a virtual tile carries a path -> materialize it.
+    if d.get("path") if hasattr(d, "get") else None:
+        return ot.materialize_to_bytes(ot._to_virtual_tile(row)).raster
+    return None
 
 
 # --- scalar as_tile UDFs: wrap an aggregated BINARY result into a tile struct
@@ -4614,26 +5866,25 @@ def rst_h3_gridspec(
 # column directly without callers needing to extract the raster subfield).
 
 _sql_accessors = {
-    # Virtual-aware (header/pixel front-door); same single-tile arity as the
-    # sql_scalar_udf variants they replace, so the registered signature is
-    # unchanged.
-    "gbx_rst_width": _width_header_udf,
-    "gbx_rst_height": sql_scalar_udf(accessors.height, IntegerType()),
-    "gbx_rst_numbands": sql_scalar_udf(accessors.numbands, IntegerType()),
-    "gbx_rst_srid": sql_scalar_udf(accessors.srid, IntegerType()),
-    "gbx_rst_pixelwidth": sql_scalar_udf(accessors.pixelwidth, DoubleType()),
-    "gbx_rst_pixelheight": sql_scalar_udf(accessors.pixelheight, DoubleType()),
-    "gbx_rst_upperleftx": sql_scalar_udf(accessors.upperleftx, DoubleType()),
-    "gbx_rst_upperlefty": sql_scalar_udf(accessors.upperlefty, DoubleType()),
-    "gbx_rst_scalex": sql_scalar_udf(accessors.scalex, DoubleType()),
-    "gbx_rst_scaley": sql_scalar_udf(accessors.scaley, DoubleType()),
-    "gbx_rst_isempty": sql_scalar_udf(accessors.isempty, BooleanType()),
-    "gbx_rst_boundingbox": sql_scalar_udf(accessors.boundingbox, BinaryType()),
-    "gbx_rst_metadata": sql_scalar_udf(
-        accessors.metadata, MapType(StringType(), StringType())
-    ),
-    "gbx_rst_type": sql_scalar_udf(accessors.type, ArrayType(StringType())),
-    "gbx_rst_getnodata": sql_scalar_udf(accessors.getnodata, ArrayType(DoubleType())),
+    # Virtual-aware (header/pixel front-door). Every accessor is now the same
+    # struct-accepting virtual-aware UDF the Python Column API uses (single-tile
+    # arity, so the registered signature is unchanged). Header-only accessors go
+    # through open_header (no pixel read); pixel accessors through _open.
+    "gbx_rst_width": _u_width,
+    "gbx_rst_height": _u_height,
+    "gbx_rst_numbands": _u_numbands,
+    "gbx_rst_srid": _u_srid,
+    "gbx_rst_pixelwidth": _u_pixelwidth,
+    "gbx_rst_pixelheight": _u_pixelheight,
+    "gbx_rst_upperleftx": _u_upperleftx,
+    "gbx_rst_upperlefty": _u_upperlefty,
+    "gbx_rst_scalex": _u_scalex,
+    "gbx_rst_scaley": _u_scaley,
+    "gbx_rst_isempty": _u_isempty,
+    "gbx_rst_boundingbox": _u_boundingbox,
+    "gbx_rst_metadata": _metadata_udf,
+    "gbx_rst_type": _u_type,
+    "gbx_rst_getnodata": _u_getnodata,
     "gbx_rst_rastertoworldcoordx": sql_scalar_udf2(
         coords.raster_to_world_x, DoubleType()
     ),
@@ -4647,15 +5898,15 @@ _sql_accessors = {
         coords.world_to_raster_y, IntegerType()
     ),
     # Group 1 per-band statistics & scalar accessors (struct-accepting).
-    "gbx_rst_avg": _avg_pixel_udf,
-    "gbx_rst_min": sql_scalar_udf(accessors.minimum, ArrayType(DoubleType())),
-    "gbx_rst_max": sql_scalar_udf(accessors.maximum, ArrayType(DoubleType())),
-    "gbx_rst_median": sql_scalar_udf(accessors.median, ArrayType(DoubleType())),
-    "gbx_rst_pixelcount": sql_scalar_udf(accessors.pixelcount, ArrayType(LongType())),
-    "gbx_rst_rotation": sql_scalar_udf(accessors.rotation, DoubleType()),
-    "gbx_rst_skewx": sql_scalar_udf(accessors.skewx, DoubleType()),
-    "gbx_rst_skewy": sql_scalar_udf(accessors.skewy, DoubleType()),
-    "gbx_rst_format": sql_scalar_udf(accessors.format, StringType()),
+    "gbx_rst_avg": _u_avg,
+    "gbx_rst_min": _u_min,
+    "gbx_rst_max": _u_max,
+    "gbx_rst_median": _u_median,
+    "gbx_rst_pixelcount": _u_pixelcount,
+    "gbx_rst_rotation": _u_rotation,
+    "gbx_rst_skewx": _u_skewx,
+    "gbx_rst_skewy": _u_skewy,
+    "gbx_rst_format": _u_format,
     # memsize reads the raster byte length straight off the tile struct.
     "gbx_rst_memsize": _memsize_struct_udf,
     "gbx_rst_georeference": _georeference_udf,

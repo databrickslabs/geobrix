@@ -107,3 +107,45 @@ Across the benchmark suite the two tiers agree within tolerance on **115 of 116*
 ## Function availability
 
 See the [Raster Functions](./raster-functions) availability section for what each tier provides.
+
+## Virtual tiles and the light→heavy bridge {#light-heavy-bridge}
+
+The **lightweight tier** introduces a bytes-free tile representation called a **virtual tile** — a
+reference to a source path and a pixel window, rather than a self-contained in-memory raster payload.
+Virtual tiles are a lightweight-tier concept: they are created, consumed, and manipulated entirely
+within the Python worker. The heavyweight tier does not support them — passing a virtual tile to a
+heavyweight function raises an error, because the JVM cannot lazily read from a Unity Catalog Volume
+path the way a Python worker can.
+
+**If you get an error passing a tile to a heavyweight function**, the tile is likely virtual. You have
+two options:
+
+- **Stay in the lightweight tier.** For most raster work, `pyrx` covers the full function set and runs
+  everywhere (serverless, standard clusters, ARM). If you don't specifically need the JVM execution
+  model, there is no reason to cross to heavy.
+- **Materialize before crossing.** If you do need a heavyweight function: call a tile-returning
+  lightweight function with `materialize=True` to produce a bytes-carrying tile, or write via any
+  raster writer (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) and read the output back — every writer is a
+  materialization boundary.
+
+The lightweight-tier `rst_*` functions accept three optional force-output params (`virtualize_dir`,
+`virtualize_prefix`, `materialize`) to control this; the heavyweight tier has none of them. See
+[Virtual-tile force-output params](./raster-functions#virtual-tile-overrides) for the full param
+reference.
+
+### Virtual↔materialized advice {#virtual-materialized-advice}
+
+When working with virtual tiles in the lightweight tier, the key question is: **which operations need
+pixels, and which can stay lazy?**
+
+| Operation type | Behavior under auto | Notes |
+|---|---|---|
+| **Metadata accessors** (`rst_width`, `rst_height`, `rst_srid`, `rst_boundingbox`, `rst_format`, `rst_georeference`, `rst_metadata`, `rst_rotation`, `rst_scalex`, `rst_scaley`, `rst_skewx`, `rst_skewy`, `rst_numbands`, `rst_type`, `rst_getnodata`, `rst_upperleftx`, `rst_upperlefty`) | Free on virtual tiles — no pixels read | The header is opened lazily; `.read()` is never called |
+| **Pixel accessors / stats** (`rst_avg`, `rst_min`, `rst_max`, `rst_median`, `rst_pixelcount`, `rst_summary`, `rst_histogram`, `rst_sample`, `rst_isempty`) | Read the window (transient materialize), return scalars/arrays | Pixels are materialized for the computation only; no bytes in the output row |
+| **Deferrable tile ops** (`rst_clip`, `rst_setsrid`, transform-intent) | Stay virtual when input is virtual | Chain them for free — no pixels touched |
+| **Pixel-producing tile ops** (slope, aspect, hillshade, terrain, focal, mapalgebra, spectral indices, rasterize, resample, …) | Materialize the window and return bytes | Pass `virtualize_dir` to write the computed result to a durable path and return a light virtual row instead |
+| **Writers** (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) | Always a materialization boundary | A virtual DataFrame is directly writable — writers auto-materialize; `cog_gbx` converts whole-file virtual tiles path-direct (no bytes round-trip) |
+| **Crossing to heavy** | Error if tile is virtual | Heavy raises an error on a virtual tile — stay in light (recommended), or materialize first (`materialize=True`, or write + read back) before handing off |
+
+**Short rule:** chain deferrable ops as long as you like; when you need pixels (or need to cross to
+heavy), materialize at that point — not before.

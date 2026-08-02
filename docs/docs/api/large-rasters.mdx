@@ -181,11 +181,34 @@ exist, and why increasing worker memory does not help large-file preparation.
 
 Once a source is mastered as a COG, reads become cheap: a COG-aware reader can
 fetch any window, at any zoom level, with a small number of ranged reads instead
-of loading the whole image. GeoBrix's windowed-read path and its virtual-tile
-model — carrying a reference to a source and window through a pipeline and
-materializing pixels only when an operation needs them — are covered in a later
-release, along with the tile representation that supports them. Prepare your
-COGs now; the reading side builds on exactly the files this page produces.
+of loading the whole image.
+
+GeoBrix's `cog_gbx` reader emits **virtual tiles** — each row carries a path and
+a pixel window instead of in-memory bytes. Downstream `rst_*` functions in the
+lightweight tier consume virtual tiles directly: metadata accessors answer from
+the header (no pixels read), deferrable ops like `rst_clip` stay virtual, and
+pixel-computing ops materialize only the window they need. This keeps memory
+bounded when fanning a large raster into many pieces: no executor ever holds the
+whole image.
+
+The lightweight-tier force-output params (`virtualize_dir`, `virtualize_prefix`,
+`materialize`) let you control when and how results are written back to durable
+storage or explicitly converted to bytes. See
+[Virtual-tile force-output params](./raster-functions#virtual-tile-overrides) on
+the function reference page, and the
+[Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice)
+section on the tier comparison page for a full breakdown of which operations are
+free on virtual tiles and which materialize.
+
+:::note Deeper Virtual Tiles coverage coming
+A dedicated Virtual Tiles page covering the full reading model, advanced chaining
+patterns, and worked examples is in progress. Prepare your COGs now — the reading
+side builds on exactly the files this page produces.
+:::
+
+See the [`cog_gbx` reader](../readers/cog) for the windowed-read options
+(tileSize, overlapPercent, clipPolygon) and the `virtualTiles` read option that
+controls whether the reader emits virtual or materialized rows.
 
 ## See also
 

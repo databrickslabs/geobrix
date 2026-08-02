@@ -1,0 +1,24 @@
+:::info Virtual-tile force-output params — lightweight tier only
+
+Tile-returning `rst_*` functions in the **lightweight tier** accept three optional keyword arguments
+that control whether the produced tile carries raster bytes or a **bytes-free virtual reference**
+(a path + window instead of in-memory pixels):
+
+| Argument | Type | Meaning |
+|---|---|---|
+| `virtualize_dir` | `str` (durable path) | Write the produced tile to `<dir>/[<prefix>_]<name>.tif` and return a **virtual tile** (path + window, no bytes). The directory must be a durable, executor-readable location such as a Unity Catalog Volume path. Cannot be set together with `materialize=True`. |
+| `virtualize_prefix` | `str` | Optional filename prefix added before the provenance-based filename — use this to deconflict when two different function outputs share the same `virtualize_dir`. |
+| `materialize` | `bool` | `True` — ensure the produced tile carries bytes (materializes a virtual tile). `False` — no-op. Default (unset) — auto: deferrable ops stay virtual if the input was virtual; pixel-computing ops materialize. |
+
+**Default (auto) behavior:** chain deferrable operations (clip, setsrid, transform-intent) for free —
+they stay virtual when their input is virtual. Pixel-computing operations (slope, focal, mapalgebra,
+spectral indices, …) materialize the window and return bytes. Pass `virtualize_dir` to re-externalize
+the computed result as a light virtual row.
+
+**Heavy tier has none of these params.** The heavyweight (`rasterx`) tier does not accept
+`virtualize_dir`, `virtualize_prefix`, or `materialize`, and raises an error when handed a virtual
+tile. For most raster work the lightweight tier covers the full function set and is the recommended
+default. If you specifically need a heavyweight function, materialize the tile first with
+`materialize=True` (or write via a writer, which always materializes) before passing it. See
+[Virtual tiles and the light→heavy bridge](./execution-tiers#light-heavy-bridge) for details.
+:::

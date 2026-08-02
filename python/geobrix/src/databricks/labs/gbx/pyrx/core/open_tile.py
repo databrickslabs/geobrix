@@ -24,6 +24,8 @@ from typing import Iterator, Optional, Tuple
 
 import numpy as np
 import rasterio
+import rasterio.windows
+from rasterio.coords import BoundingBox
 from rasterio.io import DatasetReader, MemoryFile
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
@@ -197,6 +199,69 @@ def _open_all(tiles):
         yield [stack.enter_context(_open(t)) for t in tiles]
 
 
+class _WindowHeaderView:
+    """Read-free header view of a source dataset restricted to a sub-window.
+
+    Presents the window-varying fields (``width``, ``height``, ``transform``,
+    ``bounds``, ``profile``) as the sub-window's values, computed purely from the
+    source header + the window offset/size (no pixel I/O). Every other attribute
+    (``crs``, ``count``, ``nodata``, ``dtypes``, ``driver``, ``tags()``,
+    ``subdatasets``, ...) proxies straight through to the source dataset via
+    ``__getattr__`` — those are window-invariant. ``read`` is intentionally NOT
+    proxied: this view exists precisely to avoid materialising pixels.
+    """
+
+    def __init__(self, src, window: Window):
+        self._src = src
+        self._window = window
+        self._transform = src.window_transform(window)
+        # Bounds of the window in the source CRS, derived from the source
+        # transform + window (no read).
+        left, bottom, right, top = rasterio.windows.bounds(window, src.transform)
+        self._bounds = BoundingBox(left, bottom, right, top)
+
+    @property
+    def width(self) -> int:
+        return int(self._window.width)
+
+    @property
+    def height(self) -> int:
+        return int(self._window.height)
+
+    @property
+    def transform(self):
+        return self._transform
+
+    @property
+    def bounds(self) -> BoundingBox:
+        return self._bounds
+
+    @property
+    def profile(self):
+        prof = self._src.profile.copy()
+        prof.update(
+            width=int(self._window.width),
+            height=int(self._window.height),
+            transform=self._transform,
+        )
+        return prof
+
+    def __getattr__(self, name):
+        # Window-invariant attributes/methods proxy to the source dataset. Guard
+        # against read to keep the view header-only.
+        if name == "read":
+            raise AttributeError(
+                "_WindowHeaderView is header-only; pixel reads are not supported"
+            )
+        return getattr(self._src, name)
+
+
+def _is_full_extent(window, src) -> bool:
+    """True if ``window`` (col, row, w, h) covers the full source extent."""
+    c, r, w, h = window
+    return c == 0 and r == 0 and w == src.width and h == src.height
+
+
 @contextmanager
 def open_header(tile) -> Iterator[DatasetReader]:
     """Context manager yielding an open dataset for **header/metadata access only**.
@@ -211,9 +276,14 @@ def open_header(tile) -> Iterator[DatasetReader]:
       MemoryFile path (``_open``).  The bytes already contain the full result so
       header is trivially available; no window read is performed by this call.
     - virtual dict / v2 struct / VirtualTile (``raster`` None) → stage the path
-      local if needed (e.g. /Volumes FUSE), open the **full source** file with a
-      plain ``rasterio.open`` (lazy, no pixel I/O), yield the dataset.  The
-      ExitStack cleans up the staged temp on exit.
+      local if needed (e.g. /Volumes FUSE), open the source file with a plain
+      ``rasterio.open`` (lazy, no pixel I/O). If the tile carries a sub-window
+      (present AND not the full source extent), yield a read-free
+      ``_WindowHeaderView`` whose ``width``/``height``/``transform``/``bounds``/
+      ``profile`` reflect the WINDOW (consistent with the pixel path and the
+      materialized-equivalent tile) while other fields proxy the source. For a
+      whole-file window (None or == full extent) yield the source dataset
+      directly. The ExitStack cleans up the staged temp on exit.
     """
     vt = _to_virtual_tile(tile)
 
@@ -223,13 +293,19 @@ def open_header(tile) -> Iterator[DatasetReader]:
             yield ds
         return
 
-    # Virtual path: open the full source header — no window slicing, no read.
+    # Virtual path: open the source header — no window read in either branch.
     with ExitStack() as stack:
         local_path, is_temp = _stage_local_if_needed(vt.path)
         if is_temp:
             stack.callback(_safe_remove, local_path)
-        ds = stack.enter_context(rasterio.open(local_path))
-        yield ds
+        src = stack.enter_context(rasterio.open(local_path))
+        if vt.window is None or _is_full_extent(vt.window, src):
+            # Whole-file: full-source header is the answer.
+            yield src
+        else:
+            # Sub-window: present the window's dims/extent, header-only.
+            c, r, w, h = vt.window
+            yield _WindowHeaderView(src, Window(c, r, w, h))
 
 
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:

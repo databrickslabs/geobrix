@@ -84,11 +84,19 @@ object RST_ErrorHandler extends Logging {
         }
     }
 
-    /** Runs eval; on exception returns null or throws if ExpressionConfig.crashExpressions is true. */
+    /** Runs eval; on exception returns null or throws if ExpressionConfig.crashExpressions is true.
+      *
+      * IllegalArgumentExceptions are always re-thrown regardless of crashExpressions: they
+      * represent programmer errors (e.g. passing a virtual tile to a heavyweight function) that
+      * must be surfaced as hard failures, not silently swallowed as null results.
+      */
     def safeEval(eval: () => Any, row: InternalRow, rasterType: DataType, conf: UTF8String): Any = {
         try {
             eval()
         } catch {
+            case e: IllegalArgumentException =>
+                // Programming errors (wrong API usage, virtual tile guard) must propagate.
+                throw e
             case t: Throwable =>
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 if (exprConf.crashExpressions) {

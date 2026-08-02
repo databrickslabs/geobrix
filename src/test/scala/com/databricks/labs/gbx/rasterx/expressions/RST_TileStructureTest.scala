@@ -1,11 +1,14 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.rasterx.functions
+import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.catalyst.expressions.BoundReference
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions.{col, explode, lit}
 import org.apache.spark.sql.test.SilentSparkSession
+import org.apache.spark.sql.types.{LongType, MapType, StringType, StructField, StructType}
 import org.scalatest.matchers.should.Matchers._
 
 /**
@@ -213,6 +216,17 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
 
         val result = gTiffTiles.collect()
         result.length should be(2)
+    }
+
+    test("rasterType rejects a v1 String path-tile schema") {
+        val v1path = StructType(Seq(
+            StructField("cellid", LongType, nullable = false),
+            StructField("raster", StringType, nullable = false),
+            StructField("metadata", MapType(StringType, StringType), nullable = true)))
+        val ex = intercept[Exception](
+            RST_ExpressionUtil.rasterType(BoundReference(0, v1path, nullable = true)))
+        assert(ex.getMessage.toLowerCase.contains("path-tile") ||
+               ex.getMessage.toLowerCase.contains("materialize"))
     }
 
     test("Use sibling path column for conditional processing") {

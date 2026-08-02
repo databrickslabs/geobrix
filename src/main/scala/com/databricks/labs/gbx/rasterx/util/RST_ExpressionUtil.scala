@@ -13,12 +13,24 @@ import scala.util.Try
 /**
   * Helpers for RasterX expressions: tile struct type, GDAL/checkpoint init, and iterator cleanup.
   *
-  * Tile struct is (cellid, raster, metadata); raster type is String (path) or Binary (content).
+  * Tile struct is (cellid, raster, metadata); raster type is Binary (content only; String path-tiles are rejected).
   */
 object RST_ExpressionUtil {
 
-    /** DataType of the raster field (second field) of the tile struct for the given tile expression. */
-    def rasterType(tileExpr: Expression): DataType = tileExpr.dataType.asInstanceOf[StructType].fields(1).dataType
+    /** DataType of the raster field (second field) of the tile struct for the given tile expression.
+      * Throws [[IllegalArgumentException]] if the raster field is StringType (v1 path-tile), which
+      * is no longer supported by the heavyweight tier.
+      */
+    def rasterType(tileExpr: Expression): DataType = {
+        val rdt = tileExpr.dataType.asInstanceOf[StructType].fields(1).dataType
+        rdt match {
+            case StringType => throw new IllegalArgumentException(
+                "Raster path-tiles (raster field as a String path) are no longer supported by the " +
+                "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
+                "(materialize=True, or write + read back) before passing it to a heavyweight function.")
+            case other => other
+        }
+    }
 
     /**
       * Raster DataType inside an `ARRAY<tile>` expression, with a friendly
@@ -50,7 +62,13 @@ object RST_ExpressionUtil {
         aggHint: Option[String] = None
     ): DataType = tileExpr.dataType match {
         case ArrayType(StructType(fields), _) if fields.length >= 2 =>
-            fields(1).dataType
+            fields(1).dataType match {
+                case StringType => throw new IllegalArgumentException(
+                    "Raster path-tiles (raster field as a String path) are no longer supported by the " +
+                    "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
+                    "(materialize=True, or write + read back) before passing it to a heavyweight function.")
+                case other => other
+            }
         case other =>
             val aggSuggestion = aggHint
                 .map(name => s" To aggregate the column across rows, use $name(tile).")

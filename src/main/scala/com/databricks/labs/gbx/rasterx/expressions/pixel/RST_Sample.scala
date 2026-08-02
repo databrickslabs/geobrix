@@ -29,12 +29,11 @@ case class RST_Sample(
     geomExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, geomExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Sample.name
-    override def replacement: Expression = rstInvoke(RST_Sample, rasterType)
+    override def replacement: Expression = invoke(RST_Sample)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
 
@@ -42,10 +41,8 @@ case class RST_Sample(
 
 object RST_Sample extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, geom: Any, conf: UTF8String): ArrayData =
+    def eval(row: InternalRow, geom: Any, conf: UTF8String): ArrayData =
         doInvoke(row, geom, conf, BinaryType)
-    def evalPath(row: InternalRow, geom: Any, conf: UTF8String): ArrayData =
-        doInvoke(row, geom, conf, StringType)
 
     private def doInvoke(row: InternalRow, geom: Any, conf: UTF8String, dt: DataType): ArrayData =
         Option(

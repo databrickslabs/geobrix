@@ -7,7 +7,7 @@ import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUti
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
+import org.apache.spark.sql.types.{BinaryType, DataType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
@@ -16,13 +16,11 @@ case class RST_InitNoData(
     tileExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_InitNoData.name
-    override def replacement: Expression = rstInvoke(RST_InitNoData, rasterType)
+    override def replacement: Expression = invoke(RST_InitNoData)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -30,8 +28,7 @@ case class RST_InitNoData(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_InitNoData extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): InternalRow = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): InternalRow = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): InternalRow = eval(row, conf, BinaryType)
 
     def eval(row: InternalRow, conf: UTF8String, rdt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

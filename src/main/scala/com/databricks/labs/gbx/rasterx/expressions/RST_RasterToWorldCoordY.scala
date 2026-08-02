@@ -17,13 +17,11 @@ case class RST_RasterToWorldCoordY(
     y: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, x, y, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_RasterToWorldCoordY.name
-    override def replacement: Expression = rstInvoke(RST_RasterToWorldCoordY, rasterType)
+    override def replacement: Expression = invoke(RST_RasterToWorldCoordY)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }
@@ -31,8 +29,7 @@ case class RST_RasterToWorldCoordY(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_RasterToWorldCoordY extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, x: Int, y: Int, conf: UTF8String): Double = eval(row, x, y, conf, StringType)
-    def evalBinary(row: InternalRow, x: Int, y: Int, conf: UTF8String): Double = eval(row, x, y, conf, BinaryType)
+    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String): Double = eval(row, x, y, conf, BinaryType)
 
     def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String, rdt: DataType): Double =
         Option(

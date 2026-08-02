@@ -14,13 +14,11 @@ case class RST_Format(
     tileExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = StringType
     override def nullable: Boolean = true
     override def prettyName: String = RST_Format.name
-    override def replacement: Expression = rstInvoke(RST_Format, rasterType)
+    override def replacement: Expression = invoke(RST_Format)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -28,8 +26,7 @@ case class RST_Format(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Format extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, conf: UTF8String): UTF8String = eval(row, conf, BinaryType)
-    def evalPath(row: InternalRow, conf: UTF8String): UTF8String = eval(row, conf, StringType)
+    def eval(row: InternalRow, conf: UTF8String): UTF8String = eval(row, conf, BinaryType)
 
     private def eval(row: InternalRow, conf: UTF8String, dt: DataType): UTF8String =
         Option(

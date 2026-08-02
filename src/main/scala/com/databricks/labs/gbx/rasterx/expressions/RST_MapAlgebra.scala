@@ -30,7 +30,7 @@ case class RST_MapAlgebra(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_MapAlgebra.name
-    override def replacement: Expression = rstInvoke(RST_MapAlgebra, rasterType)
+    override def replacement: Expression = invoke(RST_MapAlgebra)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -38,23 +38,8 @@ case class RST_MapAlgebra(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MapAlgebra extends WithExpressionInfo {
 
-    def evalPath(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
-        RST_ErrorHandler.safeEval(
-          () => {
-              val exprConf = ExpressionConfig.fromB64(conf.toString)
-              RST_ExpressionUtil.init(exprConf)
-              val dss = RasterSerializationUtil.arrayToTiles(array, StringType)
-              val (result, mtd) = execute(dss.map(_._2), dss.head._3, spec.toString)
-              dss.foreach(ds => RasterDriver.releaseDataset(ds._2))
-              val res = RasterSerializationUtil.tileToRow((dss.head._1, result, mtd), StringType, exprConf.hConf)
-              RasterDriver.releaseDataset(result)
-              res
-          },
-          array,
-          StringType
-        )
 
-    def evalBinary(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
+    def eval(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)

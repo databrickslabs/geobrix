@@ -27,14 +27,13 @@ case class RST_Slope(
     scaleExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, unitExpr, scaleExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals (e.g. ``1.0``) coerce to Double cleanly.
     override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, StringType, DoubleType, StringType)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Slope.name
-    override def replacement: Expression = rstInvoke(RST_Slope, rasterType)
+    override def replacement: Expression = invoke(RST_Slope)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -42,10 +41,8 @@ case class RST_Slope(
 
 object RST_Slope extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, unit: UTF8String, scale: Double, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, unit: UTF8String, scale: Double, conf: UTF8String): InternalRow =
         runDispatch(row, unit, scale, conf, BinaryType)
-    def evalPath(row: InternalRow, unit: UTF8String, scale: Double, conf: UTF8String): InternalRow =
-        runDispatch(row, unit, scale, conf, StringType)
 
     private def runDispatch(row: InternalRow, unit: UTF8String, scale: Double, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

@@ -54,13 +54,12 @@ case class RST_TileXYZ(
     rescaleExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] =
         Seq(tileExpr, zExpr, xExpr, yExpr, formatExpr, sizeExpr, resamplingExpr, rescaleExpr, ExpressionConfigExpr())
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = RST_TileXYZ.name
-    override def replacement: Expression = rstInvoke(RST_TileXYZ, rasterType)
+    override def replacement: Expression = invoke(RST_TileXYZ)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7))
 }
@@ -80,14 +79,10 @@ object RST_TileXYZ extends WithExpressionInfo {
     // Spark sends Python ints as LongType - we accept both Int and Long overloads. Int
     // overloads are needed for SQL literal default args; Long overloads cover the
     // PySpark-from-notebook case (Wave 3 found this in Quadbin_PointAsCell).
-    def evalBinary(row: InternalRow, z: Int, x: Int, y: Int, format: UTF8String, size: Int, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
+    def eval(row: InternalRow, z: Int, x: Int, y: Int, format: UTF8String, size: Int, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
         doInvoke(row, z, x, y, format, size, resampling, rescale, conf, BinaryType)
-    def evalBinary(row: InternalRow, z: Long, x: Long, y: Long, format: UTF8String, size: Long, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
+    def eval(row: InternalRow, z: Long, x: Long, y: Long, format: UTF8String, size: Long, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
         doInvoke(row, z.toInt, x.toInt, y.toInt, format, size.toInt, resampling, rescale, conf, BinaryType)
-    def evalPath(row: InternalRow, z: Int, x: Int, y: Int, format: UTF8String, size: Int, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
-        doInvoke(row, z, x, y, format, size, resampling, rescale, conf, StringType)
-    def evalPath(row: InternalRow, z: Long, x: Long, y: Long, format: UTF8String, size: Long, resampling: UTF8String, rescale: UTF8String, conf: UTF8String): Array[Byte] =
-        doInvoke(row, z.toInt, x.toInt, y.toInt, format, size.toInt, resampling, rescale, conf, StringType)
 
     private def doInvoke(
         row: InternalRow,

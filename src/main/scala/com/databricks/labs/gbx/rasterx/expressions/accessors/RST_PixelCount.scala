@@ -16,13 +16,11 @@ case class RST_PixelCount(
     tileExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(LongType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_PixelCount.name
-    override def replacement: Expression = rstInvoke(RST_PixelCount, rasterType)
+    override def replacement: Expression = invoke(RST_PixelCount)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -30,8 +28,7 @@ case class RST_PixelCount(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_PixelCount extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, BinaryType)
-    def evalPath(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, StringType)
+    def eval(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, BinaryType)
 
     private def eval(row: InternalRow, conf: UTF8String, dt: DataType): ArrayData =
         Option(

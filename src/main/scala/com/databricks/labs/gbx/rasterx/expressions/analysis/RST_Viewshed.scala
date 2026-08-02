@@ -37,7 +37,6 @@ case class RST_Viewshed(
     maxDistanceExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
         tileExpr, observerGeomExpr, observerHeightExpr, targetHeightExpr, maxDistanceExpr,
         ExpressionConfigExpr()
@@ -50,7 +49,7 @@ case class RST_Viewshed(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Viewshed.name
-    override def replacement: Expression = rstInvoke(RST_Viewshed, rasterType)
+    override def replacement: Expression = invoke(RST_Viewshed)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4))
 
@@ -58,14 +57,10 @@ case class RST_Viewshed(
 
 object RST_Viewshed extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, geom: Any, observerHeight: Double, targetHeight: Double,
         maxDistance: Any, conf: UTF8String
     ): InternalRow = runDispatch(row, geom, observerHeight, targetHeight, maxDistance, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, geom: Any, observerHeight: Double, targetHeight: Double,
-        maxDistance: Any, conf: UTF8String
-    ): InternalRow = runDispatch(row, geom, observerHeight, targetHeight, maxDistance, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, geomArg: Any, observerHeight: Double, targetHeight: Double,

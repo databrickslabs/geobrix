@@ -33,7 +33,6 @@ case class RST_Polygonize(
     connectednessExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] =
         Seq(tileExpr, bandExpr, connectednessExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(
@@ -44,7 +43,7 @@ case class RST_Polygonize(
     )
     override def nullable: Boolean = true
     override def prettyName: String = RST_Polygonize.name
-    override def replacement: Expression = rstInvoke(RST_Polygonize, rasterType)
+    override def replacement: Expression = invoke(RST_Polygonize)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -57,14 +56,10 @@ case class RST_Polygonize(
  */
 object RST_Polygonize extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, band: Int, connectedness: Int, conf: UTF8String): ArrayData =
+    def eval(row: InternalRow, band: Int, connectedness: Int, conf: UTF8String): ArrayData =
         doInvoke(row, band, connectedness, conf, BinaryType)
-    def evalBinary(row: InternalRow, band: Long, connectedness: Long, conf: UTF8String): ArrayData =
+    def eval(row: InternalRow, band: Long, connectedness: Long, conf: UTF8String): ArrayData =
         doInvoke(row, band.toInt, connectedness.toInt, conf, BinaryType)
-    def evalPath(row: InternalRow, band: Int, connectedness: Int, conf: UTF8String): ArrayData =
-        doInvoke(row, band, connectedness, conf, StringType)
-    def evalPath(row: InternalRow, band: Long, connectedness: Long, conf: UTF8String): ArrayData =
-        doInvoke(row, band.toInt, connectedness.toInt, conf, StringType)
 
     private def doInvoke(
         row: InternalRow, band: Int, connectedness: Int,

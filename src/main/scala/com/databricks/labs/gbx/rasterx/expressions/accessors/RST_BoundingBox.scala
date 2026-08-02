@@ -18,13 +18,11 @@ case class RST_BoundingBox(
     tileExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = RST_BoundingBox.name
-    override def replacement: Expression = rstInvoke(RST_BoundingBox, rasterType)
+    override def replacement: Expression = invoke(RST_BoundingBox)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -32,8 +30,7 @@ case class RST_BoundingBox(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_BoundingBox extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): Array[Byte] = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): Array[Byte] = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): Array[Byte] = eval(row, conf, BinaryType)
 
     def eval(row: InternalRow, conf: UTF8String, dt: DataType): Array[Byte] =
         Option(

@@ -27,14 +27,13 @@ case class RST_SetSrid(
     sridExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, sridExpr, ExpressionConfigExpr())
     // Pin srid as IntegerType so SQL integer literals coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, IntegerType, StringType)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_SetSrid.name
-    override def replacement: Expression = rstInvoke(RST_SetSrid, rasterType)
+    override def replacement: Expression = invoke(RST_SetSrid)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
 
@@ -42,16 +41,12 @@ case class RST_SetSrid(
 
 object RST_SetSrid extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, srid: Int, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, srid: Int, conf: UTF8String): InternalRow =
         runDispatch(row, srid, conf, BinaryType)
-    def evalPath(row: InternalRow, srid: Int, conf: UTF8String): InternalRow =
-        runDispatch(row, srid, conf, StringType)
     // PySpark commonly passes integer literals as Long; accept that without an
     // input-type coercion failure.
-    def evalBinary (row: InternalRow, srid: Long, conf: UTF8String): InternalRow =
+    def eval (row: InternalRow, srid: Long, conf: UTF8String): InternalRow =
         runDispatch(row, srid.toInt, conf, BinaryType)
-    def evalPath (row: InternalRow, srid: Long, conf: UTF8String): InternalRow =
-        runDispatch(row, srid.toInt, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, srid: Int, conf: UTF8String, dt: DataType

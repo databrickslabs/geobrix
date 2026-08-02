@@ -25,7 +25,7 @@ case class RST_FromBands(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_FromBands.name
-    override def replacement: Expression = rstInvoke(RST_FromBands, rasterType)
+    override def replacement: Expression = invoke(RST_FromBands)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -33,8 +33,7 @@ case class RST_FromBands(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_FromBands extends WithExpressionInfo {
 
-    def evalBinary(row: ArrayData, conf: UTF8String): InternalRow = eval(row, conf, BinaryType)
-    def evalPath(row: ArrayData, conf: UTF8String): InternalRow = eval(row, conf, StringType)
+    def eval(row: ArrayData, conf: UTF8String): InternalRow = eval(row, conf, BinaryType)
 
     def eval(row: ArrayData, conf: UTF8String, rdt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

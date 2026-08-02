@@ -20,8 +20,6 @@ case class RST_Convolve(
 ) extends InvokedExpression {
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     /** Element type of the 2D kernel array. */
     private def kernelType = kernelExpr.dataType.asInstanceOf[ArrayType].elementType.asInstanceOf[ArrayType].elementType
     override def children: Seq[Expression] = Seq(tileExpr, kernelExpr, ExpressionConfigExpr())
@@ -29,15 +27,11 @@ case class RST_Convolve(
     override def nullable: Boolean = true
     override def prettyName: String = RST_Convolve.name
     override def replacement: Expression =
-        (rasterType, kernelType) match {
-            case (StringType, DoubleType)  => invoke(RST_Convolve, "evalPathDouble")
-            case (BinaryType, DoubleType)  => invoke(RST_Convolve, "evalBinaryDouble")
-            case (StringType, IntegerType) => invoke(RST_Convolve, "evalPathInt")
-            case (BinaryType, IntegerType) => invoke(RST_Convolve, "evalBinaryInt")
-            case (StringType, FloatType)   => invoke(RST_Convolve, "evalPathFloat")
-            case (BinaryType, FloatType)   => invoke(RST_Convolve, "evalBinaryFloat")
-            case (StringType, LongType)    => invoke(RST_Convolve, "evalPathLong")
-            case (BinaryType, LongType)    => invoke(RST_Convolve, "evalBinaryLong")
+        kernelType match {
+            case DoubleType  => invoke(RST_Convolve, "evalDouble")
+            case IntegerType => invoke(RST_Convolve, "evalInt")
+            case FloatType   => invoke(RST_Convolve, "evalFloat")
+            case LongType    => invoke(RST_Convolve, "evalLong")
         }
 
 }
@@ -45,14 +39,10 @@ case class RST_Convolve(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Convolve extends WithExpressionInfo {
 
-    def evalPathDouble(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, StringType, DoubleType)
-    def evalBinaryDouble(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, DoubleType)
-    def evalPathInt(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, StringType, IntegerType)
-    def evalBinaryInt(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, IntegerType)
-    def evalPathFloat(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, StringType, FloatType)
-    def evalBinaryFloat(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, FloatType)
-    def evalPathLong(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, StringType, LongType)
-    def evalBinaryLong(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, LongType)
+    def evalDouble(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, DoubleType)
+    def evalInt(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, IntegerType)
+    def evalFloat(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, FloatType)
+    def evalLong(row: InternalRow, kernelAD: ArrayData, conf: UTF8String): InternalRow = eval(row, kernelAD, conf, BinaryType, LongType)
 
     def eval(row: InternalRow, kernelAD: ArrayData, conf: UTF8String, rdt: DataType, kdt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

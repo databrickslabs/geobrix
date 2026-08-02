@@ -28,7 +28,6 @@ case class RST_Hillshade(
     zFactorExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] =
         Seq(tileExpr, azimuthExpr, altitudeExpr, zFactorExpr, ExpressionConfigExpr())
     override def inputTypes: Seq[DataType] =
@@ -36,7 +35,7 @@ case class RST_Hillshade(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Hillshade.name
-    override def replacement: Expression = rstInvoke(RST_Hillshade, rasterType)
+    override def replacement: Expression = invoke(RST_Hillshade)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -44,10 +43,8 @@ case class RST_Hillshade(
 
 object RST_Hillshade extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, azimuth: Double, altitude: Double, zFactor: Double, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, azimuth: Double, altitude: Double, zFactor: Double, conf: UTF8String): InternalRow =
         runDispatch(row, azimuth, altitude, zFactor, conf, BinaryType)
-    def evalPath(row: InternalRow, azimuth: Double, altitude: Double, zFactor: Double, conf: UTF8String): InternalRow =
-        runDispatch(row, azimuth, altitude, zFactor, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, azimuth: Double, altitude: Double, zFactor: Double,

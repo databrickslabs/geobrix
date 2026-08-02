@@ -25,7 +25,7 @@ case class RST_CombineAvg(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_CombineAvg.name
-    override def replacement: Expression = rstInvoke(RST_CombineAvg, rasterType)
+    override def replacement: Expression = invoke(RST_CombineAvg)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -33,8 +33,7 @@ case class RST_CombineAvg(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_CombineAvg extends WithExpressionInfo {
 
-    def evalPath(row: ArrayData, conf: UTF8String): InternalRow = eval(row, conf, StringType)
-    def evalBinary(row: ArrayData, conf: UTF8String): InternalRow = eval(row, conf, BinaryType)
+    def eval(row: ArrayData, conf: UTF8String): InternalRow = eval(row, conf, BinaryType)
 
     def eval(array: ArrayData, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

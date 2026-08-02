@@ -25,7 +25,7 @@ case class RST_Merge(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Merge.name
-    override def replacement: Expression = rstInvoke(RST_Merge, rasterType)
+    override def replacement: Expression = invoke(RST_Merge)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -33,8 +33,7 @@ case class RST_Merge(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Merge extends WithExpressionInfo {
 
-    def evalPath(array: ArrayData, conf: UTF8String): InternalRow = eval(array, conf, StringType)
-    def evalBinary(array: ArrayData, conf: UTF8String): InternalRow = eval(array, conf, BinaryType)
+    def eval(array: ArrayData, conf: UTF8String): InternalRow = eval(array, conf, BinaryType)
 
     def eval(array: ArrayData, conf: UTF8String, rdt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

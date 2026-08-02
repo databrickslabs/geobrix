@@ -39,7 +39,6 @@ case class RST_Proximity(
     maxDistanceExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
         tileExpr, targetValuesExpr, distUnitsExpr, maxDistanceExpr, ExpressionConfigExpr()
     )
@@ -50,7 +49,7 @@ case class RST_Proximity(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Proximity.name
-    override def replacement: Expression = rstInvoke(RST_Proximity, rasterType)
+    override def replacement: Expression = invoke(RST_Proximity)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -58,14 +57,10 @@ case class RST_Proximity(
 
 object RST_Proximity extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, targetValues: UTF8String, distUnits: UTF8String,
         maxDistance: Any, conf: UTF8String
     ): InternalRow = runDispatch(row, targetValues, distUnits, maxDistance, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, targetValues: UTF8String, distUnits: UTF8String,
-        maxDistance: Any, conf: UTF8String
-    ): InternalRow = runDispatch(row, targetValues, distUnits, maxDistance, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, targetValues: UTF8String, distUnits: UTF8String,

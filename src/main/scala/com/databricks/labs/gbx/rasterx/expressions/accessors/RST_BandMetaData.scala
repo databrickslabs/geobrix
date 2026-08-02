@@ -27,13 +27,11 @@ case class RST_BandMetaData(
     band: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, band, ExpressionConfigExpr())
     override def dataType: DataType = MapType(StringType, StringType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_BandMetaData.name
-    override def replacement: Expression = rstInvoke(RST_BandMetaData, rasterType)
+    override def replacement: Expression = invoke(RST_BandMetaData)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -41,8 +39,7 @@ case class RST_BandMetaData(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_BandMetaData extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, bandIndex: Int, conf: UTF8String): MapData = eval(row, bandIndex, conf, StringType)
-    def evalBinary(row: InternalRow, bandIndex: Int, conf: UTF8String): MapData = eval(row, bandIndex, conf, BinaryType)
+    def eval(row: InternalRow, bandIndex: Int, conf: UTF8String): MapData = eval(row, bandIndex, conf, BinaryType)
 
     def eval(row: InternalRow, bandIndex: Int, conf: UTF8String, dt: DataType): MapData =
         Option(

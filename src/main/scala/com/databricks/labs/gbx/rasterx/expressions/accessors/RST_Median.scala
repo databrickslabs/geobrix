@@ -17,13 +17,11 @@ case class RST_Median(
     tileExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Median.name
-    override def replacement: Expression = rstInvoke(RST_Median, rasterType)
+    override def replacement: Expression = invoke(RST_Median)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -31,8 +29,7 @@ case class RST_Median(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Median extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, BinaryType)
 
     def eval(row: InternalRow, conf: UTF8String, rdt: DataType): ArrayData =
         Option(

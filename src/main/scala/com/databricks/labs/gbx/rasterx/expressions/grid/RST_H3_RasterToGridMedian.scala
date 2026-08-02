@@ -18,14 +18,12 @@ case class RST_H3_RasterToGridMedian(
     resolution: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, resolution, ExpressionConfigExpr())
     override def dataType: DataType =
         ArrayType(ArrayType(StructType(Seq(StructField("cellID", LongType), StructField("measure", DoubleType)))))
     override def nullable: Boolean = true
     override def prettyName: String = RST_H3_RasterToGridMedian.name
-    override def replacement: Expression = rstInvoke(RST_H3_RasterToGridMedian, rasterType)
+    override def replacement: Expression = invoke(RST_H3_RasterToGridMedian)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -33,8 +31,7 @@ case class RST_H3_RasterToGridMedian(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_H3_RasterToGridMedian extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = eval(row, resolution, conf, StringType)
-    def evalBinary(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = eval(row, resolution, conf, BinaryType)
+    def eval(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = eval(row, resolution, conf, BinaryType)
 
     def eval(row: InternalRow, resolution: Int, conf: UTF8String, rdt: DataType): ArrayData =
         Option(RST_ErrorHandler.safeEval(() => RST_H3_RasterToGrid.eval[Double](row, resolution, conf, rdt, this.execute), row, rdt, conf))

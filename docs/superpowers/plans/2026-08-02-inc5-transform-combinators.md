@@ -92,7 +92,7 @@ def test_reproject_no_epsg_source_still_warps(tmp_path):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `python/geobrix/.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "reproject_identity or reproject_no_epsg" -v` (or the repo's pyrx venv/`gbx:test:pyrx --path python/geobrix/test/pyrx/test_virtual_aware_family.py`)
+Run: `.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "reproject_identity or reproject_no_epsg" -v` (or the repo's pyrx venv/`gbx:test:pyrx --path python/geobrix/test/pyrx/test_virtual_aware_family.py`)
 Expected: `test_reproject_identity_returns_source_bytes_verbatim` FAILS (current code re-encodes via `calculate_default_transform`+`reproject`, so pixels may differ / it is not verbatim); `test_reproject_no_epsg` passes already (guard falls through) — that's fine, it locks the fall-through.
 
 - [ ] **Step 3: Add the identity guard**
@@ -132,7 +132,7 @@ Note: "verbatim" here means the same pixels + georeference re-serialized as GTif
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `python/geobrix/.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "reproject_identity or reproject_no_epsg" -v`
+Run: `.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "reproject_identity or reproject_no_epsg" -v`
 Expected: both PASS.
 
 - [ ] **Step 5: Commit**
@@ -192,7 +192,7 @@ def test_transform_reproject_stamps_target_crs(tmp_path):
 
 - [ ] **Step 2: Run to verify status**
 
-Run: `python/geobrix/.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "transform_identity_virtual or transform_reproject_stamps" -v`
+Run: `.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "transform_identity_virtual or transform_reproject_stamps" -v`
 Expected: `transform_reproject_stamps` PASSES immediately (already eager). `transform_identity_virtual...` — its exact assertion depends on how `_shaped_result_row` shapes an identity result: with Task 1 the identity `_transform_bytes` yields source-bytes, then `shape_output(virtualize_dir=...)` writes them and returns a virtual row referencing the written file. Assertion is on openability + source CRS, which holds. If it fails, the failure message tells you whether the identity output was mis-warped (→ Task 1 guard) or the row is unopenable (→ provenance, Task 4).
 
 - [ ] **Step 3: If failing, adjust (else no source change)**
@@ -258,7 +258,7 @@ def test_transform_virtualize_dir_result_is_coherent(tmp_path):
 
 - [ ] **Step 2: Run to verify status**
 
-Run: `python/geobrix/.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "virtualize_dir_result_is_coherent" -v`
+Run: `.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "virtualize_dir_result_is_coherent" -v`
 Expected: both PASS on current code (the written GTiff embeds CRS; `open_tile` reads it). If either FAILS, it reveals a genuine coherence gap (emitted row references a file whose CRS/dims disagree with the materialized result) → fix `_shaped_result_row`/`shape_output` to stamp the missing provenance before this passes.
 
 - [ ] **Step 3: If failing, stamp provenance**
@@ -316,7 +316,7 @@ def test_identity_transform_preserves_merge_overlap_winner():
 
 - [ ] **Step 2: Run to verify status**
 
-Run: `python/geobrix/.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "identity_transform_preserves_merge" -v`
+Run: `.venv-pyrx/bin/python -m pytest python/geobrix/test/pyrx/test_virtual_aware_family.py -k "identity_transform_preserves_merge" -v`
 Expected: PASSES with Task 1's verbatim identity guard. Without the guard it would FAIL (re-encode changes the bytes → different sort key → possibly flipped winner). This is the parity lock the spec calls out.
 
 - [ ] **Step 3: (no source change; guard from Task 1 makes it pass)**
@@ -531,7 +531,7 @@ Expected: `1` on both the local `dist` wheel and the downloaded staged copy — 
 - [ ] **Step 3: Fire the Serverless job directly**
 
 ```bash
-python/geobrix/.venv-pyrx/bin/python notebooks/tests/run_notebooks_serverless.py \
+.venv-pyrx/bin/python notebooks/tests/run_notebooks_serverless.py \
   --notebook prompts/features/2026-08-02-inc5-transform-combinators-serverless.ipynb \
   --wheel /Volumes/geospatial_docs/gdal_artifacts/noble/geobrix/geobrix-0.4.4-py3-none-any.whl \
   --extras light --profile oauth-fe

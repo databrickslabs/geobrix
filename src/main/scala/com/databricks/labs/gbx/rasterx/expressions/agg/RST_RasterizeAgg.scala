@@ -200,7 +200,7 @@ case class RST_RasterizeAgg(
                 "all_parents"-> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, mapData))
+            InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData))
         } finally {
             rasterDs.delete()
             ogrDs.delete()

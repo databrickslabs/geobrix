@@ -1,11 +1,12 @@
 package com.databricks.labs.gbx.rasterx.util
 
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg, RST_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
+import org.apache.spark.sql.catalyst.expressions.{GenericInternalRow, Literal}
 import org.apache.spark.sql.catalyst.util.{ArrayBasedMapData, MapData}
-import org.apache.spark.sql.types.{BinaryType, LongType, MapType, StringType}
+import org.apache.spark.sql.types.{BinaryType, LongType, MapType, StringType, StructType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
@@ -130,6 +131,118 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         assert(row.isNullAt(2) && row.isNullAt(3) && row.isNullAt(4) && row.isNullAt(5) && row.isNullAt(6))
         assert(!row.isNullAt(7))
         RasterDriver.releaseDataset(ds)
+    }
+
+    /** Smoke-test: each rasterize aggregator's eval output MUST have the same
+     *  field count as its declared dataType.  Catches the 3-vs-8 mismatch
+     *  WITHOUT needing a SparkSession / UnsafeProjection.
+     *
+     *  For RST_RasterizeAgg we supply real geometry so eval() can actually rasterize.
+     *  For the three grid aggregators (BNG/H3/Quadbin) we verify dataType size only
+     *  (their eval() requires large geometry inputs and GDAL state not available here).
+     */
+    test("rasterize aggregator eval row numFields matches dataType field count") {
+        // --- Helper: assert dataType declares 8 fields ---
+        def assertDataType8(name: String, dt: org.apache.spark.sql.types.DataType): Unit = {
+            val n = dt.asInstanceOf[StructType].size
+            assert(n == 8, s"$name.dataType has $n fields, expected 8")
+        }
+
+        assertDataType8("RST_RasterizeAgg",
+            RST_RasterizeAgg(
+                geomWkbExpr  = Literal.create(null, BinaryType),
+                valueExpr    = Literal(0.0),
+                xminExpr     = Literal(0.0),
+                yminExpr     = Literal(0.0),
+                xmaxExpr     = Literal(100.0),
+                ymaxExpr     = Literal(100.0),
+                widthPxExpr  = Literal(100),
+                heightPxExpr = Literal(100),
+                sridExpr     = Literal(32633)
+            ).dataType)
+
+        // Grid aggregator signature: cellId, value, srid, pixelSize, xmin, ymin, xmax, ymax,
+        //                              width, height, mode, kringPad  (12 positional args)
+        assertDataType8("RST_BNG_RasterizeAgg",
+            RST_BNG_RasterizeAgg(
+                cellIdExpr    = Literal.create(null, StringType),
+                valueExpr     = Literal(0.0),
+                sridExpr      = Literal(27700),
+                pixelSizeExpr = Literal(1.0),
+                xminExpr      = Literal(0.0),
+                yminExpr      = Literal(0.0),
+                xmaxExpr      = Literal(100.0),
+                ymaxExpr      = Literal(100.0),
+                widthExpr     = Literal(100),
+                heightExpr    = Literal(100),
+                modeExpr      = Literal("sum"),
+                kringPadExpr  = Literal(0)
+            ).dataType)
+
+        assertDataType8("RST_H3_RasterizeAgg",
+            RST_H3_RasterizeAgg(
+                cellIdExpr    = Literal.create(null, StringType),
+                valueExpr     = Literal(0.0),
+                sridExpr      = Literal(4326),
+                pixelSizeExpr = Literal(1.0),
+                xminExpr      = Literal(0.0),
+                yminExpr      = Literal(0.0),
+                xmaxExpr      = Literal(100.0),
+                ymaxExpr      = Literal(100.0),
+                widthExpr     = Literal(100),
+                heightExpr    = Literal(100),
+                modeExpr      = Literal("sum"),
+                kringPadExpr  = Literal(0)
+            ).dataType)
+
+        assertDataType8("RST_Quadbin_RasterizeAgg",
+            RST_Quadbin_RasterizeAgg(
+                cellIdExpr    = Literal.create(null, StringType),
+                valueExpr     = Literal(0.0),
+                sridExpr      = Literal(4326),
+                pixelSizeExpr = Literal(1.0),
+                xminExpr      = Literal(0.0),
+                yminExpr      = Literal(0.0),
+                xmaxExpr      = Literal(100.0),
+                ymaxExpr      = Literal(100.0),
+                widthExpr     = Literal(100),
+                heightExpr    = Literal(100),
+                modeExpr      = Literal("sum"),
+                kringPadExpr  = Literal(0)
+            ).dataType)
+
+        // --- Also exercise RST_RasterizeAgg.eval and confirm the row shape ---
+        import com.databricks.labs.gbx.expressions.ExpressionConfig
+        import org.apache.spark.util.SerializableConfiguration
+        import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+
+        val gf = new GeometryFactory()
+        val poly = gf.createPolygon(Array(
+            new Coordinate(0.0, 0.0), new Coordinate(50.0, 0.0),
+            new Coordinate(50.0, 50.0), new Coordinate(0.0, 50.0),
+            new Coordinate(0.0, 0.0)))
+        val wkb = JTS.toWKB(poly)
+
+        val cfg = new ExpressionConfig(
+            Map.empty[String, String],
+            new SerializableConfiguration(new org.apache.hadoop.conf.Configuration()))
+        val baos = new java.io.ByteArrayOutputStream()
+        val oos = new java.io.ObjectOutputStream(baos); oos.writeObject(cfg); oos.close()
+        val encodedCfg = UTF8String.fromString(java.util.Base64.getEncoder.encodeToString(baos.toByteArray))
+
+        val agg = RST_RasterizeAgg(
+            Literal.create(null, BinaryType), Literal(0.0),
+            Literal(0.0), Literal(0.0), Literal(100.0), Literal(100.0),
+            Literal(100), Literal(100), Literal(32633),
+            Literal.create(encodedCfg, StringType))
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, wkb, 5.0)
+        val emittedRow = agg.eval(buf).asInstanceOf[InternalRow]
+        val declaredSize = agg.dataType.asInstanceOf[StructType].size
+        assert(emittedRow.numFields == declaredSize,
+            s"RST_RasterizeAgg.eval row has ${emittedRow.numFields} fields but dataType declares $declaredSize")
+        assert(emittedRow.numFields == 8, s"Expected 8 fields, got ${emittedRow.numFields}")
     }
 
 }

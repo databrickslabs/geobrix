@@ -53,15 +53,19 @@ object RST_ErrorHandler extends Logging {
         }
     }
 
-    /** Like safeEval for single row but for array of rows; returns first row with error metadata or propagates. */
-    def safeEval(eval: () => InternalRow, rows: ArrayData, rasterType: DataType): InternalRow = {
+    /** Like safeEval for single row but for array of rows; returns first row with error metadata or propagates.
+      *
+      * @param elementFieldCount the declared field count of each element struct (3 for v1, 8 for v2).
+      *                          Passed from the expression's declared input schema.
+      */
+    def safeEval(eval: () => InternalRow, rows: ArrayData, rasterType: DataType, elementFieldCount: Int = 3): InternalRow = {
         try {
             eval()
         } catch {
             case e: Throwable =>
                 // Check if input already had error
                 val errorIdx = (0 until rows.numElements()).find { i =>
-                    val row = rows.getStruct(i, 3)
+                    val row = rows.getStruct(i, elementFieldCount)
                     val metadata = Try { // just in case of malformed rows and unexpected errors
                         val (_, ds, metadata) = RasterSerializationUtil.rowToTile(row, rasterType)
                         RasterDriver.releaseDataset(ds)
@@ -70,8 +74,8 @@ object RST_ErrorHandler extends Logging {
                     hasError(metadata)
                 }
                 if (errorIdx.nonEmpty) {
-                    // Rethrow since no input had error
-                    rows.getStruct(errorIdx.get, 3)
+                    // Return the input row that already had the error
+                    rows.getStruct(errorIdx.get, elementFieldCount)
                 } else {
                     // Create new error row
                     val errorMetadata = createErrorMetadata(e)

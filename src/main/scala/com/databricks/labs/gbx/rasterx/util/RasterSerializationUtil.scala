@@ -86,11 +86,15 @@ object RasterSerializationUtil {
         )
     }
 
-    /** Deserialize an array of tile structs to (cellId, Dataset, metadata); caller must release each Dataset. */
-    def arrayToTiles(array: ArrayData, dataType: DataType): Seq[(Long, Dataset, Map[String, String])] = {
+    /** Deserialize an array of tile structs to (cellId, Dataset, metadata); caller must release each Dataset.
+      *
+      * @param elementFieldCount the declared field count of the element StructType (3 for v1, 8 for v2).
+      *                          Must come from the expression's declared input schema — never hardcoded.
+      */
+    def arrayToTiles(array: ArrayData, dataType: DataType, elementFieldCount: Int = 3): Seq[(Long, Dataset, Map[String, String])] = {
         val n = array.numElements()
         (0 until n).map { i =>
-            val row = array.getStruct(i, 3)
+            val row = array.getStruct(i, elementFieldCount)
             rowToTile(row, dataType)
         }
     }

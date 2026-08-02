@@ -8,7 +8,7 @@ import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUti
 import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -26,7 +26,10 @@ case class RST_MapAlgebra(
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
         RST_MapAlgebra.name, tileExpr, aggHint = None
     )
-    override def children: Seq[Expression] = Seq(tileExpr, jsonSpecExpr, ExpressionConfigExpr())
+    /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
+    private lazy val elementFieldCountLit: Expression =
+        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tileExpr), IntegerType)
+    override def children: Seq[Expression] = Seq(tileExpr, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_MapAlgebra.name
@@ -39,12 +42,18 @@ case class RST_MapAlgebra(
 object RST_MapAlgebra extends WithExpressionInfo {
 
 
+    // Called by Spark reflection when children = [tileExpr, jsonSpecExpr, ExpressionConfigExpr()]  (v1 legacy path).
     def eval(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
+        eval(array, spec, conf, 3)
+
+    // Called by Spark reflection when children = [tileExpr, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit].
+    // elementFieldCount is derived from the declared input array element struct (3=v1, 8=v2).
+    def eval(array: ArrayData, spec: UTF8String, conf: UTF8String, elementFieldCount: Int): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val dss = RasterSerializationUtil.arrayToTiles(array, BinaryType)
+              val dss = RasterSerializationUtil.arrayToTiles(array, BinaryType, elementFieldCount)
               // GDAL calc does not work with /vsimem/ files, so we need to copy them to a local path
               val dssCpy = dss.map { ds =>
                   val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
@@ -65,7 +74,8 @@ object RST_MapAlgebra extends WithExpressionInfo {
               res
           },
           array,
-          BinaryType
+          BinaryType,
+          elementFieldCount
         )
 
     def execute(dss: Seq[Dataset], options: Map[String, String], spec: String): (Dataset, Map[String, String]) = {

@@ -37,6 +37,11 @@ case class RST_FromBandsAgg(
 
     lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
+    /** Field count of the input tile struct (3 for v1, 8 for v2), from the declared element schema. */
+    private lazy val tileFieldCount: Int = tileExpr.dataType match {
+        case st: org.apache.spark.sql.types.StructType => st.fields.length
+        case _                                         => 3
+    }
     override lazy val deterministic: Boolean = true
     override val nullable: Boolean = true
     override def prettyName: String = RST_FromBandsAgg.name
@@ -103,7 +108,7 @@ case class RST_FromBandsAgg(
 
         // Open each buffered tile. Buffer is uniformly BinaryType (normalized in update).
         val tiles: Seq[(Long, org.gdal.gdal.Dataset, Map[String, String])] = sorted.map { row =>
-            val tileRow = row.getStruct(1, 3)
+            val tileRow = row.getStruct(1, tileFieldCount)
             RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)
         }.toSeq
 
@@ -130,7 +135,7 @@ case class RST_FromBandsAgg(
         for (elem <- obj) {
             val row = elem.asInstanceOf[InternalRow]
             val idx = row.getInt(0)
-            val tileRow = row.getStruct(1, 3)
+            val tileRow = row.getStruct(1, tileFieldCount)
             val tileBytes = serializeTileRow(tileRow)
             out.writeInt(idx)
             out.writeInt(tileBytes.length)

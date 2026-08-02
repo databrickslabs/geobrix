@@ -77,7 +77,7 @@ class ConstructorExpressionsTest extends AnyFunSuite {
         expr shouldBe a[Expression]
     }
 
-    test("RST_FromBands should have two children") {
+    test("RST_FromBands should have three children") {
         val arrayType = ArrayType(
           StructType(Array(
             StructField("id", LongType),
@@ -85,7 +85,7 @@ class ConstructorExpressionsTest extends AnyFunSuite {
           ))
         )
         val expr = RST_FromBands(Literal.create(null, arrayType))
-        expr.children should have length 2 // bands, ExpressionConfigExpr
+        expr.children should have length 3 // bands, ExpressionConfigExpr, elementFieldCountLit
     }
 
     test("RST_FromBands should have tile dataType") {

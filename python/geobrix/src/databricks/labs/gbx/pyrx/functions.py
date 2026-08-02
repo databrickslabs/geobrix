@@ -840,6 +840,26 @@ def _transform_bytes(tile, target_srid):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
+    # CRITICAL: for a MATERIALIZED tile with an identity transform (source EPSG ==
+    # target_srid), return the ORIGINAL raster bytes verbatim — no re-encode.
+    # ``agg_core.merge_tiles`` sorts inputs on their RAW GTiff byte content to
+    # choose a deterministic, heavy-parity last-wins overlap winner.  Calling
+    # ``warp.reproject_to_srid`` even on the identity path opens the dataset and
+    # re-serialises it through a rasterio MemoryFile write, which produces
+    # byte-different output (header metadata may differ even though pixels are
+    # identical) and shifts the sort key — potentially flipping the overlap winner
+    # vs. the heavy tier.  For VIRTUAL tiles (no original bytes) there is nothing
+    # to return verbatim, so they fall through to the normal warp path (which
+    # itself also identity-short-circuits at the pixel level).
+    vt = ot._to_virtual_tile(tile)
+    if not vt.is_virtual() and vt.raster is not None:
+        target_srid_int = int(target_srid)
+        with ot._open(tile) as ds:
+            src_epsg = ds.crs.to_epsg() if ds.crs else None
+            if src_epsg is not None and src_epsg == target_srid_int:
+                # Identity on a materialized tile: original bytes, sort key intact.
+                return bytes(vt.raster)
+            return warp.reproject_to_srid(ds, target_srid_int)
     with ot._open(tile) as ds:
         return warp.reproject_to_srid(ds, int(target_srid))
 

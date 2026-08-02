@@ -468,3 +468,28 @@ def test_transform_virtualize_dir_result_is_coherent(tmp_path):
     assert row["raster"] is None and row["path"] is not None
     with ot._open(row) as ds:
         assert ds.crs.to_epsg() == 4326
+
+
+# ---------------------------------------------------------------------------
+# Identity transform into merge preserves overlap winner (Task 4 parity guard)
+# ---------------------------------------------------------------------------
+def test_identity_transform_preserves_merge_overlap_winner():
+    """Identity transform must not re-encode: two overlapping materialized tiles
+    passed through identity rst_transform then merged must pick the SAME winner
+    as merging their raw bytes directly (raw-bytes sort-key parity)."""
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    from .conftest import make_geotiff_bytes
+
+    a = make_geotiff_bytes(width=4, height=4, epsg=4326)
+    b = _shift_pixels(make_geotiff_bytes(width=4, height=4, epsg=4326), +50.0)
+    a_tile = {"cellid": 0, "raster": a, "metadata": {}}
+    b_tile = {"cellid": 0, "raster": b, "metadata": {}}
+
+    expected = agg_core.merge_tiles([a, b])  # raw-bytes winner
+
+    # Identity transform (4326 -> 4326) then merge.
+    ta = prx._transform_udf.func(a_tile, 4326)
+    tb = prx._transform_udf.func(b_tile, 4326)
+    got = prx._merge_udf.func([ta, tb])
+    assert got is not None and bytes(got["raster"]) == expected

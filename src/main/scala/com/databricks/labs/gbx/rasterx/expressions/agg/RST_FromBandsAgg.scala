@@ -54,32 +54,12 @@ case class RST_FromBandsAgg(
 
     override def createAggregationBuffer(): ArrayBuffer[Any] = ArrayBuffer.empty
 
-    /** Normalize any tile row to a BinaryType tile row (bytes at field 1).
-     *  If the incoming tile is already BinaryType, copies it as-is.
-     *  If path-based (StringType), opens via GDAL and writes back to bytes.
-     *  This guarantees the buffer is uniformly binary so eval/deserialize
+    /** Copy the BinaryType tile row through as-is.
+     *  Raster is always binary; the buffer is uniformly binary so eval/deserialize
      *  can always use BinaryType without branching on rasterType.
      */
-    private def toBinaryTileRow(tileRow: InternalRow): InternalRow = {
-        rasterType match {
-            case org.apache.spark.sql.types.BinaryType =>
-                InternalRow.copyValue(tileRow).asInstanceOf[InternalRow]
-            case _ =>
-                val (cellId, ds, mtd) = RasterSerializationUtil.rowToTile(tileRow, rasterType)
-                try {
-                    val bytes = RasterDriver.writeToBytes(ds, mtd)
-                    import org.apache.spark.sql.catalyst.util.ArrayBasedMapData
-                    import org.apache.spark.unsafe.types.UTF8String
-                    InternalRow.fromSeq(Seq(
-                        cellId,
-                        bytes,
-                        ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
-                    ))
-                } finally {
-                    RasterDriver.releaseDataset(ds)
-                }
-        }
-    }
+    private def toBinaryTileRow(tileRow: InternalRow): InternalRow =
+        InternalRow.copyValue(tileRow).asInstanceOf[InternalRow]
 
     /** Catalyst-facing update: extract tile and band_index from the row. */
     override def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {

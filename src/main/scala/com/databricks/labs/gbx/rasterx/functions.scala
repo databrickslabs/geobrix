@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx
 
-import com.databricks.labs.gbx.expressions.{ExpressionConfig, RegistryDelegate}
+import com.databricks.labs.gbx.expressions.RegistryDelegate
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_H3_RasterizeAgg, RST_MergeAgg, RST_Quadbin_RasterizeAgg, RST_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.expressions.analysis._
@@ -33,8 +33,6 @@ object functions extends Serializable {
     def register(spark: SparkSession): Unit = {
         val sc = spark.sparkContext
         if (sc.getConf.get(flag, "false") == "true") return
-
-        val expressionConfig = ExpressionConfig(spark)
 
         val registry = spark.sessionState.functionRegistry
         val rd = RegistryDelegate(registry)

@@ -10,7 +10,7 @@ import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate,
 import org.apache.spark.sql.catalyst.expressions.{Expression, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.trees.UnaryLike
 import org.apache.spark.sql.catalyst.util.GenericArrayData
-import org.apache.spark.sql.types.{ArrayType, DataType, StringType}
+import org.apache.spark.sql.types.{ArrayType, DataType}
 
 import scala.collection.mutable.ArrayBuffer
 
@@ -108,23 +108,19 @@ case class RST_MergeAgg(
 
 }
 
-/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
+/** Companion: SQL name, builder, and sort helpers for binary tile. */
 object RST_MergeAgg extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_merge_agg"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => RST_MergeAgg(c(0))
 
-    /** Canonical sort key for a tile row: its raw serialized content (the GTiff bytes a
-      * BinaryType tile carries, or the UTF-8 path bytes a StringType tile carries). This is
+    /** Canonical sort key for a tile row: the raw GTiff bytes (BinaryType, field 1). This is
       * a total order intrinsic to the tile -- bitwise-identical to what the lightweight tier
       * sorts on -- with no random per-open component.
       */
     private[agg] def contentKey(row: InternalRow, rasterDT: DataType): Array[Byte] =
-        rasterDT match {
-            case StringType => row.getString(1).getBytes("UTF-8")
-            case _          => row.getBinary(1)
-        }
+        row.getBinary(1)
 
     /** Unsigned lexicographic ordering of byte arrays (a stable total order on raw content). */
     private[agg] val unsignedBytesOrdering: Ordering[Array[Byte]] = new Ordering[Array[Byte]] {

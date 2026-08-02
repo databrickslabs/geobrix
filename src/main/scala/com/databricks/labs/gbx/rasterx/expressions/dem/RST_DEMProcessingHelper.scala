@@ -33,8 +33,7 @@ object RST_DEMProcessingHelper {
       * (resultDataset, metadata). Caller must release the returned Dataset.
       *
       * The result lives at a `/vsimem/` GTiff path; downstream serialization
-      * (RasterDriver.writeToBytes / tileToRow) handles materialization to a
-      * byte payload or a checkpoint path.
+      * (RasterDriver.writeToBytes / tileToRow) handles materialization to bytes.
       */
     def process(
         srcDs: Dataset,

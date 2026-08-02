@@ -13,15 +13,8 @@ import org.apache.spark.unsafe.types.UTF8String
 
 /**
   * Creates raster tiles from the input column.
-  *   - spark config to turn checkpointing on for all functions in 0.4.2
-  *   - this is the only function able to write raster to checkpoint (even if
-  *     the spark config is set to false).
-  *   - can be useful when you want to start from the configured checkpoint but
-  *     work with binary payloads from there.
   * @param tileExpr
-  *   The expression for the raster. If the raster is stored on disc, the path
-  *   to the raster is provided. If the raster is stored in memory, the bytes of
-  *   the raster are provided.
+  *   The expression for the raster (BinaryType tile); bytes of the raster are provided.
   * @param sizeInMBExpr
   *   The size of the tiles in MB. If set to -1, the file is loaded and returned
   *   as a single tile. If set to 0, the file is loaded and subdivided into
@@ -87,7 +80,7 @@ case class RST_MakeTiles(
 
 }
 
-/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
+/** Companion: SQL name and builder for `gbx_rst_maketiles`. */
 object RST_MakeTiles extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_maketiles"

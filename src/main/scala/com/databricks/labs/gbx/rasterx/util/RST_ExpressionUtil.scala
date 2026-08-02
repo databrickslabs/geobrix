@@ -11,7 +11,7 @@ import org.apache.spark.util.TaskFailureListener
 import scala.util.Try
 
 /**
-  * Helpers for RasterX expressions: tile struct type, GDAL/checkpoint init, and iterator cleanup.
+  * Helpers for RasterX expressions: tile struct type, GDAL init, and iterator cleanup.
   *
   * Tile struct is (cellid, raster, metadata); raster type is Binary (content only; String path-tiles are rejected).
   */
@@ -19,13 +19,13 @@ object RST_ExpressionUtil {
 
     /** DataType of the raster field (second field) of the tile struct for the given tile expression.
       * Throws [[IllegalArgumentException]] if the raster field is StringType (v1 path-tile), which
-      * is no longer supported by the heavyweight tier.
+      * is not supported by the heavyweight tier.
       */
     def rasterType(tileExpr: Expression): DataType = {
         val rdt = tileExpr.dataType.asInstanceOf[StructType].fields(1).dataType
         rdt match {
             case StringType => throw new IllegalArgumentException(
-                "Raster path-tiles (raster field as a String path) are no longer supported by the " +
+                "Raster path-tiles (raster field as a String path) are not supported by the " +
                 "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
                 "(materialize=True, or write + read back) before passing it to a heavyweight function.")
             case other => other
@@ -64,7 +64,7 @@ object RST_ExpressionUtil {
         case ArrayType(StructType(fields), _) if fields.length >= 2 =>
             fields(1).dataType match {
                 case StringType => throw new IllegalArgumentException(
-                    "Raster path-tiles (raster field as a String path) are no longer supported by the " +
+                    "Raster path-tiles (raster field as a String path) are not supported by the " +
                     "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
                     "(materialize=True, or write + read back) before passing it to a heavyweight function.")
                 case other => other

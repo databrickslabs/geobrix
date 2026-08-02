@@ -860,6 +860,7 @@ def _transform_bytes(tile, target_srid):
                 # Identity on a materialized tile: original bytes, sort key intact.
                 return bytes(vt.raster)
             return warp.reproject_to_srid(ds, target_srid_int)
+    # Virtual tile: no original bytes — open and reproject (identity-short-circuits inside).
     with ot._open(tile) as ds:
         return warp.reproject_to_srid(ds, int(target_srid))
 

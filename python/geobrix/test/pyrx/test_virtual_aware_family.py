@@ -474,9 +474,9 @@ def test_transform_virtualize_dir_result_is_coherent(tmp_path):
 # Identity transform into merge preserves overlap winner (Task 4 parity guard)
 # ---------------------------------------------------------------------------
 def test_identity_transform_preserves_merge_overlap_winner():
-    """Identity transform must not re-encode: two overlapping materialized tiles
-    passed through identity rst_transform then merged must pick the SAME winner
-    as merging their raw bytes directly (raw-bytes sort-key parity)."""
+    """Identity transform must not re-encode: a materialized identity transform
+    must return the ORIGINAL bytes verbatim (no re-encode, no shifted sort key).
+    A secondary check confirms the merge winner matches merging raw bytes directly."""
     from databricks.labs.gbx.pyrx.core import agg as agg_core
 
     from .conftest import make_geotiff_bytes
@@ -490,6 +490,12 @@ def test_identity_transform_preserves_merge_overlap_winner():
 
     # Identity transform (4326 -> 4326) then merge.
     ta = prx._transform_udf.func(a_tile, 4326)
+    # PRIMARY (catching) assertion: a materialized identity transform must return
+    # the ORIGINAL bytes verbatim (no re-encode). If the _transform_bytes identity
+    # short-circuit is reverted to warp.reproject_to_srid, the bytes change and this
+    # fails — this is the assertion that actually guards the raw-bytes sort key.
+    assert bytes(ta["raster"]) == a, "identity _transform_udf must return verbatim original bytes"
     tb = prx._transform_udf.func(b_tile, 4326)
     got = prx._merge_udf.func([ta, tb])
+    # SECONDARY: merge winner must also match the raw-bytes sort key.
     assert got is not None and bytes(got["raster"]) == expected

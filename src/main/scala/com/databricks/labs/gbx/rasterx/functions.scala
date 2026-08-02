@@ -14,8 +14,6 @@ import com.databricks.labs.gbx.rasterx.expressions.spectral._
 import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Polygonize, RST_Rasterize}
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
-import com.databricks.labs.gbx.rasterx.gdal.CheckpointManager
-import com.databricks.labs.gbx.rasterx.util.CleanupListener
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.{Column, SparkSession}
@@ -24,21 +22,19 @@ import org.apache.spark.sql.{Column, SparkSession}
   * RasterX API entry point: register all raster SQL functions and provide Column-based helpers.
   *
   * Call `functions.register(spark)` once per session to make `gbx_rst_*` functions available in SQL
-  * and to initialize GDAL/checkpoint state. The Column helpers (e.g. `rst_width`) delegate to
+  * and to initialize GDAL. The Column helpers (e.g. `rst_width`) delegate to
   * the same registered functions.
   */
 object functions extends Serializable {
 
     val flag = "com.databricks.labs.gbx.rasterx.registered"
 
-    /** Register all RasterX expressions with Spark and initialize GDAL/checkpoint; idempotent per session. */
+    /** Register all RasterX expressions with Spark and initialize GDAL; idempotent per session. */
     def register(spark: SparkSession): Unit = {
         val sc = spark.sparkContext
         if (sc.getConf.get(flag, "false") == "true") return
 
         val expressionConfig = ExpressionConfig(spark)
-        CheckpointManager.init(expressionConfig)
-        spark.sparkContext.addSparkListener(new CleanupListener(spark))
 
         val registry = spark.sessionState.functionRegistry
         val rd = RegistryDelegate(registry)

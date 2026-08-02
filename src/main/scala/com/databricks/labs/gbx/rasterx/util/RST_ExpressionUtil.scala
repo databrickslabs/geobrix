@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.gdal.{CheckpointManager, GDALManager}
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.util.NodeFileManager
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -103,11 +103,10 @@ object RST_ExpressionUtil {
         )
     }
 
-    /** Initialize NodeFileManager, GDAL, and CheckpointManager for this process (e.g. on executor). */
+    /** Initialize NodeFileManager and GDAL for this process (e.g. on executor). */
     def init(expressionConfig: ExpressionConfig): Unit = {
         NodeFileManager.init(expressionConfig.hConf)
         GDALManager.init(expressionConfig)
-        CheckpointManager.init(expressionConfig)
     }
 
     /** Register task completion/failure listeners to close the given iterator (e.g. release resources). */

@@ -8,6 +8,13 @@ import org.apache.spark.sql.types.DataType
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.Dataset
 
+/** Raised by [[RasterSerializationUtil.guardMaterialized]] when a virtual (non-materialized)
+  * tile is passed to a heavyweight rst_* function. Extends IllegalArgumentException so it
+  * remains an IAE for callers that match on that type, but is distinct from ordinary per-row
+  * IAEs (e.g. bad EPSG code, non-Point geometry) that should be handled null-tolerantly.
+  */
+final class VirtualTileException(msg: String) extends IllegalArgumentException(msg)
+
 /**
   * Converts between Spark InternalRow (tile struct) and GDAL Dataset for raster expressions.
   *
@@ -34,7 +41,7 @@ object RasterSerializationUtil {
     private def guardMaterialized(row: InternalRow, lyt: TileLayout): Unit =
         if (lyt.isV2 && row.isNullAt(lyt.raster) && lyt.path.exists(p => !row.isNullAt(p))) {
             val path = lyt.path.map(p => row.getUTF8String(p).toString).getOrElse("<unknown>")
-            throw new IllegalArgumentException(
+            throw new VirtualTileException(
                 s"Heavyweight rst_* received a virtual tile (raster is null, path=$path). The " +
                 "heavyweight tier operates only on materialized (binary) tiles. Materialize it in the " +
                 "lightweight tier first — call the lightweight rst_* with materialize=True, or write it " +

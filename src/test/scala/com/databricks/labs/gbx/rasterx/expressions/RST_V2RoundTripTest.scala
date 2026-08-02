@@ -1,10 +1,12 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.rasterx.functions
-import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, VirtualTileException}
 import com.databricks.labs.gbx.udfs
 import com.databricks.labs.gbx.udfs.st_buffer
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions.{col, lit}
 import org.apache.spark.sql.test.SilentSparkSession
@@ -147,6 +149,81 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             s"Top-level: ${ex.getMessage}\n" +
             Option(ex.getCause).map(c => s"Cause: ${c.getMessage}").getOrElse("(no cause)")
         )
+    }
+
+    // ---- 3b. rst_clip on VIRTUAL tile raises error through tile-returning (3-arg) overload ----
+
+    test("heavy rst_clip on a VIRTUAL tile raises the materialize-first error (3-arg overload)") {
+        // This test covers the gap fixed by Task 9b: tile-returning ops use the 3-arg
+        // safeEval(eval, row, rasterType) overload. Pre-fix it swallowed the VirtualTileException
+        // as an error-row and .collect() would NOT throw. Post-fix it re-throws.
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        functions.register(spark)
+
+        // Build a v2 virtual tile DataFrame: raster=null, path set, 8-field schema.
+        val tileSchema = StructType(Seq(
+            StructField("tile", RST_ExpressionUtil.v2TileType, nullable = false)))
+
+        val virtualRow = Row(Row(
+            0L,
+            null,                  // raster = null → virtual
+            "/some/virtual.tif",   // path set
+            null, null, null, null,
+            Map.empty[String, String]))
+
+        val dfVirtual = spark.createDataFrame(
+            spark.sparkContext.parallelize(Seq(virtualRow)),
+            tileSchema)
+
+        val ex = intercept[Exception] {
+            dfVirtual.select(rst_clip(col("tile"), lit("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"), lit(true))).collect()
+        }
+
+        assert(
+            causeChainContains(ex, Seq("virtual tile", "materialize", "lightweight")),
+            s"Expected 'virtual tile', 'materialize', 'lightweight' in cause chain.\n" +
+            s"Top-level: ${ex.getMessage}\n" +
+            Option(ex.getCause).map(c => s"Cause: ${c.getMessage}").getOrElse("(no cause)")
+        )
+    }
+
+    // ---- 3c. F1 regression guard: plain IAE is NOT propagated (null-tolerant) ----
+
+    test("F1 regression: plain IllegalArgumentException from 4-arg safeEval returns null not throw") {
+        // Directly exercises the 4-arg safeEval overload with a thunk that throws a plain IAE
+        // (not a VirtualTileException) and confirms it returns null (non-crash mode), not a throw.
+        // This proves the broad IAE re-throw from Task 9 has been reverted.
+        import com.databricks.labs.gbx.expressions.ExpressionConfig
+        import org.apache.spark.sql.types.BinaryType
+        import org.apache.spark.unsafe.types.UTF8String
+        import org.apache.spark.util.SerializableConfiguration
+        import com.databricks.labs.gbx.util.SerializationUtil
+
+        val conf = new ExpressionConfig(
+            Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "false"),
+            new SerializableConfiguration(new org.apache.hadoop.conf.Configuration())
+        )
+        val confB64 = UTF8String.fromString(conf.toB64)
+
+        // Minimal v2 row (not a virtual tile — raster field is empty bytes at position 1)
+        val metadataMapData = SerializationUtil.toMapData[String, String](Map.empty[String, String])
+        val row: InternalRow = new GenericInternalRow(Array[Any](
+            1L, Array.emptyByteArray, null, null, null, null, null, metadataMapData))
+
+        // Thunk throws a plain IAE (not VirtualTileException) — should be swallowed → null
+        val plainIAEResult = RST_ErrorHandler.safeEval(
+            () => throw new IllegalArgumentException("not a virtual tile, just a bad arg"),
+            row, BinaryType, confB64)
+        assert(plainIAEResult == null,
+            "plain IAE must be swallowed to null in non-crash mode (F1 regression guard)")
+
+        // Thunk throws VirtualTileException — must propagate
+        intercept[VirtualTileException] {
+            RST_ErrorHandler.safeEval(
+                () => throw new VirtualTileException("virtual tile guard test"),
+                row, BinaryType, confB64)
+        }
     }
 
     // ---- 4. Heavy output schema == light V2_TILE_SCHEMA field-for-field -----

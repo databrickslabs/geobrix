@@ -30,11 +30,15 @@ object RST_ErrorHandler extends Logging {
         )
     }
 
-    /** Run eval; on exception return a tile row with error metadata instead of throwing. */
+    /** Run eval; on exception return a tile row with error metadata instead of throwing.
+      * VirtualTileExceptions are always re-thrown — they indicate a virtual tile reaching a
+      * heavyweight function and must surface as hard failures, not silent error rows.
+      */
     def safeEval(eval: () => InternalRow, row: InternalRow, rasterType: DataType): InternalRow = {
         try {
             eval()
         } catch {
+            case e: VirtualTileException => throw e
             case e: Throwable =>
                 // Check if input already had error
                 val (cellId, metadata) = Try { // just in case of malformed rows and unexpected errors
@@ -54,6 +58,8 @@ object RST_ErrorHandler extends Logging {
     }
 
     /** Like safeEval for single row but for array of rows; returns first row with error metadata or propagates.
+      * VirtualTileExceptions are always re-thrown — they indicate a virtual tile reaching a
+      * heavyweight function and must surface as hard failures, not silent error rows.
       *
       * @param elementFieldCount the declared field count of each element struct (3 for v1, 8 for v2).
       *                          Passed from the expression's declared input schema.
@@ -62,6 +68,7 @@ object RST_ErrorHandler extends Logging {
         try {
             eval()
         } catch {
+            case e: VirtualTileException => throw e
             case e: Throwable =>
                 // Check if input already had error
                 val errorIdx = (0 until rows.numElements()).find { i =>
@@ -86,16 +93,17 @@ object RST_ErrorHandler extends Logging {
 
     /** Runs eval; on exception returns null or throws if ExpressionConfig.crashExpressions is true.
       *
-      * IllegalArgumentExceptions are always re-thrown regardless of crashExpressions: they
-      * represent programmer errors (e.g. passing a virtual tile to a heavyweight function) that
-      * must be surfaced as hard failures, not silently swallowed as null results.
+      * VirtualTileExceptions are always re-thrown regardless of crashExpressions: they indicate
+      * a virtual tile reaching a heavyweight function and must surface as hard failures. Ordinary
+      * per-row IllegalArgumentExceptions (e.g. non-Point geometry for rst_sample, bad EPSG code
+      * for rst_transform) fall through to the null-tolerant path so they remain swallowable.
       */
     def safeEval(eval: () => Any, row: InternalRow, rasterType: DataType, conf: UTF8String): Any = {
         try {
             eval()
         } catch {
-            case e: IllegalArgumentException =>
-                // Programming errors (wrong API usage, virtual tile guard) must propagate.
+            case e: VirtualTileException =>
+                // Virtual-tile guard must propagate — wrong API usage, not a per-row data error.
                 throw e
             case t: Throwable =>
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -122,11 +130,15 @@ object RST_ErrorHandler extends Logging {
         }
     }
 
-    /** Runs generator eval; on exception returns single row with error metadata. */
+    /** Runs generator eval; on exception returns single row with error metadata.
+      * VirtualTileExceptions are always re-thrown — they indicate a virtual tile reaching a
+      * heavyweight function and must surface as hard failures, not silent error rows.
+      */
     def safeEval(eval: () => IterableOnce[InternalRow], row: InternalRow, rasterType: DataType): IterableOnce[InternalRow] = {
         try {
             eval()
         } catch {
+            case e: VirtualTileException => throw e
             case e: Throwable =>
                 val cellId = Try { // just in case of malformed rows and unexpected errors
                     val (cellId, ds, _) = RasterSerializationUtil.rowToTile(row, rasterType)

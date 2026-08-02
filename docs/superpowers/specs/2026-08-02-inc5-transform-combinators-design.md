@@ -116,9 +116,12 @@ taxonomy documentation.
 - **New combinator functions** — "mosaic" = `rst_merge`, "stack" = `rst_frombands`; both exist. No
   `rst_stack` alias (no aliases; beta).
 - **Lazy "recipe" combinator tiles** — rejected by the governing principle (pending trap).
-- **Heavy-tier v2 handling** — the standing big deferral; heavy still cannot consume virtual tiles.
-- **Virtual Tiles page + hero diagram build** — the capstone; Inc 5 only writes the taxonomy content
-  that page will host.
+- **Heavy-tier v2 handling** — the **next increment after Inc 5** (user 2026-08-02: heavy before the
+  capstone). Not in Inc 5, but no longer an open-ended deferral — it is the on-deck work, and the
+  capstone waits on it. Heavy still cannot consume virtual tiles today.
+- **Virtual Tiles page + hero diagram build** — the capstone, built **after** heavy-tier v2 handling
+  so it can show the light↔heavy bridge as first-class. Inc 5 only writes the taxonomy content that
+  page will host.
 - **`rst_transform` window/clip co-transform beyond CRS** — the reader already emits window/clip in
   the tile's own CRS, and an eager transform re-encodes to target CRS with embedded georeference, so
   the materialized result is self-consistent; no separate window/clip re-projection field bookkeeping

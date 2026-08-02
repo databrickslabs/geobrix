@@ -2,8 +2,14 @@
 
 **Date:** 2026-08-02
 **Branch:** `feature/large-raster-reader`
-**Status:** design approved, ready for planning
+**Status:** design approved; planned as a two-phase plan (`docs/superpowers/plans/2026-08-02-heavy-tier-v2-tiles.md`).
 **Related:** the v2 virtual-tile arc — Inc 1 (`2026-07-31-v2-virtual-tile-reader-design.md`) through Inc 5 (`2026-08-02-inc5-transform-combinators-design.md`); [[light-virtual-tiling-by-reference]]. This is the increment **after Inc 5 and before the capstone** (Virtual Tiles page + hero diagram), per the user's sequencing — the capstone waits on this so it can show the light↔heavy bridge as first-class.
+
+> **Scope refinements after this spec was drafted (user decisions 2026-08-02), reflected in the plan:**
+> 1. **Two phases.** Phase 1 is a behavior-preserving TEARDOWN (no tile-shape change): fully remove the dead path-tile + checkpoint machinery and collapse the `evalPath`/`evalBinary` split. Phase 2 is the v2 functional change described below. The dead-code surface is larger than "delete two branches" — it includes `CheckpointManager`/`CheckpointCleaner`/`CleanupListener`, `RasterDriver.write`, `ExpressionConfig.useCheckpoint`/`getRasterCheckpointDir` + both checkpoint config keys, the `GDALManager` checkpoint vars, `rstInvoke`, and all 138 `evalPath` methods across ~103 files.
+> 2. **`eval` collapse.** With path-tiles gone, `evalBinary` → a single `eval` per expression; `rstInvoke` deleted.
+> 3. **Deserialize by layout, not by a named-field carrier.** Since `InternalRow` carries no schema, the chokepoint resolves v1 (3-field) vs v2 (8-field) by `row.numFields()` — the concrete realization of "by name" given exactly two canonical layouts. Where this spec says `tileFromRow`, the plan keeps the existing `rowToTile`/`rowToDS` names (signatures preserved so ~80 callers stay untouched) and makes them layout-aware.
+> 4. **Python heavy tier is a pure passthrough** — Phase 1 touches no Python; Phase 2 fixes only three stale `rasterx/functions.py` docstrings (`source`→`cellid`, v2 fields) and the `pyrx/_serde.py` shared-schema note.
 
 ## Problem & motivation
 

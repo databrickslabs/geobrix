@@ -1401,7 +1401,11 @@ def _buildoverviews_v2_udf(
 
 @f.udf(ArrayType(DoubleType()))
 def _sample_udf(tile, geom_wkb):
-    if tile is None or tile["raster"] is None or geom_wkb is None:
+    # PIXEL accessor: needs the window pixels, so use the virtual-aware
+    # _tile_is_empty guard (a virtual tile has raster None but a path -> NOT
+    # empty) and open via ot._open below. A bytes-only guard would drop a
+    # virtual input before ever materialising its window.
+    if _tile_is_empty(tile) or geom_wkb is None:
         return None
     from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env

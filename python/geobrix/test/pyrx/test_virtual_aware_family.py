@@ -98,6 +98,32 @@ def test_rst_avg_virtual_materializes(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# rst_sample — PIXEL accessor: samples the correct pixel on a VIRTUAL input.
+# Regression guard: the pre-sweep null guard (tile["raster"] is None) would
+# short-circuit a virtual tile to None before ever materialising the window.
+# ---------------------------------------------------------------------------
+def test_rst_sample_virtual_returns_pixel_value(tmp_path):
+    # 8x8 ramp DEM, origin (0,8), px=1, EPSG:32633 -> value at pixel
+    # (col, row) is row*8+col. Pick col=2,row=3 -> value 26; its pixel-centre
+    # world coord is x = 0 + 2.5 = 2.5, y = 8 - 3.5 = 4.5 (raster CRS).
+    import shapely.wkb
+    from shapely.geometry import Point
+
+    tile = _virtual_tile(tmp_path)
+    point_wkb = shapely.wkb.dumps(Point(2.5, 4.5))  # no SRID -> assumed aligned
+
+    virtual_val = prx._sample_udf.func(tile, point_wkb)
+    assert virtual_val is not None, "virtual tile must NOT short-circuit to None"
+    assert virtual_val == [pytest.approx(26.0)]
+
+    # Matches the materialized-equivalent tile (same file, opened as bytes).
+    with open(tile["path"], "rb") as fh:
+        mat_tile = {"cellid": 5, "raster": fh.read(), "metadata": {}}
+    mat_val = prx._sample_udf.func(mat_tile, point_wkb)
+    assert virtual_val == mat_val
+
+
+# ---------------------------------------------------------------------------
 # rst_slope — pixel tile op: auto / virtualize_dir / materialize / conflict
 # ---------------------------------------------------------------------------
 def _slope_array_from_row(row):

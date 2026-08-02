@@ -107,7 +107,7 @@ object GDALManager extends Logging {
             gdal.GetDriverByName(shortName)
         }
 
-    /** Apply ExpressionConfig to GDAL options and store checkpoint settings for this process. */
+    /** Apply ExpressionConfig to GDAL options for this process. */
     def configureGDAL(config: ExpressionConfig): Unit = {
         val CPL_TMPDIR = config.configs.getOrElse("cpl_tmpdir", "/tmp/gdal")
         val GDAL_PAM_PROXY_DIR = config.configs.getOrElse("gdal_pam_proxy_dir", "/tmp/gdal/pam")

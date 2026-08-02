@@ -527,17 +527,31 @@ def rst_fromfile(path: ColLike, driver: ColLike = "GTiff") -> Column:
 # extent (reuses core.agg.merge_tiles, the same union-extent reducer the
 # heavyweight RST_MergeAgg uses). cellid = 0 (no aggregate group key here).
 def _merge_bytes(tiles):
-    """Shared merge body: open every (virtual or materialized) input tile via
-    the ``_open_all`` front-door, encode each to GTiff bytes, mosaic by extent.
-    Returns the merged GTiff bytes (or None on an empty array)."""
+    """Shared merge body: collect each input tile's GTiff bytes, mosaic by extent.
+    Returns the merged GTiff bytes (or None on an empty array).
+
+    CRITICAL — materialized inputs pass their ORIGINAL bytes verbatim.
+    ``agg_core.merge_tiles`` sorts inputs on their RAW GTiff bytes to pick a
+    deterministic, tier-agreeing last-wins overlap winner (bitwise-identical
+    across light/heavy — see its docstring). Re-encoding a materialized tile
+    (full read -> re-write) would change that sort key and diverge from heavy
+    for overlapping tiles, so materialized bytes are NEVER round-tripped. Only
+    a VIRTUAL input (raster None) is materialized here (it has no bytes yet)."""
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     elems = [t for t in tiles if t is not None and not _tile_is_empty(t)]
     if not elems:
         return None
-    with ot._open_all(elems) as dss:
-        rasters = [_dataset_to_gtiff_bytes(ds) for ds in dss]
+    rasters = []
+    for t in elems:
+        vt = ot._to_virtual_tile(t)
+        if vt.is_virtual():
+            # Only virtual tiles (path+window, no bytes) need materializing.
+            rasters.append(ot.materialize_to_bytes(vt).raster)
+        else:
+            # Verbatim original bytes — preserves the sort key + heavy parity.
+            rasters.append(bytes(vt.raster))
     return agg_core.merge_tiles(rasters)
 
 

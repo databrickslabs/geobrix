@@ -198,6 +198,51 @@ def test_rst_merge_virtual_virtualize_dir(tmp_path):
         assert ds.width == 16
 
 
+def test_rst_merge_materialized_overlap_winner_matches_raw_bytes():
+    """Regression: materialized inputs must NOT be re-encoded before merge.
+
+    ``agg_core.merge_tiles`` sorts inputs on their RAW GTiff bytes to pick a
+    deterministic, heavy-parity last-wins overlap winner. Re-encoding a
+    materialized tile (full read -> re-write) would change that sort key and
+    flip the winner for OVERLAPPING tiles. This asserts the registered
+    ``_merge_udf`` produces the EXACT bytes of ``merge_tiles`` on the original
+    raw bytes — i.e. no re-encode altered the winner.
+    """
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    from .conftest import make_geotiff_bytes
+
+    # Two fully-overlapping same-origin materialized tiles with different
+    # content — the residual case the raw-bytes sort key exists to disambiguate.
+    a_bytes = make_geotiff_bytes(width=4, height=4)
+    b_bytes = make_geotiff_bytes(width=4, height=4, count=1)
+    # Force distinct content so the two tiles differ (else the test is trivial).
+    b_bytes = _shift_pixels(b_bytes, +50.0)
+
+    a_tile = {"cellid": 0, "raster": a_bytes, "metadata": {}}
+    b_tile = {"cellid": 0, "raster": b_bytes, "metadata": {}}
+
+    # Expected: merge_tiles on the ORIGINAL raw bytes (the pre-commit path).
+    expected = agg_core.merge_tiles([a_bytes, b_bytes])
+    got = prx._merge_udf.func([a_tile, b_tile])
+    assert got is not None and got["raster"] is not None
+    # Bitwise identical — proves no re-encode changed the sort key / winner.
+    assert bytes(got["raster"]) == expected
+
+
+def _shift_pixels(raster_bytes, delta):
+    """Return GTiff bytes with every band shifted by ``delta`` (same georef)."""
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(raster_bytes) as mf, mf.open() as src:
+        data = src.read() + delta
+        profile = src.profile.copy()
+    with MemoryFile() as out:
+        with out.open(**profile) as dst:
+            dst.write(data)
+        return out.read()
+
+
 # ---------------------------------------------------------------------------
 # rst_retile — UDTF fan-out: yields sub-tiles from a virtual input
 # ---------------------------------------------------------------------------

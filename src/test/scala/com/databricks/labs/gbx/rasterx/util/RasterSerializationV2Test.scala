@@ -5,7 +5,7 @@ import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
 import org.apache.spark.sql.catalyst.util.{ArrayBasedMapData, MapData}
-import org.apache.spark.sql.types.{BinaryType, StringType}
+import org.apache.spark.sql.types.{BinaryType, LongType, MapType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
@@ -68,6 +68,14 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
     private def v2VirtualRow(cellid: Long, path: String): InternalRow =
         new GenericInternalRow(Array[Any](cellid, null, UTF8String.fromString(path), null, null, null, null, emptyMap))
 
+    /** Open a minimal in-memory GeoTIFF as a live Dataset (caller must releaseDataset). */
+    private def openTinyGeotiff(): org.gdal.gdal.Dataset = {
+        RasterDriver.readFromBytes(tinyGeotiff(), Map.empty)
+    }
+
+    private val hconf: org.apache.spark.util.SerializableConfiguration =
+        new org.apache.spark.util.SerializableConfiguration(new org.apache.hadoop.conf.Configuration())
+
     // ---- tests --------------------------------------------------------------
 
     test("rowToTile reads a v1 (3-field) binary tile") {
@@ -103,6 +111,25 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
                 new GenericInternalRow(Array[Any](1L, Array.emptyByteArray)), BinaryType))
         assert(ex.getMessage.contains("2"),
             s"Expected field count '2' in message: ${ex.getMessage}")
+    }
+
+    test("v2TileType matches the light V2 schema exactly") {
+        val t = RST_ExpressionUtil.v2TileType
+        assert(t.fieldNames.toSeq == Seq("cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata"))
+        assert(t("cellid").dataType == LongType && !t("cellid").nullable)
+        assert(t("raster").dataType == BinaryType && t("raster").nullable)
+        val w = t("window").dataType.asInstanceOf[org.apache.spark.sql.types.StructType]
+        assert(w.fieldNames.toSeq == Seq("col_off", "row_off", "width", "height"))
+        assert(t("metadata").dataType == MapType(StringType, StringType))
+    }
+
+    test("tileToRow emits an 8-field v2 materialized row with null pedigree") {
+        val ds = openTinyGeotiff()
+        val row = RasterSerializationUtil.tileToRow((5L, ds, Map("d" -> "GTiff")), BinaryType, hconf)
+        assert(row.numFields == 8 && row.getLong(0) == 5L && !row.isNullAt(1))
+        assert(row.isNullAt(2) && row.isNullAt(3) && row.isNullAt(4) && row.isNullAt(5) && row.isNullAt(6))
+        assert(!row.isNullAt(7))
+        RasterDriver.releaseDataset(ds)
     }
 
 }

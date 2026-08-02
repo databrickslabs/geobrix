@@ -80,28 +80,29 @@ object RST_ExpressionUtil {
             )
     }
 
-    /** StructType for a tile with the given tile expression's raster type (cellid, raster, metadata). */
-    def tileDataType(tileExpr: Expression): DataType = {
-        val rasterDataType = rasterType(tileExpr)
-        StructType(
-          Seq(
-            StructField("cellid", LongType, nullable = false),
-            StructField("raster", rasterDataType, nullable = false),
-            StructField("metadata", MapType(StringType, StringType), nullable = true)
-          )
-        )
-    }
+    /** StructType for the window sub-struct (col_off, row_off, width, height). */
+    val windowType: StructType = StructType(Seq(
+        StructField("col_off", IntegerType, nullable = false),
+        StructField("row_off", IntegerType, nullable = false),
+        StructField("width", IntegerType, nullable = false),
+        StructField("height", IntegerType, nullable = false)))
 
-    /** StructType for a tile with the given raster DataType (cellid, raster, metadata). */
-    def tileDataType(rdt: DataType): DataType = {
-        StructType(
-          Seq(
-            StructField("cellid", LongType, nullable = false),
-            StructField("raster", rdt, nullable = false),
-            StructField("metadata", MapType(StringType, StringType), nullable = true)
-          )
-        )
-    }
+    /** Canonical v2 tile schema — 8 fields, matching the light-tier V2_TILE_SCHEMA byte-for-byte. */
+    val v2TileType: StructType = StructType(Seq(
+        StructField("cellid", LongType, nullable = false),
+        StructField("raster", BinaryType, nullable = true),
+        StructField("path", StringType, nullable = true),
+        StructField("window", windowType, nullable = true),
+        StructField("clip_polygon", BinaryType, nullable = true),
+        StructField("clip_crs", StringType, nullable = true),
+        StructField("crs", StringType, nullable = true),
+        StructField("metadata", MapType(StringType, StringType), nullable = true)))
+
+    /** StructType for a tile with the given tile expression's raster type (v2 8-field schema). */
+    def tileDataType(tileExpr: Expression): DataType = v2TileType
+
+    /** StructType for a tile with the given raster DataType (v2 8-field schema). */
+    def tileDataType(rdt: DataType): DataType = v2TileType
 
     /** Initialize NodeFileManager and GDAL for this process (e.g. on executor). */
     def init(expressionConfig: ExpressionConfig): Unit = {

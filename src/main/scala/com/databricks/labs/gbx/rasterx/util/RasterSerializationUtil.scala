@@ -75,8 +75,13 @@ object RasterSerializationUtil {
         InternalRow.fromSeq(
           Seq(
             tuple._1, // cellid
-            bytes, // binary
-            metadata // metadata
+            bytes,    // raster (binary)
+            null,     // path (null — bytes are self-describing)
+            null,     // window
+            null,     // clip_polygon
+            null,     // clip_crs
+            null,     // crs
+            metadata  // metadata (position 7)
           )
         )
     }

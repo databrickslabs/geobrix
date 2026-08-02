@@ -76,7 +76,7 @@ case class RST_MergeAgg(
             // per-open /vsimem/<uuid> path -- i.e. random. Raw content has no such hole.
             val tiles = buffer
                 .map(_.asInstanceOf[InternalRow])
-                .sortBy(row => RST_MergeAgg.contentKey(row, rasterType))(RST_MergeAgg.unsignedBytesOrdering)
+                .sortBy(row => RST_MergeAgg.contentKey(row))(RST_MergeAgg.unsignedBytesOrdering)
                 .map(row => RasterSerializationUtil.rowToTile(row, rasterType))
 
             // If merging multiple index rasters, the index value is dropped
@@ -119,7 +119,7 @@ object RST_MergeAgg extends WithExpressionInfo {
       * a total order intrinsic to the tile -- bitwise-identical to what the lightweight tier
       * sorts on -- with no random per-open component.
       */
-    private[agg] def contentKey(row: InternalRow, rasterDT: DataType): Array[Byte] =
+    private[agg] def contentKey(row: InternalRow): Array[Byte] =
         row.getBinary(1)
 
     /** Unsigned lexicographic ordering of byte arrays (a stable total order on raw content). */

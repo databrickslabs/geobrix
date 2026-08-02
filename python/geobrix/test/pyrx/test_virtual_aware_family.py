@@ -352,3 +352,45 @@ def test_rst_slope_column_api_virtualize_dir_on_virtual_df(spark, tmp_path):
     assert row["path"] is not None and row["path"].endswith(".tif")
     with ot._open(row.asDict()) as ds:
         assert ds.count == 1
+
+
+# ---------------------------------------------------------------------------
+# rst_transform — identity (target == source EPSG) is a PASSTHROUGH
+# ---------------------------------------------------------------------------
+def test_reproject_identity_returns_source_bytes_verbatim(tmp_path):
+    """reproject_to_srid to the SOURCE epsg returns the source bytes unchanged
+    (no resample, no re-encode) — identity produces no new pixels."""
+    from databricks.labs.gbx.pyrx.core import warp
+
+    p = str(tmp_path / "ident.tif")
+    _write_ramp_tif(p, side=8, epsg=32633)
+    with rasterio.open(p) as ds:
+        src_bytes = ds.read()  # decode source pixels for comparison
+        out = warp.reproject_to_srid(ds, 32633)
+    # Output decodes to the exact same pixels + CRS as the source.
+    with rasterio.io.MemoryFile(out) as mf, mf.open() as ods:
+        assert ods.crs.to_epsg() == 32633
+        assert ods.width == 8 and ods.height == 8
+        np.testing.assert_array_equal(ods.read(), src_bytes)
+
+
+def test_reproject_no_epsg_source_still_warps(tmp_path):
+    """A source CRS with no EPSG code never mis-short-circuits: the identity
+    check compares EPSG codes, so a codeless CRS always falls through to warp."""
+    from databricks.labs.gbx.pyrx.core import warp
+    import rasterio.crs
+
+    p = str(tmp_path / "esri.tif")
+    # ESRI:54008 (World Sinusoidal) has no EPSG code.
+    prof = dict(
+        driver="GTiff", width=8, height=8, count=1, dtype="float32",
+        crs=rasterio.crs.CRS.from_string("ESRI:54008"),
+        transform=from_origin(0.0, 8.0, 1000.0, 1000.0), nodata=-9999.0,
+    )
+    with rasterio.open(p, "w", **prof) as ds:
+        ds.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
+    with rasterio.open(p) as ds:
+        assert ds.crs.to_epsg() is None  # precondition
+        out = warp.reproject_to_srid(ds, 4326)
+    with rasterio.io.MemoryFile(out) as mf, mf.open() as ods:
+        assert ods.crs.to_epsg() == 4326  # a real warp happened

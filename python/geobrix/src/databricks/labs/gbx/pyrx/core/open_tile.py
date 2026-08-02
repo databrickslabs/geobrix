@@ -358,9 +358,9 @@ def shape_output(
 
     ``virtualize_dir`` set:
       - The tile is already a REFERENCE to backing pixels (``raster`` is None —
-        header reads, reader selection, identity transform): return as-is.
-        ``virtualize_dir`` is a no-op here because the tile already references
-        real, self-consistent bytes on a backing store.
+        header reads, reader selection): return as-is.
+        ``virtualize_dir`` has no meaningful effect here because the tile already
+        references real, self-consistent bytes on a backing store.
       - The tile carries PRODUCED pixels (``raster`` set — a pixel-producing op
         such as reproject/merge/combineavg/frombands materialized its result):
         write bytes to

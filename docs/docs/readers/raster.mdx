@@ -44,6 +44,7 @@ prepare-then-read pipeline.
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `virtualTiles` | `"true"` | **Default.** Emit bytes-free **virtual tiles** — each row carries the source `path` + pixel `window` instead of raster bytes; pixels are read lazily when an operation needs them (the ingest-OOM-dissolving default for the light tier). Set `"false"` to materialize raster bytes into each row. See [Virtual Tiles](../api/virtual-tiles). |
 | `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one whole-image tile per file), `auto` (resolve to `serverless` or `classic` by environment), `serverless` (opt-in, 64 MiB decoded budget per tile), `classic` (opt-in, 1 536 MiB decoded budget per tile). |
 | `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB. A positive value implies opt-in split regardless of `splitStrategy`. `-1` = defer to `splitStrategy`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
@@ -59,6 +60,14 @@ that straddles a seam, so no single tile sees it whole. Set `overlapPercent` so 
 cells overlap — a feature near a boundary then appears complete in at least one tile, which per-tile
 analysis needs. Overlap only makes sense for a reader-chosen grid (`tileSize`); `windows` and
 `clipPolygons` are extents you specify explicitly, so they take no overlap.
+:::
+
+:::note Virtual tiles are the default
+Light raster readers now emit **virtual tiles** by default (`virtualTiles=true`) — bytes-free
+`(path, window)` references that read pixels lazily. Previously the reader materialized raster
+bytes into every row. To restore materialized reads, pass `.option("virtualTiles", "false")`.
+A virtual tile passed to a heavyweight function must be materialized first — see
+[Virtual Tiles](../api/virtual-tiles).
 :::
 
 :::note Default changed from `auto` to `none`

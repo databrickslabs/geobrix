@@ -32,6 +32,7 @@ This makes `cog_gbx` the natural read path after COG preparation with the
 
 | Option | Default | Description |
 |--------|---------|-------------|
+| `virtualTiles` | `"true"` | **Default.** Emit bytes-free **virtual tiles** — each row carries the source `path` + pixel `window` instead of raster bytes; pixels are read lazily when an operation needs them (the ingest-OOM-dissolving default for the light tier). Set `"false"` to materialize raster bytes into each row. See [Virtual Tiles](../api/virtual-tiles). |
 | `clipPolygons` | _none_ | Area(s) of interest: one WKT/EWKT string, or a JSON-array string for a list, e.g. `'["POLYGON((...))","POLYGON((...))"]'`. One tile per polygon whose envelope intersects the COG; only the intersecting blocks/overviews are fetched. Materialized tiles are pre-clipped (NoData outside the polygon); virtual tiles defer the clip. Mutually exclusive with `windows`. |
 | `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`/`tileSize`. |
 | `clipCrs` | _none_ | CRS for `clipPolygons` lacking an embedded SRID (e.g. `"EPSG:27700"`). Precedence: embedded EWKB/EWKT SRID → `clipCrs` → the COG's CRS. The reader reprojects the polygon internally. |
@@ -40,6 +41,14 @@ This makes `cog_gbx` the natural read path after COG preparation with the
 | `tileSize` | _none_ | Regular fixed-size grid over the COG: `"w,h"` or a single `"n"` (square). One tile per cell; mutually exclusive with `clipPolygons`/`windows`. Materialized cells guarded to ~2 GB; virtual unguarded. See [Raster Options](./raster#options). |
 | `overlapPercent` | `0` | Overlap % between `tileSize` cells (`tileSize`-only). See [Raster Options](./raster#options). |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
+
+:::note Virtual tiles are the default
+Light raster readers now emit **virtual tiles** by default (`virtualTiles=true`) — bytes-free
+`(path, window)` references that read pixels lazily. Previously the reader materialized raster
+bytes into every row. To restore materialized reads, pass `.option("virtualTiles", "false")`.
+A virtual tile passed to a heavyweight function must be materialized first — see
+[Virtual Tiles](../api/virtual-tiles).
+:::
 
 :::tip Default is no-split
 Both `raster_gbx` and `cog_gbx` default to `splitStrategy=none` — one tile per

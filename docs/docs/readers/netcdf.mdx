@@ -68,6 +68,12 @@ Raw sensor-geometry products (no per-pixel lon/lat) are rejected with an
 actionable error rather than silently guessed at.
 :::
 
+:::note NetCDF readers always materialize tiles
+NetCDF raster reads are multidimensional per-variable reads that materialize tile
+bytes directly into each row. Virtual-tile support (`virtualTiles`) for the NetCDF
+readers is not part of this release.
+:::
+
 ### Options
 
 | Option | Default | Description |

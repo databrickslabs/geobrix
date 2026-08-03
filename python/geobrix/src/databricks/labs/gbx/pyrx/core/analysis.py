@@ -226,7 +226,7 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     # ZSTD level from decoded_bytes (the ZSTD baseline, same as the GTiff path).
     _comp_arg = "none" if compression == "RAW" else compression.lower()
     _comp_opts = _comp.creation_opts(
-        str(ds.dtypes[0]), decoded_bytes=data.nbytes, compress=_comp_arg
+        str(ds.dtypes[0]), decoded_bytes=data.nbytes, compress=_comp_arg, driver="COG"
     )
 
     profile = ds.profile.copy()
@@ -269,6 +269,8 @@ def cog_convert_file(
     blocksize: int = 512,
     overview_resampling: str = "AVERAGE",
     bigtiff: str = "YES",
+    compress_level: int = None,
+    predictor: int = None,
 ) -> None:
     """Convert a raster file to COG layout using streaming block-by-block copy.
 
@@ -293,6 +295,10 @@ def cog_convert_file(
                              Classic TIFF, which FAILS for outputs past ~4 GiB).
                              A COG exceeding ~4 GiB overflows the Classic TIFF
                              32-bit directory-offset limit and MUST be BigTIFF.
+        compress_level:      Optional compression level (for ZSTD/DEFLATE). Ignored
+                             when compression is "none" or unknown.
+        predictor:           Optional TIFF predictor tag (1-3). Ignored when
+                             compression is "none" or unknown codecs.
     """
     blocksize = int(blocksize)
     if blocksize <= 0:
@@ -320,7 +326,14 @@ def cog_convert_file(
     _comp_arg = (
         "none" if str(compression).upper() == "RAW" else str(compression).lower()
     )
-    _comp_opts = _comp.creation_opts(_src_dtype, decoded_bytes=None, compress=_comp_arg)
+    _comp_opts = _comp.creation_opts(
+        _src_dtype,
+        decoded_bytes=None,
+        compress=_comp_arg,
+        level=compress_level,
+        predictor=predictor,
+        driver="COG",
+    )
 
     creation = dict(
         blocksize=int(blocksize),

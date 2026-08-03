@@ -50,12 +50,22 @@ object OperatorOptions {
         }
 
         val coComp = compression match {
-            case "ZSTD"    => Seq(s"$coFlag COMPRESS=ZSTD", s"$coFlag ZSTD_LEVEL=${writeOptions.getOrElse("zstd_level", "9")}", s"$coFlag PREDICTOR=$predictor")
-            case "DEFLATE" => Seq(
-                  s"$coFlag COMPRESS=DEFLATE",
-                  s"$coFlag PREDICTOR=$predictor",
-                  s"$coFlag ZLEVEL=${writeOptions.getOrElse("zlevel", "6")}"
+            case "ZSTD"    => {
+                // COG driver uses "LEVEL"; GTiff uses "ZSTD_LEVEL"
+                val levelOption = if (format == "COG") "LEVEL" else "ZSTD_LEVEL"
+                val levelKey = if (format == "COG") "level" else "zstd_level"
+                Seq(s"$coFlag COMPRESS=ZSTD", s"$coFlag $levelOption=${writeOptions.getOrElse(levelKey, "9")}", s"$coFlag PREDICTOR=$predictor")
+            }
+            case "DEFLATE" => {
+                // COG driver uses "LEVEL"; GTiff uses "ZLEVEL"
+                val levelOption = if (format == "COG") "LEVEL" else "ZLEVEL"
+                val levelKey = if (format == "COG") "level" else "zlevel"
+                Seq(
+                    s"$coFlag COMPRESS=DEFLATE",
+                    s"$coFlag PREDICTOR=$predictor",
+                    s"$coFlag $levelOption=${writeOptions.getOrElse(levelKey, "6")}"
                 )
+            }
             case "LZW"     => Seq(s"$coFlag COMPRESS=LZW", s"$coFlag PREDICTOR=$predictor")
             case other     => Seq(s"$coFlag COMPRESS=$other")
         }

@@ -23,8 +23,9 @@ import java.util.{Vector => JVector}
   * cheaper to serve from object storage than a classic GTiff and recognised by
   * every modern raster tool.
   *
-  *   - `compression` (default `"DEFLATE"`): pixel compression — one of
-  *     `NONE`, `DEFLATE`, `LZW`, `ZSTD`, `LERC`, `JPEG`, `WEBP`.
+  *   - `compression` (default `"ZSTD"`): pixel compression — one of
+  *     `NONE`, `DEFLATE`, `LZW`, `ZSTD`, `LERC`, `JPEG`, `WEBP`. ZSTD is the
+  *     recommended default, consistent with the ZSTD baseline for all COG outputs.
   *   - `blocksize` (default `512`): internal tile size in pixels (square).
   *   - `overview_resampling` (default `"AVERAGE"`): downsampling algorithm
   *     used when GDAL auto-generates the overview pyramid — same set as
@@ -78,7 +79,7 @@ object RST_CogConvert extends WithExpressionInfo {
               val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
               val (resDs, resMtd) = execute(
                   ds, options,
-                  Option(compression).map(_.toString).getOrElse("DEFLATE"),
+                  Option(compression).map(_.toString).getOrElse("ZSTD"),
                   blocksize,
                   Option(overviewResampling).map(_.toString).getOrElse("AVERAGE")
               )
@@ -169,7 +170,7 @@ object RST_CogConvert extends WithExpressionInfo {
     override def name: String = "gbx_rst_cog_convert"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 1 => RST_CogConvert(c(0), Literal("DEFLATE"), Literal(512), Literal("AVERAGE"))
+        case 1 => RST_CogConvert(c(0), Literal("ZSTD"), Literal(512), Literal("AVERAGE"))
         case 2 => RST_CogConvert(c(0), c(1), Literal(512), Literal("AVERAGE"))
         case 3 => RST_CogConvert(c(0), c(1), c(2), Literal("AVERAGE"))
         case 4 => RST_CogConvert(c(0), c(1), c(2), c(3))

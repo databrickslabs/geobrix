@@ -231,6 +231,8 @@ class CogGbxWriter(DataSourceWriter):
                     blocksize=self.cog_blocksize,
                     overview_resampling=self.cog_overview_resampling,
                     bigtiff=self.cog_bigtiff,
+                    compress_level=self.compress_level,
+                    predictor=self.predictor,
                 )
                 shutil.copyfile(tmp, out_path)  # bytes-only → FUSE-safe on /Volumes
             finally:
@@ -303,6 +305,8 @@ class CogGbxWriter(DataSourceWriter):
                 blocksize=self.cog_blocksize,
                 overview_resampling=self.cog_overview_resampling,
                 bigtiff=self.cog_bigtiff,
+                compress_level=self.compress_level,
+                predictor=self.predictor,
             )
             shutil.copyfile(tmp_out, out_path)  # bytes-only → FUSE-safe on /Volumes
         finally:
@@ -349,6 +353,8 @@ class CogGbxWriter(DataSourceWriter):
                         blocksize=self.cog_blocksize,
                         overview_resampling=self.cog_overview_resampling,
                         bigtiff=self.cog_bigtiff,
+                        compress_level=self.compress_level,
+                        predictor=self.predictor,
                     )
                     shutil.copyfile(tmp, out_path)
                 finally:
@@ -384,6 +390,8 @@ class CogGbxWriter(DataSourceWriter):
                 blocksize=self.cog_blocksize,
                 resampling=self.cog_overview_resampling,
                 compression=self._resolved_cog_compression(),
+                compress_level=self.compress_level,
+                predictor=self.predictor,
                 subdataset=self.cog_subdataset,
                 skip_if_exists=self.cog_skip_if_exists,
                 verbose=self.driver_mode_verbose,

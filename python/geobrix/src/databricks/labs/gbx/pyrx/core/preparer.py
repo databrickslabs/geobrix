@@ -123,6 +123,8 @@ def prepare_cog(
                 blocksize=blocksize,
                 overview_resampling=resampling,
                 bigtiff=bigtiff,
+                compress_level=compress_level,
+                predictor=predictor,
             )
             shutil.copyfile(tmp, out_path)  # bytes-only → FUSE-safe
         finally:

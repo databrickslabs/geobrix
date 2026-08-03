@@ -46,13 +46,11 @@ def encode_tile(
         window:                (col_off, row_off, win_w, win_h) pixel window.
         source_path:           Original source file path (for metadata).
         all_parents:           Semicolon-delimited parent chain (for metadata).
-        compression:           GTiff compression (default ``"auto"`` → ZSTD +
-                               dtype-predictor via the compression authority).
-                               Explicit values ``"DEFLATE"``, ``"LZW"``,
-                               ``"ZSTD"``, ``"NONE"`` / ``"RAW"`` are forwarded
-                               through the authority unchanged.  For the COG
-                               path, ``"auto"`` is resolved to ``"DEFLATE"``
-                               (rio_cogeo profile compatibility).
+        compression:           Compression codec (default ``"auto"`` → size-adaptive
+                               ZSTD + dtype-predictor via the compression authority,
+                               for both GTiff and COG paths). Explicit values
+                               ``"DEFLATE"``, ``"LZW"``, ``"ZSTD"``, ``"NONE"`` /
+                               ``"RAW"`` are forwarded through the authority unchanged.
         tile_format:           ``"gtiff"`` (default, plain windowed GTiff) or
                                ``"cog"`` (opt-in COG with overviews, ~2.8× peak).
         cog_blocksize:         Internal tile size for COG output (default 512).
@@ -70,20 +68,31 @@ def encode_tile(
         # intermediate so peak = decoded array + COG file bytes (not all three).
         from rio_cogeo.profiles import cog_profiles
 
-        # Resolve "auto" → "DEFLATE" for rio_cogeo profile compatibility;
-        # the COG driver owns blocksize/overview structure so we leave its
-        # compression choice to the caller (rio_cogeo profiles).
-        cog_compression = (
-            compression if str(compression).lower() != "auto" else "DEFLATE"
-        )
+        # Resolve "auto" → "ZSTD" for the ZSTD baseline (constraint requirement).
+        # Route through the compression authority for size-adaptive levels.
+        cog_compression = compression if str(compression).lower() != "auto" else "AUTO"
         compression_str = str(cog_compression).upper()
-        # Validate compression name (same set as analysis.cog_convert).
-        _profile_check = cog_profiles.get(compression_str.lower())
-        if _profile_check is None:
-            raise ValueError(
-                f"encode_tile: unknown compression '{cog_compression}'; "
-                f"valid: {', '.join(sorted(cog_profiles.keys()))}"
-            )
+
+        # If not AUTO, validate compression name (same set as analysis.cog_convert).
+        if compression_str != "AUTO":
+            _profile_check = cog_profiles.get(compression_str.lower())
+            if _profile_check is None:
+                raise ValueError(
+                    f"encode_tile: unknown compression '{cog_compression}'; "
+                    f"valid: {', '.join(sorted(cog_profiles.keys()))}"
+                )
+
+        # Route through the compression authority for proper codec/level/predictor
+        # with driver="COG" to ensure LEVEL (not zstd_level) is used.
+        out_dtype = ds.dtypes[0]
+        decoded_bytes = ds.count * win_w * win_h * np.dtype(out_dtype).itemsize
+        _comp_arg = "none" if compression_str == "RAW" else compression_str.lower()
+        _comp_opts = _comp.creation_opts(
+            str(out_dtype),
+            decoded_bytes=decoded_bytes,
+            compress=_comp_arg,
+            driver="COG",
+        )
 
         profile = ds.profile.copy()
         profile.update(
@@ -94,10 +103,11 @@ def encode_tile(
             blocksize=cog_blocksize,
             overview_resampling=str(cog_overview_resampling).upper(),
         )
-        if compression_str != "RAW":
-            profile["compress"] = compression_str
-        else:
-            profile.pop("compress", None)
+        # Remove stale compression keys from the source profile before merging authority opts.
+        for _k in ("compress", "predictor", "zstd_level", "zlevel", "LEVEL"):
+            profile.pop(_k, None)
+        # Merge authority options (codec + level + predictor)
+        profile.update(_comp_opts)
 
         tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
         tmp.close()

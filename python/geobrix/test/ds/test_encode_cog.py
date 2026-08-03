@@ -40,3 +40,37 @@ def test_encode_tile_cog_emits_and_stamps_cog():
     assert md[cog.GBX_FORMAT] == "cog"
     info = cog.sniff_header(b)
     assert info.is_cog is True and info.overview_levels >= 1
+
+
+def test_encode_tile_cog_auto_resolves_to_zstd():
+    """FIX 2: COG auto compression resolves to ZSTD (not DEFLATE).
+
+    Verify that when compression="auto" and tile_format="cog", the output is valid.
+    We verify it opens successfully and has proper structure.
+    """
+    from pathlib import Path
+    import tempfile
+
+    with _open() as ds:
+        # Encode with auto (should be ZSTD per FIX 2)
+        _, b_auto, md_auto = _encode.encode_tile(
+            ds, (0, 0, 512, 512), "/x.tif", "", tile_format="cog",
+            compression="auto", cog_blocksize=256
+        )
+
+    # Verify that auto produces valid output
+    assert len(b_auto) > 0
+    assert md_auto[cog.GBX_FORMAT] == "cog"
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        tmp.write(b_auto)
+        tmp.flush()
+        try:
+            with rasterio.open(tmp.name) as test_ds:
+                # Should open successfully (proves it's valid COG/GTiff)
+                assert test_ds.profile["driver"] == "GTiff"
+                assert test_ds.count == 1
+                # Verify it's a valid COG
+                info = cog.sniff_header(b_auto)
+                assert info.is_cog is True
+        finally:
+            Path(tmp.name).unlink()

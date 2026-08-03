@@ -60,6 +60,7 @@ def creation_opts(
     compress="auto",
     level=None,
     predictor=None,
+    driver="GTiff",
 ) -> dict:
     """Return rasterio creation-options for a raster write.
 
@@ -80,10 +81,15 @@ def creation_opts(
         Any other string — passed through as-is (no predictor assumption).
     level:
         Optional level override. Ignored (with UserWarning) when compress='auto'.
-        For zstd: becomes zstd_level. For deflate: becomes zlevel.
+        For zstd: becomes zstd_level (GTiff) or LEVEL (COG).
+        For deflate: becomes zlevel (GTiff) or LEVEL (COG).
     predictor:
         Optional predictor override. Ignored (with UserWarning) when
         compress='auto' (auto always derives predictor from dtype).
+    driver:
+        "GTiff" (default) or "COG". Controls compression option names:
+        - GTiff ZSTD uses "zstd_level", DEFLATE uses "zlevel"
+        - COG ZSTD/DEFLATE both use "LEVEL"
 
     Returns
     -------
@@ -91,6 +97,7 @@ def creation_opts(
     """
     dtype = str(dtype)
     pred = predictor if predictor is not None else predictor_for(dtype)
+    is_cog = str(driver).upper() == "COG"
 
     if compress == "auto":
         if level is not None or predictor is not None:
@@ -100,28 +107,37 @@ def creation_opts(
                 UserWarning,
                 stacklevel=2,
             )
-        return {
+        auto_lev = str(auto_level(decoded_bytes))
+        opts = {
             "compress": "zstd",
-            "zstd_level": str(auto_level(decoded_bytes)),
             "predictor": str(predictor_for(dtype)),
         }
+        # COG driver uses LEVEL; GTiff uses zstd_level
+        opts["LEVEL" if is_cog else "zstd_level"] = auto_lev
+        return opts
 
     c = str(compress).lower()
     if c in ("none", "raw"):
         return {}  # no compression keys
 
     if c == "zstd":
-        return {
+        opts = {
             "compress": "zstd",
-            "zstd_level": str(level if level is not None else _AUTO_DEFAULT_LEVEL),
             "predictor": str(pred),
         }
+        # COG driver uses LEVEL; GTiff uses zstd_level
+        opts["LEVEL" if is_cog else "zstd_level"] = str(
+            level if level is not None else _AUTO_DEFAULT_LEVEL
+        )
+        return opts
     if c == "deflate":
-        return {
+        opts = {
             "compress": "deflate",
-            "zlevel": str(level if level is not None else 6),
             "predictor": str(pred),
         }
+        # COG driver uses LEVEL; GTiff uses zlevel
+        opts["LEVEL" if is_cog else "zlevel"] = str(level if level is not None else 6)
+        return opts
     if c == "lzw":
         return {
             "compress": "lzw",

@@ -93,3 +93,59 @@ def test_materialize_strips_pending_keys():
     with MemoryFile(mat.raster) as mf, mf.open() as ds:
         assert ds.nodata == -9999.0
         assert ds.crs.to_epsg() == 3857
+
+
+# ---------------------------------------------------------------------------
+# Task 2: rst_initnodata records pending nodata on virtual tiles, emits v2
+# ---------------------------------------------------------------------------
+from pyspark.sql import SparkSession
+
+from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx.pyrx import functions as rx
+
+
+def _spark():
+    return (
+        SparkSession.builder.master("local[2]")
+        .config("spark.ui.enabled", "false")
+        .getOrCreate()
+    )
+
+
+def _read_virtual_df(spark, tif):
+    register(spark)
+    return (
+        spark.read.format("gtiff_gbx")
+        .option("driver", "GTiff")
+        .option("filterRegex", r".*\.(tif|TIF)$")
+        .load(tif)
+    )
+
+
+def test_initnodata_virtual_stays_virtual_records_key():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    out = df.withColumn("tile", rx.rst_initnodata("tile"))
+    row = out.select("tile.raster", "tile.path", "tile.metadata").first()
+    assert row["raster"] is None, "virtual tile must stay virtual (no bytes)"
+    assert row["path"] is not None, "path reference preserved"
+    assert (
+        row["metadata"]["pending_nodata"] == "-9999.0"
+        or row["metadata"]["pending_nodata"] == "-9999"
+    )
+
+
+def test_initnodata_virtual_emits_v2_struct():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    out = df.withColumn("tile", rx.rst_initnodata("tile"))
+    fields = [f.name for f in out.schema["tile"].dataType.fields]
+    assert "path" in fields and "window" in fields  # v2, not v1 3-field
+
+
+def test_initnodata_materialize_true_bakes_bytes():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    out = df.withColumn("tile", rx.rst_initnodata("tile", materialize=True))
+    row = out.select("tile.raster").first()
+    assert row["raster"] is not None and len(row["raster"]) > 0

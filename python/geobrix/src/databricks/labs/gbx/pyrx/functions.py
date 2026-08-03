@@ -218,6 +218,8 @@ def _shaped_result_row(
     """
     if new_bytes is None:
         return None
+    # Fresh VirtualTile with empty metadata — no source metadata copied, so the
+    # produced tile carries no pending_* keys (they were consumed into the bytes).
     vt = VirtualTile(cellid=int(cellid), raster=bytes(new_bytes))
     shaped = ot.shape_output(
         vt,
@@ -1220,12 +1222,23 @@ def _init_nodata_bytes(tile):
         return edit.init_nodata(ds)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _init_nodata_udf(tile):
     if _tile_is_empty(tile):
         return None
+    vt = ot._to_virtual_tile(tile)
+    if vt.is_virtual():
+        # record pending instruction; stay virtual (no pixel read)
+        md = dict(vt.metadata or {})
+        md.setdefault(ot.PENDING_NODATA, str(edit._DEFAULT_NODATA))
+        vt.metadata = md
+        return vt.to_row()
+    # materialized input: apply eagerly to bytes (today's behavior), emit v2
+    # materialized inputs carry no pending_* keys (invariant), so metadata is already clean
     new_bytes = _init_nodata_bytes(tile)
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+    ).to_row()
 
 
 @f.udf(V2_TILE_SCHEMA)

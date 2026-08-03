@@ -386,6 +386,16 @@ def main() -> int:
             "(default: strip them — they fail in Serverless JOB compute)."
         ),
     )
+    parser.add_argument(
+        "--dep-notebook",
+        metavar="PATH",
+        action="append",
+        dest="dep_notebooks",
+        help=(
+            "Local .ipynb to import into ws-dir but NOT submit (e.g. config_nb.ipynb "
+            "used via %%run). Repeatable."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -416,6 +426,15 @@ def main() -> int:
     print(f"Notebooks: {len(notebooks)}", flush=True)
     print(f"Strip %%pip: {args.strip_pip}", flush=True)
     print("", flush=True)
+
+    # Upload dep-notebooks (referenced via %run) before submitting main notebooks.
+    for dep_path_str in args.dep_notebooks or []:
+        dep_path = pathlib.Path(dep_path_str).resolve()
+        if not dep_path.exists():
+            print(f"ERROR: dep-notebook not found: {dep_path}", file=sys.stderr)
+            return 2
+        print(f"=== DEP-IMPORT: {dep_path.name} ===", flush=True)
+        _import_notebook(w, dep_path, ws_dir, strip_pip=args.strip_pip)
 
     for nb_path in notebooks:
         ok = run_one(

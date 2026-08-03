@@ -14,6 +14,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 
 - `--notebook PATH` – Local `.ipynb` file to run (repeatable).
 - `--dir DIR` – Directory of `.ipynb` files to run (all `*.ipynb`, sorted).
+- `--dep-notebook PATH` – Local `.ipynb` to import into `--ws-dir` but NOT submit (e.g. a shared `config_nb.ipynb` referenced via `%run ./config_nb`). Repeatable.
 - `--ws-dir WSPATH` – Workspace folder to import notebooks into (default: `/Users/<current-user>/GeoBrix/serverless-run`).
 - `--extras CSV` – Geobrix extras whose deps to install (default: `light,stac,vizx,overture`).
 - `--extra-deps CSV` – Additional pip requirements (comma-separated).

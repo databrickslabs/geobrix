@@ -30,6 +30,8 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--notebook PATH${NC}       Local .ipynb to run (repeatable; or use --dir)."
     echo -e "  ${GREEN}--dir DIR${NC}             Directory of .ipynb files to run (all *.ipynb, sorted)."
+    echo -e "  ${GREEN}--dep-notebook PATH${NC}   Local .ipynb to import but NOT submit (e.g. config_nb.ipynb"
+    echo -e "                        referenced via %%run; repeatable)."
     echo -e "  ${GREEN}--ws-dir WSPATH${NC}       Workspace folder to import notebooks into."
     echo -e "                        (default: /Users/<current-user>/GeoBrix/serverless-run)"
     echo -e "  ${GREEN}--extras CSV${NC}          Geobrix extras whose deps to install"

@@ -1,7 +1,10 @@
 import glob
+import tempfile
 
 import numpy as np
 import rasterio
+from rasterio.io import MemoryFile
+from rasterio.transform import from_bounds
 
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -251,3 +254,75 @@ def test_accumulated_instructions_apply_in_order():
         and "pending_srid" not in md
         and "pending_nodata" not in md
     )
+
+
+# ---------------------------------------------------------------------------
+# Dtype / preserve tests: nodata "ensure/preserve" semantics
+# ---------------------------------------------------------------------------
+
+
+def _write_tif(path, dtype, nodata=None, width=4, height=4):
+    """Write a minimal GTiff to *path* with given dtype and nodata."""
+    transform = from_bounds(0, 0, 1, 1, width, height)
+    profile = dict(
+        driver="GTiff",
+        dtype=dtype,
+        width=width,
+        height=height,
+        count=1,
+        crs="EPSG:4326",
+        transform=transform,
+    )
+    if nodata is not None:
+        profile["nodata"] = nodata
+    arr = np.zeros((1, height, width), dtype=dtype)
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(arr)
+
+
+def _virtual_from_path(path):
+    with rasterio.open(path) as ds:
+        w, h = ds.width, ds.height
+    return VirtualTile(
+        cellid=-1, raster=None, path=path, window=(0, 0, w, h), metadata={}
+    )
+
+
+def test_pending_nodata_preserves_existing_uint16():
+    """uint16 tile that already has nodata=0: open_tile must PRESERVE 0, not set -9999."""
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "uint16", nodata=0)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": "-9999.0"}
+    with ot.open_tile(vt) as ds:
+        assert (
+            ds.nodata == 0.0
+        ), f"Expected nodata=0.0 (preserved from source), got {ds.nodata}"
+
+
+def test_pending_nodata_float32_no_nodata_applies_default():
+    """float32 tile with no nodata: pending_nodata=-9999 must be applied (fits float)."""
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "float32", nodata=None)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": "-9999.0"}
+    with ot.open_tile(vt) as ds:
+        assert (
+            ds.nodata == -9999.0
+        ), f"Expected nodata=-9999.0 (default applied to float32), got {ds.nodata}"
+
+
+def test_pending_nodata_uint16_no_nodata_leaves_unset():
+    """uint16 tile with no nodata: -9999 doesn't fit uint16; nodata must remain None, no exception."""
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "uint16", nodata=None)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": "-9999.0"}
+    # Must NOT raise ValueError about out-of-range nodata
+    with ot.open_tile(vt) as ds:
+        assert (
+            ds.nodata is None
+        ), f"Expected nodata=None (default -9999 doesn't fit uint16), got {ds.nodata}"

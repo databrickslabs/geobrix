@@ -80,11 +80,36 @@ def _epsg_of(crs) -> Optional[int]:
         return None
 
 
+def _nodata_fits_dtype(nodata: float, dtype_str: str) -> bool:
+    """Return True if *nodata* is representable in *dtype_str*.
+
+    Float dtypes always fit (rasterio allows any float nodata for float bands).
+    Integer dtypes are checked via numpy's iinfo range.
+    """
+    try:
+        dt = np.dtype(dtype_str)
+        if np.issubdtype(dt, np.integer):
+            info = np.iinfo(dt)
+            return info.min <= nodata <= info.max
+        return True  # float dtypes: always fits
+    except Exception:
+        return True  # unknown dtype: don't block
+
+
 def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> bytes:
     """Read one window into standalone GTiff bytes, applying pending instructions.
 
     pending = (bands|None, nodata|None, srid|None); applied in fixed order:
     band-select (which bands to read) -> nodata (profile) -> setsrid (crs relabel).
+
+    Nodata "ensure/preserve" semantics (matches edit.init_nodata):
+    - If the source already carries a nodata value, PRESERVE it (do not override
+      with the pending default).
+    - If the source has no nodata AND the pending default fits the output dtype
+      range, set it.
+    - If the source has no nodata AND the pending default does NOT fit the dtype
+      (e.g. -9999 for uint16), leave nodata unset rather than writing an invalid
+      value.
     """
     import rasterio.crs as _rcrs
 
@@ -103,7 +128,16 @@ def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> by
         transform=src.window_transform(window),
     )
     if nodata is not None:
-        profile["nodata"] = nodata
+        if src.nodata is not None:
+            # Source already has a nodata value: preserve it (pending_nodata
+            # means "ensure exists", not "force override").
+            profile["nodata"] = src.nodata
+        else:
+            # Source has no nodata: apply the pending default only if it fits.
+            out_dtype = profile.get("dtype", src.dtypes[0])
+            if _nodata_fits_dtype(nodata, out_dtype):
+                profile["nodata"] = nodata
+            # else: default doesn't fit the dtype; leave nodata unset.
     if srid is not None:
         profile["crs"] = _rcrs.CRS.from_epsg(srid)
     with MemoryFile() as mf:

@@ -93,6 +93,52 @@ plot_mask_layers(
 
 See the [H3 rasterize notebook](../notebooks/h3-rasterize) for a full worked example of building shared-canvas presence-mask layers.
 
+## Rendering from a Spark DataFrame
+
+### `plot_tiles`
+
+```python
+plot_tiles(df, tile_col="tile", *, mode="facet", limit=None,
+           fig_w=10, fig_h=10, max_pixels=2000, composite="auto", emphasis="blend")
+```
+
+Render raster tiles directly from a (filtered) Spark DataFrame — no manual materialize step required. Virtual and materialized tiles (v1 and v2 schema) are both handled automatically.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `df` | `DataFrame` | — | A Spark DataFrame with a tile column. Filter it before calling — only the first `limit` rows are pulled to the driver. |
+| `tile_col` | `str` | `"tile"` | Name of the tile struct column. |
+| `mode` | `str` | `"facet"` | Rendering mode: `"facet"` (grid of thumbnails), `"first"` (single tile), or `"mosaic"` (stitch same-CRS tiles into one georeferenced image). |
+| `limit` | `int` or `None` | mode default | Maximum rows to pull to the driver. Defaults to 25 (facet), 1 (first), or 64 (mosaic). If the DataFrame has more rows than the limit, a warning is issued and only the first `limit` tiles are rendered — the entire DataFrame is never collected. |
+| `fig_w` | `float` | `10` | Figure width in inches. |
+| `fig_h` | `float` | `10` | Figure height in inches. |
+| `max_pixels` | `int` | `2000` | Decimate above this longest-edge pixel count before rendering. |
+| `composite` | `str` | `"auto"` | Band-composite mode (see [Raster rendering](#raster-rendering) above). |
+
+**Mode notes:**
+
+- `"facet"` — renders each tile as a separate panel in a grid. Works with any mix of CRS values.
+- `"first"` — renders the first tile only. Works with any CRS.
+- `"mosaic"` — merges tiles into a single georeferenced image via `rasterio.merge`. All tiles must share the same CRS; a `ValueError` is raised if the collected rows contain more than one distinct CRS.
+
+**Returns:** a matplotlib `Axes` for `"first"` and `"mosaic"`, a `Figure` for `"facet"`.
+
+```python
+from databricks.labs.gbx.vizx import plot_tiles
+
+# Show the first 4 tiles from a GeoTIFF reader result as a 2×2 grid:
+df = spark.read.format("gtiff_gbx").load("/Volumes/main/samples/sentinel/")
+plot_tiles(df.filter("cellid is not null"), mode="facet", limit=4)
+
+# Inspect a single tile quickly:
+plot_tiles(df.filter("path = '/Volumes/main/samples/sentinel/B04.tif'"), mode="first")
+
+# Stitch adjacent tiles from a single scene into one image (all must share CRS):
+plot_tiles(scene_df, mode="mosaic", limit=16)
+```
+
 ## Escape hatches
 
 When you need raster math that isn't in the `rst_*` surface, drop down to NumPy / rasterio per tile with the [pyrx escape hatches](./raster-functions#escape-hatches) (`tile_to_numpy`, `rst_apply`).

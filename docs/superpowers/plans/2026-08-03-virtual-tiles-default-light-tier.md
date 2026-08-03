@@ -258,9 +258,13 @@ Co-authored-by: Isaac"
 
 **Files:** `notebooks/examples/eo-series/03*.ipynb`, `eo-series/04*.ipynb`, `helios/03*.ipynb`, `vapor-eyes/02*.ipynb`, `vapor-eyes/03*.ipynb`, `xview/Clipping*.ipynb`; mirror narrative to `docs/docs/notebooks/*.mdx`.
 
-- [ ] **Step 1: Stage the fresh 0.5.0 wheel**
+- [ ] **Step 1: Stage the fresh 0.5.0 wheel to the EXAMPLE path**
 
-Rebuild + stage the wheel to the artifact Volume; verify the staged copy is fresh (grep a 0.5.0 marker) per [[bench-wheel-path-divergence]]. Confirm the version is `0.5.0`.
+Rebuild + stage the `0.5.0` wheel to **`/Volumes/geospatial_docs/geobrix/sample-data`** — the exact path the example notebooks' `%pip` cells install from (NOT only the artifact volume; see [[bench-wheel-path-divergence]] for the two-path trap). Verify the staged copy is fresh (grep a 0.5.0 marker + confirm size/mtime) before running any notebook. Confirm the version is `0.5.0`.
+
+- [ ] **Step 1b: Bump each notebook's "Last Modified" header to today**
+
+For every notebook touched, update its top "Last Modified" entry to **"August 03, 2026"** (in the same edit stroke as the code/narrative change; [[announce-altered-notebooks]]).
 
 - [ ] **Step 2: Per notebook — run on the new default, fix only breaks**
 

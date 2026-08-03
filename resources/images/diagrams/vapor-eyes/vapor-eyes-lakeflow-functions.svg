@@ -3,7 +3,7 @@
 <rect x="0" y="0" width="1256" height="710" fill="url(#bg)"/>
 <text x="36" y="64" font-size="30" font-weight="800" fill="#0F1B2A">GeoBrix &#183; Vapor-Eyes Lakeflow</text>
 <text x="36" y="92" font-size="15" fill="#3F4D5E">Every GeoBrix and Databricks built-in spatial/H3 function used in the example</text>
-<rect x="1108" y="44" rx="13" ry="13" width="112" height="26" fill="#0F1B2A"/><text x="1164.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.4.4 • Beta</text>
+<rect x="1108" y="44" rx="13" ry="13" width="112" height="26" fill="#0F1B2A"/><text x="1164.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.5.0 • Beta</text>
 <rect x="36" y="149" width="14" height="14" rx="3" ry="3" fill="#1F6FB5"/><text x="58" y="161" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#1B3139">GeoBrix</text><line x1="140.0" y1="156.5" x2="616.0" y2="156.5" stroke="#E5E7EB" stroke-width="1.5"/>
 <rect x="640" y="149" width="14" height="14" rx="3" ry="3" fill="#D49213"/><text x="662" y="161" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#1B3139">Databricks built-in</text><line x1="854.0" y1="156.5" x2="1220.0" y2="156.5" stroke="#E5E7EB" stroke-width="1.5"/>
 <rect x="36" y="186" rx="14" ry="14" width="580" height="172" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>

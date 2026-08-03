@@ -15,7 +15,7 @@ from pathlib import Path
 
 # Determine paths
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.4.4-jar-with-dependencies.jar"
+GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.5.0-jar-with-dependencies.jar"
 
 
 @pytest.fixture(scope="session")

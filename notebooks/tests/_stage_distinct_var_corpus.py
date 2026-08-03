@@ -24,9 +24,9 @@ VARIABLES = os.environ.get("GBX_DISTINCT_VARS", "tas,pr,hurs,huss,sfcWind,rlds")
 def _nb() -> bytes:
     pip = (
         "%pip install --force-reinstall --no-deps "
-        "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.4-py3-none-any.whl\n"
+        "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl\n"
         "%pip install "
-        "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.4-py3-none-any.whl[light]\n"
+        "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl[light]\n"
         "%pip install pystac-client planetary-computer\n"
         "dbutils.library.restartPython()"
     )

@@ -47,7 +47,7 @@ full stack.
   used in Step 4 requires Serverless or DBR 18.1+ — it is **not** supported on
   dedicated/single-user clusters.
 - **GeoBrix 0.4.0.** Update the `%pip install` cell to point at your staged
-  `geobrix-0.4.4-py3-none-any.whl`. The `[light,vizx]` extras install rasterio,
+  `geobrix-0.5.0-py3-none-any.whl`. The `[light,vizx]` extras install rasterio,
   geopandas, matplotlib, and mapclassify — no other dependencies assumed
   pre-staged.
 - **Unity Catalog Volume.** The DEM staging cell writes to

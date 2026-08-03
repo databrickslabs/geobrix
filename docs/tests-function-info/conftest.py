@@ -13,7 +13,7 @@ import pytest
 # Project root: docs/tests-function-info -> docs -> repo root
 DOCS_DIR = Path(__file__).resolve().parent.parent
 PROJECT_ROOT = DOCS_DIR.parent
-GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.4.4-jar-with-dependencies.jar"
+GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.5.0-jar-with-dependencies.jar"
 
 
 def _register_all(spark):

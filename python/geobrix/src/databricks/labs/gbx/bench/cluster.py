@@ -2900,8 +2900,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     # (light, heavy) then spark-path (light, heavy).
     cells = [
         # Ensure BOTH fresh geobrix code AND the full [light] dep set every run. The wheel
-        # version is a fixed 0.4.4 string, so on a WARM cluster that already has geobrix
-        # installed, a bare `pip install '<wheel>[light]'` no-ops: pip sees geobrix==0.4.4
+        # version is a fixed 0.5.0 string, so on a WARM cluster that already has geobrix
+        # installed, a bare `pip install '<wheel>[light]'` no-ops: pip sees geobrix==0.5.0
         # satisfied and skips the install ENTIRELY -- including resolving the [light] extra
         # deps. So the cluster can end up running STALE code (e.g. a freshly added DataSource
         # -> DATA_SOURCE_NOT_FOUND) OR missing a [light] dep (e.g. shapely -> ModuleNotFound

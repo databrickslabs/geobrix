@@ -11,7 +11,7 @@
 <rect x="0" y="0" width="1480" height="872" fill="url(#bg)"/>
 <text x="36" y="64" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="30" font-weight="800" fill="#0F1B2A" text-anchor="start">GeoBrix · Tile Structure</text>
 <text x="36" y="92" font-size="15" fill="#3F4D5E">A RasterX <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700" fill="#0F1B2A">tile</tspan> is one typed struct — shared by both tiers — carrying raster bytes (or a bytes-free reference) with grid, clip, CRS and format metadata</text>
-<rect x="1318" y="44" rx="13" ry="13" width="126" height="26" fill="#0F1B2A"/><text x="1381.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.4.4  ·  Beta</text>
+<rect x="1318" y="44" rx="13" ry="13" width="126" height="26" fill="#0F1B2A"/><text x="1381.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.5.0  ·  Beta</text>
 <rect x="36" y="152" rx="14" ry="14" width="1408" height="348" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
 <path d="M 36 166 A 14 14 0 0 1 50 152 H 1430 A 14 14 0 0 1 1444 166 V 157 H 36 Z" fill="#1B3139"/>
 <text x="58" y="182" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="700" fill="#7A8794" text-anchor="start" letter-spacing="1.6">TILE SCHEMA — 8 FIELDS</text>

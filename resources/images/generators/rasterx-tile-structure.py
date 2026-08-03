@@ -234,7 +234,7 @@ def render():
            f'font-weight="700" fill="{C_INK}">tile</tspan> is one typed struct — shared by both '
            'tiers — carrying raster bytes (or a bytes-free reference) with grid, clip, CRS and format metadata')
     parts.append(f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="{C_MUTED}">{sub}</text>')
-    pill_text = "v0.4.4  ·  Beta"
+    pill_text = "v0.5.0  ·  Beta"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{CANVAS_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" width="{pw}" height="26" fill="{C_INK}"/>'

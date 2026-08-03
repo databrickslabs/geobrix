@@ -268,5 +268,11 @@ def test_plot_tiles_mosaic_decimates(spark, tmp_path):
     # max_pixels=100; merged width will be ~256 → must decimate
     ax = plot_tiles(df, mode="mosaic", max_pixels=100)
     assert ax is not None
-    # Verify the figure was actually rendered without OOM (no assertion needed beyond no-raise)
+    # The rendered raster array must be bounded by max_pixels on its largest axis
+    # (proves decimation actually happened, not just a title relabel).
+    assert ax.images, "expected a rendered raster image"
+    arr = ax.images[0].get_array()
+    assert (
+        max(arr.shape[-2], arr.shape[-1]) <= 100
+    ), f"mosaic not decimated: rendered dims {arr.shape} exceed max_pixels=100"
     plt.close("all")

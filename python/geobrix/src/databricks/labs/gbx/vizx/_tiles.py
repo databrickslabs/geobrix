@@ -12,11 +12,11 @@ from contextlib import contextmanager
 def _extract_tile(tile_or_row, tile_col):
     """Pull the tile value out of a Row/dict that has a tile_col, else pass through.
 
-    Prefers explicit tile_col extraction: if tile_col is present in the wrapper
-    AND the value at tile_col is itself a tile-shaped struct (has 'raster' or
-    'path', is a bytes/bytearray, or is a Row/dict with tile fields), extract it.
-    Falls back to treating the whole row as the tile only when tile_col is absent.
-    This is robust to sibling columns (e.g. a wrapper with both 'tile' and 'path').
+    Explicit tile_col wins: when the Row/dict has the tile_col key, extract that
+    value (it is the tile struct). This is robust to sibling columns — a wrapper
+    with both 'tile' and a sibling 'path'/'raster' still extracts 'tile'. Only
+    when tile_col is absent is the whole value treated as the tile (a bare struct,
+    VirtualTile, or bytes passed directly).
     """
     if isinstance(tile_or_row, (bytes, bytearray)):
         return tile_or_row
@@ -121,7 +121,6 @@ def _plot_tiles_mosaic(
     # transform is scaled correctly (reuses the tested decimation path).
     from rasterio.crs import CRS
     from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
 
     bands, height, width = mosaic.shape
     dtype = mosaic.dtype.name

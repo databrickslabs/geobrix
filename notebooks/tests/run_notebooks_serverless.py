@@ -125,6 +125,64 @@ def _strip_pip_cells(nb_bytes: bytes) -> bytes:
     return json.dumps(nb).encode()
 
 
+def _inject_override_cell(nb_bytes: bytes, assignments: list[str]) -> bytes:
+    """Inject a code cell of Python assignments so validation runs force compute.
+
+    Example series notebooks skip the expensive compute steps when their output
+    tables already exist (guards like ``do_overwrite=FORCE_REBUILD`` with
+    ``FORCE_REBUILD=False`` committed as the default). A green run that skips
+    every ``rst_*`` / reader step validates nothing. This injects an override
+    cell (e.g. ``FORCE_REBUILD=True``) into the UPLOADED copy only — the
+    committed notebook keeps its safe defaults.
+
+    Placement: immediately AFTER the last cell that runs ``%run`` (the shared
+    config / user-settings cell), so the override wins over the config's
+    default. If no ``%run`` cell exists, the override is inserted after the
+    first code cell. The assignments are plain ``NAME = VALUE`` Python lines,
+    so they override module-level names regardless of which notebook or series
+    this is (works for lakeflow config cells too).
+    """
+    if not assignments:
+        return nb_bytes
+    nb = json.loads(nb_bytes)
+    cells = nb.get("cells", [])
+
+    # Find the last %run cell (config include); else the first code cell.
+    insert_after = None
+    for idx, cell in enumerate(cells):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", [])
+        if isinstance(src, str):
+            src = src.splitlines(keepends=True)
+        if any(line.lstrip().startswith("%run") for line in src):
+            insert_after = idx
+    if insert_after is None:
+        for idx, cell in enumerate(cells):
+            if cell.get("cell_type") == "code":
+                insert_after = idx
+                break
+    if insert_after is None:
+        insert_after = -1  # empty / markdown-only notebook -> prepend
+
+    body = ["# --- validation override (injected by runner; NOT in the committed notebook) ---\n"]
+    body += [f"{a}\n" for a in assignments]
+    override = {
+        "cell_type": "code",
+        "execution_count": 0,
+        "metadata": {},
+        "outputs": [],
+        "source": body,
+    }
+    cells.insert(insert_after + 1, override)
+    nb["cells"] = cells
+    print(
+        f"    injected override cell after cell {insert_after}: {', '.join(assignments)}",
+        flush=True,
+    )
+    return json.dumps(nb).encode()
+
+
 # ---------------------------------------------------------------------------
 # Polling helpers
 # ---------------------------------------------------------------------------
@@ -147,6 +205,7 @@ def _import_notebook(
     local_path: pathlib.Path,
     ws_dir: str,
     strip_pip: bool,
+    set_vars: list[str] | None = None,
 ) -> str:
     """Import a local .ipynb to the workspace; return the workspace path."""
     from databricks.sdk.service.workspace import ImportFormat
@@ -154,6 +213,8 @@ def _import_notebook(
     nb_bytes = local_path.read_bytes()
     if strip_pip:
         nb_bytes = _strip_pip_cells(nb_bytes)
+    if set_vars:
+        nb_bytes = _inject_override_cell(nb_bytes, set_vars)
 
     stem = local_path.stem  # filename without .ipynb
     ws_path = f"{ws_dir.rstrip('/')}/{stem}"
@@ -176,13 +237,14 @@ def run_one(
     env_version: str,
     poll_secs: int,
     strip_pip: bool,
+    set_vars: list[str] | None = None,
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS."""
     from databricks.sdk.service import compute, jobs
 
     print(f"\n=== SUBMIT (serverless): {local_path.name} ===", flush=True)
 
-    ws_path = _import_notebook(w, local_path, ws_dir, strip_pip)
+    ws_path = _import_notebook(w, local_path, ws_dir, strip_pip, set_vars=set_vars)
 
     task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
 
@@ -396,8 +458,28 @@ def main() -> int:
             "used via %%run). Repeatable."
         ),
     )
+    parser.add_argument(
+        "--set-var",
+        metavar="NAME=VALUE",
+        action="append",
+        dest="set_vars",
+        help=(
+            "Inject a Python assignment into the UPLOADED notebook copy (after the "
+            "%%run/config cell) so a validation run forces compute the committed "
+            "notebook would skip. Example: --set-var FORCE_REBUILD=True forces the "
+            "reader/rst_* rebuild steps that are gated on do_overwrite=FORCE_REBUILD, "
+            "without changing the committed default. VALUE is inlined as a Python "
+            "literal. Repeatable. Applies to every submitted notebook."
+        ),
+    )
 
     args = parser.parse_args()
+
+    # Validate --set-var forms early (NAME=VALUE, NAME a valid identifier).
+    for sv in args.set_vars or []:
+        name, sep, _ = sv.partition("=")
+        if not sep or not name.strip().isidentifier():
+            parser.error(f"--set-var must be NAME=VALUE with NAME a valid identifier; got {sv!r}")
 
     notebooks = _collect_notebooks(args.notebooks, args.dirs)
     if not notebooks:
@@ -425,6 +507,8 @@ def main() -> int:
     print(f"Deps     : {len(deps)} entries (wheel + {len(deps) - 1} packages)", flush=True)
     print(f"Notebooks: {len(notebooks)}", flush=True)
     print(f"Strip %%pip: {args.strip_pip}", flush=True)
+    if args.set_vars:
+        print(f"Override vars: {', '.join(args.set_vars)}", flush=True)
     print("", flush=True)
 
     # Upload dep-notebooks (referenced via %run) before submitting main notebooks.
@@ -445,6 +529,7 @@ def main() -> int:
             env_version=args.env_version,
             poll_secs=args.poll_secs,
             strip_pip=args.strip_pip,
+            set_vars=args.set_vars,
         )
         if not ok:
             return 1

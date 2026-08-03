@@ -34,6 +34,28 @@ def _subdataset_uri(path: str, subdataset: Optional[str]) -> str:
     return f'NETCDF:"{path}":{subdataset}'
 
 
+def _resolve_cog_compression(
+    compress: Optional[str],
+    compression: Optional[str],
+) -> str:
+    """Resolve the final compression string for cog_convert_file.
+
+    ``compress`` is the canonical kwarg (Task 5 surface); ``compression`` is the
+    legacy kwarg kept as a deprecated alias.  When both are supplied, ``compress``
+    wins.  When compress='auto', resolves to 'DEFLATE' (safe COG default).
+    """
+    if compress is not None:
+        c = str(compress).upper()
+        if c == "AUTO":
+            return "DEFLATE"
+        if c == "NONE":
+            return "RAW"
+        return c
+    if compression is not None:
+        return str(compression).upper()
+    return "DEFLATE"
+
+
 def prepare_cog(
     path: str,
     out_dir: str,
@@ -44,6 +66,12 @@ def prepare_cog(
     skip_if_exists: bool = True,
     out_name: Optional[str] = None,
     bigtiff: str = "YES",
+    # Task 5: unified compression surface. ``compress`` is the canonical kwarg.
+    # ``compression`` is the deprecated alias; when both are given, ``compress`` wins.
+    # compress='auto' resolves to 'DEFLATE' (COG format safe default).
+    compress: Optional[str] = None,
+    compress_level: Optional[int] = None,
+    predictor: Optional[int] = None,
 ) -> Tuple[Optional[str], str]:
     """Prepare ONE master COG from ``path`` into ``out_dir`` as ``<basename>.cog``.
 
@@ -65,8 +93,14 @@ def prepare_cog(
 
     ``bigtiff`` (default ``"YES"``) is the GDAL BIGTIFF creation option; outputs
     larger than ~4 GiB MUST be BigTIFF (see ``cog_convert_file``).
+
+    ``compress`` (Task 5): unified compression option — "auto" | "zstd" |
+    "deflate" | "lzw" | "none". Deprecated alias: ``compression``. When both
+    are set, ``compress`` wins.
     """
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+    effective_compression = _resolve_cog_compression(compress, compression)
 
     base = out_name if out_name is not None else os.path.basename(path)
     name = cog_output_name(base)
@@ -84,7 +118,7 @@ def prepare_cog(
             cog_convert_file(
                 src,
                 tmp,
-                compression=compression,
+                compression=effective_compression,
                 blocksize=blocksize,
                 overview_resampling=resampling,
                 bigtiff=bigtiff,
@@ -115,6 +149,9 @@ def prepare_cog_measured(
     subdataset: Optional[str] = None,
     skip_if_exists: bool = True,
     bigtiff: str = "YES",
+    compress: Optional[str] = None,
+    compress_level: Optional[int] = None,
+    predictor: Optional[int] = None,
 ) -> Dict[str, object]:
     """prepare_cog + peak-RSS capture, returning a driver-collectable dict.
 
@@ -131,6 +168,9 @@ def prepare_cog_measured(
         subdataset=subdataset,
         skip_if_exists=skip_if_exists,
         bigtiff=bigtiff,
+        compress=compress,
+        compress_level=compress_level,
+        predictor=predictor,
     )
     return {
         "output_path": out_path,
@@ -234,6 +274,11 @@ def prepare_cogs(
     extensions=DEFAULT_RASTER_EXTS,
     verbose: bool = True,
     bigtiff: str = "YES",
+    # Task 5: unified compression surface. ``compress`` is the canonical kwarg.
+    # ``compression`` is the deprecated alias; when both are given, ``compress`` wins.
+    compress: Optional[str] = None,
+    compress_level: Optional[int] = None,
+    predictor: Optional[int] = None,
 ) -> Dict[str, object]:
     """Prepare one master COG per source, driver-side, with live progress + summary.
 
@@ -243,6 +288,10 @@ def prepare_cogs(
 
     ``bigtiff`` (default ``"YES"``) is the GDAL BIGTIFF creation option applied to
     every output; outputs larger than ~4 GiB MUST be BigTIFF.
+
+    ``compress`` (Task 5): unified compression option — "auto" | "zstd" |
+    "deflate" | "lzw" | "none". Deprecated alias: ``compression``. When both
+    are set, ``compress`` wins.
     """
     os.makedirs(out_dir, exist_ok=True)
     resolved = _resolve_sources(sources, recursive=recursive, extensions=extensions)
@@ -277,6 +326,9 @@ def prepare_cogs(
                         skip_if_exists=skip_if_exists,
                         out_name=original_base,
                         bigtiff=bigtiff,
+                        compress=compress,
+                        compress_level=compress_level,
+                        predictor=predictor,
                     )
                 finally:
                     if is_temp and os.path.exists(local_src):

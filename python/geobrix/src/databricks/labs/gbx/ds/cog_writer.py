@@ -111,7 +111,16 @@ class CogGbxWriter(DataSourceWriter):
         overwrite,
         cog_blocksize=512,
         cog_overview_resampling="AVERAGE",
-        cog_compression="DEFLATE",
+        # Unified compression surface (Task 5).
+        # ``compress`` = "auto" | "zstd" | "deflate" | "lzw" | "none".
+        # Deprecated: ``cog_compression`` is the old option; maps to ``compress``.
+        # When compress == "auto", resolves to "DEFLATE" for cog_convert_file
+        # (COG format compatibility; the compression authority is used for
+        # non-file conversion paths). If BOTH are given, compress wins.
+        compress="auto",
+        compress_level=None,
+        predictor=None,
+        cog_compression=None,
         name_col=None,
         ext="tif",
         cog_subdataset=None,
@@ -126,7 +135,13 @@ class CogGbxWriter(DataSourceWriter):
         self.overwrite = overwrite
         self.cog_blocksize = int(cog_blocksize)
         self.cog_overview_resampling = cog_overview_resampling
-        self.cog_compression = cog_compression
+        # Resolve compress: explicit compress wins over deprecated cog_compression.
+        if compress == "auto" and cog_compression is not None:
+            self.compress = cog_compression.lower()
+        else:
+            self.compress = compress
+        self.compress_level = compress_level
+        self.predictor = predictor
         self.name_col = name_col
         self.ext = ext
         self.cog_subdataset = cog_subdataset
@@ -140,6 +155,22 @@ class CogGbxWriter(DataSourceWriter):
                     os.remove(stale)
                 except OSError:
                     pass
+
+    def _resolved_cog_compression(self) -> str:
+        """Return the compression string for cog_convert_file / prepare_cogs.
+
+        ``cog_convert_file`` expects a codec name that rio-cogeo recognises (e.g.
+        ``"DEFLATE"``, ``"LZW"``, ``"ZSTD"``). When the writer's compress is
+        ``"auto"``, default to ``"DEFLATE"`` for compatibility with the COG
+        format; the compression authority's ZSTD default is used for the
+        non-file tile-bytes paths (``_bytes_to_cog`` / ``cog_convert``).
+        """
+        c = str(self.compress).lower()
+        if c == "auto":
+            return "DEFLATE"
+        if c == "none":
+            return "RAW"
+        return c.upper()
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
         if self.tile_envelope:
@@ -196,7 +227,7 @@ class CogGbxWriter(DataSourceWriter):
                 cog_convert_file(
                     conv_src,
                     tmp,
-                    compression=self.cog_compression,
+                    compression=self._resolved_cog_compression(),
                     blocksize=self.cog_blocksize,
                     overview_resampling=self.cog_overview_resampling,
                     bigtiff=self.cog_bigtiff,
@@ -268,7 +299,7 @@ class CogGbxWriter(DataSourceWriter):
             cog_convert_file(
                 tmp_src,
                 tmp_out,
-                compression=self.cog_compression,
+                compression=self._resolved_cog_compression(),
                 blocksize=self.cog_blocksize,
                 overview_resampling=self.cog_overview_resampling,
                 bigtiff=self.cog_bigtiff,
@@ -314,7 +345,7 @@ class CogGbxWriter(DataSourceWriter):
                     cog_convert_file(
                         src_local,
                         tmp,
-                        compression=self.cog_compression,
+                        compression=self._resolved_cog_compression(),
                         blocksize=self.cog_blocksize,
                         overview_resampling=self.cog_overview_resampling,
                         bigtiff=self.cog_bigtiff,
@@ -352,7 +383,7 @@ class CogGbxWriter(DataSourceWriter):
                 self.out_dir,
                 blocksize=self.cog_blocksize,
                 resampling=self.cog_overview_resampling,
-                compression=self.cog_compression,
+                compression=self._resolved_cog_compression(),
                 subdataset=self.cog_subdataset,
                 skip_if_exists=self.cog_skip_if_exists,
                 verbose=self.driver_mode_verbose,

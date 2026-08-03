@@ -1021,6 +1021,22 @@ class RasterGbxDataSource(DataSource):
         path = self.options.get("path")
         if not path:
             raise ValueError("raster_gbx writer requires an output path (.save(path)).")
+        # Resolve the compression surface.
+        # ``compress`` is the canonical option; ``cogCompression`` is a
+        # deprecated alias retained for back-compat. When both are supplied,
+        # ``compress`` wins.
+        _compress = self.options.get("compress")
+        _cog_compression_alias = self.options.get("cogCompression")
+        if _compress is None and _cog_compression_alias is not None:
+            _compress = _cog_compression_alias.lower()
+        if _compress is None:
+            _compress = "auto"
+        _compress_level_raw = self.options.get("compressLevel")
+        _compress_level = (
+            int(_compress_level_raw) if _compress_level_raw is not None else None
+        )
+        _predictor_raw = self.options.get("predictor")
+        _predictor = int(_predictor_raw) if _predictor_raw is not None else None
         return RasterGbxWriter(
             path,
             schema,
@@ -1033,5 +1049,7 @@ class RasterGbxDataSource(DataSource):
             cog_overview_resampling=self.options.get(
                 "cogOverviewResampling", "AVERAGE"
             ),
-            cog_compression=self.options.get("cogCompression", "DEFLATE"),
+            compress=_compress,
+            compress_level=_compress_level,
+            predictor=_predictor,
         )

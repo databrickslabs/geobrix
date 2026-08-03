@@ -19,6 +19,54 @@ from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import _write
 from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
+
+def _apply_compression(
+    raster_bytes: bytes,
+    compress: str,
+    compress_level: "Optional[int]",
+    predictor: "Optional[int]",
+) -> bytes:
+    """Re-encode *raster_bytes* with the requested compression profile.
+
+    Routes through the compression authority (``pyrx.core.compression``) so
+    that auto / ZSTD / deflate / lzw / none are all handled consistently with
+    dtype-appropriate predictors. Returns the re-encoded GTiff bytes.
+
+    When compress='auto', this will return ZSTD+predictor output. When
+    compress='none', the output has no compression keys.
+    """
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
+        data = src.read()
+        profile = src.profile.copy()
+        profile.update(driver="GTiff")
+        out_dtype = profile.get("dtype", str(src.dtypes[0]))
+        decoded_bytes = src.count * src.width * src.height
+        try:
+            import numpy as np
+
+            decoded_bytes *= np.dtype(out_dtype).itemsize
+        except (TypeError, AttributeError):
+            pass
+        # Remove stale compression keys before merging authority output.
+        for _k in ("compress", "predictor", "zstd_level", "zlevel"):
+            profile.pop(_k, None)
+        profile.update(
+            _comp.creation_opts(
+                out_dtype,
+                decoded_bytes=decoded_bytes,
+                compress=compress,
+                level=compress_level,
+                predictor=predictor,
+            )
+        )
+        with MemoryFile() as out_mf:
+            with out_mf.open(**profile) as dst:
+                dst.write(data)
+            return out_mf.read()
 
 
 @dataclass
@@ -72,7 +120,20 @@ class RasterGbxWriter(DataSourceWriter):
         cog: bool = False,
         cog_blocksize: int = 512,
         cog_overview_resampling: str = "AVERAGE",
-        cog_compression: str = "DEFLATE",
+        # Unified compression surface (Task 5).
+        # ``compress`` = "auto" (default) | "zstd" | "deflate" | "lzw" | "none".
+        # ``compress_level`` and ``predictor`` refine it when compress != "auto".
+        # When compress == "auto", explicit level/predictor are ignored (with a
+        # UserWarning from the authority).
+        # Deprecated: ``cog_compression`` is the old single-codec option accepted
+        # by the pre-Task-5 API; it still works but maps to ``compress`` internally.
+        # If BOTH are supplied, ``compress`` wins (callers should migrate).
+        compress: str = "auto",
+        compress_level: Optional[int] = None,
+        predictor: Optional[int] = None,
+        # Kept for legacy callers that construct RasterGbxWriter directly with
+        # cog_compression; stripped out here and replaced by compress.
+        cog_compression: Optional[str] = None,
     ):
         assert_write_schema(schema)
         if name_col and name_col not in [f.name for f in schema.fields]:
@@ -92,7 +153,14 @@ class RasterGbxWriter(DataSourceWriter):
         self.cog = cog
         self.cog_blocksize = cog_blocksize
         self.cog_overview_resampling = cog_overview_resampling
-        self.cog_compression = cog_compression
+        # Resolve final compress value: explicit ``compress`` wins over ``cog_compression``.
+        if compress == "auto" and cog_compression is not None:
+            # Legacy caller passed only cog_compression; adopt it as compress.
+            self.compress = cog_compression.lower()
+        else:
+            self.compress = compress
+        self.compress_level = compress_level
+        self.predictor = predictor
         # Use self.path (scheme stripped), NOT the raw path: a dbfs:/file:-qualified
         # path makes os.path.isdir(path) False, which would silently skip the
         # overwrite cleanup and leave stale tiles from a prior write mixed in.
@@ -124,6 +192,15 @@ class RasterGbxWriter(DataSourceWriter):
             cellid = vt.cellid
             metadata = dict(vt.metadata or {})
             if self.cog:
+                # COG path: cog_convert handles compression directly; skip the
+                # pre-encode _apply_compression step to avoid a double re-encode.
+                # Resolve "auto" → "DEFLATE" for cog_convert (it validates
+                # against rio-cogeo cog_profiles which does not know "auto").
+                _cog_compress = str(self.compress).lower()
+                if _cog_compress == "auto":
+                    _cog_compress = "deflate"
+                elif _cog_compress == "none":
+                    _cog_compress = "raw"
                 from rasterio.io import MemoryFile
 
                 from databricks.labs.gbx.pyrx.core import analysis as _analysis
@@ -135,11 +212,19 @@ class RasterGbxWriter(DataSourceWriter):
                         with mf.open() as ds:
                             raster_bytes = _analysis.cog_convert(
                                 ds,
-                                self.cog_compression,
+                                _cog_compress,
                                 self.cog_blocksize,
                                 self.cog_overview_resampling,
                             )
                     metadata = _cog.stamp_format_metadata(raster_bytes, metadata)
+            else:
+                # GTiff path: apply user-requested compression to the output tile.
+                # Re-encodes the tile bytes through the compression authority so the
+                # output file has the correct codec regardless of whether the input
+                # came through the passthrough path or a re-encode path.
+                raster_bytes = _apply_compression(
+                    raster_bytes, self.compress, self.compress_level, self.predictor
+                )
             if self.name_col:
                 raw_name = row[self.name_col]
                 name = os.path.basename(str(raw_name)) if raw_name is not None else ""

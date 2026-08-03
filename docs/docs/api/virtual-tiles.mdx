@@ -88,9 +88,10 @@ The diagram above traces the four stages:
    which makes windowed reads cheap (a striped source can inflate a single window
    ~570× versus a clean tiled block). Optimization is a choice, not a gate.
 2. **Distributed load.** A reader (`cog_gbx`, `gdal`, `netcdf_gbx`, …) partitions
-   the source across executors and emits tile rows — virtual by default in the
-   lightweight tier, or materialized on request. Selection options
-   (`tileSize`, `overlapPercent`, `clipPolygons`, …) shape the windowing.
+   the source across executors and emits tile rows — the lightweight raster readers
+   (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) emit **virtual tiles by default**;
+   pass `.option("virtualTiles", "false")` to get materialized bytes instead. Selection
+   options (`tileSize`, `overlapPercent`, `clipPolygons`, …) shape the windowing.
 3. **Operate.** Any `rst_*` function accepts either a virtual or a materialized
    tile. The output shape is your choice — see below.
 4. **Write.** Persist to files (COG, GeoTIFF, NetCDF, …) with a writer, or save a
@@ -100,8 +101,8 @@ The diagram above traces the four stages:
 
 The lightweight readers expose the windowing surface as read options:
 
-- **`virtualTiles`** — emit bytes-free virtual tiles (`true`) or materialized
-  tiles.
+- **`virtualTiles`** — emit bytes-free virtual tiles (`true`, the default) or
+  materialized tiles (`false`).
 - **`tileSize`** — regular tiling grid; **`overlapPercent`** — overlap between
   adjacent tiles so per-tile operations don't clip features at the edges.
 - **`clipPolygons`** / **`clipCrs`** — emit only the tile(s) intersecting each

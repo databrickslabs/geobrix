@@ -14,6 +14,14 @@ GeoBrix provides Spark readers for geospatial file formats.
 
 The lightweight tier ships native Python DataSource V2 readers — no JAR, no init script.
 
+:::tip Loading into virtual tiles — the default
+The lightweight raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) load data as **virtual tiles**
+by default — bytes-free `(path, window)` references that read pixels lazily, so a multi-gigabyte
+raster fans into tiles without out-of-memory. This is the front door to the virtual-tile model; see
+**[Virtual Tiles](../api/virtual-tiles)**. Pass `.option("virtualTiles", "false")` for materialized
+(bytes-in-row) reads.
+:::
+
 :::tip Why this scales beyond a single node
 These are Spark DataSource V2 readers, not single-node `rasterio`/`pyogrio` wrappers. The
 work is **partitioned and read in parallel across the cluster** — vector readers slice

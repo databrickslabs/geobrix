@@ -16,7 +16,7 @@ benchmarking.
 
 ## Readers
 
-Load geospatial files into a distributed DataFrame. See the **[Readers Overview](./readers/overview)**
+Load geospatial files into a distributed DataFrame. The lightweight raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) return **[virtual tiles](./api/virtual-tiles)** by default — bytes-free `(path, window)` references; pass `.option("virtualTiles", "false")` to get materialized bytes instead. See the **[Readers Overview](./readers/overview)**
 for the full list, tier differences, output schemas, and options.
 
 | Format | Lightweight | Heavyweight |

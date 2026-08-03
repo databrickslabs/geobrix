@@ -175,6 +175,13 @@ Register the lightweight readers once per session, then load by format string (`
   outputConstant="READ_GEOTIFF_LIGHT_output"
 />
 
+:::note Virtual tiles by default
+The lightweight raster reader returns **[virtual tiles](./api/virtual-tiles)** by default — each row
+carries a bytes-free `(path, window)` reference instead of the raster pixels, so a large file fans
+into tiles without accumulating memory. Pass `.option("virtualTiles", "false")` (or use
+`materialize=True` on a downstream `rst_*` call) when you need the bytes in-row.
+:::
+
 #### Read Shapefile
 
 <CodeFromTest

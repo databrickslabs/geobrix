@@ -42,7 +42,8 @@ A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — 
 is a bytes-free reference to a window of a raster on durable storage. A tile is
 **materialized** when `raster` carries the encoded bytes. The struct is identical
 either way, so a DataFrame can hold a mix, and a tile can move between the two
-states without changing shape.
+states without changing shape. See **[Tile Structure](./tile-structure)** for a
+field-by-field reference to this struct.
 
 ### Reference vs. instruction
 

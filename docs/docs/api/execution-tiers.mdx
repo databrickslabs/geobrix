@@ -4,9 +4,19 @@ sidebar_position: 1
 
 # Choosing an Execution Tier
 
-GeoBrix raster functions come in two interchangeable **Execution Tiers** — **Lightweight (pyrx)** and **Heavyweight (rasterx)**. Both tiers use the same `rst_*` Python function names and `gbx_rst_*` SQL names, so switching between them is a one-line import change.
+**One API, two engines.** Every GeoBrix raster function exists in two interchangeable
+**Execution Tiers**, behind the *same* `rst_*` Python names and `gbx_rst_*` SQL names:
 
-Choose the tier that fits your environment and requirements; the rest of your code stays the same.
+- **Lightweight (`pyrx`)** — pure Python/rasterio, no JAR, no init script. Runs **everywhere**:
+  Serverless, standard/shared clusters, ARM, Lakeflow declarative pipelines. Works with bytes-free
+  **[virtual tiles](./virtual-tiles)** so huge rasters ingest without out-of-memory. **The
+  recommended default.**
+- **Heavyweight (`rasterx`)** — JVM-native (Scala + GDAL JNI) on a classic x86 cluster. Operates on
+  **materialized** (binary) tiles.
+
+Both tiers cover the **full raster function set** and agree within tolerance across the benchmark
+suite — so switching is a **one-line import change** and the rest of your code is identical. Pick the
+tier that fits your environment; the sections below cover what each provides and how to choose.
 
 ## The one-line swap
 
@@ -23,6 +33,15 @@ After an explicit `rx.register(spark)`, the SQL names are identical too (`gbx_rs
 :::warning Heavyweight needs more than the wheel
 The one-line *import* swap is symmetric, but the *install* is not. The **lightweight** tier is just the `[light]` wheel (`%pip`, no JAR, no init script). The **heavyweight** tier additionally requires the **GeoBrix JAR as a cluster library and the GDAL init script** on a **classic x86 cluster** — the wheel alone will not resolve the import or the JVM expressions. See [Installation](../installation) for the heavyweight setup.
 :::
+
+## Function availability
+
+Both tiers implement the **full raster set** — every `rst_*` function, including the BNG and quadbin
+raster-grid functions — so the tier choice is about *environment*, not *capability*. The remaining
+heavyweight-only surfaces are narrow: the vector **OGR readers** (`shapefile_ogr`, `geojson_ogr`, …),
+the `conforming` triangulation mode, and the heavy `pmtiles` DataSource writer. For the per-function
+breakdown see the [Raster Functions](./raster-functions) availability section; for the tier tile
+model (virtual vs. materialized), see [Virtual Tiles](./virtual-tiles).
 
 ## Registering a subset (`only=`)
 
@@ -70,6 +89,7 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 | ARM support | x86 only | x86 and ARM |
 | Serverless / shared clusters / Lakeflow SDP | Not supported | Supported |
 | Execution model | JVM-native (Scala + GDAL JNI) | Python-worker UDFs (rasterio + NumPy) |
+| Tile model | Materialized (binary) tiles only | Materialized **and** bytes-free **[virtual tiles](./virtual-tiles)** (lazy windowed reads; no ingest OOM) |
 | Driver coverage | Full custom GDAL build | rasterio's bundled build (narrower) |
 | SQL default arguments | Supported | Pass all arguments explicitly |
 | Function coverage | Full raster set | Full raster set — every `rst_*` function, including the BNG/quadbin raster-grid functions |
@@ -103,10 +123,6 @@ The one-line swap keeps your code identical across tiers. The lightweight tier i
 On per-operation timing the lightweight tier is **competitive-to-faster for the large majority** of functions. Band math is dramatically faster, because the heavyweight tier shells out to a subprocess there. Terrain, focal filters, and discrete-grid (H3/quadbin) aggregation are a few times faster following recent vectorization. A small number of algorithm-bound operations (for example viewshed) are slower on the lightweight tier but remain sub-second in absolute terms. Metadata accessors are sub-millisecond on both.
 
 Across the benchmark suite the two tiers agree within tolerance on **115 of 116** functions. Only one differs, at raster edges: **`rst_convolve`** differs slightly — the heavyweight tier applies a GDAL block-halo convolution that no single lightweight boundary mode reproduces exactly; interior values match. All three tessellation generators (`rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`) use a **positive-area covering keep-test** on both tiers: a cell is emitted iff its geometry has greater-than-zero area overlap with the raster — a cell that merely touches the raster along a boundary edge or corner (zero pixel overlap) is excluded, while a within-extent cell whose pixels are all NoData is still emitted (NoData renders in place, it does not punch a gap into the mosaic). With that shared semantic the three tessellators agree **exactly** across tiers (identical cell sets), including on grid-aligned tiles where the raster edges land on cell boundaries. The BNG and quadbin raster-grid **reducers** (`rst_bng_rastertogrid{avg,count,max,min,median,sum,variance,stddev}`) were measured on a British-National-Grid tile with real cells and agree **within tolerance** across tiers; the two `*_rasterize_agg` aggregators agree **exactly**. See **[Benchmarking](./benchmarking)** for the full per-function heavy-vs-light results and how to run the benchmark on a cluster or locally.
-
-## Function availability
-
-See the [Raster Functions](./raster-functions) availability section for what each tier provides.
 
 ## Virtual tiles and the light→heavy bridge {#light-heavy-bridge}
 

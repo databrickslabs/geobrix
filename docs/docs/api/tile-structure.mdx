@@ -12,29 +12,45 @@ Understanding the internal structure of GeoBrix tiles is essential for advanced 
 
 ## Overview
 
-In GeoBrix, a **tile** is not a simple binary column—it's a **structured type** (struct) containing three fields that together represent a raster dataset along with its metadata and optional grid cell information.
+In GeoBrix, a **tile** is not a simple binary column—it's a **structured type** (struct) that represents a raster dataset along with its metadata, grid-cell information, and — when the tile is a bytes-free reference — the source path, window, and clip/CRS provenance. The same struct is shared by both execution tiers.
 
 ## Tile Schema
 
 A tile has the following structure:
 
-![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, required), metadata (map of string to string), with non-tessellated vs tessellated examples](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
+![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, nullable), path/window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string)](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
 
 ```
 struct<
-  cellid: bigint,                 -- Grid cell ID (nullable)
-  raster: binary,                 -- Raster bytes
-  metadata: map<string,string>    -- Driver, extension, size, etc.
+  cellid: bigint,                                -- Grid cell ID (nullable)
+  raster: binary,                                -- Raster bytes (NULL when virtual)
+  path: string,                                  -- Source path (set when virtual)
+  window: struct<col_off,row_off,width,height>,  -- Pixel window
+  clip_polygon: binary,                          -- Optional clip geometry (WKB)
+  clip_crs: string,                              -- CRS for clip_polygon
+  crs: string,                                   -- Working/target CRS
+  metadata: map<string,string>                   -- Driver, extension, size, etc.
 >
 ```
+
+A tile is **materialized** when `raster` carries the encoded bytes (the common case, and the only form the heavyweight tier consumes). A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — a bytes-free reference that materializes pixels on demand (a lightweight-tier capability). For the full virtual/materialized model, see **[Virtual Tiles](./virtual-tiles)**.
 
 ### Field Descriptions
 
 | Field | Type | Nullable | Description |
 |-------|------|----------|-------------|
 | `cellid` | `bigint` (Long) | Yes | Grid cell identifier for tessellated rasters. `null` for non-tessellated rasters. |
-| `raster` | `binary` | No | Binary raster content (bytes). |
+| `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
+| `path` | `string` | Yes | Source path for a virtual tile; `null` for a materialized tile. |
+| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. |
+| `clip_polygon` | `binary` | Yes | Optional clip geometry (WKB). Instruction on a virtual tile; applied-provenance on a materialized tile. |
+| `clip_crs` | `string` | Yes | CRS for `clip_polygon` (e.g. `"EPSG:4326"`). |
+| `crs` | `string` | Yes | Working/target CRS. |
 | `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. |
+
+:::note Reference vs. instruction
+On a **materialized** tile, `window` / `clip_polygon` / `clip_crs` / `crs` are **provenance** — a record of what was already applied to produce the bytes. On a **virtual** tile they are **instructions** — pending operations applied when the tile is read. See [Virtual Tiles](./virtual-tiles#reference-vs-instruction).
+:::
 
 ---
 
@@ -61,18 +77,20 @@ The `cellid` field identifies which grid cell a tile belongs to when using tesse
 
 ### 2. raster
 
-The `raster` field contains the actual raster bytes — the full file content in memory.
+The `raster` field contains the raster bytes — the full file content in memory —
+for a **materialized** tile. It is `null` for a **virtual** tile, where the pixels
+live at `path` and are read on demand.
 
-**All tile constructors and readers produce binary content:**
-- `rst_fromfile(path, driver)` → reads the file at `path` into **binary** bytes
+**Tile constructors and materializing readers produce binary content:**
+- `rst_fromfile(path, driver)` → reads the file at `path` into **binary** bytes (its `path` argument is a *source file* to read, not a tile reference)
 - `rst_fromcontent(content, driver)` → embeds the given **binary** bytes
 - GDAL reader → **binary** (raster bytes)
+- The lightweight `cog_gbx` reader can instead emit **virtual** tiles (`raster` null, `path` + `window` set) — see [Virtual Tiles](./virtual-tiles).
 
 **Properties:**
 - **Type**: `binary`
-- **Nullable**: No
-- **Purpose**: Self-contained raster payload carried through the plan; downstream operators
-  (`rst_clip`, `rst_transform`, ...) read and produce bytes, so there is no orphan-path risk.
+- **Nullable**: Yes — `null` on a virtual tile; the bytes are present on a materialized tile.
+- **Purpose**: Self-contained raster payload carried through the plan. Heavyweight operators consume materialized bytes; lightweight operators accept either and materialize a virtual tile's window only when pixels are needed.
 
 **Binary Format:**
 - Complete raster file (e.g. GeoTIFF) in memory
@@ -185,6 +203,7 @@ Created by `rst_h3_tessellate`:
 
 ## Next Steps
 
+- [Virtual Tiles](./virtual-tiles) - The virtual↔materialized model over this struct
 - [Raster Functions](./raster-functions) - Functions that work with tiles
 - [Custom UDFs](../advanced/custom-udfs) - Build custom tile processing
 - [Library Integration](../advanced/library-integration) - Use tiles with rasterio/xarray

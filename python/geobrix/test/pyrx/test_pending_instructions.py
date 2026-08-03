@@ -149,3 +149,41 @@ def test_initnodata_materialize_true_bakes_bytes():
     out = df.withColumn("tile", rx.rst_initnodata("tile", materialize=True))
     row = out.select("tile.raster").first()
     assert row["raster"] is not None and len(row["raster"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# Task 3: rst_setsrid / rst_band record on virtual, v2 everywhere
+# ---------------------------------------------------------------------------
+
+
+def test_setsrid_virtual_records_key_stays_virtual():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    out = df.withColumn("tile", rx.rst_setsrid("tile", 3857))
+    row = out.select("tile.raster", "tile.path", "tile.metadata").first()
+    assert row["raster"] is None and row["path"] is not None
+    assert row["metadata"]["pending_srid"] == "3857"
+    # reading it applies the relabel
+    row2 = out.select(rx.rst_srid("tile").alias("s")).first()
+    assert row2["s"] == 3857
+
+
+def test_band_virtual_records_key_stays_virtual():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    out = df.withColumn("tile", rx.rst_band("tile", 1))
+    row = out.select("tile.raster", "tile.path", "tile.metadata").first()
+    assert row["raster"] is None and row["path"] is not None
+    assert row["metadata"]["pending_bands"] == "1"
+    row2 = out.select(rx.rst_numbands("tile").alias("n")).first()
+    assert row2["n"] == 1
+
+
+def test_setsrid_band_v2_struct():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    for col in (rx.rst_setsrid("tile", 3857), rx.rst_band("tile", 1)):
+        fields = [
+            f.name for f in df.withColumn("tile", col).schema["tile"].dataType.fields
+        ]
+        assert "path" in fields and "window" in fields

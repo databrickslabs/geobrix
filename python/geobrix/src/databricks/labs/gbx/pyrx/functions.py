@@ -1353,12 +1353,25 @@ def _setsrid_bytes(tile, srid):
         return edit.set_srid(ds, int(srid))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _setsrid_udf(tile, srid):
     if _tile_is_empty(tile) or srid is None:
         return None
-    new_bytes = _setsrid_bytes(tile, srid)
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+    vt = ot._to_virtual_tile(tile)
+    s = int(srid)
+    if s <= 0:
+        raise ValueError(f"rst_setsrid requires a positive EPSG code; got {s}")
+    if vt.is_virtual():
+        md = dict(vt.metadata or {})
+        md[ot.PENDING_SRID] = str(s)
+        vt.metadata = md
+        return vt.to_row()
+    # materialized: apply eagerly to bytes, emit v2
+    # materialized inputs carry no pending_* keys (invariant), so metadata is already clean
+    new_bytes = _setsrid_bytes(tile, s)
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+    ).to_row()
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -1379,12 +1392,25 @@ def _band_bytes(tile, band_index):
         return edit.band(ds, int(band_index))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _band_udf(tile, band_index):
     if _tile_is_empty(tile) or band_index is None:
         return None
-    new_bytes = _band_bytes(tile, band_index)
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+    vt = ot._to_virtual_tile(tile)
+    b = int(band_index)
+    if b < 1:
+        raise ValueError(f"rst_band: band_index {b} out of range (>=1)")
+    if vt.is_virtual():
+        md = dict(vt.metadata or {})
+        md[ot.PENDING_BANDS] = str(b)
+        vt.metadata = md
+        return vt.to_row()
+    # materialized: apply eagerly to bytes, emit v2
+    # materialized inputs carry no pending_* keys (invariant), so metadata is already clean
+    new_bytes = _band_bytes(tile, b)
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+    ).to_row()
 
 
 @f.udf(V2_TILE_SCHEMA)

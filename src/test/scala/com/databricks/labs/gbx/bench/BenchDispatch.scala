@@ -478,7 +478,7 @@ object BenchDispatch {
     // when newFormat differs; the no-op case times the cheap identity return.
     case "rst_asformat"    => fpAsFormat(RST_AsFormat.execute(ds, Map.empty, argS(a, "new_format", "GTiff")), ds)
     case "rst_cog_convert" =>
-      fpDerived(RST_CogConvert.execute(ds, Map.empty, argS(a, "compression", "DEFLATE"),
+      fpDerived(RST_CogConvert.execute(ds, Map.empty, argS(a, "compression", "ZSTD"),
         argI(a, "blocksize", 512), argS(a, "overview_resampling", "AVERAGE")))
     case "rst_resample" =>
       fpDerived(RST_Resample.execute(ds, Map.empty, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear")))
@@ -1016,7 +1016,7 @@ object BenchDispatch {
         rst_convolve(tile, kernelCol)
       case "rst_asformat"    => rst_asformat(tile, argS(a, "new_format", "GTiff"))
       case "rst_cog_convert" =>
-        rst_cog_convert(tile, argS(a, "compression", "DEFLATE"),
+        rst_cog_convert(tile, argS(a, "compression", "ZSTD"),
           argI(a, "blocksize", 512), argS(a, "overview_resampling", "AVERAGE"))
       case "rst_resample" =>
         rst_resample(tile, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear"))

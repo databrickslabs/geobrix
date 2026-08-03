@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.analysis
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -92,9 +93,9 @@ object RST_CogConvert extends WithExpressionInfo {
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
-      * Runs `gdal.Translate -of COG -co COMPRESS=<c> -co BLOCKSIZE=<n> -co OVERVIEW_RESAMPLING=<r>`
-      * against `ds` and returns the result Dataset + metadata. Caller releases
-      * the returned Dataset.
+      * Runs `gdal.Translate -of COG` with ZSTD+predictor compression (routed through OperatorOptions
+      * for standard codec handling) and COG-specific blocksize/overview settings. Returns result
+      * Dataset + metadata. Caller releases the returned Dataset.
       */
     def execute(
         ds: Dataset, options: Map[String, String],
@@ -110,11 +111,27 @@ object RST_CogConvert extends WithExpressionInfo {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         // Use .tif extension — downstream tools recognise COG as a GTiff variant.
         val outPath = s"/vsimem/cog_$uuid.tif"
-        val opts = new JVector[String]()
-        opts.add("-of"); opts.add("COG")
-        opts.add("-co"); opts.add(s"COMPRESS=$compression")
-        opts.add("-co"); opts.add(s"BLOCKSIZE=$blocksize")
-        opts.add("-co"); opts.add(s"OVERVIEW_RESAMPLING=$overviewResampling")
+
+        // Route through OperatorOptions to get standard ZSTD+predictor codec handling.
+        // Pass the COG-specific options (format=COG, blocksize, overview_resampling) alongside compression.
+        val writeOpts = options ++ Map(
+            "format" -> "COG",
+            "compression" -> compression,
+            "blocksize" -> blocksize.toString,
+            "overview_resampling" -> overviewResampling
+        )
+
+        // Build command string and route through appendOptions for standard predictor/codec.
+        val baseCommand = "gdal_translate"
+        val commandWithOptions = OperatorOptions.appendOptions(baseCommand, writeOpts, ds)
+
+        // Parse the decorated command back into a TranslateOptions vector.
+        val opts = OperatorOptions.parseOptions(commandWithOptions)
+        // Add the OVERVIEW_RESAMPLING if not already present (appendOptions may not emit it).
+        if (!opts.contains(s"OVERVIEW_RESAMPLING=$overviewResampling")) {
+            opts.add("-co"); opts.add(s"OVERVIEW_RESAMPLING=$overviewResampling")
+        }
+
         val tOpts = new TranslateOptions(opts)
         val result =
             try {
@@ -136,7 +153,7 @@ object RST_CogConvert extends WithExpressionInfo {
             // COG is a GTiff variant on disk — downstream serialization expects GTiff here.
             "driver" -> "GTiff",
             "extension" -> "tif",
-            "last_command" -> s"gdal.Translate(-of COG -co COMPRESS=$compression -co BLOCKSIZE=$blocksize)",
+            "last_command" -> s"gdal.Translate(-of COG -co COMPRESS=$compression -co BLOCKSIZE=$blocksize -co OVERVIEW_RESAMPLING=$overviewResampling)",
             "last_error" -> (if (errMsg == null) "" else errMsg),
             "all_parents" -> Option(ds.GetDescription()).getOrElse(""),
             "size" -> "-1",

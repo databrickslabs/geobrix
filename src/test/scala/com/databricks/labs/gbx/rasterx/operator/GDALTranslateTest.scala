@@ -233,25 +233,27 @@ class GDALTranslateTest extends AnyFunSuite with BeforeAndAfterAll {
         succeed
     }
 
-    test("GDALTranslate should handle float datasets with DEFLATE compression") {
+    test("GDALTranslate should use ZSTD+PREDICTOR for float datasets (new standard)") {
         // Create a Float32 dataset
         val driver = gdal.GetDriverByName("MEM")
         val floatDs = driver.Create("/vsimem/float.tif", 100, 100, 1, gdalconstConstants.GDT_Float32)
         val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, -1.0)
         floatDs.SetGeoTransform(gt)
 
-        val outputPath = "/vsimem/translated_float_deflate.tif"
+        val outputPath = "/vsimem/translated_float_zstd.tif"
         val command = "gdal_translate"
+        // Heavy tier now defaults to ZSTD+predictor for all outputs; float -> PREDICTOR=3
         val (resultDs, metadata) = GDALTranslate.executeTranslate(
-            outputPath, 
-            floatDs, 
-            command, 
-            Map("compression" -> "DEFLATE")
+            outputPath,
+            floatDs,
+            command,
+            Map.empty  // No compression specified -> default is now ZSTD
         )
 
         resultDs should not be null
-        // Float dataset with DEFLATE should use PREDICTOR=3
+        // Default (no compression specified) now uses ZSTD with PREDICTOR=3 for float
         metadata should contain key "last_command"
+        metadata("last_command") should include("COMPRESS=ZSTD")
         metadata("last_command") should include("PREDICTOR=3")
 
         gdal.Unlink(outputPath)

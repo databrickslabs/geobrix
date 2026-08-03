@@ -6675,6 +6675,519 @@ def stage_nasanex_corpus(
     return manifest
 
 
+def _write_striped_gtiff(
+    path: str, width: int, height: int, bands: int, dtype: str
+) -> None:
+    """Write a fully-striped (1-row-per-strip) GeoTIFF to ``path``.
+
+    Striped layout is what large satellite sensors produce; it is the worst-case
+    for the window-read path because each windowed ds.read() must seek to the
+    row's strip offset instead of reading pre-tiled blocks. ``path`` must end in
+    ``.tif``. Dimensions are configurable so tests can use tiny fixtures (< 1 MB)
+    while the cluster profile uses VIIRS/UK-scale sizes (> 1 GB).
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    data = np.zeros((bands, height, width), dtype=dtype)
+    # Fill with a ramp so checksums are non-trivial.
+    for b in range(bands):
+        data[b] = np.arange(height * width, dtype=dtype).reshape(height, width) % 256
+
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=bands,
+        dtype=dtype,
+        crs="EPSG:4326",
+        transform=from_origin(0.0, 60.0, 0.01, 0.01),
+        compress="DEFLATE",
+        # Explicit STRIP layout — no tiling, no blockxsize/blockysize.
+        tiled=False,
+    )
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+
+
+def _write_tiled_cog(
+    path: str,
+    width: int,
+    height: int,
+    bands: int,
+    dtype: str,
+    cog_blocksize: int = 64,
+) -> None:
+    """Write a genuine Cloud-Optimized GeoTIFF (COG) to ``path``.
+
+    A real COG has (a) internal tiling AND (b) pre-built overview pyramid.
+    This function writes a temporary plain GeoTIFF, then converts it to COG
+    using the shared ``pyrx.core.analysis.cog_convert`` path — the same path
+    the reader/writer COG features use — so the result is identical to what the
+    product emits.
+
+    ``cog_blocksize`` controls the overview tile size.  It must be small enough
+    that at least one overview level is generated for the given ``width``/``height``
+    (rule of thumb: ``max(width, height) > cog_blocksize``).  The default 64 is
+    small so even tiny 128×128 unit-test fixtures produce overviews.
+
+    ``path`` must end in ``.tif``.
+    """
+    import tempfile
+
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+
+    data = np.zeros((bands, height, width), dtype=dtype)
+    for b in range(bands):
+        data[b] = np.arange(height * width, dtype=dtype).reshape(height, width) % 256
+
+    # Write a plain GTiff first, then convert to COG in-memory.
+    fd, tmp_path = tempfile.mkstemp(suffix=".tif")
+    import os
+
+    os.close(fd)
+    try:
+        profile = dict(
+            driver="GTiff",
+            width=width,
+            height=height,
+            count=bands,
+            dtype=dtype,
+            crs="EPSG:4326",
+            transform=from_origin(0.0, 60.0, 0.01, 0.01),
+        )
+        with rasterio.open(tmp_path, "w", **profile) as ds_tmp:
+            ds_tmp.write(data)
+        # Convert to real COG (tiled + overviews) using the shared converter.
+        with rasterio.open(tmp_path) as ds_src:
+            cog_bytes = cog_convert(ds_src, "DEFLATE", cog_blocksize, "AVERAGE")
+    finally:
+        os.unlink(tmp_path)
+
+    with open(path, "wb") as fh:
+        fh.write(cog_bytes)
+
+
+# ---------------------------------------------------------------------------
+# Large-raster bench profile
+# ---------------------------------------------------------------------------
+
+#: Default corpus parameters for the full-scale cluster run (VIIRS/UK-scale).
+#: Override via ``LargeRasterCorpusConfig`` in the cluster notebook.
+_LARGE_RASTER_CLUSTER_DEFAULTS = {
+    "width": 86400,  # VIIRS 750m global (~86400 cols)
+    "height": 43200,  # VIIRS 750m global (~43200 rows)
+    "bands": 1,
+    "dtype": "float32",
+    # Strategy sweep — the key variable under test.
+    "split_strategies": ("none", "serverless", "classic", "auto"),
+    # Serverless decoded budget (~512 MiB decoded) expressed as sizeInMB for the
+    # legacy pure-local path that still takes a sizeInMB arg.
+    "size_mib_serverless": 512,
+    "size_mib_classic": 1536,
+}
+
+
+def _large_raster_result_row(
+    *,
+    run_id: str,
+    env: dict,
+    source_tag: str,
+    raster_dtype: str,
+    strategy: str,
+    rows: int,
+    status: str,
+    note: str,
+    stats=None,
+    warmup: int = 0,
+    corpus_size_mib: float = 0.0,
+    throughput_mib_s: float = 0.0,
+) -> "ResultRow":
+    """Build a ResultRow for one large-raster bench leg.
+
+    ``source_tag``    — "striped" | "tiled-cog"
+    ``raster_dtype``  — the actual NumPy/rasterio dtype of the corpus raster
+                        (e.g. "float32"), stored in the ``dtype`` field as intended.
+    ``strategy``      — splitStrategy value: "none"|"serverless"|"classic"|"auto",
+                        stored in the dedicated ``split_strategy`` optional field.
+    ``corpus_size_mib`` — decoded file size in MiB; stamped into ``note`` so a
+                          0-row fast read is immediately visible as wrong.
+    ``throughput_mib_s`` — decoded MiB/s; stored in ``throughput_mpix_s``
+                           (repurposed for this profile since mpix doesn't apply
+                           to large single-file reads).
+    """
+    ms = stats["iter_median_ms"] if stats else 0.0
+    return ResultRow(
+        run_id=run_id,
+        api="lightweight",
+        fn=f"raster_read_large_{source_tag}",
+        category="large_raster",
+        mode="spark-path",
+        tile_px=0,
+        bands=0,
+        dtype=raster_dtype,
+        srid=0,
+        rows=rows,
+        nodata_frac=0.0,
+        warmup_iters=(stats["warmup_iters"] if stats else warmup),
+        measured_iters=(stats["measured_iters"] if stats else 0),
+        iter_median_s=(ms / 1000.0),
+        iter_min_s=((stats["iter_min_ms"] / 1000.0) if stats else 0.0),
+        iter_p90_s=((stats["iter_p90_ms"] / 1000.0) if stats else 0.0),
+        iter_total_wall_clock_s=(
+            (stats["iter_total_wall_clock_ms"] / 1000.0) if stats else 0.0
+        ),
+        avg_wall_clock_s=((stats["avg_wall_clock_ms"] / 1000.0) if stats else 0.0),
+        per_tile_avg_s=((ms / rows / 1000.0) if (ms and rows) else 0.0),
+        per_tile_avg_ms=((ms / rows) if (ms and rows) else 0.0),
+        # throughput_mpix_s repurposed for decoded MiB/s (mpix doesn't apply here).
+        throughput_mpix_s=throughput_mib_s,
+        throughput_rows_s=((rows / (ms / 1000.0)) if (ms and rows) else 0.0),
+        peak_rss_mb=peak_rss_mb(),
+        status=status,
+        note=note,
+        output_fingerprint="",
+        split_strategy=strategy,
+        **env,
+    )
+
+
+def _bench_large_raster_leg(
+    spark,
+    corpus_path: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    source_tag: str,
+    strategy: str,
+    corpus_size_mib: float,
+    raster_dtype: str,
+    where: str,
+    env: dict,
+) -> "ResultRow":
+    """Time one leg of the large-raster profile.
+
+    Reads ``corpus_path`` (a directory with one raster file) via ``raster_gbx``
+    with the specified ``splitStrategy``. Times the full
+    ``spark.read.format("raster_gbx").option(...).load(path).count()`` job.
+    Verifies rows > 0 before recording (bench-verify-nonzero rule).
+
+    ``corpus_size_mib`` is the decoded uncompressed size of the source file in MiB;
+    it is stamped into the note so a 0-row fast read is visible. Throughput in
+    MiB/s is computed from corpus_size_mib / iter_median_s (total file / one pass).
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+
+    def _job():
+        return (
+            spark.read.format("raster_gbx")
+            .option("splitStrategy", strategy)
+            .load(corpus_path)
+            .count()
+        )
+
+    note_prefix = (
+        f"{source_tag} strategy={strategy} " f"corpus={corpus_size_mib:.1f}MiB"
+    )
+    try:
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        # Verify rows > 0 before recording (bench-verify-nonzero rule: a 0-row
+        # read is not a valid throughput measurement — it means the corpus is wrong
+        # or the reader silently skipped the file).
+        actual_rows = _job()
+        actual_rows = int(actual_rows)
+        if actual_rows == 0:
+            note = f"{note_prefix} -- READ 0 ROWS (check corpus/options)"
+            return _large_raster_result_row(
+                run_id=run_id,
+                env=env,
+                source_tag=source_tag,
+                raster_dtype=raster_dtype,
+                strategy=strategy,
+                rows=0,
+                status="empty",
+                note=note,
+                warmup=warmup,
+                corpus_size_mib=corpus_size_mib,
+            )
+        throughput = (corpus_size_mib / (ms / 1000.0)) if ms else 0.0
+        note = f"{note_prefix} -> {actual_rows} tile(s) " f"({throughput:.1f} MiB/s)"
+        return _large_raster_result_row(
+            run_id=run_id,
+            env=env,
+            source_tag=source_tag,
+            raster_dtype=raster_dtype,
+            strategy=strategy,
+            rows=actual_rows,
+            status="ok",
+            note=note,
+            stats=stats,
+            corpus_size_mib=corpus_size_mib,
+            throughput_mib_s=throughput,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _large_raster_result_row(
+            run_id=run_id,
+            env=env,
+            source_tag=source_tag,
+            raster_dtype=raster_dtype,
+            strategy=strategy,
+            rows=0,
+            status="error",
+            note=f"{note_prefix} -- {str(e)[-400:]}",
+            warmup=warmup,
+            corpus_size_mib=corpus_size_mib,
+        )
+
+
+def run_large_raster_profile(
+    spark,
+    corpus_dir: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    width: int = _LARGE_RASTER_CLUSTER_DEFAULTS["width"],
+    height: int = _LARGE_RASTER_CLUSTER_DEFAULTS["height"],
+    bands: int = _LARGE_RASTER_CLUSTER_DEFAULTS["bands"],
+    dtype: str = _LARGE_RASTER_CLUSTER_DEFAULTS["dtype"],
+    split_strategies: tuple = _LARGE_RASTER_CLUSTER_DEFAULTS["split_strategies"],
+    where: str = "cluster",
+) -> List[ResultRow]:
+    """Large-raster bench profile: striped vs tiled-COG across splitStrategy values.
+
+    Generates two synthetic corpora under ``corpus_dir`` — a striped GeoTIFF
+    (worst-case sequential layout as produced by large satellite sensors) and a
+    tiled COG (cloud-native baseline) — then times the light ``raster_gbx`` reader
+    over each for every value in ``split_strategies``.
+
+    Measurement goals:
+    - **Ingest throughput** (decoded MiB/s): ``corpus_size_mib / iter_median_s``.
+    - **Per-tile memory proxy**: ``peak_rss_mb`` captured after each leg (the
+      Spark task memory watermark is not directly measurable from the driver in
+      local mode, so RSS is the best available proxy for unit tests; on the cluster
+      the executor RSS is observable via Spark metrics/Ganglia).
+    - **Striped-vs-COG delta**: the ratio ``striped_median_s / cog_median_s`` for
+      the same strategy — measurable from the returned rows.
+    - **OOM envelope concept**: the ``strategy=serverless`` leg uses the ~512 MiB
+      decoded budget; a file whose decoded size exceeds that will split into
+      multiple tiles. The ``strategy=none`` leg disables splitting — if the file
+      is large enough it will fail with an explicit error (the caller can read the
+      OOM boundary from the ``status=error`` rows).
+
+    Corpora are created lazily (idempotent): if the files already exist at the
+    expected paths they are reused, so a cluster run that stages real VIIRS/UK
+    GeoTIFFs beforehand does not regenerate them.
+
+    For the unit test, pass small dimensions (e.g. width=512, height=512) so the
+    fixture is generated quickly and the Spark job completes in seconds.
+    For the full cluster run, use the class defaults (VIIRS-scale: 86400x43200).
+
+    Args:
+        spark: Active SparkSession (local or cluster).
+        corpus_dir: Directory under which the two fixture sub-directories are
+            created (``striped/`` and ``tiled_cog/``).
+        run_id: Run-ID label stamped into every ResultRow.
+        warmup: Warmup iterations per leg.
+        measured: Measured iterations per leg.
+        width: Raster width in pixels.
+        height: Raster height in pixels.
+        bands: Number of bands.
+        dtype: NumPy/rasterio dtype string (e.g. ``"float32"``).
+        split_strategies: Sequence of ``splitStrategy`` option values to sweep.
+        where: ``env_where`` label (``"cluster"`` for cluster runs).
+
+    Returns:
+        A list of ``ResultRow`` instances, one per (source_tag, strategy) leg plus
+        one ``ResultRow`` for the delta comparison (status="ok", category="large_raster",
+        fn ending in "_delta").  The list length is
+        ``len(split_strategies) * 2 + len(split_strategies)`` at most:
+        striped × strategies + cog × strategies + delta per strategy.
+    """
+    import os
+
+    env = capture_env(where)
+    import numpy as np
+
+    # Decoded size in MiB (before compression; this is what the reader must budget).
+    itemsize = np.dtype(dtype).itemsize
+    decoded_mib = (width * height * bands * itemsize) / (1024 * 1024)
+
+    corpus_dir = str(corpus_dir)
+    striped_dir = os.path.join(corpus_dir, "striped")
+    cog_dir = os.path.join(corpus_dir, "tiled_cog")
+    os.makedirs(striped_dir, exist_ok=True)
+    os.makedirs(cog_dir, exist_ok=True)
+
+    striped_path = os.path.join(striped_dir, "large_striped.tif")
+    cog_path = os.path.join(cog_dir, "large_cog.tif")
+
+    # Create fixtures lazily (idempotent).
+    leg_n = len(split_strategies) * 2
+    leg_i = 0
+    print(
+        f"[bench] large-raster profile: {width}x{height}x{bands} {dtype} "
+        f"({decoded_mib:.1f} MiB decoded) — "
+        f"{len(split_strategies)} strategies × 2 layouts = {leg_n} leg(s)"
+    )
+
+    if not os.path.exists(striped_path):
+        print(f"  generating striped fixture -> {striped_path} ...", flush=True)
+        _write_striped_gtiff(striped_path, width, height, bands, dtype)
+    else:
+        print(f"  reusing striped fixture at {striped_path}", flush=True)
+
+    if not os.path.exists(cog_path):
+        print(f"  generating tiled-COG fixture -> {cog_path} ...", flush=True)
+        _write_tiled_cog(cog_path, width, height, bands, dtype)
+    else:
+        print(f"  reusing tiled-COG fixture at {cog_path}", flush=True)
+
+    out: List[ResultRow] = []
+    striped_by_strategy: dict = {}
+    cog_by_strategy: dict = {}
+
+    for strategy in split_strategies:
+        # Striped leg.
+        leg_i += 1
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  striped  strategy={strategy}  ...",
+            flush=True,
+        )
+        r_striped = _bench_large_raster_leg(
+            spark,
+            striped_dir,
+            run_id,
+            warmup,
+            measured,
+            source_tag="striped",
+            strategy=strategy,
+            corpus_size_mib=decoded_mib,
+            raster_dtype=dtype,
+            where=where,
+            env=env,
+        )
+        out.append(r_striped)
+        striped_by_strategy[strategy] = r_striped
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  striped  strategy={strategy}  "
+            f"{r_striped.iter_median_s * 1000:.1f}ms  rows={r_striped.rows}  "
+            f"{r_striped.status}",
+            flush=True,
+        )
+
+        # Tiled-COG leg.
+        leg_i += 1
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  tiled-cog  strategy={strategy}  ...",
+            flush=True,
+        )
+        r_cog = _bench_large_raster_leg(
+            spark,
+            cog_dir,
+            run_id,
+            warmup,
+            measured,
+            source_tag="tiled-cog",
+            strategy=strategy,
+            corpus_size_mib=decoded_mib,
+            raster_dtype=dtype,
+            where=where,
+            env=env,
+        )
+        out.append(r_cog)
+        cog_by_strategy[strategy] = r_cog
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  tiled-cog  strategy={strategy}  "
+            f"{r_cog.iter_median_s * 1000:.1f}ms  rows={r_cog.rows}  "
+            f"{r_cog.status}",
+            flush=True,
+        )
+
+    # Emit one delta row per strategy so the striped-vs-COG ratio is explicit in
+    # the results table without requiring the user to compute it from the raw rows.
+    # The delta row is status="ok" even when one leg errored, but its note makes
+    # the situation explicit (so it doesn't masquerade as a clean measurement).
+    for strategy in split_strategies:
+        r_s = striped_by_strategy.get(strategy)
+        r_c = cog_by_strategy.get(strategy)
+        if r_s is not None and r_c is not None:
+            if r_s.status == "ok" and r_c.status == "ok" and r_c.iter_median_s > 0:
+                delta = r_s.iter_median_s / r_c.iter_median_s
+                note = (
+                    f"striped/cog delta: strategy={strategy} "
+                    f"ratio={delta:.2f}x "
+                    f"(striped={r_s.iter_median_s * 1000:.1f}ms "
+                    f"cog={r_c.iter_median_s * 1000:.1f}ms)"
+                )
+                delta_status = "ok"
+            else:
+                delta = 0.0
+                note = (
+                    f"striped/cog delta: strategy={strategy} "
+                    f"could not compute (striped={r_s.status} cog={r_c.status})"
+                )
+                delta_status = (
+                    "error"
+                    if (r_s.status == "error" or r_c.status == "error")
+                    else "empty"
+                )
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn="raster_read_large_delta",
+                    category="large_raster",
+                    mode="spark-path",
+                    tile_px=0,
+                    bands=0,
+                    dtype=dtype,
+                    srid=0,
+                    rows=r_s.rows + r_c.rows,
+                    nodata_frac=0.0,
+                    warmup_iters=warmup,
+                    measured_iters=measured if delta_status == "ok" else 0,
+                    iter_median_s=delta,
+                    iter_min_s=0.0,
+                    iter_p90_s=0.0,
+                    iter_total_wall_clock_s=0.0,
+                    avg_wall_clock_s=0.0,
+                    per_tile_avg_s=0.0,
+                    per_tile_avg_ms=0.0,
+                    throughput_mpix_s=delta,
+                    throughput_rows_s=0.0,
+                    split_strategy=strategy,
+                    peak_rss_mb=peak_rss_mb(),
+                    status=delta_status,
+                    note=note,
+                    output_fingerprint="",
+                    **env,
+                )
+            )
+
+    # Progress summary.
+    ok_rows = [
+        r
+        for r in out
+        if r.status == "ok" and r.category == "large_raster" and "delta" not in r.fn
+    ]
+    print(
+        f"[bench] large-raster profile done: "
+        f"{len(ok_rows)} ok legs, {len(out)} total rows",
+        flush=True,
+    )
+    return out
+
+
 def _print_summary(rows: List[ResultRow]) -> None:
     """Print a compact results table to stdout."""
     if not rows:

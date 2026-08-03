@@ -40,7 +40,7 @@ case class RST_CombineAvgAgg(
 
     override def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {
         val value = child.eval(input)
-        buffer += InternalRow.copyValue(value)
+        buffer += InternalRow.copyValue(RasterSerializationUtil.normalizeToV2Row(value.asInstanceOf[InternalRow]))
         buffer
     }
 

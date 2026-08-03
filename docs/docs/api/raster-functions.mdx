@@ -14,6 +14,7 @@ import pyrxCode from '!!raw-loader!../../tests/python/api/pyrx_functions.py';
 import rasterxSqlCode from '!!raw-loader!../../tests/python/api/rasterx_functions_sql.py';
 import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.py';
 import rasterxScalaCode from '!!raw-loader!../../tests/scala/packages/RasterxPackageExamples.scala';
+import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
 # <img src={RasterXIcon} alt="RasterX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
 
@@ -64,9 +65,15 @@ RasterX exposes 87+ SQL functions (registered as `gbx_rst_*`; available in Pytho
 
 ## Tile payload
 
-Every RasterX function returns a tile whose `raster` field is a **self-contained, in-memory raster** (GTiff by default) — safe to serialize between Spark stages and executors, persist to Delta, hand off to `rasterio` / `gdal`, or write back out via the `gdal` writer. The bytes are never an XML reference to a per-executor `/vsimem/` tempfile or to a path that only exists on the producing node.
+Every RasterX (heavyweight) function returns a **materialized** tile whose `raster` field is a **self-contained, in-memory raster** (GTiff by default) — safe to serialize between Spark stages and executors, persist to Delta, hand off to `rasterio` / `gdal`, or write back out via the `gdal` writer. The bytes are never an XML reference to a per-executor `/vsimem/` tempfile or to a path that only exists on the producing node.
+
+See **[Tile structure](./tile-structure)** for the full tile-struct schema (the shared `cellid` / `raster` / `path` / `window` / … struct), and **[Virtual Tiles](./virtual-tiles)** for the bytes-free lightweight-tier variant and how tiles move between materialized and virtual.
 
 Functions that internally build via an intermediate VRT — `gbx_rst_merge`, `gbx_rst_merge_agg`, `gbx_rst_frombands`, `gbx_rst_combineavg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband`, `gbx_rst_derivedband_agg` — materialize the result to GTiff before returning, so downstream stages on different executors see real raster bytes. Inspect a tile's payload format from `tile.metadata.driver`; for any of the functions above, it will read `GTiff` (not `VRT`). See [Beta Release Notes](../beta-release-notes#whats-new-in-v030) for the v0.3.0 correctness fix that introduced this invariant. See [Tile structure](./tile-structure) for the full tile-struct schema.
+
+## Virtual-tile force-output params {#virtual-tile-overrides}
+
+<VirtualTileOverrides />
 
 ## Setup
 

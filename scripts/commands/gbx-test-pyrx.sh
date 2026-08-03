@@ -29,14 +29,16 @@ show_help() {
 }
 
 # Parse arguments
-TEST_PATH="/root/geobrix/python/geobrix/test/pyrx/"
+DEFAULT_TEST_PATH="/root/geobrix/python/geobrix/test/pyrx/"
+TEST_PATHS=()
 LOG_PATH=""
 USE_DOCKER=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
         --path)
-            TEST_PATH="/root/geobrix/$2"
+            # Accumulate: --path may be repeated to run several files/dirs.
+            TEST_PATHS+=("/root/geobrix/$2")
             shift 2
             ;;
         --docker)
@@ -62,10 +64,15 @@ done
 
 cd "$PROJECT_ROOT"
 
+# Default to the full pyrx suite when no --path was given.
+if [[ ${#TEST_PATHS[@]} -eq 0 ]]; then
+    TEST_PATHS=("$DEFAULT_TEST_PATH")
+fi
+
 show_banner "GeoBrix: pyrx Tests (lightweight, no JAR)"
 setup_log_file "$LOG_PATH"
 
-echo -e "${CYAN}Test path: ${YELLOW}$TEST_PATH${NC}"
+echo -e "${CYAN}Test path: ${YELLOW}${TEST_PATHS[*]}${NC}"
 echo -e "${CYAN}Markers: ${YELLOW}not integration${NC}"
 echo ""
 show_separator
@@ -76,13 +83,16 @@ echo ""
 if [[ $USE_DOCKER -eq 1 ]]; then
     check_docker
     PYTEST_CMD="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
-        python3 -m pytest $TEST_PATH -v --tb=short --color=yes -m 'not integration'"
+        python3 -m pytest ${TEST_PATHS[*]} -v --tb=short --color=yes -m 'not integration'"
     docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 else
     # Host venv path (default): isolated from system site-packages.
-    HOST_PATH="${TEST_PATH#/root/geobrix/}"   # strip the in-container prefix if present
-    run_in_pyrx_venv "cd '$PROJECT_ROOT' && python -m pytest '$HOST_PATH' \
+    HOST_PATHS=()
+    for p in "${TEST_PATHS[@]}"; do
+        HOST_PATHS+=("${p#/root/geobrix/}")   # strip the in-container prefix if present
+    done
+    run_in_pyrx_venv "cd '$PROJECT_ROOT' && python -m pytest ${HOST_PATHS[*]} \
         -v --tb=short --color=yes -m 'not integration'"
     EXIT_CODE=$?
 fi

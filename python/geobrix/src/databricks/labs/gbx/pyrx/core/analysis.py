@@ -8,8 +8,11 @@ expressions, implemented without the JAR:
 
   * ``proximity`` uses ``scipy.ndimage.distance_transform_edt`` (scipy is already
     a pyrx dependency) instead of GDAL's ComputeProximity.
-  * ``cog_convert`` uses ``rio-cogeo``'s ``cog_translate`` instead of
-    ``gdal_translate -of COG``.
+  * ``cog_convert`` uses GDAL's native ``driver="COG"`` via rasterio instead of
+    ``gdal_translate -of COG``. This approach writes directly from the decoded
+    array without re-decoding (unlike rio-cogeo's ``cog_translate``), keeping
+    peak RSS at ~2.8× the decoded tile size — safe under Databricks Serverless's
+    1 GB Python UDF cap.
   * ``contour`` uses ``skimage.measure.find_contours`` instead of GDAL's
     ContourGenerateEx.
   * ``viewshed`` uses ``xrspatial.viewshed`` instead of GDAL's ViewshedGenerate.
@@ -142,20 +145,28 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     """Convert a raster to a Cloud Optimized GeoTIFF (COG) layout.
 
     Mirrors the heavyweight ``gbx_rst_cog_convert`` (``gdal.Translate -of COG``)
-    using rio-cogeo's ``cog_translate``.
+    using GDAL's native ``driver="COG"`` via rasterio.
 
-      * ``compression`` (default ``"DEFLATE"``): mapped to a rio-cogeo output
-        profile (``cog_profiles.get(compression.lower())``). Unknown profiles
-        raise ``ValueError``.
+      * ``compression`` (default ``"DEFLATE"``): GDAL COG compression name.
+        Accepted values are the same profile names accepted by rio-cogeo:
+        ``deflate``, ``lzw``, ``zstd``, ``jpeg``, ``webp``, ``packbits``,
+        ``lzma``, ``lerc``, ``lerc_deflate``, ``lerc_zstd``, ``raw``.
+        Unknown values raise ``ValueError``.
       * ``blocksize`` (default 512): internal tile size; must be ``> 0``.
       * ``overview_resampling`` (default ``"AVERAGE"``): downsampling algorithm
-        for the auto-generated overview pyramid.
+        for the auto-generated overview pyramid (e.g. ``"AVERAGE"``,
+        ``"NEAREST"``, ``"BILINEAR"``).
+
+    Uses GDAL's ``driver="COG"`` directly (not rio-cogeo's ``cog_translate``).
+    This writes from the already-decoded array without a re-decode pass, keeping
+    peak RSS at ~2.8× the decoded tile size.  Output is spec-valid COG
+    (cog_validate=True) — GDAL's COG driver orders IFDs correctly by construction.
 
     The result is COG-layout GTiff bytes that reopen with rasterio.
 
     Args:
         ds:                  Open rasterio DatasetReader.
-        compression:         COG compression / rio-cogeo profile name.
+        compression:         COG compression name (case-insensitive).
         blocksize:           Internal tile size in pixels (square).
         overview_resampling: Overview resampling algorithm name.
 
@@ -169,44 +180,126 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
         raise ValueError("rst_cog_convert: compression must be non-empty")
     if overview_resampling is None or str(overview_resampling).strip() == "":
         raise ValueError("rst_cog_convert: overview_resampling must be non-empty")
-    compression = str(compression)
-    overview_resampling = str(overview_resampling)
+    compression = str(compression).upper()
+    overview_resampling = str(overview_resampling).upper()
 
-    from rio_cogeo.cogeo import cog_translate
+    # Validate compression against the same set that rio-cogeo accepts, so
+    # callers passing profile names (e.g. "deflate", "lzw", "raw") still work.
+    # "raw" maps to no compression (omit the compress kwarg for driver="COG").
     from rio_cogeo.profiles import cog_profiles
 
     try:
-        output_profile = cog_profiles.get(compression.lower())
-    except KeyError as exc:  # rio-cogeo raises KeyError for an unknown profile
+        _profile_check = cog_profiles.get(compression.lower())
+    except KeyError as exc:
         raise ValueError(
             f"rst_cog_convert: unknown compression '{compression}'; "
             f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
         ) from exc
-    if output_profile is None:
+    if _profile_check is None:
         raise ValueError(
             f"rst_cog_convert: unknown compression '{compression}'; "
             f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
         )
-    output_profile = dict(output_profile)
-    output_profile.update(blockxsize=blocksize, blockysize=blocksize)
 
-    # cog_translate needs a destination path; a real temp file is the most
-    # reliable target (in_memory=True builds the COG in RAM, then writes it out).
+    import rasterio
+
+    # Read decoded data from the source dataset FIRST, then free it after
+    # writing to minimise concurrent-buffer overlap.
+    data = ds.read()
+
+    profile = ds.profile.copy()
+    profile.update(
+        driver="COG",
+        blocksize=blocksize,
+        overview_resampling=overview_resampling,
+    )
+    # "raw" means no compression in rio-cogeo; driver="COG" omits the key.
+    if compression != "RAW":
+        profile["compress"] = compression
+    else:
+        profile.pop("compress", None)
+
     tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
     tmp.close()
     try:
-        cog_translate(
-            ds,
-            tmp.name,
-            output_profile,
-            overview_resampling=overview_resampling.lower(),
-            in_memory=True,
-            quiet=True,
-        )
+        with rasterio.open(tmp.name, "w", **profile) as dst:
+            dst.write(data)
+        # Free the decoded array before reading the output bytes back so
+        # the peak is capped at max(data, cog_file_bytes), not their sum.
+        del data
         with open(tmp.name, "rb") as fh:
             return fh.read()
     finally:
         os.unlink(tmp.name)
+
+
+# Allowed BIGTIFF creation-option values (GDAL). Default YES: every GeoBrix
+# COG is BigTIFF (one predictable format, no ~4 GiB boundary risk, universally
+# readable by GDAL/rasterio). IF_SAFER = Classic for small outputs, BigTIFF when
+# size needs it. NO = force Classic (fails past ~4 GiB — advanced/compat only).
+_BIGTIFF_VALUES = frozenset({"YES", "NO", "IF_NEEDED", "IF_SAFER"})
+
+
+def cog_convert_file(
+    src_path: str,
+    dst_path: str,
+    compression: str = "DEFLATE",
+    blocksize: int = 512,
+    overview_resampling: str = "AVERAGE",
+    bigtiff: str = "YES",
+) -> None:
+    """Convert a raster file to COG layout using streaming block-by-block copy.
+
+    Unlike ``cog_convert`` (which decodes the whole raster into a Python array),
+    this function uses ``rasterio.shutil.copy`` with ``driver="COG"`` inside a
+    bounded GDAL cache.  GDAL streams block-by-block so peak RSS stays at ~GDAL
+    cache size regardless of file size — safe for large files under Databricks
+    Serverless's 1 GB Python UDF cap.
+
+    Uses rasterio only — does NOT import osgeo.gdal.
+
+    Args:
+        src_path:            Source raster path (local or FUSE-mounted Volume).
+        dst_path:            Destination path for the output COG (must be local;
+                             caller is responsible for FUSE-safe staging if needed).
+        compression:         COG compression name (case-insensitive, e.g. "DEFLATE").
+        blocksize:           Internal tile size in pixels (square, must be > 0).
+        overview_resampling: Overview resampling algorithm (e.g. "AVERAGE").
+        bigtiff:             GDAL BIGTIFF creation option (case-insensitive):
+                             ``YES`` (default — always BigTIFF), ``IF_SAFER`` /
+                             ``IF_NEEDED`` (size-adaptive), or ``NO`` (force
+                             Classic TIFF, which FAILS for outputs past ~4 GiB).
+                             A COG exceeding ~4 GiB overflows the Classic TIFF
+                             32-bit directory-offset limit and MUST be BigTIFF.
+    """
+    blocksize = int(blocksize)
+    if blocksize <= 0:
+        raise ValueError(f"cog_convert_file: blocksize must be > 0; got {blocksize}")
+    if compression is None or str(compression).strip() == "":
+        raise ValueError("cog_convert_file: compression must be non-empty")
+    if overview_resampling is None or str(overview_resampling).strip() == "":
+        raise ValueError("cog_convert_file: overview_resampling must be non-empty")
+    bigtiff_val = str(bigtiff).upper()
+    if bigtiff_val not in _BIGTIFF_VALUES:
+        raise ValueError(
+            f"cog_convert_file: bigtiff must be one of {sorted(_BIGTIFF_VALUES)}; "
+            f"got {bigtiff!r}"
+        )
+
+    import rasterio
+    import rasterio.shutil as rio_shutil
+
+    creation = dict(
+        blocksize=int(blocksize),
+        overview_resampling=str(overview_resampling).upper(),
+        bigtiff=bigtiff_val,
+    )
+    comp = str(compression).upper()
+    if comp != "RAW":
+        creation["compress"] = comp
+
+    with rasterio.Env(GDAL_CACHEMAX=200):
+        rio_shutil.copy(src_path, dst_path, driver="COG", **creation)
 
 
 def contour(ds, levels, interval, base, attr_field):

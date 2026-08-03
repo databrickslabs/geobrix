@@ -23,11 +23,14 @@ for the full list, tier differences, output schemas, and options.
 |---|---|---|
 | [Raster (generic)](./readers/raster) | `raster_gbx` | `gdal` |
 | [GeoTIFF](./readers/geotiff) | `gtiff_gbx` | `gtiff_gdal` |
-| [NetCDF](./readers/netcdf) | `netcdf_gbx` | `netcdf_gdal` |
+| [COG](./readers/cog) | `cog_gbx` | — (light-only) |
+| [NetCDF](./readers/netcdf) | `netcdf_gbx` | `netcdf_gdal` / `netcdf_ogr` |
 | [PMTiles](./readers/pmtiles) | `pmtiles_gbx` | — (light-only) |
+| [File lister](./readers/file) | `file_gbx` | — (light-only) |
 | [Vector (generic)](./readers/vector) | `vector_gbx` | `ogr` |
 | [Shapefile](./readers/shapefile) | `shapefile_gbx` | `shapefile_ogr` |
 | [GeoJSON](./readers/geojson) | `geojson_gbx` | `geojson_ogr` |
+| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` | — (light-only reader) |
 | [GeoPackage](./readers/geopackage) | `gpkg_gbx` | `gpkg_ogr` |
 | [File Geodatabase](./readers/filegdb) | `file_gdb_gbx` | `file_gdb_ogr` |
 
@@ -40,13 +43,14 @@ for the column contract, single-file vs sharded trade-offs, and per-format detai
 |---|---|---|
 | [Raster (generic)](./writers/raster) | `raster_gbx` | `gdal` |
 | [GeoTIFF](./writers/geotiff) | `gtiff_gbx` | `gtiff_gdal` |
+| [COG](./writers/cog) | `cog_gbx` | — (light-only) |
 | [PMTiles](./writers/pmtiles) | `pmtiles_gbx` | `pmtiles` |
 | [NetCDF](./writers/netcdf) | `netcdf_gbx` | — (light-only) |
-| [Vector (generic)](./writers/vector) | `vector_gbx` | — |
-| [Shapefile](./writers/shapefile) | `shapefile_gbx` | — |
-| [GeoJSON](./writers/geojson) | `geojson_gbx` | — |
+| [Vector (generic)](./writers/vector) | `vector_gbx` | — (light-only) |
+| [Shapefile](./writers/shapefile) | `shapefile_gbx` | — (light-only) |
+| [GeoJSON](./writers/geojson) | `geojson_gbx` | — (light-only) |
 | [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` | `geojsonl_ogr` |
-| [GeoPackage](./writers/geopackage) | `gpkg_gbx` | — |
+| [GeoPackage](./writers/geopackage) | `gpkg_gbx` | — (light-only) |
 | [File Geodatabase](./writers/filegdb) | `file_gdb_gbx` | — (hybrid; needs native GDAL) |
 
 ## Registering the lightweight tier

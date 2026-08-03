@@ -566,8 +566,8 @@ def rst_h3_rasterize_agg(
                     (``f.lit(0)`` = no expansion).
 
     Returns:
-        Column of raster tile (tile struct with ``source``, ``raster``,
-        ``metadata`` fields).
+        Column of raster tile — the v2 tile struct with fields
+        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
     return f.call_function(
         "gbx_rst_h3_rasterize_agg",
@@ -637,11 +637,13 @@ def rst_fromfile(path: ColLike, driver: ColLike) -> Column:
     """Build a raster tile from a file path and GDAL driver name.
 
     Args:
-        path: Column of file path (string).
+        path: Column of SOURCE FILE path (string) — a filesystem or Volume path read to
+            produce a materialized bytes-tile.  This is a raster-constructor argument,
+            not a "path-tile" field; the returned tile always carries raster bytes.
         driver: GDAL driver name (e.g. GTiff).
 
     Returns:
-        Column of raster tile.
+        Column of raster tile (materialized — raster bytes present).
 
     Note:
         ``gbx_rst_fromfile`` is **lightweight-only**: it is implemented by the ``pyrx`` Python loader
@@ -1216,8 +1218,8 @@ def rst_quadbin_rasterize_agg(
                     (``f.lit(0)`` = no expansion).
 
     Returns:
-        Column of raster tile (tile struct with ``source``, ``raster``,
-        ``metadata`` fields).
+        Column of raster tile — the v2 tile struct with fields
+        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
     return f.call_function(
         "gbx_rst_quadbin_rasterize_agg",
@@ -1282,8 +1284,8 @@ def rst_bng_rasterize_agg(
                     (``f.lit(0)`` = no expansion).
 
     Returns:
-        Column of raster tile (tile struct with ``source``, ``raster``,
-        ``metadata`` fields).
+        Column of raster tile — the v2 tile struct with fields
+        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
     return f.call_function(
         "gbx_rst_bng_rasterize_agg",

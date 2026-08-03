@@ -182,7 +182,8 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
             "all_parents" -> "",
             "last_command" -> "gbx_rst_dtmfromgeoms"
         )
-        InternalRow.fromSeq(Seq(0L, bytes, SerializationUtil.toMapData[String, String](mtd)))
+        // v2 8-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata
+        InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, SerializationUtil.toMapData[String, String](mtd)))
     }
 
     override def name: String = "gbx_rst_dtmfromgeoms"

@@ -80,7 +80,8 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
+            'readers/file',
           ],
         },
         {
@@ -90,7 +91,7 @@ const sidebars = {
           items: [
             'writers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['writers/raster', 'writers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/netcdf', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/cog', 'writers/netcdf', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
           ],
         },
       ],
@@ -111,6 +112,8 @@ const sidebars = {
           link: { type: 'doc', id: 'api/raster-functions' },
           items: [
             'api/rasterio-distributed',
+            'api/large-rasters',
+            'api/virtual-tiles',
             'api/h3-raster-tessellation',
           ],
         },

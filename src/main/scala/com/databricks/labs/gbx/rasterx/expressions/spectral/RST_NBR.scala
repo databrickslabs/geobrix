@@ -26,7 +26,6 @@ case class RST_NBR(
     swirIdxExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
         tileExpr, nirIdxExpr, swirIdxExpr, ExpressionConfigExpr()
     )
@@ -36,7 +35,7 @@ case class RST_NBR(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_NBR.name
-    override def replacement: Expression = rstInvoke(RST_NBR, rasterType)
+    override def replacement: Expression = invoke(RST_NBR)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -44,10 +43,8 @@ case class RST_NBR(
 
 object RST_NBR extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, nirIdx: Int, swirIdx: Int, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, nirIdx: Int, swirIdx: Int, conf: UTF8String): InternalRow =
         runDispatch(row, nirIdx, swirIdx, conf, BinaryType)
-    def evalPath(row: InternalRow, nirIdx: Int, swirIdx: Int, conf: UTF8String): InternalRow =
-        runDispatch(row, nirIdx, swirIdx, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, nirIdx: Int, swirIdx: Int, conf: UTF8String, dt: DataType

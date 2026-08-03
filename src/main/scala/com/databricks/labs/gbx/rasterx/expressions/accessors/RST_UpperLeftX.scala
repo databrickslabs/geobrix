@@ -15,13 +15,11 @@ case class RST_UpperLeftX(
     tileExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_UpperLeftX.name
-    override def replacement: Expression = rstInvoke(RST_UpperLeftX, rasterType)
+    override def replacement: Expression = invoke(RST_UpperLeftX)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -29,8 +27,7 @@ case class RST_UpperLeftX(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_UpperLeftX extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): Double = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): Double = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): Double = eval(row, conf, BinaryType)
 
     def eval(row: InternalRow, conf: UTF8String, dt: DataType): Double =
         Option(

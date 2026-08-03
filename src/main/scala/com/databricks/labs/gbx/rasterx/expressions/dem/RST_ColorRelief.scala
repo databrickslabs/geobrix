@@ -25,13 +25,12 @@ case class RST_ColorRelief(
     colorTablePathExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, colorTablePathExpr, ExpressionConfigExpr())
     override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, StringType, StringType)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ColorRelief.name
-    override def replacement: Expression = rstInvoke(RST_ColorRelief, rasterType)
+    override def replacement: Expression = invoke(RST_ColorRelief)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
 
@@ -39,10 +38,8 @@ case class RST_ColorRelief(
 
 object RST_ColorRelief extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String): InternalRow =
         runDispatch(row, colorTablePath, conf, BinaryType)
-    def evalPath(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String): InternalRow =
-        runDispatch(row, colorTablePath, conf, StringType)
 
     private def runDispatch(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

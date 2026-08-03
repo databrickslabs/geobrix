@@ -1,10 +1,15 @@
 """
 Tests for understanding and working with the tile structure directly.
 
-A tile in GeoBrix is a struct with three fields:
+A tile in GeoBrix is the v2 8-field struct (shared by both tiers):
 - cellid: Long (nullable) - Grid cell ID for tessellated rasters, null for non-tessellated
-- raster: Binary - Raster bytes loaded from file or content
-- metadata: Map[String, String] - Driver info, extension, size, etc.
+- raster: Binary (nullable) - Raster bytes; null on a virtual (bytes-free) tile
+- path: String (nullable) - Source path; set on a virtual tile
+- window: struct<col_off,row_off,width,height> (nullable) - Pixel window
+- clip_polygon: Binary (nullable) - Clip geometry (WKB)
+- clip_crs: String (nullable) - CRS of clip_polygon
+- crs: String (nullable) - Working/target CRS
+- metadata: Map[String, String] (nullable) - Driver info, extension, size, etc.
 """
 
 import logging
@@ -316,20 +321,24 @@ def test_tile_schema_documentation(spark):
     assert "raster" in schema.dataType.simpleString()
     assert "metadata" in schema.dataType.simpleString()
 
-    # The tile is a struct with three fields
-    assert len(schema.dataType.fields) == 3
+    # The tile is the v2 8-field struct (shared by both tiers).
+    fields = {fld.name: fld for fld in schema.dataType.fields}
+    assert set(fields) == {
+        "cellid", "raster", "path", "window",
+        "clip_polygon", "clip_crs", "crs", "metadata",
+    }
 
-    # Field 0: cellid (LongType, nullable)
-    cellid_field = schema.dataType.fields[0]
-    assert cellid_field.name == "cellid"
-    assert cellid_field.dataType.simpleString() == "bigint"
+    # cellid: LongType, not nullable
+    assert fields["cellid"].dataType.simpleString() == "bigint"
 
-    # Field 1: raster (StringType or BinaryType, not nullable)
-    raster_field = schema.dataType.fields[1]
-    assert raster_field.name == "raster"
-    assert raster_field.dataType.simpleString() in ["string", "binary"]
+    # raster: BinaryType, nullable (null on a virtual tile)
+    assert fields["raster"].dataType.simpleString() == "binary"
 
-    # Field 2: metadata (MapType, nullable)
-    metadata_field = schema.dataType.fields[2]
-    assert metadata_field.name == "metadata"
-    assert "map<string,string>" in metadata_field.dataType.simpleString()
+    # path: StringType (source path for a virtual tile)
+    assert fields["path"].dataType.simpleString() == "string"
+
+    # window: struct of four ints
+    assert "col_off" in fields["window"].dataType.simpleString()
+
+    # metadata: MapType
+    assert "map<string,string>" in fields["metadata"].dataType.simpleString()

@@ -12,6 +12,8 @@ from typing import List, Optional
 from pyspark.sql import SparkSession
 
 from databricks.labs.gbx import _register
+from databricks.labs.gbx.ds.cog import CogGbxDataSource
+from databricks.labs.gbx.ds.file import FileGbxDataSource
 from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
 from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
 from databricks.labs.gbx.ds.pmtiles import PMTilesGbxDataSource
@@ -30,6 +32,8 @@ _SOURCES = (
     GTiffGbxDataSource,
     NetcdfGbxDataSource,
     PMTilesGbxDataSource,
+    FileGbxDataSource,
+    CogGbxDataSource,
     VectorGbxDataSource,
     ShapefileGbxDataSource,
     GeoJSONGbxDataSource,

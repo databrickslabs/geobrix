@@ -6,7 +6,7 @@ import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUti
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
+import org.apache.spark.sql.types.{BinaryType, DataType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GA_ReadOnly
@@ -17,13 +17,11 @@ case class RST_GetSubdataset(
     subsetName: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, subsetName, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_GetSubdataset.name
-    override def replacement: Expression = rstInvoke(RST_GetSubdataset, rasterType)
+    override def replacement: Expression = invoke(RST_GetSubdataset)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -31,8 +29,7 @@ case class RST_GetSubdataset(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_GetSubdataset extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, subsetName: UTF8String, conf: UTF8String): InternalRow = eval(row, subsetName, conf, StringType)
-    def evalBinary(row: InternalRow, subsetName: UTF8String, conf: UTF8String): InternalRow = eval(row, subsetName, conf, BinaryType)
+    def eval(row: InternalRow, subsetName: UTF8String, conf: UTF8String): InternalRow = eval(row, subsetName, conf, BinaryType)
 
     def eval(row: InternalRow, subsetName: UTF8String, conf: UTF8String, rdt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

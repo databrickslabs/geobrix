@@ -1,12 +1,10 @@
 package com.databricks.labs.gbx.rasterx.gdal
 
 import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
-import com.databricks.labs.gbx.util.{HadoopUtils, NodeFileManager, NodeFilePathUtil}
-import org.apache.spark.util.SerializableConfiguration
+import com.databricks.labs.gbx.util.NodeFileManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants._
 
-import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.CollectionHasAsScala
 
 /**
@@ -107,32 +105,6 @@ object RasterDriver {
             else s"/vsimem/temp_raster_$uuid.$extension"
         gdal.FileFromMemBuffer(tempPath, bytes)
         gdal.Open(tempPath)
-    }
-
-    /** Write a Dataset to path (local or remote via HadoopUtils); uses GDALTranslate for format/options. */
-    def write(ds: Dataset, path: String, options: Map[String, String], hconf: SerializableConfiguration): Unit = {
-        val isLocal = this.isLocal(path)
-        val driver = ds.GetDriver()
-        val isZip = options.getOrElse("isZip", "false").toBoolean
-        val isSubdataset = options.getOrElse("isSubdataset", "false").toBoolean
-        val writePath =
-            if (isLocal) path
-            else {
-                val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
-                val extension = GDAL.getExtension(driver.getShortName)
-                s"${NodeFilePathUtil.rootPath}/$uuid.$extension"
-            }
-        val cleanPath = this.cleanPath(writePath, isZip, isSubdataset)
-        ds.FlushCache()
-        Files.createDirectories(Paths.get(cleanPath).getParent)
-        // Create a copy via gdal_translate to ensure proper format, compression, etc.
-        val (res, _) = GDALTranslate.executeTranslate(cleanPath, ds, "gdal_translate", options)
-        res.FlushCache()
-        res.delete()
-        // If not local, copy the file to the remote path
-        if (!isLocal) {
-            HadoopUtils.copyToPath(cleanPath, path, hconf)
-        }
     }
 
     /** Encode a Dataset to bytes: always translates to a fresh /vsimem/ path so the output

@@ -23,13 +23,11 @@ case class RST_Clip(
     cutlineAllTouchedExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, geometryExpr, cutlineAllTouchedExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Clip.name
-    override def replacement: Expression = rstInvoke(RST_Clip, rasterType)
+    override def replacement: Expression = invoke(RST_Clip)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }
@@ -37,10 +35,8 @@ case class RST_Clip(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Clip extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String): InternalRow =
         eval(row, geom, cutlineAllTouched, conf, BinaryType)
-    def evalPath(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String): InternalRow =
-        eval(row, geom, cutlineAllTouched, conf, StringType)
 
     def eval(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

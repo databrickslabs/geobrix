@@ -124,7 +124,8 @@ object RST_Rasterize extends WithExpressionInfo {
                 "all_parents" -> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, mapData))
+            // v2 8-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata
+            InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData))
         } finally {
             rasterDs.delete()
             ogrDs.delete()

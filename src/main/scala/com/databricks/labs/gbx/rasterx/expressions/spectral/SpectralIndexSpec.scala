@@ -100,8 +100,8 @@ object SpectralIndexSpec {
       *   2. Deserialise the input tile row to a Dataset.
       *   3. For BinaryType (in-memory ``/vsimem/``) translate to a local
       *      file because gdal_calc.py can't read ``/vsimem/`` sources
-      *      (mirrors the workaround in ``RST_MapAlgebra.evalBinary`` and
-      *      ``RST_NDVI.evalBinary``).
+      *      (mirrors the workaround in ``RST_MapAlgebra.eval`` and
+      *      ``RST_NDVI.eval``).
       *   4. Invoke the caller-supplied compute function ``f(localDs)`` which
       *      returns the gdal_calc result ``(Dataset, metadata)``.
       *   5. Serialize the result back to an ``InternalRow`` and tidy up the

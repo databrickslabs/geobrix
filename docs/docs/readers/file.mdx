@@ -1,0 +1,89 @@
+---
+sidebar_position: 2
+sidebar_label: File Lister (file_gbx)
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_examples.py';
+
+# File Lister — `file_gbx`
+
+`file_gbx` lists files in a directory as **path-reference rows**. It reads no
+raster or vector content — it emits one row per file with path, name,
+extension, size, and modification time. Use it as the first step in a
+preparation pipeline: list the files you want to process, then pipe those
+references into a writer (e.g. `cog_gbx`) that opens and converts each one.
+
+This is in contrast to `binaryFile` (which loads raw bytes) and the raster
+readers (`raster_gbx`, `gtiff_gbx`) which decode rasters into the shared
+`(source, tile)` schema. `file_gbx` is format-agnostic — it lists any file
+type and never touches the file content.
+
+:::note Lightweight only
+`file_gbx` is a pure-Python lightweight DataSource. Register it with
+`register(spark)` before use. There is no heavyweight GDAL counterpart.
+:::
+
+## Output schema
+
+```
+root
+ |-- path:             string   — full absolute path to the file
+ |-- name:             string   — filename including extension
+ |-- extension:        string   — lowercase, no leading dot; NULL for files with no extension
+ |-- size:             long     — file size in bytes
+ |-- modificationTime: timestamp — last-modified time
+```
+
+No raster or vector content is loaded. The `path` values are the references
+you pass to a subsequent writer.
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `filterRegex` | `".*"` | Keep only files whose full path matches this regex. |
+
+:::note Always recursive
+`file_gbx` always walks subdirectories. There is no opt-out — it uses
+`os.walk` unconditionally. Use `filterRegex` to scope which files are
+included.
+:::
+
+## Register
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+```
+
+## List files
+
+<CodeFromTest code={cogExamples} language="python" functionName="FILE_GBX_LIST"
+  source="docs/tests/python/readers/cog_gbx_examples.py"
+  testFile="docs/tests/python/readers/test_cog_gbx_examples.py" />
+
+## Filter by extension
+
+<CodeFromTest code={cogExamples} language="python" functionName="FILE_GBX_FILTER"
+  source="docs/tests/python/readers/cog_gbx_examples.py"
+  testFile="docs/tests/python/readers/test_cog_gbx_examples.py" />
+
+## Typical use: COG preparation
+
+The primary use of `file_gbx` is to feed the `cog_gbx` writer: list the
+source files, then write master COGs — one per source file — for efficient
+windowed reading later.
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_PREPARE"
+  source="docs/tests/python/readers/cog_gbx_examples.py"
+  testFile="docs/tests/python/readers/test_cog_gbx_examples.py" />
+
+After preparation, read clipped windows with the `cog_gbx` reader. See
+[COG Reader](./cog) for the read path.
+
+## Next steps
+
+- [COG Reader](./cog) — windowed read from prepared COGs
+- [COG Writer](../writers/cog) — convert source files to master COGs
+- [Raster Reader](./raster) — decode rasters into the `(source, tile)` schema

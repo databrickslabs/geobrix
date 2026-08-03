@@ -23,7 +23,6 @@ case class RST_ResampleToSize(
     algorithmExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] =
         Seq(tileExpr, widthPxExpr, heightPxExpr, algorithmExpr, ExpressionConfigExpr())
     override def inputTypes: Seq[DataType] =
@@ -31,7 +30,7 @@ case class RST_ResampleToSize(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ResampleToSize.name
-    override def replacement: Expression = rstInvoke(RST_ResampleToSize, rasterType)
+    override def replacement: Expression = invoke(RST_ResampleToSize)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -40,18 +39,12 @@ case class RST_ResampleToSize(
 object RST_ResampleToSize extends WithExpressionInfo {
 
     // PySpark sends Python ints as LongType; offer both Int and Long overloads.
-    def evalBinary(
+    def eval(
         row: InternalRow, widthPx: Int, heightPx: Int, algorithm: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, widthPx, heightPx, algorithm, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, widthPx: Int, heightPx: Int, algorithm: UTF8String, conf: UTF8String
-    ): InternalRow = runDispatch(row, widthPx, heightPx, algorithm, conf, StringType)
-    def evalBinary(
+    def eval(
         row: InternalRow, widthPx: Long, heightPx: Long, algorithm: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, widthPx.toInt, heightPx.toInt, algorithm, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, widthPx: Long, heightPx: Long, algorithm: UTF8String, conf: UTF8String
-    ): InternalRow = runDispatch(row, widthPx.toInt, heightPx.toInt, algorithm, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, widthPx: Int, heightPx: Int,

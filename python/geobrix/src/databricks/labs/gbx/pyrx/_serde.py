@@ -1,8 +1,17 @@
 """Tile struct schema and rasterio MemoryFile (de)serialization.
 
-The tile struct mirrors the heavyweight rasterx tile exactly:
-    struct<cellid: bigint, raster: binary, metadata: map<string,string>>
-pyrx always uses the BINARY raster variant (never executor-only file paths).
+Both the lightweight (pyrx) and heavyweight (rasterx) tiers share the v2 tile
+struct defined in ``pyrx.core.virtual_tile.V2_TILE_SCHEMA``:
+
+    struct<cellid: bigint, raster: binary, path: string,
+           window: struct<col_off,row_off,width,height>,
+           clip_polygon: binary, clip_crs: string, crs: string,
+           metadata: map<string,string>>
+
+A materialized tile carries raster bytes (``raster`` is not null); the provenance
+fields (``path``, ``window``, ``clip_polygon``, ``clip_crs``, ``crs``) are null for
+a plain materialized tile.  The legacy ``TILE_SCHEMA`` below covers only the
+three-field subset used by older build_tile / open_tile helpers.
 """
 
 from contextlib import contextmanager

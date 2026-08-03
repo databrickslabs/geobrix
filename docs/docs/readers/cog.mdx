@@ -1,0 +1,110 @@
+---
+sidebar_position: 3
+sidebar_label: COG
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_examples.py';
+
+# COG Reader
+
+`cog_gbx` reads Cloud-Optimized GeoTIFFs (COGs) into the shared `(source, tile)`
+schema. Its defining feature is **area-of-interest clipping**: pass one or more
+clip polygons and the reader issues HTTP range-requests (or FUSE range-reads)
+that fetch only the bytes that intersect each AOI, skipping the rest of the file
+entirely.
+
+This makes `cog_gbx` the natural read path after COG preparation with the
+`cog_gbx` writer — the prepare-then-read pipeline:
+
+1. **List** source files with `file_gbx`.
+2. **Prepare** — convert each to a master COG with the `cog_gbx` writer
+   (internal tiling + overview levels baked in).
+3. **Read** — clip to any AOI with `cog_gbx` + `clipPolygons`, pulling only the
+   required tiles and overview levels.
+
+:::note Lightweight only
+`cog_gbx` is a pure-Python lightweight DataSource (no JAR). Register it with
+`register(spark)` before use.
+:::
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `clipPolygons` | _none_ | Area(s) of interest: one WKT/EWKT string, or a JSON-array string for a list, e.g. `'["POLYGON((...))","POLYGON((...))"]'`. One tile per polygon whose envelope intersects the COG; only the intersecting blocks/overviews are fetched. Materialized tiles are pre-clipped (NoData outside the polygon); virtual tiles defer the clip. Mutually exclusive with `windows`. |
+| `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`/`tileSize`. |
+| `clipCrs` | _none_ | CRS for `clipPolygons` lacking an embedded SRID (e.g. `"EPSG:27700"`). Precedence: embedded EWKB/EWKT SRID → `clipCrs` → the COG's CRS. The reader reprojects the polygon internally. |
+| `splitStrategy` | `"none"` | Split large COGs: `none` (default — one tile per file), `serverless`, `classic`, or `auto`. Splitting respects the COG's internal tile grid. |
+| `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile budget in MiB. `-1` defers to `splitStrategy`. |
+| `tileSize` | _none_ | Regular fixed-size grid over the COG: `"w,h"` or a single `"n"` (square). One tile per cell; mutually exclusive with `clipPolygons`/`windows`. Materialized cells guarded to ~2 GB; virtual unguarded. See [Raster Options](./raster#options). |
+| `overlapPercent` | `0` | Overlap % between `tileSize` cells (`tileSize`-only). See [Raster Options](./raster#options). |
+| `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
+
+:::tip Default is no-split
+Both `raster_gbx` and `cog_gbx` default to `splitStrategy=none` — one tile per
+file. Splitting is opt-in. COG files prepared by the `cog_gbx` writer already
+carry internal tiling and overviews, so the reader can serve any AOI without
+splitting the source into partitions.
+:::
+
+## Register
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+```
+
+## Read a COG directory
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+
+df = spark.read.format("cog_gbx").load("/Volumes/main/.../cog-prepared/nyc-sentinel2")
+df.show()
+```
+
+## Read with AOI clip
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
+  source="docs/tests/python/readers/cog_gbx_examples.py"
+  testFile="docs/tests/python/readers/test_cog_gbx_examples.py" />
+
+## Output schema
+
+`cog_gbx` emits the standard raster schema:
+
+```
+root
+ |-- source: string   — path to the source COG file
+ |-- tile: struct
+ |    |-- cellid: bigint (nullable)
+ |    |-- raster: binary (nullable) — clipped tile bytes (GeoTIFF); null for virtual tiles
+ |    |-- path: string (nullable) — source path (provenance / virtual read target)
+ |    |-- window: struct<col_off,row_off,width,height> (nullable) — pixel window read
+ |    |-- clip_polygon: binary (nullable) — the AOI applied (materialized) or to apply (virtual)
+ |    |-- clip_crs: string (nullable) — CRS of clip_polygon
+ |    |-- crs: string (nullable) — working/target CRS
+ |    |-- metadata: map<string,string> — driver, CRS, extent, …
+```
+
+For a materialized tile the `raster` bytes carry the CRS and geotransform of the
+clipped window (not the full source file), and `window`/`clip_polygon`/`clip_crs`
+are provenance of what was applied. A virtual tile (from `.option("virtualTiles",
+"true")`) leaves `raster` null and carries those fields as a deferred instruction.
+Downstream `rst_*` functions consume either identically.
+
+## Full prepare-then-read pipeline
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_PREPARE"
+  source="docs/tests/python/readers/cog_gbx_examples.py" />
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
+  source="docs/tests/python/readers/cog_gbx_examples.py" />
+
+## Next steps
+
+- [File Lister](./file) — list source files before preparation
+- [COG Writer](../writers/cog) — prepare master COGs from source rasters
+- [Raster Functions](../api/raster-functions) — process the clipped tiles

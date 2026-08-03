@@ -45,7 +45,7 @@ case class RST_DerivedBandAgg(
 
     def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {
         val value = first.eval(input)
-        buffer += InternalRow.copyValue(value)
+        buffer += InternalRow.copyValue(RasterSerializationUtil.normalizeToV2Row(value.asInstanceOf[InternalRow]))
         buffer
     }
 

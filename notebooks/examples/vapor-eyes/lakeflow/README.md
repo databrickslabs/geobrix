@@ -148,7 +148,7 @@ databricks bundle run vapor_eyes_lf_job
 - The bundle validates and deploys with the committed defaults in `databricks.yml` out of the box. Set your own workspace CLI profile and SQL warehouse by copying `databricks.override.yml.example` to `databricks.override.yml` (git-ignored) and filling in your profile and `warehouse_id`; it's layered in automatically via `include: ["*.override.yml"]`. The warehouse is used both for the AI/BI dashboard and for validation queries — a fresh clone with no override file still validates/deploys, it just has no dashboard until a `warehouse_id` is set.
 - **Schedule**: the job carries a daily schedule (`0 0 7 * * ?`, America/Chicago) but ships **paused** (`pause_status: PAUSED`) — unpause it in the workspace (or in `databricks.yml`) once you've confirmed a manual run.
 - **Backfill**: to widen or shift the historical window, edit the `date_window`, `s5p_temporal`, `s5p_windows`, or `emit_windows` variables (in `databricks.yml` or your override file) and re-run the job. Widening the window re-downloads a correspondingly larger volume of granules — see [Caveats](#caveats).
-- **The GeoBrix wheel**: `gbx_wheel` points at a wheel staged on a Volume (`geobrix-0.4.3-py3-none-any.whl`); both the pipeline and the `land` task install `${var.gbx_wheel}[light,stac,vizx]` from that path. Stage your own build there, or point the variable at wherever your wheel lives.
+- **The GeoBrix wheel**: `gbx_wheel` points at a wheel staged on a Volume (`geobrix-0.5.0-py3-none-any.whl`); both the pipeline and the `land` task install `${var.gbx_wheel}[light,stac,vizx]` from that path. Stage your own build there, or point the variable at wherever your wheel lives.
 
 ---
 

@@ -43,7 +43,7 @@ variables:
   max_z: {default: "13"}
   overview_max_z: {default: "12"}
   earthdata_secret: {default: "geospatial_docs.vapor_eyes.earthdata_token"}
-  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.3-py3-none-any.whl"}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl"}
   # SQL warehouse for validation queries + the AI/BI dashboard. No portable default —
   # set it in databricks.override.yml (see databricks.override.yml.example).
   warehouse_id: {default: ""}

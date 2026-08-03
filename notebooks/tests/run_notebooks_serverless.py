@@ -48,7 +48,7 @@ _PYPROJECT_PATH = PROJECT_ROOT / "python" / "geobrix" / "pyproject.toml"
 # ---------------------------------------------------------------------------
 ENV_KEY = "ser5"
 DEFAULT_WHEEL = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.3-py3-none-any.whl"
+    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl"
 )
 DEFAULT_EXTRAS = "light,stac,vizx,overture"
 DEFAULT_ENV_VERSION = "5"
@@ -202,6 +202,16 @@ def run_one(
                 task_key=task_key,
                 environment_key=ENV_KEY,
                 notebook_task=jobs.NotebookTask(notebook_path=ws_path),
+                # Run exactly once — do not retry a failed validation run (a retry
+                # just re-burns compute on the same failure and doubles the child
+                # runs to sift through).
+                max_retries=0,
+                # max_retries alone does NOT stop serverless auto-optimization
+                # retries (the "Enable serverless auto-optimization (may include
+                # additional retries)" box, on by default). That is what produced
+                # a duplicate child run on INTERNAL_ERROR. disable_auto_optimization
+                # is the API equivalent of unchecking it → truly at-most-once.
+                disable_auto_optimization=True,
             )
         ],
     )
@@ -235,6 +245,17 @@ def run_one(
     for t in r.tasks or []:
         ts = t.state.result_state if t.state else None
         print(f"    task {t.task_key}: {ts}  page={t.run_page_url}", flush=True)
+        # The jobs API does NOT expose serverless notebook stdout; a notebook that
+        # ends with dbutils.notebook.exit(<json>) surfaces its result here. Print
+        # it so experiment summaries are captured client-side (reliable, not stdout).
+        try:
+            out = w.jobs.get_run_output(run_id=t.run_id)
+            nb_out = getattr(out, "notebook_output", None)
+            payload = getattr(nb_out, "result", None) if nb_out else None
+            if payload:
+                print(f"    task {t.task_key} notebook_output: {payload}", flush=True)
+        except Exception as exc:  # noqa: BLE001 — output fetch is best-effort
+            print(f"    (no notebook_output for {t.task_key}: {exc})", flush=True)
 
     from databricks.sdk.service.jobs import RunResultState
     ok = (result == RunResultState.SUCCESS)

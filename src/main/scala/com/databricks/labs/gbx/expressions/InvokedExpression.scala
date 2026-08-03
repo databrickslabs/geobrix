@@ -1,13 +1,13 @@
 package com.databricks.labs.gbx.expressions
 
 import org.apache.spark.sql.catalyst.expressions.{ImplicitCastInputTypes, Literal, RuntimeReplaceable}
-import org.apache.spark.sql.types.{BinaryType, DataType, ObjectType, StringType}
+import org.apache.spark.sql.types.{DataType, ObjectType}
 
 /**
   * Base trait for GeoBrix expressions that are evaluated by calling a method on a companion object.
   *
   * The catalyst expression is replaced at analysis time with a [[PrettyInvoke]] that invokes
-  * the companion's `eval` (or `evalPath`/`evalBinary` for raster tiles) with the child expressions.
+  * the companion's `eval` method with the child expressions.
   * This allows each expression to be implemented as a regular Scala method on the companion
   * while still participating in Spark's optimizer and codegen.
   */
@@ -38,14 +38,6 @@ trait InvokedExpression extends RuntimeReplaceable with ImplicitCastInputTypes {
           isDeterministic = true,
           nonFoldable = nonFoldable
         )
-    }
-
-    /** Raster tile dispatch: use evalPath (path-based tile) or evalBinary (binary tile) by tile type. */
-    def rstInvoke(companion: Object, rdt: DataType): PrettyInvoke = {
-        rdt match {
-            case StringType => invoke(companion, "evalPath")
-            case BinaryType => invoke(companion, "evalBinary")
-        }
     }
 
 }

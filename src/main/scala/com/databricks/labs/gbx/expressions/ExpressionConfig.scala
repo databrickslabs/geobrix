@@ -7,7 +7,7 @@ import org.apache.spark.util.SerializableConfiguration
 
 /**
   * Case class: serializable snapshot of Spark and Hadoop config used when evaluating expressions on executors.
-  * Raster (and other) expressions need GDAL options, checkpoint dir, etc. Built on the driver from the
+  * Raster (and other) expressions need GDAL options and other settings. Built on the driver from the
   * active session, serialized to base64 via toB64, and passed via [[ExpressionConfigExpr]] so executors
   * can reconstruct config for GDAL and other libraries.
   */
@@ -38,16 +38,6 @@ case class ExpressionConfig(
             p._1.startsWith("spark.databricks.labs.gbx.sharedobjects.") ||
             p._1.startsWith("spark.sharedobjects.")
         })
-    }
-
-    /** Directory for raster checkpoint files when useCheckpoint is true. */
-    def getRasterCheckpointDir: String = {
-        configs.getOrElse("spark.databricks.labs.gbx.raster.checkpoint.dir", "/tmp/raster-checkpoint")
-    }
-
-    /** Whether to checkpoint intermediate rasters to getRasterCheckpointDir. */
-    def useCheckpoint: Boolean = {
-        configs.getOrElse("spark.databricks.labs.gbx.raster.use.checkpoint", "false").toBoolean
     }
 
     /** If true, expression errors surface as exceptions; if false, return null and optionally log. */

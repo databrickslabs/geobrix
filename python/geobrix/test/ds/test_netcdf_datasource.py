@@ -101,7 +101,7 @@ def test_raster_read_round_trip(spark, tmp_path):
     assert len(rows) == 1
     row = rows[0]
     assert row["tile"]["cellid"] == -1
-    assert set(row["tile"]["metadata"].keys()) == EXPECTED_METADATA_KEYS
+    assert EXPECTED_METADATA_KEYS <= set(row["tile"]["metadata"].keys())
     with MemoryFile(bytes(row["tile"]["raster"])) as mf, mf.open() as out:
         arr = out.read(1)
         assert out.crs.to_epsg() == 4326

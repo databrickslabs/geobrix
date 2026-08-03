@@ -39,7 +39,6 @@ case class RST_CogConvert(
     overviewResamplingExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
         tileExpr, compressionExpr, blocksizeExpr, overviewResamplingExpr, ExpressionConfigExpr()
     )
@@ -50,7 +49,7 @@ case class RST_CogConvert(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_CogConvert.name
-    override def replacement: Expression = rstInvoke(RST_CogConvert, rasterType)
+    override def replacement: Expression = invoke(RST_CogConvert)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -58,22 +57,14 @@ case class RST_CogConvert(
 
 object RST_CogConvert extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, compression: UTF8String, blocksize: Int,
         overviewResampling: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, compression, blocksize, overviewResampling, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, compression: UTF8String, blocksize: Int,
-        overviewResampling: UTF8String, conf: UTF8String
-    ): InternalRow = runDispatch(row, compression, blocksize, overviewResampling, conf, StringType)
-    def evalBinary(
+    def eval(
         row: InternalRow, compression: UTF8String, blocksize: Long,
         overviewResampling: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, compression, blocksize.toInt, overviewResampling, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, compression: UTF8String, blocksize: Long,
-        overviewResampling: UTF8String, conf: UTF8String
-    ): InternalRow = runDispatch(row, compression, blocksize.toInt, overviewResampling, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, compression: UTF8String, blocksize: Int,

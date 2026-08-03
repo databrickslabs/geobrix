@@ -10,10 +10,10 @@ import scala.util.{Success, Try}
 /**
   * One-time GDAL environment setup for the JVM process (driver or executor).
   *
-  * Initializes GDAL driver registration, config options (from ExpressionConfig), shared native
-  * libraries, and checkpoint paths. Must be called before any raster operations; typically
-  * triggered from [[com.databricks.labs.gbx.rasterx.functions.register]] or when the first
-  * raster expression runs on an executor.
+  * Initializes GDAL driver registration, config options (from ExpressionConfig), and shared native
+  * libraries. Must be called before any raster operations; typically triggered from
+  * [[com.databricks.labs.gbx.rasterx.functions.register]] or when the first raster expression
+  * runs on an executor.
   */
 object GDALManager extends Logging {
 
@@ -25,8 +25,6 @@ object GDALManager extends Logging {
 
     var isEnabled = false
     private val lock = AnyRef
-    var checkpointPath: String = _
-    var useCheckpoint: Boolean = _
 
     /** Tracks whether OGR drivers have been registered in this JVM. See [[initOgr]]. */
     @volatile private var ogrEnabled = false
@@ -109,7 +107,7 @@ object GDALManager extends Logging {
             gdal.GetDriverByName(shortName)
         }
 
-    /** Apply ExpressionConfig to GDAL options and store checkpoint settings for this process. */
+    /** Apply ExpressionConfig to GDAL options for this process. */
     def configureGDAL(config: ExpressionConfig): Unit = {
         val CPL_TMPDIR = config.configs.getOrElse("cpl_tmpdir", "/tmp/gdal")
         val GDAL_PAM_PROXY_DIR = config.configs.getOrElse("gdal_pam_proxy_dir", "/tmp/gdal/pam")
@@ -120,8 +118,6 @@ object GDALManager extends Logging {
                 .stripPrefix("spark.gdal.")
             gdal.SetConfigOption(gdalKey, value)
         }
-        this.checkpointPath = config.getRasterCheckpointDir
-        this.useCheckpoint = config.useCheckpoint
     }
 
     def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF",

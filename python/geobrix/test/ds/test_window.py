@@ -5,8 +5,9 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from rasterio.warp import transform_bounds
+from shapely.geometry import box
 
-from databricks.labs.gbx.ds._window import window_for_bbox
+from databricks.labs.gbx.ds._window import window_for_bbox, window_for_geom
 
 
 def make_geotiff_bytes(width=4, height=3, count=1, epsg=4326, nodata=-9999.0):
@@ -112,3 +113,87 @@ def test_bbox_crs_is_reprojected():
     finally:
         ds.close()
         mf.close()
+
+
+# ---------------------------------------------------------------------------
+# window_for_geom tests
+# ---------------------------------------------------------------------------
+
+
+def _ds(width=1000, height=1000, epsg=4326):
+    # origin (10,50), 0.001 deg pixels
+    prof = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="float32",
+        crs=f"EPSG:{epsg}",
+        transform=from_origin(10.0, 50.0, 0.001, 0.001),
+        nodata=-9999.0,
+    )
+    mf = MemoryFile()
+    with mf.open(**prof) as ds:
+        ds.write(np.zeros((height, width), "float32"), 1)
+    return mf.open()
+
+
+def test_window_for_geom_same_crs_envelope():
+    ds = _ds()
+    # a box over cols 100..300, rows 50..250 in pixel space
+    minx = 10.0 + 100 * 0.001
+    maxx = 10.0 + 300 * 0.001
+    maxy = 50.0 - 50 * 0.001
+    miny = 50.0 - 250 * 0.001
+    win = window_for_geom(ds, box(minx, miny, maxx, maxy), geom_crs="EPSG:4326")
+    assert win is not None
+    assert (int(win.col_off), int(win.row_off)) == (100, 50)
+    assert int(win.width) == 200 and int(win.height) == 200
+
+
+def test_window_for_geom_overhang_clips_to_extent():
+    ds = _ds(width=200, height=200)
+    # box extends beyond the raster on the +x/+y side
+    win = window_for_geom(
+        ds,
+        box(
+            10.0 + 100 * 0.001,
+            50.0 - 500 * 0.001,
+            10.0 + 900 * 0.001,
+            50.0,
+        ),
+        geom_crs="EPSG:4326",
+    )
+    assert win is not None
+    assert (
+        int(win.col_off) == 100 and int(win.width) == 100
+    )  # clipped to 200-wide raster
+
+
+def test_window_for_geom_disjoint_returns_none():
+    ds = _ds()
+    win = window_for_geom(ds, box(100.0, 10.0, 101.0, 11.0), geom_crs="EPSG:4326")
+    assert win is None
+
+
+def test_window_for_geom_reprojects_bounds():
+    # UTM raster; geom given in 4326 must reproject and cover it
+    prof = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32633",
+        transform=from_origin(500000.0, 5000000.0, 100.0, 100.0),
+        nodata=-9999.0,
+    )
+    mf = MemoryFile()
+    with mf.open(**prof) as d:
+        d.write(np.zeros((8, 8), "float32"), 1)
+    ds = mf.open()
+    minx, miny, maxx, maxy = transform_bounds(
+        "EPSG:32633", "EPSG:4326", 500000, 4999200, 500800, 5000000
+    )
+    win = window_for_geom(ds, box(minx, miny, maxx, maxy), geom_crs="EPSG:4326")
+    assert win is not None and int(win.width) > 0 and int(win.height) > 0

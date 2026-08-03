@@ -19,13 +19,11 @@ case class RST_MetaData(
     tileExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
     override def dataType: DataType = MapType(StringType, StringType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_MetaData.name
-    override def replacement: Expression = rstInvoke(RST_MetaData, rasterType)
+    override def replacement: Expression = invoke(RST_MetaData)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -33,8 +31,7 @@ case class RST_MetaData(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MetaData extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): MapData = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): MapData = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): MapData = eval(row, conf, BinaryType)
 
     def eval(row: InternalRow, conf: UTF8String, rdt: DataType): MapData =
         Option(

@@ -34,7 +34,6 @@ case class RST_Histogram(
     includeNodataExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
         tileExpr, nBucketsExpr, minExpr, maxExpr, includeNodataExpr, ExpressionConfigExpr()
     )
@@ -46,7 +45,7 @@ case class RST_Histogram(
     override def dataType: DataType = MapType(StringType, ArrayType(LongType))
     override def nullable: Boolean = true
     override def prettyName: String = RST_Histogram.name
-    override def replacement: Expression = rstInvoke(RST_Histogram, rasterType)
+    override def replacement: Expression = invoke(RST_Histogram)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4))
 
@@ -54,27 +53,17 @@ case class RST_Histogram(
 
 object RST_Histogram extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow,
         nBuckets: Int, minVal: java.lang.Double, maxVal: java.lang.Double,
         includeNodata: Boolean, conf: UTF8String
     ): MapData = doInvoke(row, nBuckets, minVal, maxVal, includeNodata, conf, BinaryType)
-    def evalPath(
-        row: InternalRow,
-        nBuckets: Int, minVal: java.lang.Double, maxVal: java.lang.Double,
-        includeNodata: Boolean, conf: UTF8String
-    ): MapData = doInvoke(row, nBuckets, minVal, maxVal, includeNodata, conf, StringType)
     // PySpark commonly serialises integer literals as Long.
-    def evalBinary (
+    def eval (
         row: InternalRow,
         nBuckets: Long, minVal: java.lang.Double, maxVal: java.lang.Double,
         includeNodata: Boolean, conf: UTF8String
     ): MapData = doInvoke(row, nBuckets.toInt, minVal, maxVal, includeNodata, conf, BinaryType)
-    def evalPath (
-        row: InternalRow,
-        nBuckets: Long, minVal: java.lang.Double, maxVal: java.lang.Double,
-        includeNodata: Boolean, conf: UTF8String
-    ): MapData = doInvoke(row, nBuckets.toInt, minVal, maxVal, includeNodata, conf, StringType)
 
     private def doInvoke(
         row: InternalRow,

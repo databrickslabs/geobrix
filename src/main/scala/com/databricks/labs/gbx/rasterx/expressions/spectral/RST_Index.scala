@@ -38,7 +38,6 @@ case class RST_Index(
     bandMapExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
         tileExpr, formulaNameExpr, bandMapExpr, ExpressionConfigExpr()
     )
@@ -48,7 +47,7 @@ case class RST_Index(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Index.name
-    override def replacement: Expression = rstInvoke(RST_Index, rasterType)
+    override def replacement: Expression = invoke(RST_Index)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -82,10 +81,8 @@ object RST_Index extends WithExpressionInfo {
                               Seq("green", "swir"))
     )
 
-    def evalBinary(row: InternalRow, formulaName: UTF8String, bandMap: MapData, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, formulaName: UTF8String, bandMap: MapData, conf: UTF8String): InternalRow =
         runDispatch(row, formulaName, bandMap, conf, BinaryType)
-    def evalPath(row: InternalRow, formulaName: UTF8String, bandMap: MapData, conf: UTF8String): InternalRow =
-        runDispatch(row, formulaName, bandMap, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, formulaName: UTF8String, bandMap: MapData, conf: UTF8String, dt: DataType

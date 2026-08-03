@@ -1,13 +1,20 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_MergeAgg}
 import com.databricks.labs.gbx.rasterx.functions
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.util.RasterSerializationUtil
+import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.udfs
 import com.databricks.labs.gbx.udfs.st_buffer
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.catalyst.expressions.{BoundReference, GenericInternalRow, Literal}
 import org.apache.spark.sql.catalyst.plans.PlanTest
+import org.apache.spark.sql.catalyst.util.ArrayBasedMapData
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
+import org.apache.spark.sql.types.{BinaryType, LongType, MapType, StringType, StructField, StructType}
+import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.matchers.should.Matchers._
@@ -285,6 +292,157 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         meanAB shouldBe meanBA +- 1e-9
         // The winner is one of the two inputs (10 or 20), uniform across the tile.
         (meanAB === 10.0 +- 1e-9 || meanAB === 20.0 +- 1e-9) shouldBe true
+    }
+
+    // =========================================================================
+    // v1 (3-field) input normalization — regression for AIOOBE on size==1
+    // fast-path and serialize UnsafeProjection.
+    //
+    // Drives the aggregators directly (update / serialize / eval) with genuine
+    // 3-field InternalRows. Before the normalizeToV2Row fix these paths threw
+    // ArrayIndexOutOfBoundsException because the 8-field UnsafeProjection
+    // tried to read fields 3..7 on a 3-element row.
+    // =========================================================================
+
+    /** Produce a tiny in-memory GeoTIFF as bytes via /vsimem (no temp file).
+      * Calls GDALManager.init defensively so the helper works whether or not a
+      * prior test has already initialized GDAL in this JVM. */
+    private def tinyGTiffBytes(value: Int = 42): Array[Byte] = {
+        import com.databricks.labs.gbx.expressions.ExpressionConfig
+        import org.apache.spark.util.SerializableConfiguration
+        import org.apache.hadoop.conf.Configuration
+        GDALManager.init(new ExpressionConfig(Map.empty, new SerializableConfiguration(new Configuration())))
+        val path = s"/vsimem/agg_v1_test_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+        val drv  = gdal.GetDriverByName("GTiff")
+        val ds   = drv.Create(path, 4, 4, 1, gdalconstConstants.GDT_Byte, Array[String]("COMPRESS=DEFLATE"))
+        ds.SetGeoTransform(Array[Double](149.0, 0.01, 0.0, -35.0, 0.0, -0.01))
+        val sr = new org.gdal.osr.SpatialReference()
+        sr.ImportFromEPSG(4326)
+        ds.SetProjection(sr.ExportToWkt())
+        ds.GetRasterBand(1).Fill(value.toDouble)
+        ds.FlushCache()
+        val bytes = gdal.GetMemFileBuffer(path)
+        ds.delete()
+        gdal.Unlink(path)
+        bytes
+    }
+
+    /** Build a v1 (3-field) InternalRow: (cellid, raster, metadata). */
+    private def v1Row(cellid: Long, bytes: Array[Byte]) = {
+        val emptyMap = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
+        new GenericInternalRow(Array[Any](cellid, bytes, emptyMap))
+    }
+
+    /** v1 tile struct type: 3 fields (cellid, raster, metadata). */
+    private val v1TileType: StructType = StructType(Seq(
+        StructField("cellid",   LongType,               nullable = false),
+        StructField("raster",   BinaryType,              nullable = true),
+        StructField("metadata", MapType(StringType, StringType), nullable = true)
+    ))
+
+    /** BoundReference that extracts field 0 (the tile struct) from a 1-element input row,
+      * bound to v1TileType so child.eval(inputRow) returns the InternalRow as-is. */
+    private def v1TileRef: BoundReference = BoundReference(0, v1TileType, nullable = true)
+
+    /** Wrap a v1 tile row in a 1-element container row (the input row to update()). */
+    private def inputRow(tileRow: GenericInternalRow): GenericInternalRow =
+        new GenericInternalRow(Array[Any](tileRow))
+
+    test("RST_MergeAgg: size==1 v1 input through update() returns 8-field row (no AIOOBE)") {
+        functions.register(spark)
+        // BoundReference(0, v1TileType) binds child to field 0 of the input row,
+        // so child.eval(inputRow(tileRow)) returns the v1 InternalRow directly.
+        val agg = RST_MergeAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        val tile = v1Row(1L, tinyGTiffBytes(10))
+        agg.update(buf, inputRow(tile))
+
+        // Buffered row must be 8-field after normalization in update()
+        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+
+        // eval size==1 returns buffer.head; must be 8-field — before fix was 3-field
+        val out = agg.eval(buf)
+        assert(out != null)
+        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+    }
+
+    test("RST_MergeAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
+        functions.register(spark)
+        val agg = RST_MergeAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(10))))
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(20))))
+        buf.size shouldBe 2
+        buf.foreach(_.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8)
+
+        // serialize must NOT throw AIOOBE — before fix threw on 8-field UnsafeProjection
+        // applied to 3-field rows
+        noException should be thrownBy {
+            val bytes = agg.serialize(buf)
+            val buf2  = agg.deserialize(bytes)
+            buf2.size shouldBe 2
+        }
+    }
+
+    test("RST_CombineAvgAgg: size==1 v1 input through update() returns 8-field row (no AIOOBE)") {
+        functions.register(spark)
+        val agg = RST_CombineAvgAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(50))))
+
+        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+
+        val out = agg.eval(buf)
+        assert(out != null)
+        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+    }
+
+    test("RST_CombineAvgAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
+        functions.register(spark)
+        val agg = RST_CombineAvgAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(50))))
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(100))))
+
+        noException should be thrownBy {
+            val bytes = agg.serialize(buf)
+            val buf2  = agg.deserialize(bytes)
+            buf2.size shouldBe 2
+        }
+    }
+
+    test("RST_DerivedBandAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
+        functions.register(spark)
+        val pyfuncLit = Literal(UTF8String.fromString(
+            "import numpy as np\ndef identity(in_ar, out_ar, *a, **kw): out_ar[:] = in_ar[0]"))
+        val funcNameLit = Literal(UTF8String.fromString("identity"))
+        val agg = RST_DerivedBandAgg(v1TileRef, pyfuncLit, funcNameLit)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(30))))
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(60))))
+
+        noException should be thrownBy {
+            val bytes = agg.serialize(buf)
+            val buf2  = agg.deserialize(bytes)
+            buf2.size shouldBe 2
+        }
+    }
+
+    test("normalizeToV2Row: v1 3-field row becomes 8-field, v2 8-field row is unchanged") {
+        val emptyMap = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
+        val v1 = new GenericInternalRow(Array[Any](42L, Array[Byte](1, 2, 3), emptyMap))
+        val n  = RasterSerializationUtil.normalizeToV2Row(v1)
+        n.numFields shouldBe 8
+        n.getLong(0) shouldBe 42L
+        n.getBinary(1) shouldBe Array[Byte](1, 2, 3)
+        // Fields 2..6 (pedigree) must be null
+        (2 to 6).foreach(i => n.isNullAt(i) shouldBe true)
+        // metadata still present at position 7
+        n.isNullAt(7) shouldBe false
+
+        // v2 row passes through unchanged (same object reference)
+        val v2 = new GenericInternalRow(Array[Any](7L, Array[Byte](9), null, null, null, null, null, emptyMap))
+        RasterSerializationUtil.normalizeToV2Row(v2) should be theSameInstanceAs v2
     }
 
 }

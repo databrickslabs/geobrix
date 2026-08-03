@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.gdal.{CheckpointManager, GDALManager}
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.util.NodeFileManager
 import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -11,14 +11,26 @@ import org.apache.spark.util.TaskFailureListener
 import scala.util.Try
 
 /**
-  * Helpers for RasterX expressions: tile struct type, GDAL/checkpoint init, and iterator cleanup.
+  * Helpers for RasterX expressions: tile struct type, GDAL init, and iterator cleanup.
   *
-  * Tile struct is (cellid, raster, metadata); raster type is String (path) or Binary (content).
+  * Tile struct is (cellid, raster, metadata); raster type is Binary (content only; String path-tiles are rejected).
   */
 object RST_ExpressionUtil {
 
-    /** DataType of the raster field (second field) of the tile struct for the given tile expression. */
-    def rasterType(tileExpr: Expression): DataType = tileExpr.dataType.asInstanceOf[StructType].fields(1).dataType
+    /** DataType of the raster field (second field) of the tile struct for the given tile expression.
+      * Throws [[IllegalArgumentException]] if the raster field is StringType (v1 path-tile), which
+      * is not supported by the heavyweight tier.
+      */
+    def rasterType(tileExpr: Expression): DataType = {
+        val rdt = tileExpr.dataType.asInstanceOf[StructType].fields(1).dataType
+        rdt match {
+            case StringType => throw new IllegalArgumentException(
+                "Raster path-tiles (raster field as a String path) are not supported by the " +
+                "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
+                "(materialize=True, or write + read back) before passing it to a heavyweight function.")
+            case other => other
+        }
+    }
 
     /**
       * Raster DataType inside an `ARRAY<tile>` expression, with a friendly
@@ -50,7 +62,13 @@ object RST_ExpressionUtil {
         aggHint: Option[String] = None
     ): DataType = tileExpr.dataType match {
         case ArrayType(StructType(fields), _) if fields.length >= 2 =>
-            fields(1).dataType
+            fields(1).dataType match {
+                case StringType => throw new IllegalArgumentException(
+                    "Raster path-tiles (raster field as a String path) are not supported by the " +
+                    "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
+                    "(materialize=True, or write + read back) before passing it to a heavyweight function.")
+                case other => other
+            }
         case other =>
             val aggSuggestion = aggHint
                 .map(name => s" To aggregate the column across rows, use $name(tile).")
@@ -62,34 +80,45 @@ object RST_ExpressionUtil {
             )
     }
 
-    /** StructType for a tile with the given tile expression's raster type (cellid, raster, metadata). */
-    def tileDataType(tileExpr: Expression): DataType = {
-        val rasterDataType = rasterType(tileExpr)
-        StructType(
-          Seq(
-            StructField("cellid", LongType, nullable = false),
-            StructField("raster", rasterDataType, nullable = false),
-            StructField("metadata", MapType(StringType, StringType), nullable = true)
-          )
-        )
+    /**
+      * Field count of the element StructType inside an ARRAY&lt;tile&gt; expression.
+      * Returns 3 for a v1 tile (3-field) or 8 for a v2 tile (8-field), derived from the
+      * declared schema so it is automatically correct for whatever the input is.
+      * Defaults to 3 (v1) if the expression type does not match ArrayType(StructType, _).
+      */
+    def arrayOfTileElementFieldCount(tileExpr: Expression): Int = tileExpr.dataType match {
+        case ArrayType(st: StructType, _) => st.fields.length
+        case _                            => 3
     }
 
-    /** StructType for a tile with the given raster DataType (cellid, raster, metadata). */
-    def tileDataType(rdt: DataType): DataType = {
-        StructType(
-          Seq(
-            StructField("cellid", LongType, nullable = false),
-            StructField("raster", rdt, nullable = false),
-            StructField("metadata", MapType(StringType, StringType), nullable = true)
-          )
-        )
-    }
+    /** StructType for the window sub-struct (col_off, row_off, width, height). */
+    val windowType: StructType = StructType(Seq(
+        StructField("col_off", IntegerType, nullable = false),
+        StructField("row_off", IntegerType, nullable = false),
+        StructField("width", IntegerType, nullable = false),
+        StructField("height", IntegerType, nullable = false)))
 
-    /** Initialize NodeFileManager, GDAL, and CheckpointManager for this process (e.g. on executor). */
+    /** Canonical v2 tile schema — 8 fields, matching the light-tier V2_TILE_SCHEMA byte-for-byte. */
+    val v2TileType: StructType = StructType(Seq(
+        StructField("cellid", LongType, nullable = false),
+        StructField("raster", BinaryType, nullable = true),
+        StructField("path", StringType, nullable = true),
+        StructField("window", windowType, nullable = true),
+        StructField("clip_polygon", BinaryType, nullable = true),
+        StructField("clip_crs", StringType, nullable = true),
+        StructField("crs", StringType, nullable = true),
+        StructField("metadata", MapType(StringType, StringType), nullable = true)))
+
+    /** StructType for a tile with the given tile expression's raster type (v2 8-field schema). */
+    def tileDataType(tileExpr: Expression): DataType = v2TileType
+
+    /** StructType for a tile with the given raster DataType (v2 8-field schema). */
+    def tileDataType(rdt: DataType): DataType = v2TileType
+
+    /** Initialize NodeFileManager and GDAL for this process (e.g. on executor). */
     def init(expressionConfig: ExpressionConfig): Unit = {
         NodeFileManager.init(expressionConfig.hConf)
         GDALManager.init(expressionConfig)
-        CheckpointManager.init(expressionConfig)
     }
 
     /** Register task completion/failure listeners to close the given iterator (e.g. release resources). */

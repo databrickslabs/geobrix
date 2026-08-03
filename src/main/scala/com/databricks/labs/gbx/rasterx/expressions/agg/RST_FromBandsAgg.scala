@@ -37,6 +37,11 @@ case class RST_FromBandsAgg(
 
     lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
+    /** Field count of the input tile struct (3 for v1, 8 for v2), from the declared element schema. */
+    private lazy val tileFieldCount: Int = tileExpr.dataType match {
+        case st: org.apache.spark.sql.types.StructType => st.fields.length
+        case _                                         => 3
+    }
     override lazy val deterministic: Boolean = true
     override val nullable: Boolean = true
     override def prettyName: String = RST_FromBandsAgg.name
@@ -54,32 +59,12 @@ case class RST_FromBandsAgg(
 
     override def createAggregationBuffer(): ArrayBuffer[Any] = ArrayBuffer.empty
 
-    /** Normalize any tile row to a BinaryType tile row (bytes at field 1).
-     *  If the incoming tile is already BinaryType, copies it as-is.
-     *  If path-based (StringType), opens via GDAL and writes back to bytes.
-     *  This guarantees the buffer is uniformly binary so eval/deserialize
+    /** Copy the BinaryType tile row through as-is.
+     *  Raster is always binary; the buffer is uniformly binary so eval/deserialize
      *  can always use BinaryType without branching on rasterType.
      */
-    private def toBinaryTileRow(tileRow: InternalRow): InternalRow = {
-        rasterType match {
-            case org.apache.spark.sql.types.BinaryType =>
-                InternalRow.copyValue(tileRow).asInstanceOf[InternalRow]
-            case _ =>
-                val (cellId, ds, mtd) = RasterSerializationUtil.rowToTile(tileRow, rasterType)
-                try {
-                    val bytes = RasterDriver.writeToBytes(ds, mtd)
-                    import org.apache.spark.sql.catalyst.util.ArrayBasedMapData
-                    import org.apache.spark.unsafe.types.UTF8String
-                    InternalRow.fromSeq(Seq(
-                        cellId,
-                        bytes,
-                        ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
-                    ))
-                } finally {
-                    RasterDriver.releaseDataset(ds)
-                }
-        }
-    }
+    private def toBinaryTileRow(tileRow: InternalRow): InternalRow =
+        InternalRow.copyValue(tileRow).asInstanceOf[InternalRow]
 
     /** Catalyst-facing update: extract tile and band_index from the row. */
     override def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {
@@ -123,7 +108,7 @@ case class RST_FromBandsAgg(
 
         // Open each buffered tile. Buffer is uniformly BinaryType (normalized in update).
         val tiles: Seq[(Long, org.gdal.gdal.Dataset, Map[String, String])] = sorted.map { row =>
-            val tileRow = row.getStruct(1, 3)
+            val tileRow = row.getStruct(1, tileFieldCount)
             RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)
         }.toSeq
 
@@ -150,7 +135,7 @@ case class RST_FromBandsAgg(
         for (elem <- obj) {
             val row = elem.asInstanceOf[InternalRow]
             val idx = row.getInt(0)
-            val tileRow = row.getStruct(1, 3)
+            val tileRow = row.getStruct(1, tileFieldCount)
             val tileBytes = serializeTileRow(tileRow)
             out.writeInt(idx)
             out.writeInt(tileBytes.length)

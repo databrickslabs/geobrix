@@ -25,7 +25,6 @@ case class RST_ResampleToRes(
     algorithmExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] =
         Seq(tileExpr, xResExpr, yResExpr, algorithmExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals coerce to Double cleanly.
@@ -34,7 +33,7 @@ case class RST_ResampleToRes(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ResampleToRes.name
-    override def replacement: Expression = rstInvoke(RST_ResampleToRes, rasterType)
+    override def replacement: Expression = invoke(RST_ResampleToRes)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -42,12 +41,9 @@ case class RST_ResampleToRes(
 
 object RST_ResampleToRes extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, xRes: Double, yRes: Double, algorithm: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, xRes, yRes, algorithm, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, xRes: Double, yRes: Double, algorithm: UTF8String, conf: UTF8String
-    ): InternalRow = runDispatch(row, xRes, yRes, algorithm, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, xRes: Double, yRes: Double,

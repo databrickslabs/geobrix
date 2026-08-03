@@ -35,6 +35,39 @@ from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
+# ---------------------------------------------------------------------------
+# Pending-instruction metadata keys
+# These keys in a virtual tile's metadata map record cheap ops (band-select,
+# nodata assign, CRS relabel) that are applied together at the next open_tile
+# call, avoiding a pixel read just to record the intent.
+# Apply order (fixed, order-independent of call order):
+#   band-select -> nodata -> setsrid -> window -> clip -> reproject
+# ---------------------------------------------------------------------------
+
+PENDING_NODATA = "pending_nodata"
+PENDING_SRID = "pending_srid"
+PENDING_BANDS = "pending_bands"
+
+_PENDING_KEYS = (PENDING_NODATA, PENDING_SRID, PENDING_BANDS)
+
+
+def _parse_pending(metadata):
+    """Return (bands|None, nodata|None, srid|None) from a tile metadata map."""
+    md = metadata or {}
+    bands = None
+    if md.get(PENDING_BANDS):
+        bands = [int(b) for b in str(md[PENDING_BANDS]).split(",") if b.strip()]
+    nodata = (
+        float(md[PENDING_NODATA]) if md.get(PENDING_NODATA) not in (None, "") else None
+    )
+    srid = int(md[PENDING_SRID]) if md.get(PENDING_SRID) not in (None, "") else None
+    return bands, nodata, srid
+
+
+def _without_pending(metadata):
+    """Metadata map with all pending_* keys removed (consumed on materialization)."""
+    return {k: v for k, v in (metadata or {}).items() if k not in _PENDING_KEYS}
+
 
 def _epsg_of(crs) -> Optional[int]:
     """Parse 'EPSG:3857' / '3857' -> 3857; None if not a plain EPSG code."""
@@ -47,25 +80,43 @@ def _epsg_of(crs) -> Optional[int]:
         return None
 
 
-def _window_dataset_bytes(src, window: Window) -> bytes:
-    """Read one window from an open dataset into standalone GTiff bytes."""
-    data = src.read(window=window)
+def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> bytes:
+    """Read one window into standalone GTiff bytes, applying pending instructions.
+
+    pending = (bands|None, nodata|None, srid|None); applied in fixed order:
+    band-select (which bands to read) -> nodata (profile) -> setsrid (crs relabel).
+    """
+    import rasterio.crs as _rcrs
+
+    bands, nodata, srid = pending
+    indexes = bands if bands else None  # rasterio: 1-based band list or None=all
+    data = src.read(window=window, indexes=indexes)
+    if data.ndim == 2:  # single-band read collapses a dim
+        data = data[np.newaxis, :, :]
     profile = src.profile.copy()
+    count = len(bands) if bands else src.count
     profile.update(
         driver="GTiff",
         height=int(window.height),
         width=int(window.width),
+        count=count,
         transform=src.window_transform(window),
     )
+    if nodata is not None:
+        profile["nodata"] = nodata
+    if srid is not None:
+        profile["crs"] = _rcrs.CRS.from_epsg(srid)
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(data)
         return mf.read()
 
 
-def _warp_window_bytes(src, window: Window, want_epsg: int) -> bytes:
+def _warp_window_bytes(
+    src, window: Window, want_epsg: int, pending=(None, None, None)
+) -> bytes:
     """Materialize a window, lazily reproject it to want_epsg, return GTiff bytes."""
-    win_bytes = _window_dataset_bytes(src, window)
+    win_bytes = _window_dataset_bytes(src, window, pending=pending)
     with MemoryFile(win_bytes) as mf, mf.open() as wds:
         with WarpedVRT(wds, crs=f"EPSG:{want_epsg}") as vrt:
             prof = vrt.profile.copy()
@@ -126,13 +177,14 @@ def open_tile(tile: VirtualTile) -> Iterator[DatasetReader]:
 
         c, r, w, h = tile.window
         window = Window(c, r, w, h)
+        pending = _parse_pending(tile.metadata)
         with rasterio.open(local_path) as src:
             src_epsg = src.crs.to_epsg() if src.crs else None
             want = _epsg_of(tile.crs) if tile.crs else None
             if want is not None and want != src_epsg:
-                tile_bytes = _warp_window_bytes(src, window, want)
+                tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
             else:
-                tile_bytes = _window_dataset_bytes(src, window)
+                tile_bytes = _window_dataset_bytes(src, window, pending=pending)
         # src is closed here; we hold only standalone bytes.
 
         wds = _open_bytes(stack, tile_bytes)
@@ -209,9 +261,12 @@ class _WindowHeaderView:
     ``subdatasets``, ...) proxies straight through to the source dataset via
     ``__getattr__`` — those are window-invariant. ``read`` is intentionally NOT
     proxied: this view exists precisely to avoid materialising pixels.
+
+    Optional ``pending_count`` and ``pending_crs`` override ``count`` and ``crs``
+    to reflect pending band-select / setsrid instructions recorded on the tile.
     """
 
-    def __init__(self, src, window: Window):
+    def __init__(self, src, window: Window, pending_count=None, pending_crs=None):
         self._src = src
         self._window = window
         self._transform = src.window_transform(window)
@@ -219,6 +274,8 @@ class _WindowHeaderView:
         # transform + window (no read).
         left, bottom, right, top = rasterio.windows.bounds(window, src.transform)
         self._bounds = BoundingBox(left, bottom, right, top)
+        self._pending_count = pending_count
+        self._pending_crs = pending_crs
 
     @property
     def width(self) -> int:
@@ -237,6 +294,18 @@ class _WindowHeaderView:
         return self._bounds
 
     @property
+    def count(self) -> int:
+        if self._pending_count is not None:
+            return self._pending_count
+        return self._src.count
+
+    @property
+    def crs(self):
+        if self._pending_crs is not None:
+            return self._pending_crs
+        return self._src.crs
+
+    @property
     def profile(self):
         prof = self._src.profile.copy()
         prof.update(
@@ -244,6 +313,10 @@ class _WindowHeaderView:
             height=int(self._window.height),
             transform=self._transform,
         )
+        if self._pending_count is not None:
+            prof["count"] = self._pending_count
+        if self._pending_crs is not None:
+            prof["crs"] = self._pending_crs
         return prof
 
     def __getattr__(self, name):
@@ -299,13 +372,41 @@ def open_header(tile) -> Iterator[DatasetReader]:
         if is_temp:
             stack.callback(_safe_remove, local_path)
         src = stack.enter_context(rasterio.open(local_path))
+
+        # Parse pending instructions to reflect band-select / setsrid in header.
+        bands, _nodata, srid = _parse_pending(vt.metadata)
+        pending_count = len(bands) if bands else None
+        pending_crs = None
+        if srid is not None:
+            import rasterio.crs as _rcrs
+
+            pending_crs = _rcrs.CRS.from_epsg(srid)
+
         if vt.window is None or _is_full_extent(vt.window, src):
-            # Whole-file: full-source header is the answer.
-            yield src
+            # Whole-file: yield a view that reflects pending_count / pending_crs
+            # but otherwise proxies the source directly.
+            if pending_count is None and pending_crs is None:
+                yield src
+            else:
+                # Re-use _WindowHeaderView with the full-source window to get
+                # the pending overrides; width/height/transform/bounds are
+                # identical to the source for a whole-file window.
+                full_window = Window(0, 0, src.width, src.height)
+                yield _WindowHeaderView(
+                    src,
+                    full_window,
+                    pending_count=pending_count,
+                    pending_crs=pending_crs,
+                )
         else:
-            # Sub-window: present the window's dims/extent, header-only.
+            # Sub-window: present the window's dims/extent + pending overrides.
             c, r, w, h = vt.window
-            yield _WindowHeaderView(src, Window(c, r, w, h))
+            yield _WindowHeaderView(
+                src,
+                Window(c, r, w, h),
+                pending_count=pending_count,
+                pending_crs=pending_crs,
+            )
 
 
 def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
@@ -330,7 +431,9 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
         clip_polygon=tile.clip_polygon,
         clip_crs=tile.clip_crs,
         crs=tile.crs,
-        metadata=dict(tile.metadata or {}),
+        # Pending keys are baked into the produced bytes; strip them so the
+        # materialized tile's metadata stays honest (no double-application).
+        metadata=_without_pending(tile.metadata),
     )
 
 
@@ -417,7 +520,10 @@ def shape_output(
             if os.path.exists(tmp):
                 os.remove(tmp)
 
-        meta = dict(vt.metadata or {})
+        # Pending keys were applied when open_tile read the bytes above; strip
+        # them so the produced tile's metadata is pending-free (keys are baked
+        # into the written file, no longer pending).
+        meta = _without_pending(vt.metadata)
         meta["shape_output"] = "virtualized"
         return VirtualTile(
             cellid=vt.cellid,

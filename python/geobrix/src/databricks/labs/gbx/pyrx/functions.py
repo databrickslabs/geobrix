@@ -356,13 +356,25 @@ def _memsize_udf(raster):
     return int(len(bytes(raster)))
 
 
-# Struct-accepting memsize for SQL registration: reads the raster byte length
-# from the tile struct directly (no rasterio open).
+# Struct-accepting memsize for SQL registration: returns byte length for a
+# materialized tile; estimated decoded window footprint for a virtual tile
+# (count * width * height * itemsize via open_header — no pixel read).
 @f.udf(LongType())
 def _memsize_struct_udf(tile):
-    if tile is None or tile["raster"] is None:
+    if _tile_is_empty(tile):
         return None
-    return int(len(bytes(tile["raster"])))
+    vt = ot._to_virtual_tile(tile)
+    if not vt.is_virtual():
+        return int(len(bytes(vt.raster)))
+    # virtual: estimate decoded window footprint from the header (no pixel read)
+    import numpy as np
+
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot.open_header(tile) as ds:
+        itemsize = np.dtype(ds.dtypes[0]).itemsize
+        return int(ds.count * ds.width * ds.height * itemsize)
 
 
 # MapType return paths use plain @f.udf (pandas_udf rejects MapType on some
@@ -4057,8 +4069,10 @@ def rst_pixelcount(tile: ColLike) -> Column:
 
 
 def rst_memsize(tile: ColLike) -> Column:
-    """Serialized size of the raster in bytes (length of the raster buffer); LONG."""
-    return _memsize_udf(_raster_field(_col(tile)))
+    """Serialized size in bytes for a materialized tile (raster buffer length);
+    for a virtual tile, the estimated decoded window footprint
+    (count * width * height * itemsize). LONG."""
+    return _memsize_struct_udf(_col(tile))
 
 
 def rst_rotation(tile: ColLike) -> Column:

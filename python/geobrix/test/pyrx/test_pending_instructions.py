@@ -187,3 +187,25 @@ def test_setsrid_band_v2_struct():
             f.name for f in df.withColumn("tile", col).schema["tile"].dataType.fields
         ]
         assert "path" in fields and "window" in fields
+
+
+# ---------------------------------------------------------------------------
+# Task 4: rst_memsize virtual-aware
+# ---------------------------------------------------------------------------
+
+
+def test_memsize_virtual_not_null():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    v = df.select(rx.rst_memsize("tile").alias("m")).first()["m"]
+    assert v is not None and v > 0
+
+
+def test_memsize_materialized_is_byte_length():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    # materialize first, then check memsize equals raster byte length
+    mat = df.withColumn("tile", rx.rst_initnodata("tile", materialize=True))
+    row = mat.select(rx.rst_memsize("tile").alias("m"), "tile.raster").first()
+    assert row["m"] is not None and row["m"] > 0
+    assert row["m"] == len(bytes(row["raster"]))

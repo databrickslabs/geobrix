@@ -145,7 +145,12 @@ def test_multi_tile_split_matches_plan_layout(spark, tmp_path):
     assert expected > 1, "test setup failed to force a multi-tile split"
 
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").option("sizeInMB", "1").load(str(f))
+    df = (
+        spark.read.format("raster_gbx")
+        .option("sizeInMB", "1")
+        .option("virtualTiles", "false")
+        .load(str(f))
+    )
     assert df.count() == expected
     # every emitted tile is a fresh, un-tessellated tile
     assert all(r["tile"]["cellid"] == -1 for r in df.select("tile").collect())
@@ -295,7 +300,7 @@ def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
     _write_big_incompressible(str(f))
 
     # Opt-in split with explicit splitStrategy=serverless.
-    reader = RasterGbxReader({"path": str(f), "splitStrategy": "serverless"})
+    reader = RasterGbxReader({"path": str(f), "splitStrategy": "serverless", "virtualTiles": "false"})
     parts = reader.partitions()
 
     # One-tile-per-partition: the split must produce more than one partition.
@@ -331,7 +336,12 @@ def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):
     f = tmp_path / "big_split.tif"
     _write_big_incompressible(str(f))
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").option("sizeInMB", "8").load(str(f))
+    df = (
+        spark.read.format("raster_gbx")
+        .option("sizeInMB", "8")
+        .option("virtualTiles", "false")
+        .load(str(f))
+    )
     assert df.count() > 1
 
 

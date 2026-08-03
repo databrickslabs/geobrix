@@ -720,7 +720,7 @@ class RasterGbxReader(DataSourceReader):
                 "raster_gbx: 'overlapPercent' requires 'tileSize' (it modifies the "
                 "regular tiling grid only)."
             )
-        self.emit_virtual = str(options.get("virtualTiles", "false")).lower() == "true"
+        self.emit_virtual = str(options.get("virtualTiles", "true")).lower() == "true"
 
     def partitions(self) -> Sequence[InputPartition]:
         files = _listing.list_files(self.path, self.filter_regex)

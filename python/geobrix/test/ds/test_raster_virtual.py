@@ -7,6 +7,8 @@ import rasterio
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
@@ -113,3 +115,128 @@ def test_virtual_row_round_trips_through_open_tile(spark, tmp_path):
     with rasterio.open(tiled_path) as ds:
         exp = ds.read(1)
     assert np.array_equal(got, exp)  # whole-file window == full read
+
+
+# ---------------------------------------------------------------------------
+# Default behavior tests: verify virtualTiles defaults to true
+# ---------------------------------------------------------------------------
+
+
+def test_raster_gbx_defaults_to_virtual(spark, tmp_path):
+    """raster_gbx with NO virtualTiles option should default to virtual tiles."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = spark.read.format("raster_gbx").load(tiled_path).collect()
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "raster_gbx must default to virtual (bytes-free)"
+    assert t["path"] is not None
+    assert t["window"] is not None
+
+
+def test_gtiff_gbx_defaults_to_virtual(spark, tmp_path):
+    """gtiff_gbx with NO virtualTiles option should default to virtual tiles."""
+    spark.dataSource.register(GTiffGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = spark.read.format("gtiff_gbx").load(tiled_path).collect()
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "gtiff_gbx must default to virtual (bytes-free)"
+    assert t["path"] is not None
+    assert t["window"] is not None
+
+
+def test_cog_gbx_defaults_to_virtual(spark, tmp_path):
+    """cog_gbx with NO virtualTiles option should default to virtual tiles."""
+    spark.dataSource.register(CogGbxDataSource)
+    paths = _write3(tmp_path)
+    cog_path = str(paths["cog"])
+    rows = spark.read.format("cog_gbx").load(cog_path).collect()
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "cog_gbx must default to virtual (bytes-free)"
+    assert t["path"] is not None
+    assert t["window"] is not None
+
+
+def test_raster_gbx_virtualtiles_false_materializes(spark, tmp_path):
+    """raster_gbx with virtualTiles=false should materialize bytes."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "virtualTiles=false must materialize bytes"
+
+
+def test_gtiff_gbx_virtualtiles_false_materializes(spark, tmp_path):
+    """gtiff_gbx with virtualTiles=false should materialize bytes."""
+    spark.dataSource.register(GTiffGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = (
+        spark.read.format("gtiff_gbx")
+        .option("virtualTiles", "false")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "virtualTiles=false must materialize bytes"
+
+
+def test_cog_gbx_virtualtiles_false_materializes(spark, tmp_path):
+    """cog_gbx with virtualTiles=false should materialize bytes."""
+    spark.dataSource.register(CogGbxDataSource)
+    paths = _write3(tmp_path)
+    cog_path = str(paths["cog"])
+    rows = (
+        spark.read.format("cog_gbx")
+        .option("virtualTiles", "false")
+        .load(cog_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "virtualTiles=false must materialize bytes"
+
+
+def test_netcdf_gbx_still_materializes(spark, tmp_path):
+    """netcdf_gbx should still materialize by default (unchanged behavior)."""
+    from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
+    from netCDF4 import Dataset
+
+    # Write a minimal netcdf file
+    nc_path = tmp_path / "grid.nc"
+    with Dataset(str(nc_path), "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        v = ds.createVariable("ch4", "f4", ("lat", "lon"), fill_value=-9999.0)
+        v[:] = np.arange(12, dtype="float32").reshape(3, 4)
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    rows = (
+        spark.read.format("netcdf_gbx")
+        .option("variable", "ch4")
+        .load(str(nc_path))
+        .collect()
+    )
+    assert len(rows) >= 1, "netcdf_gbx should produce at least one row"
+    t = rows[0]["tile"]
+    assert (
+        t["raster"] is not None
+    ), "netcdf_gbx must materialize by default (unchanged)"

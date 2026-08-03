@@ -79,8 +79,10 @@ def test_partitions_gt1_for_split_raster(tmp_path):
     p = tmp_path / "split_test.tif"
     _write_striped(str(p), side=1024, bands=3, dtype="uint8")  # ~3 MiB decoded
 
-    # Override sizeInMB to force a 1 MiB budget.
-    reader = RasterGbxReader({"path": str(p), "sizeInMB": "1"})
+    # Override sizeInMB to force a 1 MiB budget.  virtualTiles=false required:
+    # the virtual-by-default short-circuit returns one whole-file reference and
+    # never reaches the budget-based split path that this test exercises.
+    reader = RasterGbxReader({"path": str(p), "sizeInMB": "1", "virtualTiles": "false"})
     parts = reader.partitions()
 
     assert (
@@ -95,7 +97,8 @@ def test_one_row_per_tile_partition(tmp_path):
     p = tmp_path / "one_row.tif"
     _write_striped(str(p), side=512, bands=3, dtype="uint8")
 
-    reader = RasterGbxReader({"path": str(p), "sizeInMB": "1"})
+    # virtualTiles=false: the virtual default short-circuit returns one partition.
+    reader = RasterGbxReader({"path": str(p), "sizeInMB": "1", "virtualTiles": "false"})
     parts = reader.partitions()
 
     for part in parts:
@@ -115,7 +118,8 @@ def test_tile_coverage_equivalence(tmp_path):
     p = tmp_path / "coverage.tif"
     _write_striped(str(p), side=side, bands=bands, dtype="uint8")
 
-    reader = RasterGbxReader({"path": str(p), "sizeInMB": "4"})
+    # virtualTiles=false: the virtual default short-circuit returns one partition.
+    reader = RasterGbxReader({"path": str(p), "sizeInMB": "4", "virtualTiles": "false"})
     parts = reader.partitions()
     assert len(parts) > 1
 
@@ -142,7 +146,8 @@ def test_no_window_overlap(tmp_path):
     p = tmp_path / "no_overlap.tif"
     _write_striped(str(p), side=side, bands=bands, dtype="uint8")
 
-    reader = RasterGbxReader({"path": str(p), "sizeInMB": "4"})
+    # virtualTiles=false: the virtual default short-circuit returns one partition.
+    reader = RasterGbxReader({"path": str(p), "sizeInMB": "4", "virtualTiles": "false"})
     parts = reader.partitions()
     assert len(parts) > 1
 
@@ -163,7 +168,9 @@ def test_passthrough_partition_has_no_window(tmp_path):
     p = tmp_path / "small.tif"
     _write_striped(str(p), side=4, bands=1, dtype="float32")
 
-    reader = RasterGbxReader({"path": str(p)})
+    # virtualTiles=false: the virtual default short-circuit bypasses the
+    # passthrough fast path (which lives in the materialized budget branch).
+    reader = RasterGbxReader({"path": str(p), "virtualTiles": "false"})
     parts = reader.partitions()
 
     assert len(parts) == 1
@@ -204,7 +211,8 @@ _PROBE_SCRIPT = textwrap.dedent("""\
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
 
-    reader = RasterGbxReader({"path": path, "sizeInMB": "4"})
+    # virtualTiles=false: the virtual default bypasses budget-based splitting.
+    reader = RasterGbxReader({"path": path, "sizeInMB": "4", "virtualTiles": "false"})
     parts = reader.partitions()
 
     # BASELINE: whole-process RSS after imports + partition planning, before any

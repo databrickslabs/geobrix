@@ -184,7 +184,7 @@ def halo_mode_bbox_read(spark, src_path=None):
 
         # Read the prepared COG back (whole file — clipPolygons/windows selection
         # is unit-tested in python/geobrix/test/ds/test_raster_clip.py).
-        cog_df = spark.read.format("cog_gbx").load(out_dir)
+        cog_df = spark.read.format("cog_gbx").option("virtualTiles", "false").load(out_dir)
         rows = cog_df.collect()
         assert len(rows) >= 1, "cog_gbx reader must return at least one tile"
         for row in rows:

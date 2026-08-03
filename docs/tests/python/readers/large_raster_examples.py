@@ -80,7 +80,7 @@ def _register(spark):
 def read_large_raster_defaults(spark, path=None):
     """Default (auto-split): directory read emits >=1 tiles, verifies schema."""
     _register(spark)
-    df = spark.read.format("raster_gbx").load(path or SAMPLE_RASTER_DIR)
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(path or SAMPLE_RASTER_DIR)
     assert "source" in df.columns and "tile" in df.columns
     rows = df.collect()
     assert len(rows) >= 1, "expected at least one tile from the sentinel2 directory"
@@ -150,7 +150,7 @@ def cog_writer_round_trip(spark, path=None):
             .option("cogCompression", "DEFLATE")
             .save(out)
         )
-        df_cog = spark.read.format("raster_gbx").load(out)
+        df_cog = spark.read.format("raster_gbx").option("virtualTiles", "false").load(out)
         cog_rows = df_cog.collect()
         assert len(cog_rows) >= 1, "COG writer must produce at least one output tile"
         for row in cog_rows:

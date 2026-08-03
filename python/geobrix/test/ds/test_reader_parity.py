@@ -110,6 +110,7 @@ def test_raster_gbx_pixels_match_source(spark_with_jar):
     """Light reader's decoded tile equals rasterio reading the source directly."""
     light = (
         spark_with_jar.read.format("raster_gbx")
+        .option("virtualTiles", "false")
         .load(SAMPLE)
         .orderBy("source")
         .collect()
@@ -157,6 +158,7 @@ def test_raster_gbx_matches_gdal(spark_with_jar):
 
     light = (
         spark_with_jar.read.format("raster_gbx")
+        .option("virtualTiles", "false")
         .load(SAMPLE)
         .orderBy("source")
         .collect()

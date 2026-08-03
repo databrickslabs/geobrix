@@ -30,7 +30,10 @@ def test_materialized_tilesize_grid(spark, tmp_path):
     spark.dataSource.register(RasterGbxDataSource)
     p = _write(tmp_path, 512, 512)
     rows = (
-        spark.read.format("raster_gbx").option("tileSize", "256,256").load(p)
+        spark.read.format("raster_gbx")
+        .option("tileSize", "256,256")
+        .option("virtualTiles", "false")
+        .load(p)
     ).collect()
     assert len(rows) == 4
     for r in rows:
@@ -43,7 +46,10 @@ def test_materialized_tilesize_pixels_match_source(spark, tmp_path):
     spark.dataSource.register(RasterGbxDataSource)
     p = _write(tmp_path, 512, 512)
     rows = (
-        spark.read.format("raster_gbx").option("tileSize", "256,256").load(p)
+        spark.read.format("raster_gbx")
+        .option("tileSize", "256,256")
+        .option("virtualTiles", "false")
+        .load(p)
     ).collect()
     with rasterio.open(p) as ds:
         full = ds.read(1)

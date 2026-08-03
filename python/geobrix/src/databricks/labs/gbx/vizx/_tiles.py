@@ -74,7 +74,40 @@ def _collect_bounded(df, tile_col, limit):
 def _plot_tiles_mosaic(
     df, tile_col, limit, *, fig_w, fig_h, max_pixels, composite, emphasis
 ):
-    raise NotImplementedError("mosaic: Task 3")
+    """Stitch same-CRS tiles into one georeferenced image via rasterio.merge."""
+    from contextlib import ExitStack
+
+    import matplotlib.pyplot as plt
+    from rasterio.merge import merge
+
+    from databricks.labs.gbx.vizx._raster import _render
+
+    rows = _collect_bounded(df, tile_col, limit)
+    with ExitStack() as stack:
+        datasets = [stack.enter_context(resolve_tile_row(r, tile_col)) for r in rows]
+        crs_set = {ds.crs.to_string() if ds.crs else None for ds in datasets}
+        if len(crs_set) > 1:
+            raise ValueError(
+                f"plot_tiles(mode='mosaic'): tiles have differing CRS "
+                f"{sorted(map(str, crs_set))}; filter the DataFrame to a single "
+                f"CRS (cross-CRS mosaic is not supported here)."
+            )
+        mosaic, transform = merge(datasets)
+    # decimate the merged array for display
+    scale = max(mosaic.shape[-1], mosaic.shape[-2]) / max_pixels
+    nodata = datasets[0].nodata if datasets else None
+    _render(
+        mosaic,
+        transform,
+        title="mosaic",
+        fig_w=fig_w,
+        fig_h=fig_h,
+        scale=max(scale, 1.0),
+        composite=composite,
+        nodata=nodata,
+        emphasis=emphasis,
+    )
+    return plt.gca()
 
 
 # ---------------------------------------------------------------------------

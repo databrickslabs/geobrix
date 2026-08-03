@@ -94,3 +94,44 @@ def test_plot_tiles_facet_warns_on_overflow(spark, tmp_path):
     with pytest.warns(UserWarning, match="limit"):
         plot_tiles(df, mode="facet", limit=2)
     plt.close("all")
+
+
+def test_plot_tiles_mosaic_same_crs(spark, tmp_path):
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    # two adjacent tiles, same CRS -> one stitched image
+    paths = [str(tmp_path / f"m{i}.tif") for i in range(2)]
+    for p in paths:
+        _write_tif(p, crs="EPSG:4326")
+    df = _virtual_df(spark, paths)
+    plt.close("all")
+    ax = plot_tiles(df, mode="mosaic")
+    assert ax is not None and len(plt.get_fignums()) >= 1
+    plt.close("all")
+
+
+def test_plot_tiles_mosaic_mixed_crs_raises(spark, tmp_path):
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    p1 = str(tmp_path / "a.tif")
+    _write_tif(p1, crs="EPSG:4326")
+    p2 = str(tmp_path / "b.tif")
+    _write_tif(p2, crs="EPSG:3857")
+    df = _virtual_df(spark, [p1, p2])
+    with pytest.raises(ValueError, match="CRS"):
+        plot_tiles(df, mode="mosaic")
+
+
+def test_plot_tiles_facet_mixed_crs_ok(spark, tmp_path):
+    # facet is CRS-agnostic -> no raise on mixed CRS
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    p1 = str(tmp_path / "c.tif")
+    _write_tif(p1, crs="EPSG:4326")
+    p2 = str(tmp_path / "d.tif")
+    _write_tif(p2, crs="EPSG:3857")
+    df = _virtual_df(spark, [p1, p2])
+    plt.close("all")
+    fig = plot_tiles(df, mode="facet")
+    assert fig is not None
+    plt.close("all")

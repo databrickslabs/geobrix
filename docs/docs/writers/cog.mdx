@@ -58,7 +58,10 @@ set `nameCol="path"` to use the basename of the path as the output filename.
 |--------|---------|-------------|
 | `cogBlockSize` | `"512"` | Internal tile size in pixels for the COG grid. |
 | `cogOverviewResampling` | `"AVERAGE"` | Resampling algorithm for overview levels. Any GDAL-supported value: `AVERAGE`, `NEAREST`, `BILINEAR`, `CUBICSPLINE`, `LANCZOS`, … |
-| `cogCompression` | `"DEFLATE"` | Compression applied to each block: `DEFLATE`, `LZW`, `ZSTD`, `NONE`, … |
+| `compress` | `"auto"` | Compression codec: `auto` (size-adaptive ZSTD+predictor — recommended), `zstd`, `deflate`, `lzw`, `none`. See [Materialized Compression](../api/materialized-compression). |
+| `compressLevel` | (codec-dependent) | Compression level: for `zstd` and `deflate` only. Ignored when `compress="auto"`. |
+| `predictor` | (dtype-matched) | TIFF predictor tag (1–3) for byte reordering. Ignored when `compress="auto"`. |
+| `cogCompression` | (deprecated) | **Deprecated alias** for `compress`; use `compress` instead. |
 | `cogSubdataset` | none | Subdataset to select from a multi-subdataset source (e.g. a NetCDF variable). |
 | `cogSkipIfExists` | `"true"` | Skip a source whose output already exists — idempotent resume after an interrupted run. |
 | `cogBigTiff` | `"YES"` | BigTIFF policy: `YES` (always — required for outputs over ~4 GiB), `IF_SAFER`/`IF_NEEDED` (size-adaptive), `NO` (force classic TIFF, fails past ~4 GiB). See the [BigTIFF note](../api/large-rasters#raster-formats-striped-tiled-and-cog). |

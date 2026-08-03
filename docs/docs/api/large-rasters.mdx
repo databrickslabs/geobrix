@@ -77,7 +77,9 @@ efficient windowed reads possible in the first place.
 The single most useful thing you can do with a large or striped raster is
 **master it into a COG once**, then read windows from it many times. Preparation
 is where the cost of tiling and overview generation is paid — deliberately, up
-front — so that every downstream read is cheap.
+front — so that every downstream read is cheap. Compression is applied per block
+during preparation; see **[Materialized Compression](./materialized-compression)**
+for codec choices, size-adaptive defaults, and when to override them.
 
 GeoBrix offers two ways to prepare COGs, sharing one conversion core. Both write
 a COG that passes `rio_cogeo`'s COG validation.
@@ -145,7 +147,10 @@ These apply to both `cog_gbx` (as writer options) and `prepare_cogs`/`prepare_co
 |---|---|---|---|
 | `cogBlockSize` | `blocksize` | `512` | Internal tile size in pixels. |
 | `cogOverviewResampling` | `resampling` | `AVERAGE` | Resampling used to build overviews. |
-| `cogCompression` | `compression` | `DEFLATE` | Per-block compression. |
+| `compress` | `compress` | `auto` | Per-block compression: `auto` (size-adaptive ZSTD+predictor — recommended), `zstd`, `deflate`, `lzw`, `none`. See [Materialized Compression](./materialized-compression). |
+| `compressLevel` | `compressLevel` | (codec-dependent) | Compression level for `zstd`/`deflate`. Ignored when `compress="auto"`. |
+| `predictor` | `predictor` | (dtype-matched) | TIFF predictor tag (1–3). Ignored when `compress="auto"`. |
+| `cogCompression` | `compression` | (deprecated) | **Deprecated alias** for `compress`; use `compress` instead. |
 | `cogSubdataset` | `subdataset` | none | Subdataset to select from a multi-subdataset source (e.g. NetCDF). |
 | `cogSkipIfExists` | `skip_if_exists` | `true` | Skip a source whose `.cog` output already exists (idempotent resume). |
 | `cogBigTiff` | `bigtiff` | `YES` | BigTIFF policy: `YES` (always), `IF_SAFER`/`IF_NEEDED` (size-adaptive), `NO` (force classic TIFF — fails past ~4 GiB). |

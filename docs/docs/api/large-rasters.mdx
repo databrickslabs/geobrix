@@ -9,8 +9,9 @@ title: Large Rasters
 Preparing and working with rasters that are too big to load whole — multi-gigabyte
 scenes, striped GeoTIFFs, satellite mosaics. This page covers the formats
 involved, why Cloud-Optimized GeoTIFF (COG) is the target, and how GeoBrix
-prepares COGs at scale on Databricks. Reading prepared COGs and windowed
-*virtual tiles* is introduced here and expanded in a later release.
+prepares COGs at scale on Databricks. For the reading model that builds on these
+prepared COGs — bytes-free windowed reads and the virtual/materialized tile
+lifecycle — see **[Virtual Tiles](./virtual-tiles)**.
 
 ---
 
@@ -61,14 +62,13 @@ and height. Because a COG is tiled and carries overviews, a reader can
 materialize a single window (at full resolution or from an overview) with a
 small ranged read, instead of loading the whole image.
 
-Windows are the foundation for **virtual tiles**: a way to carry a reference to
-a region of a raster — its source and window — through a pipeline without
-materializing the pixels until an operation actually needs them. This keeps
-memory bounded when fanning a large raster into many pieces. Virtual tiles over
-prepared COGs are in active development; the reading model and the tile
-representation that supports it are covered in a later release. The rest of this
-page focuses on **preparing** COGs, which is what makes efficient windowed and
-virtual-tile reads possible in the first place.
+Windows are the foundation for **virtual tiles** — bytes-free references (a path
+plus a window) that flow through a DataFrame and materialize pixels only when an
+operation needs them, keeping memory bounded when fanning a large raster into
+many pieces. The full reading model, the tile struct, and the
+virtual↔materialized lifecycle are covered on the **[Virtual Tiles](./virtual-tiles)**
+page. The rest of *this* page focuses on **preparing** COGs — what makes those
+efficient windowed reads possible in the first place.
 
 ---
 
@@ -177,41 +177,22 @@ exist, and why increasing worker memory does not help large-file preparation.
 
 ---
 
-## Reading COGs and virtual tiles
+## Reading prepared COGs
 
 Once a source is mastered as a COG, reads become cheap: a COG-aware reader can
 fetch any window, at any zoom level, with a small number of ranged reads instead
-of loading the whole image.
+of loading the whole image. GeoBrix's `cog_gbx` reader turns that into
+**virtual tiles** — bytes-free rows that materialize pixels only on demand — so a
+large raster fans into many pieces without any executor holding the whole image.
 
-GeoBrix's `cog_gbx` reader emits **virtual tiles** — each row carries a path and
-a pixel window instead of in-memory bytes. Downstream `rst_*` functions in the
-lightweight tier consume virtual tiles directly: metadata accessors answer from
-the header (no pixels read), deferrable ops like `rst_clip` stay virtual, and
-pixel-computing ops materialize only the window they need. This keeps memory
-bounded when fanning a large raster into many pieces: no executor ever holds the
-whole image.
-
-The lightweight-tier force-output params (`virtualize_dir`, `virtualize_prefix`,
-`materialize`) let you control when and how results are written back to durable
-storage or explicitly converted to bytes. See
-[Virtual-tile force-output params](./raster-functions#virtual-tile-overrides) on
-the function reference page, and the
-[Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice)
-section on the tier comparison page for a full breakdown of which operations are
-free on virtual tiles and which materialize.
-
-:::note Deeper Virtual Tiles coverage coming
-A dedicated Virtual Tiles page covering the full reading model, advanced chaining
-patterns, and worked examples is in progress. Prepare your COGs now — the reading
-side builds on exactly the files this page produces.
-:::
-
-See the [`cog_gbx` reader](../readers/cog) for the windowed-read options
-(tileSize, overlapPercent, clipPolygon) and the `virtualTiles` read option that
-controls whether the reader emits virtual or materialized rows.
+The full reading model — the tile struct, virtual vs. materialized state, the
+reader selection options, and how `rst_*` functions choose their output shape —
+is covered on the **[Virtual Tiles](./virtual-tiles)** page. Prepare your COGs
+here; read them there.
 
 ## See also
 
+- [Virtual Tiles](./virtual-tiles) — the reading model and virtual↔materialized lifecycle over prepared COGs
 - [COG writer (`cog_gbx`)](../writers/cog) — the DataFrame-write entry point for preparation, including `driverMode`
 - [COG reader (`cog_gbx`)](../readers/cog) — windowed, bbox-clipped reads from prepared COGs
 - [File lister (`file_gbx`)](../readers/file) — enumerate source files (paths only) to feed preparation

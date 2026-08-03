@@ -113,6 +113,7 @@ const sidebars = {
           items: [
             'api/rasterio-distributed',
             'api/large-rasters',
+            'api/virtual-tiles',
             'api/h3-raster-tessellation',
           ],
         },

@@ -1,0 +1,152 @@
+---
+sidebar_position: 5
+sidebar_label: Virtual Tiles
+title: Virtual Tiles
+---
+
+# Virtual Tiles
+
+Reading a multi-gigabyte raster the naïve way pulls the whole image into memory —
+and fanning it into pieces multiplies that cost until an executor runs out of
+memory. GeoBrix avoids this with **virtual tiles**: each row of the DataFrame
+carries a *reference* to a window of a raster — a path plus a pixel window —
+instead of the pixels themselves. Pixels are read lazily, one window at a time,
+only when an operation actually needs them.
+
+This page explains the virtual-tile model, why it dissolves the
+ingest-memory problem, and how tiles move between **virtual** (bytes-free) and
+**materialized** (bytes-in-hand) states across the read → operate → write
+lifecycle.
+
+![GeoBrix virtual & materialized tiles lifecycle — sources (striped/tiled GeoTIFF, COG, NetCDF, tables) optionally prepared to COGs, read via distributed readers into virtual or materialized tiles, operated on by rst_* functions that can stay virtual or materialize, and written back to files or Databricks SQL tables](../../../resources/images/diagrams/rasterx/virtual-tiles-lifecycle.png)
+
+## What a virtual tile is
+
+Every GeoBrix raster tile is one typed struct — the **v2 tile struct** — shared
+by both execution tiers:
+
+```
+struct<
+  cellid: bigint,                       -- grid cell id (nullable)
+  raster: binary,                       -- the raster payload (NULL when virtual)
+  path: string,                         -- source path (set when virtual)
+  window: struct<col_off,row_off,width,height>,  -- the pixel window
+  clip_polygon: binary,                 -- optional clip geometry (WKB)
+  clip_crs: string,                     -- CRS for clip_polygon
+  crs: string,                          -- working/target CRS
+  metadata: map<string,string>          -- driver, extension, format keys
+>
+```
+
+A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — it
+is a bytes-free reference to a window of a raster on durable storage. A tile is
+**materialized** when `raster` carries the encoded bytes. The struct is identical
+either way, so a DataFrame can hold a mix, and a tile can move between the two
+states without changing shape.
+
+### Reference vs. instruction
+
+The `window` / `clip_polygon` / `clip_crs` / `crs` fields mean different things
+depending on the tile's state, and this is the key to reasoning about them:
+
+- On a **materialized** tile they are **provenance** — a record of what has
+  *already been applied* to produce the bytes in `raster`.
+- On a **virtual** tile they are **instructions** — pending operations that are
+  applied when the tile is read (staged from `path`, the `window` extracted, the
+  clip and CRS applied), producing the pixels on demand.
+
+## Why it matters
+
+Carrying references instead of pixels is what makes large-raster ingest scale:
+
+- **Bytes-free rows.** A virtual tile row is roughly **100 bytes** (a path and a
+  four-integer window). The materialized bytes it stands in for are **148–527 KB**
+  per tile — so virtual rows are on the order of **1,400–5,000× smaller**. At
+  ingest you hold N tiny descriptor rows instead of hundreds of MiB of encoded
+  tiles, and the accumulation that causes Serverless out-of-memory failures
+  simply does not happen.
+- **Windowed, parallel reads.** Readers fan a source out across the cluster — one
+  window per tile, one tile per task — and each window is a small ranged read
+  against a [Cloud-Optimized GeoTIFF](./large-rasters#raster-formats-striped-tiled-and-cog).
+  No executor ever holds the whole image, and there is no driver-side `collect`.
+- **Lazy composition.** Deferrable operations chain on virtual tiles without ever
+  touching pixels — the DataFrame keeps carrying references until an operation
+  genuinely needs the data.
+
+This is the cloud-native raster model — don't move pixels; read windows on
+demand — expressed as a Spark DataFrame.
+
+## The lifecycle
+
+The diagram above traces the four stages:
+
+1. **Source.** Striped GeoTIFFs, tiled GeoTIFFs, COGs, NetCDFs, and tabular
+   tile-struct columns are all usable **as-is**. File formats can *optionally* be
+   standardized into COGs first with
+   [`prepare_cogs`](./large-rasters#prepare_cogs--driver-orchestrated-preparation),
+   which makes windowed reads cheap (a striped source can inflate a single window
+   ~570× versus a clean tiled block). Optimization is a choice, not a gate.
+2. **Distributed load.** A reader (`cog_gbx`, `gdal`, `netcdf_gbx`, …) partitions
+   the source across executors and emits tile rows — virtual by default in the
+   lightweight tier, or materialized on request. Selection options
+   (`tileSize`, `overlapPercent`, `clipPolygons`, …) shape the windowing.
+3. **Operate.** Any `rst_*` function accepts either a virtual or a materialized
+   tile. The output shape is your choice — see below.
+4. **Write.** Persist to files (COG, GeoTIFF, NetCDF, …) with a writer, or save a
+   tile DataFrame to a **Databricks SQL table**.
+
+## Reader selection surface
+
+The lightweight readers expose the windowing surface as read options:
+
+- **`virtualTiles`** — emit bytes-free virtual tiles (`true`) or materialized
+  tiles.
+- **`tileSize`** — regular tiling grid; **`overlapPercent`** — overlap between
+  adjacent tiles so per-tile operations don't clip features at the edges.
+- **`clipPolygons`** / **`clipCrs`** — emit only the tile(s) intersecting each
+  polygon; **`windows`** — explicit pixel windows.
+
+See the [`cog_gbx` reader](../readers/cog) and the
+[Readers overview](../readers/overview) for the full option reference — this page
+does not duplicate them.
+
+## Operating on tiles: your choice of output
+
+Every lightweight tile-returning `rst_*` function takes three optional
+force-output parameters:
+
+- **`virtualize_dir`** — write the produced tile to a durable path and hand back a
+  **virtual** row (bytes-free), so a chain stays light after a pixel-producing op.
+- **`virtualize_prefix`** — an optional filename prefix to deconflict outputs.
+- **`materialize`** — force raster bytes into the row.
+
+The default is automatic: reference/passthrough operations stay virtual, and
+pixel-producing operations materialize — but you can always ask for the other.
+For the full rule (which operations are free on virtual tiles and which
+materialize), see the
+[Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice) on
+the Execution Tiers page.
+
+## Tiers: light tiles vs. heavy tiles
+
+**The lightweight tier is for light (virtual) raster tiles; the heavyweight tier
+is for heavy (binary) raster tiles.**
+
+- The **lightweight tier** (`pyrx`) generates and operates on virtual tiles, and
+  materializes them on demand. Virtual tiles are a lightweight-tier capability.
+- The **heavyweight tier** (`rasterx`) accepts both v1 and v2 **materialized**
+  tiles as input and always emits the v2 tile struct. It operates only on
+  materialized tiles: a virtual tile passed to a heavyweight function raises a
+  clear error telling you to materialize it first (call the lightweight function
+  with `materialize=True`, or write it out and read it back). Writing is itself a
+  materialization boundary.
+
+## See also
+
+- [Large Rasters](./large-rasters) — preparing COGs at scale (`prepare_cogs`,
+  `cog_gbx` `driverMode`) and the format/memory details behind windowed reads.
+- [Execution Tiers](./execution-tiers) — the full virtual↔materialized taxonomy
+  and the light→heavy bridge.
+- [COG reader (`cog_gbx`)](../readers/cog) and [Readers overview](../readers/overview)
+  — the windowed-read option reference.
+- [Writers overview](../writers/overview) — persisting tiles to files.

@@ -118,6 +118,16 @@ No new API. Every member op already carries the force-output triple
   into the row. Documented as: on a virtual tile, nodata/setsrid/band-select are
   *allowed pending instructions* that stay virtual by default; `materialize=True`
   forces them applied.
+
+**Pending keys are consumed on materialization to bytes.** The moment a tile ROW
+carrying `raster` bytes is produced (the materialized branch, `materialize=True`,
+`virtualize_dir`), the `pending_*` keys — now baked into the bytes — are **removed**
+from that row's `metadata`. A materialized (bytes) tile carries no `pending_*` keys;
+they would otherwise double-apply on a later open and misrepresent the tile's state.
+"Materialization" here means emitting a bytes-carrying tile row (a heavy/materialized
+tile), *not* the transient `open_tile` read that yields an in-memory dataset for an
+accessor — that read leaves the virtual row (and its keys) unchanged. A virtual tile
+that merely records/accumulates a new instruction keeps its keys.
 - **`virtualize_dir=<path>`:** apply now, write a new backing GeoTIFF to the
   durable path, return a virtual tile referencing it.
 

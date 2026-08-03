@@ -19,6 +19,7 @@ from databricks.labs.gbx.vizx._layers import (
 from databricks.labs.gbx.vizx._maplibre import audit_layers
 from databricks.labs.gbx.vizx._raster import plot_file, plot_mask_layers, plot_raster
 from databricks.labs.gbx.vizx._static_map import plot_static
+from databricks.labs.gbx.vizx._tiles import plot_tiles
 from databricks.labs.gbx.vizx._vector import as_gdf, cells_as_gdf, grid_as_gdf
 
 
@@ -40,6 +41,7 @@ def __getattr__(name):
 
 
 __all__ = [
+    "plot_tiles",
     "plot_raster",
     "plot_file",
     "plot_mask_layers",

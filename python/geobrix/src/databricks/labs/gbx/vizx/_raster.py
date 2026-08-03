@@ -139,6 +139,7 @@ def _render(
     composite="auto",
     nodata=None,
     emphasis="blend",
+    ax=None,
 ):
     """Stretch when needed, then plot via rasterio.plot.show (Agg-safe).
 
@@ -146,6 +147,10 @@ def _render(
         composite: ``"auto"`` — 1 band → viridis; 3+ → RGB (default).
                    ``"depth"`` — render per-pixel band coverage count as viridis;
                    depth==0 (no band covers the pixel) is masked transparent.
+        ax:        Optional matplotlib Axes to draw into. When given, the function
+                   draws into that Axes instead of creating a new figure, and
+                   returns the Axes. When ``None`` (default), a new figure is
+                   created and ``pyplot.show()`` is called — existing behavior.
     """
     import sys
 
@@ -163,6 +168,7 @@ def _render(
     from rasterio.plot import show
 
     em = _RASTER_EMPHASIS[emphasis]
+    _owns_fig = ax is None  # True when we create our own figure
 
     if composite == "depth":
         depth = _coverage_depth(data, nodata)
@@ -175,15 +181,18 @@ def _render(
             if scale > 1
             else "coverage depth (bands)"
         )
-        fig, ax = pyplot.subplots(1, figsize=(fig_w, fig_h))
+        if _owns_fig:
+            fig, ax = pyplot.subplots(1, figsize=(fig_w, fig_h))
         show(depth_masked, ax=ax, transform=transform, cmap="viridis")
         ax.set_title(full_title)
-        pyplot.show()
-        return
+        if _owns_fig:
+            pyplot.show()
+        return ax
 
     if _needs_percentile_stretch(data):
         data = _percentile_stretch(data)
-    fig, ax = pyplot.subplots(1, figsize=(fig_w, fig_h))
+    if _owns_fig:
+        fig, ax = pyplot.subplots(1, figsize=(fig_w, fig_h))
     if data.shape[0] == 1:
         # Render the single band with ax.imshow rather than rasterio.plot.show:
         # show() renders a constant-valued band (e.g. an H3 presence mask, all 1.0)
@@ -206,8 +215,11 @@ def _render(
     else:
         show(data, ax=ax, transform=transform, alpha=em["alpha"])
     full_title = f"{title} (scale 1/{round(scale, 1)}x)" if scale > 1 else title
-    ax.set_title(full_title)
-    pyplot.show()
+    if title is not None:
+        ax.set_title(full_title)
+    if _owns_fig:
+        pyplot.show()
+    return ax
 
 
 def plot_raster(

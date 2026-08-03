@@ -7,8 +7,15 @@ import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
 
 def _write(profile, data) -> bytes:
+    dtype = profile.get("dtype", str(np.asarray(data).dtype))
+    decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None
+    profile.update(
+        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(data)
@@ -138,10 +145,18 @@ def _encoded_size_bytes(ds) -> int:
     Used when the caller did not supply ``size_bytes``; re-encodes the open
     dataset to an in-memory GTiff and measures the buffer length, matching the
     vsimem buffer size heavy reads via GetMemFileBuffer.
+
+    # EXEMPT: measurement-only encode (size probe for tiling-budget decisions),
+    # no compression policy. The result is used only to count bytes, not stored
+    # or returned to callers. Compression here would only change the estimate
+    # vs the uncompressed-size contract heavy uses.
     """
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
-    return len(_write(profile, ds.read()))
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(ds.read())
+        return len(mf.read())
 
 
 def iter_make_tiles(ds, size_in_mb, size_bytes=None):

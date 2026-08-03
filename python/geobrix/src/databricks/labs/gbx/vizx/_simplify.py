@@ -458,16 +458,23 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                 )
                 profile = src.profile.copy()
 
+            from databricks.labs.gbx.pyrx.core import compression as _comp
+
+            # Route through the compression authority with compress="lzw" (kept for
+            # viz-only output compat; the authority adds the correct dtype predictor).
+            _comp_opts = _comp.creation_opts(
+                str(data.dtype), decoded_bytes=data.nbytes, compress="lzw"
+            )
             profile.update(
                 driver="GTiff",
                 height=new_h,
                 width=new_w,
                 transform=transform,
-                compress="lzw",
                 tiled=True,
                 blockxsize=256,
                 blockysize=256,
             )
+            profile.update(_comp_opts)
             with rasterio.open(out_cog, "w", **profile) as dst:
                 dst.write(data)
 

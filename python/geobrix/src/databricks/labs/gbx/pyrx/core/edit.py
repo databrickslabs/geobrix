@@ -9,6 +9,8 @@ import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.mask import mask as _rio_mask
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
 # GDAL data-type name -> numpy dtype string.
 _GDAL_TO_NP = {
     "Byte": "uint8",
@@ -41,6 +43,11 @@ def _nodata_fits_dtype(nodata: float, dtype_str: str) -> bool:
 
 
 def _write(profile, data) -> bytes:
+    dtype = profile.get("dtype", str(np.asarray(data).dtype))
+    decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None
+    profile.update(
+        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(data)

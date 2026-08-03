@@ -1,10 +1,12 @@
 """Spark-free reproject/warp helpers (rasterio.warp). Tile-returning: each
 function returns new GTiff bytes."""
 
+import numpy as np
 import rasterio
 from rasterio.io import MemoryFile
 from rasterio.warp import calculate_default_transform, reproject
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core._util import resampling_enum
 
 
@@ -21,21 +23,31 @@ def reproject_to_srid(ds, target_srid: int, resampling: str = "nearest") -> byte
     target_srid = int(target_srid)
     src_epsg = ds.crs.to_epsg() if ds.crs else None
     if src_epsg is not None and src_epsg == target_srid:
-        # Identity: emit the source bytes unchanged.
+        # Identity: emit the source bytes re-encoded with ZSTD baseline.
+        data = ds.read()
+        out_dtype = ds.dtypes[0]
         profile = ds.profile.copy()
         profile.update(driver="GTiff")
+        profile.update(
+            _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
+        )
         with MemoryFile() as mf:
             with mf.open(**profile) as dst:
-                dst.write(ds.read())
+                dst.write(data)
             return mf.read()
 
     dst_crs = f"EPSG:{target_srid}"
     transform, width, height = calculate_default_transform(
         ds.crs, dst_crs, ds.width, ds.height, *ds.bounds
     )
+    out_dtype = ds.dtypes[0]
+    decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
     profile = ds.profile.copy()
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
+    )
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
     resamp = resampling_enum(resampling)
     with MemoryFile() as mf:

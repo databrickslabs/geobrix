@@ -14,6 +14,7 @@ from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core import compression as _comp
 
 # Heavyweight gdaladdo resampling name -> rasterio.enums.Resampling name.
 # Mirrors the AllowedResampling set in RST_BuildOverviews.scala; "near" is the
@@ -108,8 +109,12 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
     resampling_enum = Resampling[_OVERVIEW_RESAMPLING_MAP[key]]
 
     data = ds.read()
+    out_dtype = ds.dtypes[0]
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
+    )
     # BuildOverviews needs an r+ dataset; reopening a MemoryFile in update mode
     # mints a fresh vsimem path that does not see the just-written bytes. A
     # round-trip through a real temp file keeps the path stable, so overviews

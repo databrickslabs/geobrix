@@ -23,6 +23,8 @@ import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
 _NODATA = -9999.0
 _U64 = 0xFFFFFFFFFFFFFFFF
 
@@ -340,6 +342,7 @@ def cells_to_raster(
             out[i] = v
 
     data = out.reshape(height, width)
+    decoded_bytes = data.nbytes
     profile = dict(
         driver="GTiff",
         width=width,
@@ -349,6 +352,9 @@ def cells_to_raster(
         crs=f"EPSG:{srid}",
         transform=transform,
         nodata=_NODATA,
+    )
+    profile.update(
+        _comp.creation_opts("float64", decoded_bytes=decoded_bytes, compress="auto")
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as ds:

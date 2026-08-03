@@ -2,9 +2,11 @@
 returns new GTiff bytes. CRS and geographic extent are preserved; only the
 pixel grid (dimensions / resolution) changes."""
 
+import numpy as np
 from affine import Affine
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core._util import resampling_enum
 
 
@@ -28,6 +30,11 @@ def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> byt
     data = ds.read(
         out_shape=(ds.count, dst_height, dst_width),
         resampling=resampling_enum(algorithm),
+    )
+    out_dtype = profile.get("dtype", ds.dtypes[0])
+    decoded_bytes = data.nbytes
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:

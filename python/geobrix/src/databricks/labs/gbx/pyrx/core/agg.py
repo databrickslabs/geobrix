@@ -20,6 +20,7 @@ from rasterio.io import MemoryFile
 from rasterio.merge import merge as _rio_merge
 from rasterio.transform import from_bounds
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
 
 _NODATA = -9999.0
@@ -69,9 +70,14 @@ def _reproject_dataset(src, dst_crs):
     transform, width, height = calculate_default_transform(
         src.crs, dst_crs, src.width, src.height, *src.bounds
     )
+    out_dtype = src.dtypes[0]
+    decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
     profile = src.profile.copy()
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
+    )
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
     mf = MemoryFile()
     dst = mf.open(**profile)
@@ -157,6 +163,8 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
                 merge_ds.append(rds)
         ref = merge_ds[0]
         mosaic, out_transform = _rio_merge(merge_ds, method="last")
+        out_dtype = str(mosaic.dtype)
+        decoded_bytes = mosaic.nbytes
         profile = ref.profile.copy()
         profile.update(
             driver="GTiff",
@@ -164,6 +172,9 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
             width=mosaic.shape[2],
             count=mosaic.shape[0],
             transform=out_transform,
+        )
+        profile.update(
+            _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
         )
         with MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
@@ -247,6 +258,12 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
     ref_profile.update(driver="GTiff")
     if any_nodata:
         ref_profile.update(nodata=fallback)
+    decoded_bytes = out.nbytes
+    ref_profile.update(
+        _comp.creation_opts(
+            str(out.dtype), decoded_bytes=decoded_bytes, compress="auto"
+        )
+    )
     with MemoryFile() as out_mf:
         with out_mf.open(**ref_profile) as dst:
             dst.write(out)
@@ -302,8 +319,12 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
                     )
                     bands.append(dest)
         data = np.stack(bands)
+        out_dtype = str(data.dtype)
         profile = ref.profile.copy()
         profile.update(driver="GTiff", count=data.shape[0])
+        profile.update(
+            _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
+        )
         with MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
                 dst.write(data)
@@ -362,6 +383,7 @@ def rasterize_features(
         fill=_NODATA,
         dtype="float64",
     )
+    decoded_bytes = arr.nbytes
     profile = dict(
         driver="GTiff",
         width=width_px,
@@ -371,6 +393,9 @@ def rasterize_features(
         crs=f"EPSG:{int(srid)}",
         transform=transform,
         nodata=_NODATA,
+    )
+    profile.update(
+        _comp.creation_opts("float64", decoded_bytes=decoded_bytes, compress="auto")
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:

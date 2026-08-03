@@ -90,13 +90,19 @@ def to_render_rgb(path: str) -> str:
     import rasterio
     from rasterio.enums import ColorInterp
 
+    from databricks.labs.gbx.pyrx.core import compression as _comp
+
     with rasterio.open(path) as src:
         if src.count < 4 or ColorInterp.alpha not in src.colorinterp:
             return path
+        out_dtype = src.dtypes[0]
+        data = src.read([1, 2, 3])
         profile = src.profile.copy()
         profile.update(count=3)
         profile.pop("nodata", None)
-        data = src.read([1, 2, 3])
+        profile.update(
+            _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
+        )
     out = path + ".rgb.tif"
     with rasterio.open(out, "w", **profile) as dst:
         dst.write(data)

@@ -252,3 +252,107 @@ def test_auto_level_scales_with_tile_size(tmp_path):
     small_bytes = 1 * 1024 * 1024  # 1 MiB
     large_bytes = 512 * 1024 * 1024  # 512 MiB
     assert auto_level(small_bytes) >= auto_level(large_bytes)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: remaining light write sites — one assertion per site-FAMILY
+# ---------------------------------------------------------------------------
+
+# -- edit family (clip_to_geom / update_type / init_nodata / threshold / set_srid / band)
+
+
+def test_init_nodata_is_zstd(tmp_path):
+    """edit.init_nodata (edit family) must emit ZSTD bytes."""
+    from databricks.labs.gbx.pyrx.core import edit as _edit
+
+    p = _write_tif(tmp_path, "int16")
+    with rasterio.open(p) as ds:
+        result = _edit.init_nodata(ds)
+    _assert_zstd(result, context="edit.init_nodata")
+
+
+# -- agg family (merge_tiles / combineavg_tiles / frombands_tiles / rasterize_features)
+
+
+def test_merge_tiles_is_zstd(tmp_path):
+    """agg.merge_tiles must emit ZSTD bytes."""
+    from databricks.labs.gbx.pyrx.core.agg import merge_tiles
+
+    p1 = _write_tif(tmp_path, "int16", sz=32)
+    # Write a second non-overlapping tile
+    p2 = str(tmp_path / "int16_b.tif")
+    rng = np.random.default_rng(seed=99)
+    a2 = (rng.random((32, 32)) * 1000).astype("int16")
+    t2 = from_bounds(0.0, -1.0, 2.0, 1.0, 32, 32)
+    with rasterio.open(
+        p2,
+        "w",
+        driver="GTiff",
+        height=32,
+        width=32,
+        count=1,
+        dtype="int16",
+        crs="EPSG:4326",
+        transform=t2,
+    ) as d:
+        d.write(a2, 1)
+    with open(p1, "rb") as f:
+        b1 = f.read()
+    with open(p2, "rb") as f:
+        b2 = f.read()
+    result = merge_tiles([b1, b2])
+    _assert_zstd(result, context="agg.merge_tiles")
+
+
+# -- tiling family (retile / make_tiles / overlapping_tiles / separate_bands)
+
+
+def test_retile_is_zstd(tmp_path):
+    """tiling.retile must emit ZSTD tiles."""
+    from databricks.labs.gbx.pyrx.core.tiling import retile
+
+    p = _write_tif(tmp_path, "int16", sz=64)
+    with rasterio.open(p) as ds:
+        tiles = retile(ds, 32, 32)
+    assert len(tiles) == 4, f"expected 4 tiles, got {len(tiles)}"
+    for i, tile in enumerate(tiles):
+        _assert_zstd(tile, context=f"retile tile[{i}]")
+
+
+# -- warp family (reproject_to_srid)
+
+
+def test_reproject_to_srid_is_zstd(tmp_path):
+    """warp.reproject_to_srid must emit ZSTD bytes after reprojection."""
+    from databricks.labs.gbx.pyrx.core.warp import reproject_to_srid
+
+    p = _write_tif(tmp_path, "float32")
+    with rasterio.open(p) as ds:
+        result = reproject_to_srid(ds, 3857)
+    _assert_zstd(result, context="warp.reproject_to_srid")
+
+
+# -- resample family (resample_by_factor / resample_to_size / resample_to_res)
+
+
+def test_resample_by_factor_is_zstd(tmp_path):
+    """resample.resample_by_factor must emit ZSTD bytes."""
+    from databricks.labs.gbx.pyrx.core.resample import resample_by_factor
+
+    p = _write_tif(tmp_path, "float32")
+    with rasterio.open(p) as ds:
+        result = resample_by_factor(ds, 0.5)
+    _assert_zstd(result, context="resample.resample_by_factor")
+
+
+# -- analysis family (proximity / viewshed / cog_convert)
+
+
+def test_proximity_is_zstd(tmp_path):
+    """analysis.proximity must emit ZSTD bytes."""
+    from databricks.labs.gbx.pyrx.core.analysis import proximity
+
+    p = _write_tif(tmp_path, "int16")
+    with rasterio.open(p) as ds:
+        result = proximity(ds, None, "PIXEL", None)
+    _assert_zstd(result, context="analysis.proximity")

@@ -25,6 +25,8 @@ import tempfile
 import numpy as np
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
 # NoData sentinel for the proximity output — mirrors the heavyweight, which sets
 # NODATA=-1.0 so beyond-max / unreachable pixels are distinguishable from
 # zero-distance (source) pixels.
@@ -128,12 +130,16 @@ def proximity(ds, target_values, distunits, max_distance):
                 "float32"
             )
 
+    decoded_bytes = dist.nbytes
     profile = ds.profile.copy()
     profile.update(
         driver="GTiff",
         count=1,
         dtype="float32",
         nodata=_PROXIMITY_NODATA,
+    )
+    profile.update(
+        _comp.creation_opts("float32", decoded_bytes=decoded_bytes, compress="auto")
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -207,17 +213,24 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     # writing to minimise concurrent-buffer overlap.
     data = ds.read()
 
+    # Route compression through the authority for codec/level/predictor.
+    # Map "RAW" -> "none" so the authority emits no compression keys.
+    _comp_arg = "none" if compression == "RAW" else compression.lower()
+    _comp_opts = _comp.creation_opts(
+        str(ds.dtypes[0]), decoded_bytes=data.nbytes, compress=_comp_arg
+    )
+
     profile = ds.profile.copy()
     profile.update(
         driver="COG",
         blocksize=blocksize,
         overview_resampling=overview_resampling,
     )
-    # "raw" means no compression in rio-cogeo; driver="COG" omits the key.
-    if compression != "RAW":
-        profile["compress"] = compression
-    else:
-        profile.pop("compress", None)
+    # Remove stale compression keys from the source profile before merging authority opts.
+    for _k in ("compress", "predictor", "zstd_level", "zlevel"):
+        profile.pop(_k, None)
+    # Merge authority options (codec + level + predictor); RAW path emits empty dict.
+    profile.update(_comp_opts)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
     tmp.close()
@@ -289,14 +302,24 @@ def cog_convert_file(
     import rasterio
     import rasterio.shutil as rio_shutil
 
+    # Determine the source dtype so the authority can pick the right predictor.
+    with rasterio.open(src_path) as _src:
+        _src_dtype = _src.dtypes[0]
+
+    # Route compression through the authority for codec/level/predictor.
+    # Map "RAW" -> "none" so the authority emits no compression keys.
+    _comp_arg = (
+        "none" if str(compression).upper() == "RAW" else str(compression).lower()
+    )
+    _comp_opts = _comp.creation_opts(_src_dtype, decoded_bytes=None, compress=_comp_arg)
+
     creation = dict(
         blocksize=int(blocksize),
         overview_resampling=str(overview_resampling).upper(),
         bigtiff=bigtiff_val,
     )
-    comp = str(compression).upper()
-    if comp != "RAW":
-        creation["compress"] = comp
+    # Merge authority options (codec + level + predictor); RAW path emits empty dict.
+    creation.update(_comp_opts)
 
     with rasterio.Env(GDAL_CACHEMAX=200):
         rio_shutil.copy(src_path, dst_path, driver="COG", **creation)
@@ -482,8 +505,12 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
         # Visible cells carry an angle in [0, 180]; invisible/out-of-range carry -1.
         out = np.where(vals >= 0.0, 255, 0).astype("uint8")
 
+    decoded_bytes = out.nbytes
     profile = ds.profile.copy()
     profile.update(driver="GTiff", count=1, dtype="uint8", nodata=None)
+    profile.update(
+        _comp.creation_opts("uint8", decoded_bytes=decoded_bytes, compress="auto")
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(out, 1)

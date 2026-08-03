@@ -16,7 +16,10 @@ import tempfile
 import time
 from typing import Callable, Optional
 
+import numpy as np
 import requests
+
+from databricks.labs.gbx.pyrx.core import compression as _comp
 
 _log = logging.getLogger(__name__)
 
@@ -113,12 +116,19 @@ def windowed_download(
                 data = src.read(window=win)
                 transform = src.window_transform(win)
 
+            out_dtype = src.dtypes[0]
+            decoded_bytes = data.nbytes
             profile = src.profile.copy()
             profile.update(
                 driver="GTiff",
                 width=ow,
                 height=oh,
                 transform=transform,
+            )
+            profile.update(
+                _comp.creation_opts(
+                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+                )
             )
             with rasterio.open(outpath, "w", **profile) as dst:
                 dst.write(data)

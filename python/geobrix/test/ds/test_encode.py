@@ -42,7 +42,7 @@ def test_encode_metadata_key_set(gtiff_bytes):
     assert EXPECTED_METADATA_KEYS <= set(meta.keys())
     assert meta["driver"] == "GTiff"
     assert meta["format"] == "GTiff"
-    assert meta["compression"] == "DEFLATE"
+    assert meta["compression"] == "auto"
     assert meta["isZipped"] == "false"
     assert meta["isSubset"] == "false"
     assert meta["last_error"] == ""

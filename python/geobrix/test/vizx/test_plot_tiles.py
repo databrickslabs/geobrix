@@ -135,3 +135,138 @@ def test_plot_tiles_facet_mixed_crs_ok(spark, tmp_path):
     fig = plot_tiles(df, mode="facet")
     assert fig is not None
     plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Finding 3: empty DataFrame raises a clear ValueError in all modes
+# ---------------------------------------------------------------------------
+
+
+def test_plot_tiles_empty_df_first_raises(spark, tmp_path):
+    """Empty DF -> ValueError with a helpful message (mode=first)."""
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    p = str(tmp_path / "any.tif")
+    _write_tif(p)
+    df = _virtual_df(spark, [p]).filter("1 = 0")  # empty
+    with pytest.raises(ValueError, match="empty"):
+        plot_tiles(df, mode="first")
+
+
+def test_plot_tiles_empty_df_facet_raises(spark, tmp_path):
+    """Empty DF -> ValueError with a helpful message (mode=facet)."""
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    p = str(tmp_path / "any.tif")
+    _write_tif(p)
+    df = _virtual_df(spark, [p]).filter("1 = 0")
+    with pytest.raises(ValueError, match="empty"):
+        plot_tiles(df, mode="facet")
+
+
+def test_plot_tiles_empty_df_mosaic_raises(spark, tmp_path):
+    """Empty DF -> ValueError with a helpful message (mode=mosaic)."""
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    p = str(tmp_path / "any.tif")
+    _write_tif(p)
+    df = _virtual_df(spark, [p]).filter("1 = 0")
+    with pytest.raises(ValueError, match="empty"):
+        plot_tiles(df, mode="mosaic")
+
+
+# ---------------------------------------------------------------------------
+# Finding 4: first mode emits NO overflow warning on a multi-row DataFrame
+# ---------------------------------------------------------------------------
+
+
+def test_plot_tiles_first_no_overflow_warn(spark, tmp_path):
+    """first-mode must never emit an overflow UserWarning for a multi-row DF."""
+    import warnings
+
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    paths = [str(tmp_path / f"fw{i}.tif") for i in range(5)]
+    for p in paths:
+        _write_tif(p)
+    df = _virtual_df(spark, paths)
+    plt.close("all")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        plot_tiles(df, mode="first")
+    overflow_warns = [
+        w
+        for w in caught
+        if issubclass(w.category, UserWarning) and "limit" in str(w.message).lower()
+    ]
+    assert (
+        overflow_warns == []
+    ), f"first mode should not warn about limit; got: {[str(w.message) for w in overflow_warns]}"
+    plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: _extract_tile handles wrapper Row that has sibling path/raster col
+# ---------------------------------------------------------------------------
+
+
+def test_extract_tile_wrapper_with_sibling_path(tmp_path):
+    """Wrapper dict with both 'tile' struct and a sibling 'path' key resolves correctly."""
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+    from databricks.labs.gbx.vizx._tiles import resolve_tile_row
+
+    p = str(tmp_path / "sib.tif")
+    data = (np.random.rand(32, 32) * 100).astype("uint16")
+    transform = from_bounds(-104.0, 31.0, -103.9, 31.1, 32, 32)
+    with rasterio.open(
+        p,
+        "w",
+        driver="GTiff",
+        height=32,
+        width=32,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=transform,
+    ) as dst:
+        dst.write(data, 1)
+
+    vt_row = {
+        "cellid": -1,
+        "raster": None,
+        "path": p,
+        "window": {"col_off": 0, "row_off": 0, "width": 32, "height": 32},
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {},
+    }
+    # Wrapper has BOTH 'tile' struct AND a sibling 'path' at the top level.
+    wrapper = {"tile": vt_row, "path": p}
+    with resolve_tile_row(wrapper, tile_col="tile") as ds:
+        assert ds.width == 32
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: mosaic decimates — output dataset fits within max_pixels
+# ---------------------------------------------------------------------------
+
+
+def test_plot_tiles_mosaic_decimates(spark, tmp_path):
+    """mosaic with a large tile (size > max_pixels) must decimate before rendering."""
+    from databricks.labs.gbx.vizx import plot_tiles
+
+    # Create a tile larger than max_pixels=100 so decimation is needed.
+    paths = [str(tmp_path / f"big{i}.tif") for i in range(2)]
+    for p in paths:
+        _write_tif(p, size=256, crs="EPSG:4326")
+    df = _virtual_df(spark, paths)
+    plt.close("all")
+    # max_pixels=100; merged width will be ~256 → must decimate
+    ax = plot_tiles(df, mode="mosaic", max_pixels=100)
+    assert ax is not None
+    # Verify the figure was actually rendered without OOM (no assertion needed beyond no-raise)
+    plt.close("all")

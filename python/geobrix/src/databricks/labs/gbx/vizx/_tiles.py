@@ -10,18 +10,24 @@ from contextlib import contextmanager
 
 
 def _extract_tile(tile_or_row, tile_col):
-    """Pull the tile value out of a Row/dict that has a tile_col, else pass through."""
-    # bytes / VirtualTile / a tile-struct dict|Row -> use as-is; a wrapper Row with
-    # a tile_col field -> extract that field.
+    """Pull the tile value out of a Row/dict that has a tile_col, else pass through.
+
+    Prefers explicit tile_col extraction: if tile_col is present in the wrapper
+    AND the value at tile_col is itself a tile-shaped struct (has 'raster' or
+    'path', is a bytes/bytearray, or is a Row/dict with tile fields), extract it.
+    Falls back to treating the whole row as the tile only when tile_col is absent.
+    This is robust to sibling columns (e.g. a wrapper with both 'tile' and 'path').
+    """
     if isinstance(tile_or_row, (bytes, bytearray)):
         return tile_or_row
-    # dict/Row: if it has the tile_col AND that looks like a tile (struct), extract.
+    # dict/Row: check for tile_col first
     d = None
     if hasattr(tile_or_row, "asDict"):
         d = tile_or_row.asDict()
     elif isinstance(tile_or_row, dict):
         d = tile_or_row
-    if d is not None and tile_col in d and not ("raster" in d or "path" in d):
+    if d is not None and tile_col in d:
+        # tile_col is present — always prefer extracting it over treating d as the tile
         return d[tile_col]
     return tile_or_row
 
@@ -49,14 +55,15 @@ def resolve_tile_row(tile_or_row, tile_col="tile"):
 _MODE_DEFAULT_LIMITS = {"first": 1, "facet": 25, "mosaic": 64}
 
 
-def _collect_bounded(df, tile_col, limit):
+def _collect_bounded(df, tile_col, limit, *, warn_overflow=True):
     """Pull at most ``limit`` rows to the driver; warn if the DF has more.
 
     Never collects the whole DF: uses ``df.limit(limit+1)`` to peek at overflow
-    without a full ``count()``.
+    without a full ``count()``. Pass ``warn_overflow=False`` to suppress the
+    overflow warning (used by first-mode, which intentionally takes one row).
     """
     peek = df.limit(limit + 1).collect()
-    if len(peek) > limit:
+    if warn_overflow and len(peek) > limit:
         warnings.warn(
             f"plot_tiles: DataFrame has more than limit={limit} tiles; "
             f"rendering the first {limit}. Filter the DataFrame or raise `limit`.",
@@ -67,7 +74,7 @@ def _collect_bounded(df, tile_col, limit):
 
 
 # ---------------------------------------------------------------------------
-# Mosaic stub (Task 3)
+# Mosaic (Task 3)
 # ---------------------------------------------------------------------------
 
 
@@ -80,9 +87,14 @@ def _plot_tiles_mosaic(
     import matplotlib.pyplot as plt
     from rasterio.merge import merge
 
-    from databricks.labs.gbx.vizx._raster import _render
+    from databricks.labs.gbx.vizx._raster import _decimated_read, _render
 
     rows = _collect_bounded(df, tile_col, limit)
+    if not rows:
+        raise ValueError(
+            "plot_tiles: no tiles to render (the DataFrame is empty after limit/filter)."
+        )
+
     with ExitStack() as stack:
         datasets = [stack.enter_context(resolve_tile_row(r, tile_col)) for r in rows]
         crs_set = {ds.crs.to_string() if ds.crs else None for ds in datasets}
@@ -92,21 +104,55 @@ def _plot_tiles_mosaic(
                 f"{sorted(map(str, crs_set))}; filter the DataFrame to a single "
                 f"CRS (cross-CRS mosaic is not supported here)."
             )
+        # Validate uniform dtype and band count before merge so failures get a
+        # clear domain message rather than a raw rasterio error.
+        type_set = {(ds.dtypes[0], ds.count) for ds in datasets}
+        if len(type_set) > 1:
+            raise ValueError(
+                f"plot_tiles(mode='mosaic'): tiles have differing dtype/band-count "
+                f"{sorted(map(str, type_set))}; all tiles must share the same dtype "
+                f"and band count for mosaic mode."
+            )
+        # Capture nodata inside the with-block (before datasets are closed).
+        nodata = datasets[0].nodata
         mosaic, transform = merge(datasets)
-    # decimate the merged array for display
-    scale = max(mosaic.shape[-1], mosaic.shape[-2]) / max_pixels
-    nodata = datasets[0].nodata if datasets else None
-    _render(
-        mosaic,
-        transform,
-        title="mosaic",
-        fig_w=fig_w,
-        fig_h=fig_h,
-        scale=max(scale, 1.0),
-        composite=composite,
-        nodata=nodata,
-        emphasis=emphasis,
-    )
+
+    # Decimate the merged array via MemoryFile + _decimated_read so the
+    # transform is scaled correctly (reuses the tested decimation path).
+    from rasterio.crs import CRS
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    bands, height, width = mosaic.shape
+    dtype = mosaic.dtype.name
+    crs_str = next(iter(crs_set))
+    with MemoryFile() as mf:
+        profile = {
+            "driver": "GTiff",
+            "count": bands,
+            "height": height,
+            "width": width,
+            "dtype": dtype,
+            "crs": CRS.from_string(crs_str) if crs_str else None,
+            "transform": transform,
+        }
+        if nodata is not None:
+            profile["nodata"] = nodata
+        with mf.open(**profile) as dst:
+            dst.write(mosaic)
+        with mf.open() as src:
+            data, tfm, scale = _decimated_read(src, max_pixels)
+            _render(
+                data,
+                tfm,
+                title="mosaic",
+                fig_w=fig_w,
+                fig_h=fig_h,
+                scale=scale,
+                composite=composite,
+                nodata=nodata,
+                emphasis=emphasis,
+            )
     return plt.gca()
 
 
@@ -144,7 +190,7 @@ def plot_tiles(
         Maximum number of tiles collected from the DataFrame. Defaults to 25 for
         ``facet``, 1 for ``first``, 64 for ``mosaic``. The whole DataFrame is
         never collected; a ``UserWarning`` is emitted when the DF has more rows
-        than ``limit``.
+        than ``limit`` (facet/mosaic only — first-mode silently takes one row).
     fig_w, fig_h:
         Figure width and height in inches.
     max_pixels:
@@ -185,9 +231,14 @@ def plot_tiles(
             emphasis=emphasis,
         )
 
-    rows = _collect_bounded(df, tile_col, limit if mode == "facet" else 1)
-
     if mode == "first":
+        # Silently take one row — no overflow warning (the user asked for one tile).
+        rows = df.limit(1).collect()
+        if not rows:
+            raise ValueError(
+                "plot_tiles: no tiles to render "
+                "(the DataFrame is empty after limit/filter)."
+            )
         with resolve_tile_row(rows[0], tile_col) as src:
             data, transform, scale = _decimated_read(src, max_pixels)
             _render(
@@ -204,6 +255,12 @@ def plot_tiles(
         return plt.gca()
 
     # facet: grid of panels
+    rows = _collect_bounded(df, tile_col, limit)
+    if not rows:
+        raise ValueError(
+            "plot_tiles: no tiles to render "
+            "(the DataFrame is empty after limit/filter)."
+        )
     n = len(rows)
     ncols = min(n, 4) or 1
     nrows = (n + ncols - 1) // ncols

@@ -22,6 +22,21 @@ from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
 from databricks.labs.gbx.pyrx.core import compression as _comp
 
 
+def _raster_bytes_compression(raster_bytes: bytes) -> "Optional[str]":
+    """Return the lowercase compression name from the raster header, or None.
+
+    Opens only the TIFF header (fast — no pixel decode).
+    """
+    from rasterio.io import MemoryFile
+
+    try:
+        with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+            comp = ds.compression
+            return comp.value.lower() if comp is not None else None
+    except Exception:
+        return None
+
+
 def _apply_compression(
     raster_bytes: bytes,
     compress: str,
@@ -36,7 +51,17 @@ def _apply_compression(
 
     When compress='auto', this will return ZSTD+predictor output. When
     compress='none', the output has no compression keys.
+
+    Fast-path: when compress='auto' and *raster_bytes* are already
+    ZSTD-compressed, returns *raster_bytes* unchanged (no re-encode).  This
+    avoids a wasteful double-encode for tiles produced by the virtual-tile
+    materializer (which already ZSTD-encodes) and for passthrough ZSTD tiles.
+    Explicit codecs always re-encode even when the input is already in that
+    format (the caller requested a specific codec, so we honour it).
     """
+    if compress == "auto" and _raster_bytes_compression(raster_bytes) == "zstd":
+        return raster_bytes
+
     from rasterio.io import MemoryFile
 
     with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
@@ -194,12 +219,13 @@ class RasterGbxWriter(DataSourceWriter):
             if self.cog:
                 # COG path: cog_convert handles compression directly; skip the
                 # pre-encode _apply_compression step to avoid a double re-encode.
-                # Resolve "auto" → "DEFLATE" for cog_convert (it validates
-                # against rio-cogeo cog_profiles which does not know "auto").
+                # Pass "auto" through to cog_convert unchanged: cog_convert
+                # accepts "auto" as a special sentinel that bypasses cog_profiles
+                # validation and routes through creation_opts(compress="auto",
+                # decoded_bytes=...) for size-adaptive ZSTD level + predictor —
+                # the ZSTD baseline, same as the GTiff path.
                 _cog_compress = str(self.compress).lower()
-                if _cog_compress == "auto":
-                    _cog_compress = "deflate"
-                elif _cog_compress == "none":
+                if _cog_compress == "none":
                     _cog_compress = "raw"
                 from rasterio.io import MemoryFile
 

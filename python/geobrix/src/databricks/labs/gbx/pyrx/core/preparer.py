@@ -42,18 +42,19 @@ def _resolve_cog_compression(
 
     ``compress`` is the canonical kwarg (Task 5 surface); ``compression`` is the
     legacy kwarg kept as a deprecated alias.  When both are supplied, ``compress``
-    wins.  When compress='auto', resolves to 'DEFLATE' (safe COG default).
+    wins.  When compress='auto', resolves to 'ZSTD' — the spec ZSTD baseline
+    applies to all COG outputs.
     """
     if compress is not None:
         c = str(compress).upper()
         if c == "AUTO":
-            return "DEFLATE"
+            return "ZSTD"
         if c == "NONE":
             return "RAW"
         return c
     if compression is not None:
         return str(compression).upper()
-    return "DEFLATE"
+    return "ZSTD"
 
 
 def prepare_cog(
@@ -68,7 +69,7 @@ def prepare_cog(
     bigtiff: str = "YES",
     # Task 5: unified compression surface. ``compress`` is the canonical kwarg.
     # ``compression`` is the deprecated alias; when both are given, ``compress`` wins.
-    # compress='auto' resolves to 'DEFLATE' (COG format safe default).
+    # compress='auto' resolves to 'ZSTD' (the spec ZSTD baseline).
     compress: Optional[str] = None,
     compress_level: Optional[int] = None,
     predictor: Optional[int] = None,

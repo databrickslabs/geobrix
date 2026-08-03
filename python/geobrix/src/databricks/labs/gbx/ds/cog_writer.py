@@ -114,9 +114,8 @@ class CogGbxWriter(DataSourceWriter):
         # Unified compression surface (Task 5).
         # ``compress`` = "auto" | "zstd" | "deflate" | "lzw" | "none".
         # Deprecated: ``cog_compression`` is the old option; maps to ``compress``.
-        # When compress == "auto", resolves to "DEFLATE" for cog_convert_file
-        # (COG format compatibility; the compression authority is used for
-        # non-file conversion paths). If BOTH are given, compress wins.
+        # When compress == "auto", resolves to "ZSTD" (the spec ZSTD baseline).
+        # If BOTH are given, compress wins.
         compress="auto",
         compress_level=None,
         predictor=None,
@@ -161,13 +160,14 @@ class CogGbxWriter(DataSourceWriter):
 
         ``cog_convert_file`` expects a codec name that rio-cogeo recognises (e.g.
         ``"DEFLATE"``, ``"LZW"``, ``"ZSTD"``). When the writer's compress is
-        ``"auto"``, default to ``"DEFLATE"`` for compatibility with the COG
-        format; the compression authority's ZSTD default is used for the
-        non-file tile-bytes paths (``_bytes_to_cog`` / ``cog_convert``).
+        ``"auto"``, resolve to ``"ZSTD"`` — the spec ZSTD baseline applies to
+        COG outputs as well as GTiff outputs.  (``cog_convert_file`` routes
+        "ZSTD" through the compression authority, which uses the balanced default
+        level since decoded_bytes is unavailable in the streaming path.)
         """
         c = str(self.compress).lower()
         if c == "auto":
-            return "DEFLATE"
+            return "ZSTD"
         if c == "none":
             return "RAW"
         return c.upper()

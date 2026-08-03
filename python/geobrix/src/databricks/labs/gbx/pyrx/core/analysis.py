@@ -189,23 +189,30 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     compression = str(compression).upper()
     overview_resampling = str(overview_resampling).upper()
 
-    # Validate compression against the same set that rio-cogeo accepts, so
-    # callers passing profile names (e.g. "deflate", "lzw", "raw") still work.
-    # "raw" maps to no compression (omit the compress kwarg for driver="COG").
-    from rio_cogeo.profiles import cog_profiles
+    # "AUTO" is a special sentinel meaning "size-adaptive ZSTD" — it bypasses
+    # the cog_profiles validation (which has no "auto" entry) and routes through
+    # creation_opts(compress="auto", decoded_bytes=...) so size-adaptive level +
+    # predictor are preserved, matching the GTiff path's ZSTD baseline.
+    _is_auto = compression == "AUTO"
 
-    try:
-        _profile_check = cog_profiles.get(compression.lower())
-    except KeyError as exc:
-        raise ValueError(
-            f"rst_cog_convert: unknown compression '{compression}'; "
-            f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
-        ) from exc
-    if _profile_check is None:
-        raise ValueError(
-            f"rst_cog_convert: unknown compression '{compression}'; "
-            f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
-        )
+    if not _is_auto:
+        # Validate compression against the same set that rio-cogeo accepts, so
+        # callers passing profile names (e.g. "deflate", "lzw", "raw") still work.
+        # "raw" maps to no compression (omit the compress kwarg for driver="COG").
+        from rio_cogeo.profiles import cog_profiles
+
+        try:
+            _profile_check = cog_profiles.get(compression.lower())
+        except KeyError as exc:
+            raise ValueError(
+                f"rst_cog_convert: unknown compression '{compression}'; "
+                f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
+            ) from exc
+        if _profile_check is None:
+            raise ValueError(
+                f"rst_cog_convert: unknown compression '{compression}'; "
+                f"valid profiles: {', '.join(sorted(cog_profiles.keys()))}"
+            )
 
     import rasterio
 
@@ -215,6 +222,8 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
 
     # Route compression through the authority for codec/level/predictor.
     # Map "RAW" -> "none" so the authority emits no compression keys.
+    # "AUTO" is passed through directly so creation_opts picks size-adaptive
+    # ZSTD level from decoded_bytes (the ZSTD baseline, same as the GTiff path).
     _comp_arg = "none" if compression == "RAW" else compression.lower()
     _comp_opts = _comp.creation_opts(
         str(ds.dtypes[0]), decoded_bytes=data.nbytes, compress=_comp_arg

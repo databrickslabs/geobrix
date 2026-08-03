@@ -209,3 +209,45 @@ def test_memsize_materialized_is_byte_length():
     row = mat.select(rx.rst_memsize("tile").alias("m"), "tile.raster").first()
     assert row["m"] is not None and row["m"] > 0
     assert row["m"] == len(bytes(row["raster"]))
+
+
+# ---------------------------------------------------------------------------
+# Task 5: accumulated instructions compose + consume-on-materialize invariant
+# ---------------------------------------------------------------------------
+
+
+def test_accumulated_instructions_apply_in_order():
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    out = (
+        df.withColumn("tile", rx.rst_band("tile", 1))
+        .withColumn("tile", rx.rst_initnodata("tile"))
+        .withColumn("tile", rx.rst_setsrid("tile", 3857))
+    )
+    row = out.select("tile.raster", "tile.metadata").first()
+    assert row["raster"] is None  # still virtual after 3 ops
+    md = row["metadata"]
+    assert md["pending_bands"] == "1"
+    assert md["pending_nodata"].startswith("-9999")
+    assert md["pending_srid"] == "3857"
+    # materialize once: all three apply
+    m = (
+        df.withColumn("tile", rx.rst_band("tile", 1))
+        .withColumn("tile", rx.rst_setsrid("tile", 3857))
+        .withColumn("tile", rx.rst_initnodata("tile", materialize=True))
+    )
+    r = m.select(
+        rx.rst_numbands("tile").alias("n"),
+        rx.rst_srid("tile").alias("s"),
+        "tile.raster",
+        "tile.metadata",
+    ).first()
+    assert r["n"] == 1 and r["s"] == 3857
+    assert r["raster"] is not None  # materialized
+    # pending keys consumed on materialization to bytes
+    md = r["metadata"] or {}
+    assert (
+        "pending_bands" not in md
+        and "pending_srid" not in md
+        and "pending_nodata" not in md
+    )

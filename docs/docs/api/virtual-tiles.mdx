@@ -129,6 +129,20 @@ materialize), see the
 [Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice) on
 the Execution Tiers page.
 
+### Instructions that stay virtual
+
+A few cheap, common operations record an **instruction** on a virtual tile instead
+of reading pixels — the tile stays bytes-free and the instruction is applied on the
+next read (alongside the window and any clip/reproject):
+
+- `rst_initnodata` — set the NoData value
+- `rst_setsrid` — relabel the CRS (assign an EPSG code; not a reproject)
+- `rst_band` — select a band
+
+They accumulate: chain them on a virtual tile and all apply together when the tile is
+finally read (e.g. at tessellation). Pass `materialize=True` (or `virtualize_dir`) to
+apply them immediately and produce bytes.
+
 ## Tiers: light tiles vs. heavy tiles
 
 **The lightweight tier is for light (virtual) raster tiles; the heavyweight tier

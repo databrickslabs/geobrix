@@ -1,7 +1,10 @@
-"""Windowed GTiff(DEFLATE) re-encode + 11-key metadata, matching the heavy reader.
+"""Windowed GTiff re-encode + 11-key metadata, matching the heavy reader.
 
-Mirrors RasterDriver.writeToBytes (always GTiff/DEFLATE on the wire) and
-WindowedExtract metadata. tile.raster is NOT raw source bytes.
+Mirrors RasterDriver.writeToBytes (GTiff on the wire) and WindowedExtract
+metadata. tile.raster is NOT raw source bytes.
+
+Default compression is ``"auto"`` which routes through the compression
+authority (``pyrx.core.compression``) for ZSTD + dtype-predictor output.
 """
 
 from __future__ import annotations
@@ -10,11 +13,13 @@ import os
 import tempfile
 from typing import Dict, Tuple
 
+import numpy as np
 import rasterio
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx.core import cog as _cog
+from databricks.labs.gbx.pyrx.core import compression as _comp
 
 CELLID_FRESH = -1  # GDAL_Reader.scala:30 writes -1L for un-tessellated tiles
 
@@ -24,7 +29,7 @@ def encode_tile(
     window: Tuple[int, int, int, int],
     source_path: str,
     all_parents: str,
-    compression: str = "DEFLATE",
+    compression: str = "auto",
     tile_format: str = "gtiff",
     cog_blocksize: int = 512,
     cog_overview_resampling: str = "AVERAGE",
@@ -41,7 +46,13 @@ def encode_tile(
         window:                (col_off, row_off, win_w, win_h) pixel window.
         source_path:           Original source file path (for metadata).
         all_parents:           Semicolon-delimited parent chain (for metadata).
-        compression:           GTiff/COG compression (default ``"DEFLATE"``).
+        compression:           GTiff compression (default ``"auto"`` → ZSTD +
+                               dtype-predictor via the compression authority).
+                               Explicit values ``"DEFLATE"``, ``"LZW"``,
+                               ``"ZSTD"``, ``"NONE"`` / ``"RAW"`` are forwarded
+                               through the authority unchanged.  For the COG
+                               path, ``"auto"`` is resolved to ``"DEFLATE"``
+                               (rio_cogeo profile compatibility).
         tile_format:           ``"gtiff"`` (default, plain windowed GTiff) or
                                ``"cog"`` (opt-in COG with overviews, ~2.8× peak).
         cog_blocksize:         Internal tile size for COG output (default 512).
@@ -59,12 +70,18 @@ def encode_tile(
         # intermediate so peak = decoded array + COG file bytes (not all three).
         from rio_cogeo.profiles import cog_profiles
 
-        compression_str = str(compression).upper()
+        # Resolve "auto" → "DEFLATE" for rio_cogeo profile compatibility;
+        # the COG driver owns blocksize/overview structure so we leave its
+        # compression choice to the caller (rio_cogeo profiles).
+        cog_compression = (
+            compression if str(compression).lower() != "auto" else "DEFLATE"
+        )
+        compression_str = str(cog_compression).upper()
         # Validate compression name (same set as analysis.cog_convert).
         _profile_check = cog_profiles.get(compression_str.lower())
         if _profile_check is None:
             raise ValueError(
-                f"encode_tile: unknown compression '{compression}'; "
+                f"encode_tile: unknown compression '{cog_compression}'; "
                 f"valid: {', '.join(sorted(cog_profiles.keys()))}"
             )
 
@@ -94,14 +111,20 @@ def encode_tile(
         finally:
             os.unlink(tmp.name)
     else:
-        # GTiff path: in-memory encode.
+        # GTiff path: in-memory encode via the compression authority.
         profile = ds.profile.copy()
         profile.update(
             driver="GTiff",
             width=win_w,
             height=win_h,
-            compress=compression.lower(),
             transform=win_transform,
+        )
+        out_dtype = profile.get("dtype", ds.dtypes[0])
+        decoded_bytes = ds.count * win_w * win_h * np.dtype(out_dtype).itemsize
+        profile.update(
+            _comp.creation_opts(
+                out_dtype, decoded_bytes=decoded_bytes, compress=compression
+            )
         )
         with MemoryFile() as mf:
             with mf.open(**profile) as out:

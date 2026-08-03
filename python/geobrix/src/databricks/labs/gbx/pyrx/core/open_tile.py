@@ -32,6 +32,7 @@ from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
+from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.edit import _nodata_fits_dtype
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -125,6 +126,14 @@ def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> by
             # else: default doesn't fit the dtype; leave nodata unset.
     if srid is not None:
         profile["crs"] = _rcrs.CRS.from_epsg(srid)
+    # Route through the compression authority: ZSTD + dtype-predictor baseline.
+    out_dtype = profile.get("dtype", src.dtypes[0])
+    decoded_bytes = (
+        count * int(window.width) * int(window.height) * np.dtype(out_dtype).itemsize
+    )
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(data)
@@ -141,6 +150,16 @@ def _warp_window_bytes(
             prof = vrt.profile.copy()
             prof.update(driver="GTiff")
             data = vrt.read()
+            # Route through the compression authority for the reprojected output.
+            out_dtype = prof.get("dtype", vrt.dtypes[0])
+            decoded_bytes = (
+                vrt.count * vrt.width * vrt.height * np.dtype(out_dtype).itemsize
+            )
+            prof.update(
+                _comp.creation_opts(
+                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+                )
+            )
             with MemoryFile() as out_mf:
                 with out_mf.open(**prof) as dst:
                     dst.write(data)
@@ -165,6 +184,11 @@ def _empty_dataset_bytes(ref) -> bytes:
         crs=ref.crs,
         nodata=nodata,
         transform=ref.transform,  # source origin; valid georeference for the 1x1
+    )
+    # 1x1 tile: decoded_bytes is tiny; auto picks the highest level (fast, negligible).
+    decoded_bytes = ref.count * 1 * 1 * np.dtype(dtype).itemsize
+    profile.update(
+        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
     arr = np.full((ref.count, 1, 1), nodata, dtype=dtype)
     with MemoryFile() as mf:
@@ -493,6 +517,12 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
         data = ds.read()
         profile = ds.profile.copy()
         profile.update(driver="GTiff")
+        # Route through the compression authority: ZSTD + dtype-predictor baseline.
+        out_dtype = profile.get("dtype", ds.dtypes[0])
+        decoded_bytes = ds.count * ds.width * ds.height * np.dtype(out_dtype).itemsize
+        profile.update(
+            _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
+        )
         with MemoryFile() as mf:
             with mf.open(**profile) as dst:
                 dst.write(data)

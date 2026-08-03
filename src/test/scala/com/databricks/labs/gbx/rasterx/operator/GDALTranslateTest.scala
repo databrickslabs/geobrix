@@ -278,5 +278,28 @@ class GDALTranslateTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
+    test("GDALTranslate should use LEVEL option for COG ZSTD compression (not ZSTD_LEVEL)") {
+        val outputPath = "/vsimem/translated_cog_zstd_level.cog"
+        val command = "gdal_translate"
+        // COG format with ZSTD compression should emit -co LEVEL=... not -co ZSTD_LEVEL=...
+        val (resultDs, metadata) = GDALTranslate.executeTranslate(
+            outputPath,
+            ds,
+            command,
+            Map("format" -> "COG", "compression" -> "ZSTD", "level" -> "5")
+        )
+
+        resultDs should not be null
+        // Verify that LEVEL (not ZSTD_LEVEL) is used for COG format
+        metadata should contain key "last_command"
+        metadata("last_command") should include("COMPRESS=ZSTD")
+        metadata("last_command") should include("LEVEL=5")
+        // Ensure ZSTD_LEVEL (GTiff-specific) is NOT present for COG
+        metadata("last_command") should not include("ZSTD_LEVEL")
+
+        gdal.Unlink(outputPath)
+        resultDs.delete()
+    }
+
 }
 

@@ -89,8 +89,6 @@ def test_materialize_strips_pending_keys():
     assert PENDING_NODATA not in (mat.metadata or {})
     assert "pending_srid" not in (mat.metadata or {})
     # and the bytes actually honor the instructions
-    import io
-
     from rasterio.io import MemoryFile
 
     with MemoryFile(mat.raster) as mf, mf.open() as ds:
@@ -326,3 +324,151 @@ def test_pending_nodata_uint16_no_nodata_leaves_unset():
         assert (
             ds.nodata is None
         ), f"Expected nodata=None (default -9999 doesn't fit uint16), got {ds.nodata}"
+
+
+# ---------------------------------------------------------------------------
+# Finding 1 fix: eager path (edit.init_nodata) also guards dtype
+# ---------------------------------------------------------------------------
+
+
+def test_eager_init_nodata_uint16_no_nodata_does_not_raise():
+    """Materialized uint16-no-nodata tile: edit.init_nodata must NOT raise; nodata left unset."""
+    from databricks.labs.gbx.pyrx.core import edit
+
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "uint16", nodata=None)
+    with rasterio.open(path) as ds:
+        result = edit.init_nodata(ds)
+    # open the produced bytes and check nodata
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(result) as mf, mf.open() as out:
+        assert (
+            out.nodata is None
+        ), f"edit.init_nodata on uint16-no-nodata must leave nodata unset, got {out.nodata}"
+
+
+def test_eager_init_nodata_float32_no_nodata_sets_default():
+    """Materialized float32-no-nodata tile: edit.init_nodata must set -9999.0 (fits float)."""
+    from databricks.labs.gbx.pyrx.core import edit
+
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "float32", nodata=None)
+    with rasterio.open(path) as ds:
+        result = edit.init_nodata(ds)
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(result) as mf, mf.open() as out:
+        assert (
+            out.nodata == -9999.0
+        ), f"edit.init_nodata on float32-no-nodata must set -9999.0, got {out.nodata}"
+
+
+def test_eager_init_nodata_preserves_existing():
+    """edit.init_nodata must preserve an existing nodata value, not overwrite."""
+    from databricks.labs.gbx.pyrx.core import edit
+
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "uint16", nodata=0)
+    with rasterio.open(path) as ds:
+        result = edit.init_nodata(ds)
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(result) as mf, mf.open() as out:
+        assert (
+            out.nodata == 0.0
+        ), f"edit.init_nodata must preserve nodata=0, got {out.nodata}"
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 fix: pending_bands stacking guard
+# ---------------------------------------------------------------------------
+
+
+def test_band_stacking_guard_raises():
+    """rst_band on a virtual tile that already carries pending_bands must raise ValueError."""
+    import pytest
+
+    spark = _spark()
+    df = _read_virtual_df(spark, _a_tif())
+    # Record a pending band selection (stays virtual).
+    df_band = df.withColumn("tile", rx.rst_band("tile", 1))
+    # A second rst_band on the same virtual tile should raise.
+    with pytest.raises(Exception, match="pending band selection"):
+        df_band.withColumn("tile", rx.rst_band("tile", 1)).collect()
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 fix: setsrid + warp compose (pending_srid vs tile.crs)
+# ---------------------------------------------------------------------------
+
+
+def test_setsrid_and_warp_compose():
+    """source=4326, pending_srid=3857, tile.crs=4326 → relabel to 3857 then warp back to 4326."""
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "float32", nodata=None)
+    with rasterio.open(path) as ds:
+        w, h = ds.width, ds.height
+    # tile.crs=4326 (warp target), pending_srid=3857 (relabel source first)
+    vt = VirtualTile(
+        cellid=-1,
+        raster=None,
+        path=path,
+        window=(0, 0, w, h),
+        crs="EPSG:4326",
+        metadata={"pending_srid": "3857"},
+    )
+    # Should relabel source to 3857 THEN warp to 4326; final CRS = 4326.
+    with ot.open_tile(vt) as ds:
+        assert ds.crs is not None
+        assert (
+            ds.crs.to_epsg() == 4326
+        ), f"Expected final CRS=4326 after relabel(3857)+warp(4326), got {ds.crs.to_epsg()}"
+
+
+# ---------------------------------------------------------------------------
+# Finding 4 fix: open_header nodata consistency
+# ---------------------------------------------------------------------------
+
+
+def test_open_header_reflects_pending_nodata_float32():
+    """float32-no-nodata + pending_nodata=-9999 → open_header reports -9999 (fits float)."""
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "float32", nodata=None)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": "-9999.0"}
+    with ot.open_header(vt) as ds:
+        assert (
+            ds.nodata == -9999.0
+        ), f"open_header should report pending nodata=-9999.0 for float32, got {ds.nodata}"
+
+
+def test_open_header_pending_nodata_uint16_leaves_unset():
+    """uint16-no-nodata + pending_nodata=-9999 → open_header leaves nodata unset (dtype mismatch)."""
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "uint16", nodata=None)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": "-9999.0"}
+    with ot.open_header(vt) as ds:
+        assert (
+            ds.nodata is None
+        ), f"open_header should leave nodata=None for uint16 (out of range), got {ds.nodata}"
+
+
+def test_open_header_pending_nodata_preserves_existing():
+    """uint16 with nodata=0 + pending_nodata=-9999 → open_header preserves 0."""
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
+        path = tmp.name
+    _write_tif(path, "uint16", nodata=0)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": "-9999.0"}
+    with ot.open_header(vt) as ds:
+        assert (
+            ds.nodata == 0.0
+        ), f"open_header must preserve existing nodata=0, got {ds.nodata}"

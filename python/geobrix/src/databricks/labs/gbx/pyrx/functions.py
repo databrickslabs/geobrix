@@ -1413,6 +1413,14 @@ def _band_udf(tile, band_index):
     if b < 1:
         raise ValueError(f"rst_band: band_index {b} out of range (>=1)")
     if vt.is_virtual():
+        # Guard: stacking a second band-select on a tile that already carries
+        # pending_bands would silently compose indices or error with a confusing
+        # out-of-range message.  Raise an explicit error instead.
+        if ot.PENDING_BANDS in (vt.metadata or {}):
+            raise ValueError(
+                "rst_band: tile already has a pending band selection; "
+                "materialize before selecting again"
+            )
         md = dict(vt.metadata or {})
         md[ot.PENDING_BANDS] = str(b)
         vt.metadata = md
@@ -1743,6 +1751,12 @@ def rst_band(
     Equivalent to ``gdal_translate -b <band_index>``: the extracted tile
     preserves the source CRS, GeoTransform, nodata, and dtype; only the band
     count is reduced to 1. ``band_index`` is 1-based and must be in range.
+
+    On a virtual tile the band selection is recorded as a pending instruction
+    (``pending_bands`` in metadata) and applied at the next read.  Stacking a
+    second ``rst_band`` call on a tile that already carries a pending band
+    selection raises ``ValueError``; materialize first (``materialize=True``)
+    before selecting again.
 
     Args:
         tile:       Tile struct column.

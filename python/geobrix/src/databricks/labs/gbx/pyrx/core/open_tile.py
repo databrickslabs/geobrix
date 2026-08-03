@@ -32,6 +32,7 @@ from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
+from databricks.labs.gbx.pyrx.core.edit import _nodata_fits_dtype
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
@@ -80,22 +81,6 @@ def _epsg_of(crs) -> Optional[int]:
         return None
 
 
-def _nodata_fits_dtype(nodata: float, dtype_str: str) -> bool:
-    """Return True if *nodata* is representable in *dtype_str*.
-
-    Float dtypes always fit (rasterio allows any float nodata for float bands).
-    Integer dtypes are checked via numpy's iinfo range.
-    """
-    try:
-        dt = np.dtype(dtype_str)
-        if np.issubdtype(dt, np.integer):
-            info = np.iinfo(dt)
-            return info.min <= nodata <= info.max
-        return True  # float dtypes: always fits
-    except Exception:
-        return True  # unknown dtype: don't block
-
-
 def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> bytes:
     """Read one window into standalone GTiff bytes, applying pending instructions.
 
@@ -115,9 +100,9 @@ def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> by
 
     bands, nodata, srid = pending
     indexes = bands if bands else None  # rasterio: 1-based band list or None=all
+    # src.read with indexes as a list always returns 3D (bands, h, w); the
+    # 2D-collapse path is unreachable here and has been removed.
     data = src.read(window=window, indexes=indexes)
-    if data.ndim == 2:  # single-band read collapses a dim
-        data = data[np.newaxis, :, :]
     profile = src.profile.copy()
     count = len(bands) if bands else src.count
     profile.update(
@@ -212,10 +197,16 @@ def open_tile(tile: VirtualTile) -> Iterator[DatasetReader]:
         c, r, w, h = tile.window
         window = Window(c, r, w, h)
         pending = _parse_pending(tile.metadata)
+        bands, _nodata, pending_srid = pending
         with rasterio.open(local_path) as src:
             src_epsg = src.crs.to_epsg() if src.crs else None
             want = _epsg_of(tile.crs) if tile.crs else None
-            if want is not None and want != src_epsg:
+            # When pending_srid relabels the CRS, use the relabeled EPSG as the
+            # "current" CRS for the warp skip-decision.  Without this, a tile
+            # with pending_srid=3857 + tile.crs=4326 would skip the warp
+            # (want==src_epsg==4326) even though the relabeled CRS is 3857.
+            effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
+            if want is not None and want != effective_src_epsg:
                 tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
             else:
                 tile_bytes = _window_dataset_bytes(src, window, pending=pending)
@@ -296,11 +287,24 @@ class _WindowHeaderView:
     ``__getattr__`` — those are window-invariant. ``read`` is intentionally NOT
     proxied: this view exists precisely to avoid materialising pixels.
 
-    Optional ``pending_count`` and ``pending_crs`` override ``count`` and ``crs``
-    to reflect pending band-select / setsrid instructions recorded on the tile.
+    Optional ``pending_count``, ``pending_crs``, and ``pending_nodata`` override
+    ``count``, ``crs``, and ``nodata`` to reflect pending band-select, setsrid,
+    and init_nodata instructions recorded on the tile.
+
+    For ``pending_nodata``: the same ensure/preserve+dtype-fit logic as
+    open_tile applies — if the source already has nodata, source value is
+    preserved; if the source has no nodata and the pending value fits the dtype,
+    it is shown; otherwise source nodata (None) is preserved.
     """
 
-    def __init__(self, src, window: Window, pending_count=None, pending_crs=None):
+    def __init__(
+        self,
+        src,
+        window: Window,
+        pending_count=None,
+        pending_crs=None,
+        pending_nodata=None,
+    ):
         self._src = src
         self._window = window
         self._transform = src.window_transform(window)
@@ -310,6 +314,21 @@ class _WindowHeaderView:
         self._bounds = BoundingBox(left, bottom, right, top)
         self._pending_count = pending_count
         self._pending_crs = pending_crs
+        # Resolve nodata once at construction (no pixel I/O needed).
+        if src.nodata is not None:
+            # Source already has nodata: preserve it.
+            self._resolved_nodata = src.nodata
+        elif pending_nodata is not None:
+            # Source has no nodata: apply pending default only if it fits.
+            dtype_str = src.dtypes[0]
+            self._resolved_nodata = (
+                pending_nodata
+                if _nodata_fits_dtype(pending_nodata, dtype_str)
+                else None
+            )
+        else:
+            self._resolved_nodata = None
+        self._has_nodata_override = pending_nodata is not None and src.nodata is None
 
     @property
     def width(self) -> int:
@@ -340,6 +359,12 @@ class _WindowHeaderView:
         return self._src.crs
 
     @property
+    def nodata(self):
+        if self._has_nodata_override:
+            return self._resolved_nodata
+        return self._src.nodata
+
+    @property
     def profile(self):
         prof = self._src.profile.copy()
         prof.update(
@@ -351,6 +376,8 @@ class _WindowHeaderView:
             prof["count"] = self._pending_count
         if self._pending_crs is not None:
             prof["crs"] = self._pending_crs
+        if self._has_nodata_override:
+            prof["nodata"] = self._resolved_nodata
         return prof
 
     def __getattr__(self, name):
@@ -407,8 +434,8 @@ def open_header(tile) -> Iterator[DatasetReader]:
             stack.callback(_safe_remove, local_path)
         src = stack.enter_context(rasterio.open(local_path))
 
-        # Parse pending instructions to reflect band-select / setsrid in header.
-        bands, _nodata, srid = _parse_pending(vt.metadata)
+        # Parse pending instructions to reflect band-select / setsrid / nodata in header.
+        bands, raw_nodata, srid = _parse_pending(vt.metadata)
         pending_count = len(bands) if bands else None
         pending_crs = None
         if srid is not None:
@@ -416,10 +443,21 @@ def open_header(tile) -> Iterator[DatasetReader]:
 
             pending_crs = _rcrs.CRS.from_epsg(srid)
 
+        # pending_nodata is passed to _WindowHeaderView, which applies the same
+        # ensure/preserve+dtype-fit logic as _window_dataset_bytes so header and
+        # pixel views agree on nodata.
+        pending_nodata = raw_nodata  # may be None
+
+        any_pending = (
+            pending_count is not None
+            or pending_crs is not None
+            or pending_nodata is not None
+        )
+
         if vt.window is None or _is_full_extent(vt.window, src):
-            # Whole-file: yield a view that reflects pending_count / pending_crs
-            # but otherwise proxies the source directly.
-            if pending_count is None and pending_crs is None:
+            # Whole-file: yield a view that reflects pending overrides but
+            # otherwise proxies the source directly.
+            if not any_pending:
                 yield src
             else:
                 # Re-use _WindowHeaderView with the full-source window to get
@@ -431,6 +469,7 @@ def open_header(tile) -> Iterator[DatasetReader]:
                     full_window,
                     pending_count=pending_count,
                     pending_crs=pending_crs,
+                    pending_nodata=pending_nodata,
                 )
         else:
             # Sub-window: present the window's dims/extent + pending overrides.
@@ -440,6 +479,7 @@ def open_header(tile) -> Iterator[DatasetReader]:
                 Window(c, r, w, h),
                 pending_count=pending_count,
                 pending_crs=pending_crs,
+                pending_nodata=pending_nodata,
             )
 
 

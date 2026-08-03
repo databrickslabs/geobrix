@@ -24,6 +24,22 @@ _GDAL_TO_NP = {
 _DEFAULT_NODATA = -9999.0
 
 
+def _nodata_fits_dtype(nodata: float, dtype_str: str) -> bool:
+    """Return True if *nodata* is representable in *dtype_str*.
+
+    Float dtypes always fit (rasterio allows any float nodata for float bands).
+    Integer dtypes are checked via numpy's iinfo range.
+    """
+    try:
+        dt = np.dtype(dtype_str)
+        if np.issubdtype(dt, np.integer):
+            info = np.iinfo(dt)
+            return info.min <= nodata <= info.max
+        return True  # float dtypes: always fits
+    except Exception:
+        return True  # unknown dtype: don't block
+
+
 def _write(profile, data) -> bytes:
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -113,12 +129,21 @@ def update_type(ds, new_type: str) -> bytes:
 def init_nodata(ds, default: float = _DEFAULT_NODATA) -> bytes:
     """Ensure NoData is set on the raster; use *default* if not already set.
 
-    If NoData is already set, the existing value is preserved.
+    Semantics (shared with the virtual apply-at-open path in open_tile):
+    - If NoData is already set, the existing value is preserved.
+    - If NoData is not set and *default* fits the band dtype, set it.
+    - If NoData is not set and *default* does NOT fit the band dtype (e.g.
+      -9999.0 for uint16), leave nodata unset rather than writing an invalid
+      value. This prevents a ``ValueError`` on integer dtypes that can't
+      represent the default sentinel.
     """
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
     if profile.get("nodata") is None:
-        profile["nodata"] = default
+        dtype_str = profile.get("dtype", ds.dtypes[0])
+        if _nodata_fits_dtype(default, dtype_str):
+            profile["nodata"] = default
+        # else: default out of range for this dtype; leave nodata unset.
     return _write(profile, ds.read())
 
 

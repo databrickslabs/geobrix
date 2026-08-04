@@ -1,0 +1,107 @@
+---
+sidebar_position: 5
+title: Coordinate Reference Systems
+---
+
+# Coordinate Reference Systems
+
+A **coordinate reference system (CRS)** ties a raster's or geometry's coordinates to a place on Earth. GeoBrix supports CRS handling **across all three packages** — RasterX, GridX, and VectorX — and across **both raster execution tiers** (lightweight `pyrx` and heavyweight `rasterx`). This page explains the two ways GeoBrix names a CRS — the integer **SRID** and the **CRS string** — when to use each, and how a non-EPSG CRS (an ESRI code, WKT, or PROJ4 definition) survives a full read → operate → write round trip.
+
+## SRID vs CRS string
+
+GeoBrix names a CRS two ways, and both are first-class:
+
+| | **SRID (integer)** | **CRS string** |
+|---|---|---|
+| Type | `INT` | `STRING` |
+| Example | `4326` | `"EPSG:4326"`, `"ESRI:54008"`, WKT, PROJ4 |
+| Can represent | EPSG codes only | **any** CRS — EPSG, ESRI, WKT, PROJ4 |
+| No-EPSG value | `NULL` (lightweight) / `0` (heavyweight) | always a value |
+| Use for | the native ST bridge, EPSG-only workflows | non-EPSG rasters, lossless round trips |
+
+The integer SRID is compact and maps directly onto Databricks' native ST functions (`ST_GeomFromWKB(wkb, srid)`), but it can **only** name a CRS that has an EPSG code. A great many real datasets don't: MODIS products use ESRI:54008 (World Sinusoidal), and plenty of imagery carries only an embedded WKT with no authority code. For those, the SRID is `NULL`/`0` and the CRS string is the only lossless representation.
+
+:::tip Rule of thumb
+Reach for the **SRID** when you need the integer for the native ST bridge or an EPSG-only pipeline. Reach for the **CRS string** whenever a non-EPSG CRS might be in play — it never loses one.
+:::
+
+### The int-cast rule
+
+Everywhere GeoBrix accepts a CRS *string*, one rule decides how it is interpreted, and it lives in a single shared helper per tier (`pyrx.core.crs.resolve_crs` in the lightweight tier, `SpatialRefOps.resolveCrs` in the heavyweight tier):
+
+- A string that **casts cleanly to an integer** — `"4326"`, `" 32633 "` — is treated as an **EPSG SRID**. So `rst_setcrs(tile, '4326')` behaves exactly like `rst_setsrid(tile, 4326)`.
+- **Otherwise** the string is parsed as a universal CRS definition — an authority code (`EPSG:4326`, `ESRI:54008`), WKT, or PROJ4 (`+proj=longlat +datum=WGS84 +no_defs`).
+
+This is how ESRI codes, WKT, and PROJ4 definitions all flow through the same string-taking API.
+
+### Canonical form
+
+When GeoBrix emits a CRS string — from `rst_crs`, in the tile struct's `crs` field, or in a NetCDF `crs_wkt` attribute — it uses a canonical form: the **authority string** (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS carries one, otherwise the full **WKT**. Authority-else-WKT is more readable than PROJ4 and round-trips cleanly through both GDAL (heavyweight) and rasterio/pyproj (lightweight).
+
+## RasterX
+
+RasterX exposes both names through parallel functions. See the [RasterX Function Reference](./raster-functions) for full signatures and examples.
+
+**Read the CRS:**
+
+- [`rst_srid`](./raster-functions#rst_srid) — the integer EPSG code (`NULL`/`0` when the CRS has no EPSG code).
+- [`rst_crs`](./raster-functions#rst_crs) — the CRS string; **always** returns a value, including for non-EPSG rasters.
+
+**Relabel the CRS header (no reprojection — the pixels don't move, only the label changes):**
+
+- [`rst_setsrid`](./raster-functions#rst_setsrid) — re-stamp from an integer EPSG SRID.
+- [`rst_setcrs`](./raster-functions#rst_setcrs) — re-stamp from a CRS string (accepts ESRI/WKT/PROJ4; an int-castable string behaves like `rst_setsrid`).
+
+**Reproject (warp pixels into a new CRS):**
+
+- [`rst_transform`](./raster-functions#rst_transform) — reproject to an integer EPSG SRID.
+- [`rst_transformcrs`](./raster-functions#rst_transformcrs) — reproject to a CRS string target (accepts non-EPSG ESRI/WKT/PROJ4).
+
+```python
+from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx — same names
+
+df.select(
+    rx.rst_srid("tile").alias("srid"),                       # 4326, or None for ESRI:54008
+    rx.rst_crs("tile").alias("crs"),                         # "EPSG:4326" / "ESRI:54008"
+)
+
+# Relabel (header only) vs reproject (moves pixels):
+df.select(rx.rst_setcrs("tile", "ESRI:54008").alias("tagged"))
+df.select(rx.rst_transformcrs("tile", "EPSG:3857").alias("webmercator"))
+```
+
+`rst_setcrs`/`rst_transformcrs` are **distinct operations, not aliases** of their integer counterparts: `rst_setcrs` relabels, `rst_transformcrs` reprojects, and each takes a string so it can name any CRS.
+
+### The tile struct's `crs` field
+
+Every raster [tile struct](./tile-structure) carries a `crs` field (and a `clip_crs` field for the clip polygon). On a **materialized** tile these are provenance — a record of the CRS already baked into the bytes. On a **[virtual tile](./virtual-tiles)** they are **instructions** — a pending target CRS applied when the tile is read, so a CRS relabel or reprojection can be carried by reference without materializing pixels early. Readers populate `crs` with the canonical CRS string, so a non-EPSG source's CRS is preserved from the moment it is read.
+
+### Non-EPSG round trips
+
+A non-EPSG CRS survives the full pipeline — **read → operate → write** — in both tiers:
+
+- **Read:** the reader stores the canonical CRS string (e.g. `ESRI:54008`) in `tile.crs`; `rst_crs` reads it back.
+- **Operate:** identity and branch decisions compare CRS *objects* (rasterio `CRS.__eq__` / GDAL `IsSame`), not EPSG codes, so a CRS with no EPSG code takes the correct reproject-or-skip path instead of being mis-handled as "unknown".
+- **Write:** the GeoTIFF and NetCDF writers persist the CRS via WKT (NetCDF stores it in the CF `crs_wkt` grid-mapping attribute) so it reads back identical.
+
+### Cross-tier CRS parity
+
+The lightweight and heavyweight tiers describe the **same** CRS for the same raster. For a CRS with an EPSG code both tiers emit the identical authority string (e.g. `EPSG:4326`). For a raw file whose embedded WKT carries **no** authority node, the two underlying libraries can produce *different but equivalent* canonical strings — rasterio/pyproj may identify the ESRI authority and emit `ESRI:54008`, while GDAL emits the equivalent WKT verbatim. These name the **same CRS** (they compare equal as CRS objects), and the decoded pixels and georeference are identical across tiers. Explicitly tagging a raster (`rst_setcrs(tile, 'ESRI:54008')`) yields the `ESRI:54008` authority string on both tiers.
+
+## GridX
+
+Each discrete global grid has a fixed native CRS, so GridX functions don't take a CRS argument — they assume the grid's CRS and reproject for you where needed:
+
+- **H3** and **quadbin** operate in **EPSG:4326** (WGS84 lon/lat). Raster tessellation functions interpret the raster as EPSG:4326 — reproject upstream with `rst_transform`/`rst_transformcrs` if your source differs.
+- **BNG** (British National Grid) is **EPSG:27700**. BNG geometry outputs are plain WKB in EPSG:27700 with no SRID; assign the CRS when you read them back, e.g. `ST_GeomFromWKB(bng_geom, 27700)`.
+
+Visualization helpers such as [`plot_static`](./vizx-vector#static-maps) reproject each grid's native CRS onto the basemap automatically.
+
+## VectorX
+
+VectorX augments the product's built-in ST functions and follows the native-ST CRS conventions:
+
+- **Geometry input encodings** — every `gbx_st_*` geometry input accepts **WKB, EWKB, WKT, and EWKT** interchangeably. WKB/WKT carry no SRID; **EWKB/EWKT carry one** — pass whichever encoding your upstream produces.
+- **SRID is applied at ingestion.** Functions that return plain WKB (e.g. `gbx_st_legacyaswkb`) carry no SRID; assign the CRS when you read the geometry back with `ST_GeomFromWKB(wkb, srid)`.
+
+See the [VectorX Function Reference](./vectorx-functions) for details.

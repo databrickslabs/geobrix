@@ -2,6 +2,8 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import org.gdal.osr.SpatialReference
 
+import scala.util.Try
+
 /** Helpers for OSR SpatialReference: EPSG code extraction and construction from EPSG code. */
 object SpatialRefOps {
 
@@ -12,6 +14,57 @@ object SpatialRefOps {
         (spatialRef.GetAuthorityName(null), spatialRef.GetAuthorityCode(null)) match {
             case (name: String, code: String) if name == "EPSG" => code.toInt
             case _                                              => 0  // Default to 0 for non-EPSG projections
+        }
+    }
+
+    /** Resolves a CRS string to a SpatialReference — the ONE place the heavy-tier
+      * int-cast rule lives (mirrors the light `pyrx.core.crs.resolve_crs`):
+      *   - an int-castable string (e.g. `"4326"`, `" 32633 "`) → `ImportFromEPSG(int)`;
+      *   - otherwise → `SetFromUserInput(value)`, GDAL's universal parser that accepts
+      *     `EPSG:x` / `ESRI:x` / WKT / PROJ4 / auth strings.
+      * Throws IllegalArgumentException if the value cannot be resolved to a valid CRS. */
+    def resolveCrs(value: String): SpatialReference = {
+        require(value != null, "resolveCrs: CRS value is null")
+        val trimmed = value.trim
+        require(trimmed.nonEmpty, "resolveCrs: CRS value is empty")
+        val sr = new SpatialReference()
+        Try(trimmed.toInt).toOption match {
+            case Some(epsg) =>
+                val rc = sr.ImportFromEPSG(epsg)
+                if (rc != 0) {
+                    sr.delete()
+                    throw new IllegalArgumentException(
+                      s"resolveCrs: unknown EPSG code $epsg (OGRERR=$rc)")
+                }
+            case None =>
+                // SetFromUserInput returns a non-zero OGRERR for unparseable input, but
+                // the GDAL Java binding may ALSO throw a native RuntimeException before
+                // returning; normalise both into a clean IllegalArgumentException.
+                val rc = Try(sr.SetFromUserInput(trimmed)).recover {
+                    case e: Throwable =>
+                        sr.delete()
+                        throw new IllegalArgumentException(
+                          s"resolveCrs: could not parse CRS '$value'", e)
+                }.get
+                if (rc != 0) {
+                    sr.delete()
+                    throw new IllegalArgumentException(
+                      s"resolveCrs: could not parse CRS '$value' (OGRERR=$rc)")
+                }
+        }
+        sr
+    }
+
+    /** Canonical CRS string for a SpatialReference (mirrors the light
+      * `crs_to_canonical`): the authority string `NAME:CODE` (e.g. `EPSG:4326`,
+      * `ESRI:54008`) when the CRS carries one, else the full WKT. Returns null for a
+      * null SpatialReference. */
+    def crsToCanonical(spatialRef: SpatialReference): String = {
+        if (spatialRef == null) return null
+        (spatialRef.GetAuthorityName(null), spatialRef.GetAuthorityCode(null)) match {
+            case (name: String, code: String) if name != null && name.nonEmpty &&
+                code != null && code.nonEmpty => s"$name:$code"
+            case _ => spatialRef.ExportToWkt()
         }
     }
 

@@ -37,7 +37,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   median} + rst_{quadbin,bng}_tessellate + rst_{quadbin,bng}_rasterize_agg)
     // + 9 sum/variance/stddev reducers (rst_{h3,quadbin,bng}_rastertogrid{sum,
     //   variance,stddev})
-    assert(BenchDispatch.all.size == 125)
+    // + 3 CRS-string ops (rst_crs accessor, rst_setcrs relabel, rst_transformcrs
+    //   warp) -- the string siblings of the benchmarked rst_srid/setsrid/transform.
+    assert(BenchDispatch.all.size == 128)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -73,6 +75,14 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_resample") == "resample")
     assert(BenchDispatch.category("rst_slope") == "terrain")
     assert(BenchDispatch.category("rst_srid") == "accessor")
+    // CRS-string ops: rst_crs is an accessor (like rst_srid); rst_transformcrs is a
+    // warp (like rst_transform); rst_setcrs is an edit/relabel (like rst_setsrid).
+    assert(BenchDispatch.category("rst_crs") == "accessor")
+    assert(BenchDispatch.category("rst_transformcrs") == "warp")
+    assert(BenchDispatch.category("rst_setcrs") == "edit")
+    assert(BenchDispatch.inputKind("rst_crs") == "tile")
+    assert(BenchDispatch.inputKind("rst_setcrs") == "tile")
+    assert(BenchDispatch.inputKind("rst_transformcrs") == "tile")
   }
 
   test("BenchDispatch registers the 9 BNG/quadbin raster-grid functions") {

@@ -60,6 +60,7 @@ object functions extends Serializable {
         rd.register(RST_ScaleY)
         rd.register(RST_SkewX)
         rd.register(RST_SkewY)
+        rd.register(RST_Crs)
         rd.register(RST_SRID)
         rd.register(RST_Subdatasets)
         rd.register(RST_Summary)
@@ -140,6 +141,7 @@ object functions extends Serializable {
         rd.register(RST_RasterToWorldCoordX)
         rd.register(RST_RasterToWorldCoordY)
         rd.register(RST_Transform)
+        rd.register(RST_TransformCrs)
         rd.register(RST_TryOpen)
         rd.register(RST_UpdateType)
         rd.register(RST_WorldToRasterCoord)
@@ -185,6 +187,7 @@ object functions extends Serializable {
         rd.register(RST_Histogram)
         rd.register(RST_Sample)
         rd.register(RST_SetSrid)
+        rd.register(RST_SetCrs)
         rd.register(RST_Threshold)
 
         // Analysis (COG / proximity / contour / viewshed — GDAL wrappers)
@@ -219,6 +222,7 @@ object functions extends Serializable {
     def rst_scaley(tileExpr: Column): Column = ColumnAdapter(RST_ScaleY.name, Seq(tileExpr))
     def rst_skewx(tileExpr: Column): Column = ColumnAdapter(RST_SkewX.name, Seq(tileExpr))
     def rst_skewy(tileExpr: Column): Column = ColumnAdapter(RST_SkewY.name, Seq(tileExpr))
+    def rst_crs(tileExpr: Column): Column = ColumnAdapter(RST_Crs.name, Seq(tileExpr))
     def rst_srid(tileExpr: Column): Column = ColumnAdapter(RST_SRID.name, Seq(tileExpr))
     def rst_subdatasets(tileExpr: Column): Column = ColumnAdapter(RST_Subdatasets.name, Seq(tileExpr))
     def rst_summary(tileExpr: Column): Column = ColumnAdapter(RST_Summary.name, Seq(tileExpr))
@@ -422,6 +426,8 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
     def rst_rastertoworldcoordy(tileExpr: Column, pixelX: Column, pixelY: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tileExpr, pixelX, pixelY))
     def rst_transform(tileExpr: Column, targetSrid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tileExpr, targetSrid))
+    def rst_transformcrs(tileExpr: Column, crs: Column): Column = ColumnAdapter(RST_TransformCrs.name, Seq(tileExpr, crs))
+    def rst_transformcrs(tileExpr: Column, crs: String): Column = rst_transformcrs(tileExpr, lit(crs))
     def rst_tryopen(tileExpr: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tileExpr))
     def rst_updatetype(tileExpr: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tileExpr, newType))
     def rst_worldtorastercoord(tileExpr: Column, worldX: Column, worldY: Column): Column =
@@ -738,6 +744,11 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
         ColumnAdapter(RST_SetSrid.name, Seq(tileExpr, srid))
     def rst_setsrid(tileExpr: Column, srid: Int): Column =
         rst_setsrid(tileExpr, lit(srid))
+
+    def rst_setcrs(tileExpr: Column, crs: Column): Column =
+        ColumnAdapter(RST_SetCrs.name, Seq(tileExpr, crs))
+    def rst_setcrs(tileExpr: Column, crs: String): Column =
+        rst_setcrs(tileExpr, lit(crs))
 
     def rst_histogram(tileExpr: Column): Column =
         ColumnAdapter(RST_Histogram.name, Seq(

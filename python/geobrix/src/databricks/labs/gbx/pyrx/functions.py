@@ -274,6 +274,7 @@ def _pixel_accessor_udf(core_fn, return_type):
 _u_height = _header_accessor_udf(accessors.height, IntegerType())
 _u_numbands = _header_accessor_udf(accessors.numbands, IntegerType())
 _u_srid = _header_accessor_udf(accessors.srid, IntegerType())
+_u_crs = _header_accessor_udf(accessors.crs, StringType())
 _u_pixelwidth = _header_accessor_udf(accessors.pixelwidth, DoubleType())
 _u_pixelheight = _header_accessor_udf(accessors.pixelheight, DoubleType())
 _u_upperleftx = _header_accessor_udf(accessors.upperleftx, DoubleType())
@@ -3955,6 +3956,25 @@ def rst_srid(tile: ColLike) -> Column:
     return _u_srid(_col(tile))
 
 
+def rst_crs(tile: ColLike) -> Column:
+    """Return the canonical CRS string for the raster tile.
+
+    Returns an authority string (``'EPSG:4326'``, ``'ESRI:54008'``) when the
+    CRS has a recognised authority code, or a WKT string for authority-less
+    projections.  Returns NULL for a tile with no CRS.
+
+    Distinct from ``rst_srid`` (int / NULL): ``rst_crs`` preserves non-EPSG
+    authority codes (ESRI, IAU, etc.) and falls back to WKT rather than NULL.
+
+    Args:
+        tile: Tile struct column.
+
+    Returns:
+        STRING column — canonical CRS string, or NULL if CRS is absent.
+    """
+    return _u_crs(_col(tile))
+
+
 def rst_pixelwidth(tile: ColLike) -> Column:
     return _u_pixelwidth(_col(tile))
 
@@ -5988,6 +6008,7 @@ _sql_accessors = {
     "gbx_rst_height": _u_height,
     "gbx_rst_numbands": _u_numbands,
     "gbx_rst_srid": _u_srid,
+    "gbx_rst_crs": _u_crs,
     "gbx_rst_pixelwidth": _u_pixelwidth,
     "gbx_rst_pixelheight": _u_pixelheight,
     "gbx_rst_upperleftx": _u_upperleftx,

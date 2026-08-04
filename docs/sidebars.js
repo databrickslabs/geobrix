@@ -102,7 +102,6 @@ const sidebars = {
       collapsed: true,
       items: [
         'api/overview',
-        'api/tile-structure',
         'api/execution-tiers',
         'api/coordinate-reference-systems',
         'api/language-bindings',
@@ -112,6 +111,7 @@ const sidebars = {
           collapsed: true,
           link: { type: 'doc', id: 'api/raster-functions' },
           items: [
+            'api/tile-structure',
             'api/rasterio-distributed',
             'api/large-rasters',
             'api/virtual-tiles',

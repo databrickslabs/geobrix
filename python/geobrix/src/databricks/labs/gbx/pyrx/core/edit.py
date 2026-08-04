@@ -53,7 +53,7 @@ def _write(profile, data) -> bytes:
         return mf.read()
 
 
-def clip_to_geom(ds, geom, all_touched: bool = False):
+def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
     """Clip a raster to a geometry; return GTiff bytes, or ``None`` on non-overlap.
 
     ``geom`` may be a shapely geometry (preferred — carries SRID via
@@ -78,14 +78,16 @@ def clip_to_geom(ds, geom, all_touched: bool = False):
     mask_shape = geom
     srid = shapely.get_srid(geom)  # 0 when no SRID is set
     dst_crs = ds.crs  # rasterio CRS or None
-    if srid > 0 and dst_crs is not None:
+    # Rule 1 source-CRS: embedded SRID wins; else the explicit geom_crs (int SRID
+    # or CRS string, incl. ESRI/WKT); else None (assume aligned, never error).
+    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
+
+    src_crs = resolve_source_crs(srid, crs=geom_crs)
+    if src_crs is not None and dst_crs is not None:
         try:
             from rasterio.warp import transform_geom
             from shapely.geometry import mapping
 
-            from databricks.labs.gbx.pyrx.core.crs import resolve_crs
-
-            src_crs = resolve_crs(srid)  # epsg/esri classification (ESRI cutlines work)
             if src_crs != dst_crs:
                 # transform_geom returns a GeoJSON-like dict; rasterio.mask
                 # accepts GeoJSON geometries directly.

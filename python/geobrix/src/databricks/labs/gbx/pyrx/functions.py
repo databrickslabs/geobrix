@@ -1159,9 +1159,12 @@ def rst_resample_to_res(
 
 
 # --- Tier 1d: tile-returning edit UDFs -------------------------------------
-def _clip_bytes(tile, geom_wkb, all_touched):
+def _clip_bytes(tile, geom_wkb, all_touched, clip_crs=None):
     """Shared clip body: open the (virtual or materialized) tile, clip to the
-    parsed cutline, return the clipped GTiff bytes (or None on no-overlap)."""
+    parsed cutline, return the clipped GTiff bytes (or None on no-overlap).
+
+    ``clip_crs`` is a source-CRS override for a plain WKB/WKT cutline (int SRID or
+    CRS string incl. ESRI/WKT); an EWKB/EWKT embedded SRID wins per-geom."""
     from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env
 
@@ -1172,14 +1175,14 @@ def _clip_bytes(tile, geom_wkb, all_touched):
     if geom is None:
         return None
     with ot._open(tile) as ds:
-        return edit.clip_to_geom(ds, geom, bool(all_touched))
+        return edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
 
 
 @f.udf(_serde.TILE_SCHEMA)
-def _clip_udf(tile, geom_wkb, all_touched):
+def _clip_udf(tile, geom_wkb, all_touched, clip_crs=None):
     if _tile_is_empty(tile) or geom_wkb is None:
         return None
-    new_bytes = _clip_bytes(tile, geom_wkb, all_touched)
+    new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
     if new_bytes is None:
         # Cutline does not overlap the raster -> null tile (no crash), mirroring
         # heavy GDAL Warp -cutline producing an empty result.
@@ -1189,13 +1192,13 @@ def _clip_udf(tile, geom_wkb, all_touched):
 
 @f.udf(V2_TILE_SCHEMA)
 def _clip_v2_udf(
-    tile, geom_wkb, all_touched, virtualize_dir, virtualize_prefix, materialize
+    tile, geom_wkb, all_touched, clip_crs, virtualize_dir, virtualize_prefix, materialize
 ):
     # Force-output variant (Python API only): same clip math, but the produced
     # bytes are shaped via shape_output. Returns the 8-field v2 tile envelope.
     if _tile_is_empty(tile) or geom_wkb is None:
         return None
-    new_bytes = _clip_bytes(tile, geom_wkb, all_touched)
+    new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
@@ -1268,11 +1271,16 @@ def rst_clip(
     tile: ColLike,
     clip: ColLike,
     cutline_all_touched: ColLike,
+    clip_crs: ColLike = None,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
 ) -> Column:
     """Clip the raster to a geometry (WKB, EWKB, WKT, or EWKT). cutline_all_touched includes pixels touched by the boundary.
+
+    ``clip_crs`` declares the source CRS of a plain WKB/WKT cutline (int SRID or
+    CRS string — ``EPSG:x`` / ``ESRI:x`` / WKT); an EWKB/EWKT embedded SRID wins,
+    and a cutline with neither is assumed already in the raster CRS (never errors).
 
     Force-output (light-tier only, Python API only): ``virtualize_dir`` writes
     the clipped result to a durable path and returns a light virtual tile;
@@ -1280,17 +1288,21 @@ def rst_clip(
     ``materialize=True`` are mutually exclusive. When neither is set the SQL
     registered signature is used unchanged (materialized tile struct).
     """
+    crs_col = f.lit(clip_crs) if clip_crs is not None else f.lit(None)
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
         return _clip_v2_udf(
             _col(tile),
             _col(clip),
             _col(cutline_all_touched),
+            crs_col,
             f.lit(virtualize_dir),
             f.lit(virtualize_prefix),
             f.lit(materialize),
         )
-    return _clip_udf(_col(tile), _col(clip), _col(cutline_all_touched))
+    if clip_crs is None:
+        return _clip_udf(_col(tile), _col(clip), _col(cutline_all_touched))
+    return _clip_udf(_col(tile), _col(clip), _col(cutline_all_touched), crs_col)
 
 
 def rst_updatetype(
@@ -1555,7 +1567,7 @@ def _buildoverviews_v2_udf(
 
 
 @f.udf(ArrayType(DoubleType()))
-def _sample_udf(tile, geom_wkb):
+def _sample_udf(tile, geom_wkb, crs=None):
     # PIXEL accessor: needs the window pixels, so use the virtual-aware
     # _tile_is_empty guard (a virtual tile has raster None but a path -> NOT
     # empty) and open via ot._open below. A bytes-only guard would drop a
@@ -1567,12 +1579,13 @@ def _sample_udf(tile, geom_wkb):
 
     _env.configure_gdal_env()
     # parse_geom keeps the SRID (EWKT/EWKB carry it) so ops_core.sample can
-    # reproject the point to the raster CRS, mirroring heavy intent.
+    # reproject the point to the raster CRS, mirroring heavy intent. `crs` is a
+    # source-CRS override for a plain WKB/WKT point (ignored when EWKB carries one).
     geom = parse_geom(geom_wkb)
     if geom is None:
         return None
     with ot._open(tile) as ds:
-        return ops_core.sample(ds, geom)
+        return ops_core.sample(ds, geom, geom_crs=crs)
 
 
 def _proximity_bytes(tile, target_values, distunits, max_distance):
@@ -1639,7 +1652,9 @@ def _contour_udf(tile, levels, interval, base, attr_field):
         return analysis_core.contour(ds, lvls, iv, bs, attr)
 
 
-def _viewshed_bytes(tile, observer_geom, observer_height, target_height, max_distance):
+def _viewshed_bytes(
+    tile, observer_geom, observer_height, target_height, max_distance, crs=None
+):
     from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env
 
@@ -1656,35 +1671,33 @@ def _viewshed_bytes(tile, observer_geom, observer_height, target_height, max_dis
     th = 0.0 if target_height is None else float(target_height)
     md = None if max_distance is None else float(max_distance)
     with ot._open(tile) as ds:
-        # CRS-align the observer: if the point carries a positive SRID and the
-        # raster has a CRS, reproject EPSG:srid -> raster CRS so a 4326 observer
-        # over a UTM DEM lands correctly. Heavy RST_Viewshed assumes a pre-aligned
-        # observer; the light tier reprojects so a differently-projected point does
-        # not silently miss. Unknown EPSG / transform failure -> use as-is.
+        # CRS-align the observer (Rule 1): embedded SRID wins; else the explicit
+        # `crs` (int SRID or CRS string incl. ESRI/WKT); else assume aligned. When
+        # a source CRS is known and the raster has a CRS, reproject so a 4326
+        # observer over a UTM DEM lands correctly. Transform failure -> use as-is.
         import shapely as _shapely
 
-        ox, oy = geom.x, geom.y
-        srid = _shapely.get_srid(geom)
-        if srid > 0 and ds.crs is not None:
-            try:
-                import rasterio as _rio
-                from rasterio.warp import transform as _transform
+        from databricks.labs.gbx.pyrx.core.crs import get_transformer, resolve_source_crs
 
-                src_crs = _rio.crs.CRS.from_epsg(srid)
+        ox, oy = geom.x, geom.y
+        src_crs = resolve_source_crs(_shapely.get_srid(geom), crs=crs)
+        if src_crs is not None and ds.crs is not None:
+            try:
                 if src_crs != ds.crs:
-                    xs, ys = _transform(src_crs, ds.crs, [ox], [oy])
-                    ox, oy = xs[0], ys[0]
+                    ox, oy = get_transformer(src_crs, ds.crs).transform(ox, oy)
             except Exception:
                 ox, oy = geom.x, geom.y
         return analysis_core.viewshed(ds, ox, oy, oh, th, md)
 
 
 @f.udf(_serde.TILE_SCHEMA)
-def _viewshed_udf(tile, observer_geom, observer_height, target_height, max_distance):
+def _viewshed_udf(
+    tile, observer_geom, observer_height, target_height, max_distance, crs=None
+):
     if _tile_is_empty(tile) or observer_geom is None:
         return None
     new_bytes = _viewshed_bytes(
-        tile, observer_geom, observer_height, target_height, max_distance
+        tile, observer_geom, observer_height, target_height, max_distance, crs
     )
     if new_bytes is None:
         return None
@@ -1698,6 +1711,7 @@ def _viewshed_v2_udf(
     observer_height,
     target_height,
     max_distance,
+    crs,
     virtualize_dir,
     virtualize_prefix,
     materialize,
@@ -1705,7 +1719,7 @@ def _viewshed_v2_udf(
     if _tile_is_empty(tile) or observer_geom is None:
         return None
     new_bytes = _viewshed_bytes(
-        tile, observer_geom, observer_height, target_height, max_distance
+        tile, observer_geom, observer_height, target_height, max_distance, crs
     )
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
@@ -2141,6 +2155,7 @@ def rst_viewshed(
     observer_height: ColLike = 0.0,
     target_height: ColLike = 1.6,
     max_distance: ColLike = None,
+    crs: ColLike = None,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
@@ -2148,7 +2163,9 @@ def rst_viewshed(
     """Compute a binary viewshed (255 visible / 0 invisible) from a DEM tile.
 
     Mirrors the heavyweight ``gbx_rst_viewshed`` (GDAL ViewshedGenerate),
-    implemented with ``xrspatial.viewshed``.
+    implemented with ``xrspatial.viewshed``. ``crs`` declares the source CRS of a
+    plain WKB/WKT observer point (int SRID or CRS string incl. ESRI/WKT); an
+    EWKB/EWKT embedded SRID wins; absent + no SRID -> assumed in the raster CRS.
 
     Args:
         tile:            Tile struct column (the DEM).
@@ -2193,6 +2210,7 @@ def rst_viewshed(
             else _col(max_distance)
         )
     )
+    crs_col = f.lit(crs) if crs is not None else f.lit(None)
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
         return _viewshed_v2_udf(
@@ -2201,27 +2219,35 @@ def rst_viewshed(
             oh,
             th,
             md,
+            crs_col,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md)
+    if crs is None:
+        return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md)
+    return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md, crs_col)
 
 
-def rst_sample(tile: ColLike, geom_wkb: ColLike) -> Column:
+def rst_sample(tile: ColLike, geom_wkb: ColLike, crs: ColLike = None) -> Column:
     """Sample per-band raster values at a POINT geometry (WKB, EWKB, WKT, or EWKT).
 
     Mirrors the heavyweight ``gbx_rst_sample``: requires a POINT geometry
-    (raises otherwise), uses (geom.x, geom.y) as a world coordinate already
-    aligned to the raster CRS, and returns ARRAY<DOUBLE> with one value per
-    band in band order. Points outside the raster extent return null.
+    (raises otherwise), reprojects the point to the raster CRS, and returns
+    ARRAY<DOUBLE> with one value per band in band order. Points outside the
+    raster extent return null.
 
     Args:
         tile:     Tile struct column.
         geom_wkb: POINT geometry as WKB, EWKB, WKT, or EWKT.
+        crs:      Optional source-CRS for a plain WKB/WKT point (int SRID or CRS
+                  string — ``EPSG:x`` / ``ESRI:x`` / WKT). An EWKB/EWKT embedded
+                  SRID wins; absent + no SRID -> assumed already in the raster CRS.
 
     Returns:
         ARRAY<DOUBLE>: one value per band, or null if the point is out of extent.
     """
-    return _sample_udf(_col(tile), _col(geom_wkb))
+    if crs is None:
+        return _sample_udf(_col(tile), _col(geom_wkb))
+    return _sample_udf(_col(tile), _col(geom_wkb), f.lit(crs))
 
 
 # --- Tier 1d3: band-math / focal UDFs --------------------------------------

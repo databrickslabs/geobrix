@@ -251,14 +251,14 @@ object RST_GridFromPoints extends WithExpressionInfo {
     private def writeGeoJson(
         path: String, features: Seq[(Array[Byte], Double)], srid: Int
     ): Unit = {
+        import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
         import org.gdal.ogr.{Feature, FieldDefn, Geometry => OgrGeom, ogr}
         import org.gdal.ogr.ogrConstants.{OFTReal, wkbPoint}
-        import org.gdal.osr.SpatialReference
         GDALManager.initOgr()
         val driver = ogr.GetDriverByName("GeoJSON")
         val ds = driver.CreateDataSource(path)
-        val sr = new SpatialReference()
-        sr.ImportFromEPSG(srid)
+        // Resolve via the shared rule (ESRI codes classify correctly, not just EPSG).
+        val sr = SpatialRefOps.resolveCrs(srid.toString)
         val layer = ds.CreateLayer("features", sr, wkbPoint)
         val fd = new FieldDefn(VectorRasterBridge.ValueFieldName, OFTReal)
         layer.CreateField(fd); fd.delete()

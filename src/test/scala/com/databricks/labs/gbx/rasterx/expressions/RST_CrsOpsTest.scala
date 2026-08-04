@@ -212,6 +212,16 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         finally out.delete()
     }
 
+    test("VectorRasterBridge.buildEmptyRaster stamps an ESRI srid as ESRI (resolveCrs)") {
+        import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
+        import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge
+        // 54008 is an ESRI code — ImportFromEPSG auto-recovers it, and the bridge now
+        // routes through resolveCrs, so the output raster carries ESRI:54008.
+        val ds = VectorRasterBridge.buildEmptyRaster(0.0, 0.0, 1000.0, 1000.0, 8, 8, 54008)
+        try SpatialRefOps.crsToCanonical(ds.GetSpatialRef) shouldBe "ESRI:54008"
+        finally ds.delete()
+    }
+
     test("RST_Sample.execute is CRS-pre-aligned; reprojection is done in doInvoke") {
         import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Sample
         // execute() samples at raster-CRS coords: the fixture centre pixel must read back.

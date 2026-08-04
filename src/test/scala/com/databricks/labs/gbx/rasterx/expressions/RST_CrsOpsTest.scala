@@ -97,6 +97,46 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         crs.nonEmpty shouldBe true
     }
 
+    // --- Cross-tier CRS parity (T8): the non-EPSG MODIS fixture must report an
+    // EQUIVALENT CRS on the heavy tier and the light tier. The light tier
+    // (rasterio/pyproj) reads this exact fixture as the authority string
+    // "ESRI:54008" (pinned in the pyrx suite test_crs_accessors.test_crs_esri_raster:
+    // accessors.crs(ds) == "ESRI:54008"), because pyproj auto-identifies the
+    // embedded World Sinusoidal WKT against the ESRI authority DB.
+    //
+    // The heavy tier reads the SAME fixture and, per the authority-else-WKT rule
+    // (SpatialRefOps.crsToCanonical), emits the embedded WKT (PROJCS["World_Sinusoidal",
+    // ...]) VERBATIM — GDAL does not auto-attach an ESRI AUTHORITY node to a raw
+    // GeoTIFF whose header WKT carries none, so GetAuthorityName(null) is null and
+    // the canonical form is the WKT. This is a canonical-STRING divergence between
+    // the two CRS libraries, NOT a CRS divergence: both strings describe the same
+    // World Sinusoidal / WGS84 CRS. The cross-tier contract is CRS-EQUIVALENCE
+    // (spec: pixels+georeference+CRS identical across tiers), so we assert the heavy
+    // canonical string resolves to the SAME SpatialReference as "ESRI:54008".
+    //
+    // (When a raster is EXPLICITLY tagged ESRI:54008 via RST_SetCrs — see the test
+    // below — heavy DOES round-trip the "ESRI:54008" authority string, because
+    // SetFromUserInput imports the ESRI authority node. The divergence here is
+    // specific to a raw fixture whose embedded WKT lacks an authority node.)
+    test("RST_Crs on the MODIS fixture is CRS-equivalent to the light tier's 'ESRI:54008' (cross-tier CRS parity)") {
+        val heavyCanonical = RST_Crs.execute(ds)
+        heavyCanonical should not be null
+        // Heavy resolves this raw authority-less fixture to WKT (documented above).
+        heavyCanonical should startWith("PROJCS")
+        // CRS-EQUIVALENCE across tiers: the heavy canonical string and the light
+        // tier's "ESRI:54008" resolve to the SAME CRS (IsSame == 1).
+        val heavySr = SpatialRefOps.resolveCrs(heavyCanonical)
+        val esriSr = SpatialRefOps.resolveCrs("ESRI:54008")
+        try {
+            heavySr.IsSame(esriSr) shouldBe 1
+        } finally {
+            heavySr.delete(); esriSr.delete()
+        }
+        // Non-EPSG on the heavy tier: srid is 0 (light reports None) — parity of the
+        // "no EPSG code for this CRS" contract that motivated the CRS-string accessor.
+        RST_SRID.execute(ds) shouldBe 0
+    }
+
     test("RST_Crs and RST_SRID agree on an EPSG raster (relabelled to 4326)") {
         // Relabel the fixture to EPSG:4326 (header only), then read both accessors back.
         val (relabelled, _) = RST_SetCrs.execute(ds, Map.empty, "4326")

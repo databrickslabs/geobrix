@@ -53,11 +53,26 @@ def _parse_geom_elem(raw):
 _IDW_CELL_CHUNK = 65_536
 
 
-def _write_float64_grid(arr, xmin, ymin, xmax, ymax, width_px, height_px, srid, nodata):
+def _resolve_out_crs(out_srid, out_crs):
+    """Rule 2 output CRS -> canonical string (or None). out_crs wins over out_srid;
+    both set -> error; neither -> None (CRS-less output)."""
+    from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
+
+    if out_srid is not None and out_crs is not None:
+        raise ValueError("provide out_srid OR out_crs, not both")
+    if out_crs is not None:
+        return crs_to_canonical(resolve_crs(out_crs))
+    if out_srid is not None:
+        return crs_to_canonical(resolve_crs(out_srid))
+    return None
+
+
+def _write_float64_grid(arr, xmin, ymin, xmax, ymax, width_px, height_px, crs, nodata):
     """Write a (height_px, width_px) Float64 array as single-band GTiff bytes.
 
-    The transform is derived from the bounds + size; CRS = EPSG:srid; the given
-    nodata is stamped on the band. Shared by ``idw_grid`` and ``delaunay_dtm``.
+    The transform is derived from the bounds + size; ``crs`` is a canonical CRS
+    string (or None -> CRS-less); the given nodata is stamped on the band. Shared
+    by ``idw_grid`` and ``delaunay_dtm``.
     """
     transform = from_bounds(
         float(xmin),
@@ -73,7 +88,7 @@ def _write_float64_grid(arr, xmin, ymin, xmax, ymax, width_px, height_px, srid, 
         height=int(height_px),
         count=1,
         dtype="float64",
-        crs=f"EPSG:{int(srid)}",
+        crs=crs,
         transform=transform,
         nodata=float(nodata),
     )
@@ -147,9 +162,10 @@ def idw_grid(
     ymax,
     width_px,
     height_px,
-    srid,
+    out_srid=None,
     power=2.0,
     max_pts=12,
+    out_crs=None,
 ):
     """Inverse-distance-weighted grid from scattered points (GTiff bytes).
 
@@ -175,12 +191,14 @@ def idw_grid(
         raise ValueError("rst_gridfrompoints: power must be positive")
     if int(max_pts) <= 0:
         raise ValueError("rst_gridfrompoints: max_pts must be positive")
+    # Rule 2 output CRS (points are assumed already in it; label-only).
+    crs_str = _resolve_out_crs(out_srid, out_crs)
 
     if pts.ndim != 2 or pts.shape[0] == 0:
         # No points -> all-NoData raster of the requested shape.
         out = np.full((height_px, width_px), _NODATA, dtype="float64")
         return _write_float64_grid(
-            out, xmin, ymin, xmax, ymax, width_px, height_px, srid, _NODATA
+            out, xmin, ymin, xmax, ymax, width_px, height_px, crs_str, _NODATA
         )
     if pts.shape[0] != vals.shape[0]:
         raise ValueError(
@@ -201,7 +219,7 @@ def idw_grid(
         out = _idw_all_points(centers, pts, vals, power)
         out = out.reshape(height_px, width_px)
         return _write_float64_grid(
-            out, xmin, ymin, xmax, ymax, width_px, height_px, srid, _NODATA
+            out, xmin, ymin, xmax, ymax, width_px, height_px, crs_str, _NODATA
         )
 
     tree = cKDTree(pts)
@@ -235,7 +253,7 @@ def idw_grid(
 
     out = out.reshape(height_px, width_px)
     return _write_float64_grid(
-        out, xmin, ymin, xmax, ymax, width_px, height_px, srid, _NODATA
+        out, xmin, ymin, xmax, ymax, width_px, height_px, crs_str, _NODATA
     )
 
 
@@ -266,8 +284,9 @@ def delaunay_dtm(
     ymax,
     width_px,
     height_px,
-    srid,
+    out_srid=None,
     no_data=_NODATA,
+    out_crs=None,
 ):
     """Delaunay-TIN DTM from Z-valued points (GTiff bytes).
 
@@ -293,6 +312,8 @@ def delaunay_dtm(
     height_px = int(height_px)
     if width_px <= 0 or height_px <= 0:
         raise ValueError("rst_dtmfromgeoms: width_px and height_px must be positive")
+    # Rule 2 output CRS (points assumed already in it; label-only).
+    crs_str = _resolve_out_crs(out_srid, out_crs)
 
     pts = np.asarray(points_xyz, dtype="float64")
     if pts.ndim != 2 or pts.shape[0] == 0:
@@ -343,7 +364,7 @@ def delaunay_dtm(
 
     out = out.reshape(height_px, width_px)
     return _write_float64_grid(
-        out, xmin, ymin, xmax, ymax, width_px, height_px, srid, float(no_data)
+        out, xmin, ymin, xmax, ymax, width_px, height_px, crs_str, float(no_data)
     )
 
 

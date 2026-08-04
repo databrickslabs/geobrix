@@ -2900,7 +2900,9 @@ def rst_evi(  # noqa: E741
 
 # --- Tier 1e: constructor + fill UDFs (vector bridge) -----------------------
 @f.udf(_serde.TILE_SCHEMA)
-def _rasterize_udf(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, srid):
+def _rasterize_udf(
+    geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, out_crs=None
+):
     if geom_wkb is None:
         return None
     from databricks.labs.gbx._geom import geom_to_wkb
@@ -2908,7 +2910,8 @@ def _rasterize_udf(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px,
 
     _env.configure_gdal_env()
     new_bytes = features.rasterize_geom(
-        geom_to_wkb(geom_wkb), value, xmin, ymin, xmax, ymax, width_px, height_px, srid
+        geom_to_wkb(geom_wkb), value, xmin, ymin, xmax, ymax, width_px, height_px,
+        out_srid=out_srid, out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)
 
@@ -2922,9 +2925,17 @@ def rst_rasterize(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
-    """Burn a geometry (WKB, EWKB, WKT, or EWKT) into a new raster tile at the given extent/size/SRID."""
+    """Burn a geometry (WKB, EWKB, WKT, or EWKT) into a new raster tile at the given extent/size.
+
+    Output CRS: ``out_crs`` (string — ``EPSG:x`` / ``ESRI:x`` / WKT) wins over the
+    int ``out_srid``; both set -> error; neither -> the geometry's own source CRS
+    is carried through. The geometry is reprojected from its source CRS (EWKB
+    embedded SRID) into the output CRS before burning.
+    """
+    out_crs_col = f.lit(out_crs) if out_crs is not None else f.lit(None)
     return _rasterize_udf(
         _col(geom_wkb),
         _col(value),
@@ -2934,7 +2945,8 @@ def rst_rasterize(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid) if out_srid is not None else f.lit(None),
+        out_crs_col,
     )
 
 
@@ -3010,6 +3022,7 @@ def _gridfrompoints_udf(
     srid,
     power=None,
     max_pts=None,
+    out_crs=None,
 ):
     if points is None or values is None:
         return None
@@ -3039,9 +3052,10 @@ def _gridfrompoints_udf(
         ymax,
         int(width_px),
         int(height_px),
-        int(srid),
+        out_srid=None if srid is None else int(srid),
         power=2.0 if power is None else float(power),
         max_pts=12 if max_pts is None else int(max_pts),
+        out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)
 
@@ -3055,9 +3069,10 @@ def rst_gridfrompoints(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike = None,
     power: ColLike = 2.0,
     max_pts: ColLike = 12,
+    out_crs: ColLike = None,
 ) -> Column:
     """Inverse-distance-weighted (IDW) grid from an ARRAY of POINT WKB + values.
 
@@ -3066,14 +3081,19 @@ def rst_gridfrompoints(
     weighted mean of the nearest ``max_pts`` points (weight = 1/distance**power);
     a point coincident with a cell center returns that value. Output is a
     single-band Float64 tile over ``[xmin,ymin,xmax,ymax]`` at
-    ``width_px x height_px`` in EPSG:``srid``; NoData = -9999.0.
+    ``width_px x height_px``; NoData = -9999.0.
+
+    Output CRS: ``out_crs`` (string) wins over the int ``out_srid``; both set ->
+    error; neither -> CRS-less. The input points are assumed to be in the output
+    CRS (this is a label, not a reprojection).
 
     Args:
         points:    ARRAY<BINARY> of WKB POINT geometries.
         values:    ARRAY<DOUBLE> parallel to ``points``.
         xmin..ymax: Output extent in CRS units.
         width_px, height_px: Output raster size in pixels.
-        srid:      EPSG code for the output CRS.
+        out_srid:  EPSG or ESRI code for the output CRS.
+        out_crs:   CRS string for the output (``EPSG:x`` / ``ESRI:x`` / WKT).
         power:     IDW exponent (default 2.0).
         max_pts:   Max neighbours per cell (default 12).
 
@@ -3091,9 +3111,10 @@ def rst_gridfrompoints(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid) if out_srid is not None else f.lit(None),
         p,
         m,
+        f.lit(out_crs) if out_crs is not None else f.lit(None),
     )
 
 
@@ -3111,6 +3132,7 @@ def _dtmfromgeoms_udf(
     height_px,
     srid,
     no_data=None,
+    out_crs=None,
 ):
     if points is None:
         return None
@@ -3130,8 +3152,9 @@ def _dtmfromgeoms_udf(
         ymax,
         int(width_px),
         int(height_px),
-        int(srid),
+        out_srid=None if srid is None else int(srid),
         no_data=-9999.0 if no_data is None else float(no_data),
+        out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)
 
@@ -3147,8 +3170,9 @@ def rst_dtmfromgeoms(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike = None,
     no_data: ColLike = -9999.0,
+    out_crs: ColLike = None,
 ) -> Column:
     """Delaunay-TIN DTM from Z-valued POINT WKB (+ optional breaklines).
 
@@ -3157,7 +3181,11 @@ def rst_dtmfromgeoms(
     triangulation of the points' (x, y) is built and Z is barycentrically
     interpolated at each output cell center. Cells outside the convex hull
     become ``no_data``. Output is a single-band Float64 tile over the extent at
-    ``width_px x height_px`` in EPSG:``srid``.
+    ``width_px x height_px``.
+
+    Output CRS: ``out_crs`` (string) wins over the int ``out_srid``; both set ->
+    error; neither -> CRS-less. Input points are assumed already in the output
+    CRS (label, not a reprojection).
 
     PARITY DIVERGENCE: the lightweight tier performs an UNCONSTRAINED Delaunay
     interpolation. ``breaklines`` are accepted but NOT enforced as hard edges
@@ -3172,7 +3200,8 @@ def rst_dtmfromgeoms(
         snap_tolerance:  Accepted for parity; not applied.
         xmin..ymax:      Output extent in CRS units.
         width_px, height_px: Output raster size in pixels.
-        srid:            EPSG code for the output CRS.
+        out_srid:        EPSG or ESRI code for the output CRS.
+        out_crs:         CRS string for the output (``EPSG:x`` / ``ESRI:x`` / WKT).
         no_data:         NoData sentinel (default -9999.0).
 
     Returns:
@@ -3190,8 +3219,9 @@ def rst_dtmfromgeoms(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid) if out_srid is not None else f.lit(None),
         nd,
+        f.lit(out_crs) if out_crs is not None else f.lit(None),
     )
 
 
@@ -5296,6 +5326,7 @@ def _gridfrompoints_agg_udf(
     srid: pd.Series,
     power: pd.Series = None,
     max_pts: pd.Series = None,
+    out_crs: pd.Series = None,
 ) -> bytes:
     from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core.tin import _parse_geom_elem
@@ -5313,7 +5344,9 @@ def _gridfrompoints_agg_udf(
         vals.append(float(v))
     if not xy:
         return None
-    # Extent/size/srid/power/max_pts are per-group constants; read from row 0.
+    # Extent/size/out-CRS/power/max_pts are per-group constants; read from row 0.
+    srid0 = srid.iloc[0]
+    out_crs0 = None if out_crs is None else out_crs.iloc[0]
     return tin_core.idw_grid(
         xy,
         vals,
@@ -5323,9 +5356,10 @@ def _gridfrompoints_agg_udf(
         ymax.iloc[0],
         int(width_px.iloc[0]),
         int(height_px.iloc[0]),
-        int(srid.iloc[0]),
+        out_srid=None if srid0 is None else int(srid0),
         power=2.0 if power is None else float(power.iloc[0]),
         max_pts=12 if max_pts is None else int(max_pts.iloc[0]),
+        out_crs=out_crs0,
     )
 
 
@@ -5343,6 +5377,7 @@ def _dtmfromgeoms_agg_udf(
     height_px: pd.Series,
     srid: pd.Series,
     no_data: pd.Series = None,
+    out_crs: pd.Series = None,
 ) -> bytes:
     from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core.tin import _parse_geom_elem
@@ -5366,6 +5401,8 @@ def _dtmfromgeoms_agg_udf(
     # read from row 0 and let delaunay_dtm decode each element.
     bl_arr = breaklines.iloc[0]
     bl = [b for b in bl_arr if b is not None] if bl_arr is not None else None
+    srid0 = srid.iloc[0]
+    out_crs0 = None if out_crs is None else out_crs.iloc[0]
     return tin_core.delaunay_dtm(
         pts,
         bl,
@@ -5375,8 +5412,9 @@ def _dtmfromgeoms_agg_udf(
         ymax.iloc[0],
         int(width_px.iloc[0]),
         int(height_px.iloc[0]),
-        int(srid.iloc[0]),
+        out_srid=None if srid0 is None else int(srid0),
         no_data=-9999.0 if no_data is None else float(no_data.iloc[0]),
+        out_crs=out_crs0,
     )
 
 
@@ -5727,14 +5765,16 @@ def rst_gridfrompoints_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike = None,
     power: ColLike = 2.0,
     max_pts: ColLike = 12,
+    out_crs: ColLike = None,
 ) -> Column:
     """Streaming IDW grid per group: one ``(point, value)`` per row -> one tile.
 
-    The extent/size/srid/power/max_pts args are per-group constants. Equal to
-    ``rst_gridfrompoints`` over the same points. Use inside ``.agg()``::
+    The extent/size/out-CRS/power/max_pts args are per-group constants. Equal to
+    ``rst_gridfrompoints`` over the same points. ``out_crs`` (string) wins over
+    the int ``out_srid``; both set -> error; neither -> CRS-less. Use in ``.agg()``::
 
         df.groupBy(k).agg(
             prx.rst_gridfrompoints_agg("pt", "v", 0, 0, 10, 10, 8, 8, 32633).alias("t")
@@ -5754,9 +5794,10 @@ def rst_gridfrompoints_agg(
             _col(ymax),
             _col(width_px),
             _col(height_px),
-            _col(srid),
+            _col(out_srid) if out_srid is not None else f.lit(None),
             p,
             m,
+            f.lit(out_crs) if out_crs is not None else f.lit(None),
         )
     )
 
@@ -5772,14 +5813,16 @@ def rst_dtmfromgeoms_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike = None,
     no_data: ColLike = -9999.0,
+    out_crs: ColLike = None,
 ) -> Column:
     """Streaming Delaunay-TIN DTM per group: one Z-point per row -> one tile.
 
     ``breaklines`` is a per-group constant ARRAY<BINARY>; every other non-point
     arg is a per-group constant. Equal to ``rst_dtmfromgeoms`` over the same
-    points. Use inside ``.agg()``::
+    points. ``out_crs`` (string) wins over the int ``out_srid``; both -> error;
+    neither -> CRS-less. Use inside ``.agg()``::
 
         df.groupBy(k).agg(
             prx.rst_dtmfromgeoms_agg(
@@ -5804,8 +5847,9 @@ def rst_dtmfromgeoms_agg(
             _col(ymax),
             _col(width_px),
             _col(height_px),
-            _col(srid),
+            _col(out_srid) if out_srid is not None else f.lit(None),
             nd,
+            f.lit(out_crs) if out_crs is not None else f.lit(None),
         )
     )
 

@@ -22,6 +22,54 @@ from pyspark.sql.types import StructType
 from databricks.labs.gbx.ds import _scratch
 
 
+def _crs_canonical_str(rasterio_crs) -> Optional[str]:
+    """Return the canonical CRS string for a rasterio CRS object.
+
+    Uses crs_to_canonical (authority-else-WKT) so non-EPSG CRS (ESRI:54008,
+    WKT, PROJ4) produce a storable CF crs_wkt/crs_canonical attribute rather
+    than being silently dropped when to_epsg() returns None.
+
+    None-safe: returns None when rasterio_crs is None.
+    """
+    if rasterio_crs is None:
+        return None
+    from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
+
+    return crs_to_canonical(rasterio_crs)
+
+
+def _write_crs_var(nc, crs_canonical: Optional[str]) -> None:
+    """Write a CF grid_mapping 'crs' variable carrying the CRS.
+
+    Writes:
+    - ``crs_canonical``: the authority string ("ESRI:54008") or WKT fallback.
+      The reader checks this first.
+    - ``spatial_epsg``: the EPSG integer when the CRS is an EPSG code.
+      Legacy readers that only understand spatial_epsg still work for EPSG CRS.
+    - ``crs_wkt``: full WKT of the CRS (CF convention). Parsed by _crs_string
+      as fallback for non-EPSG CRS.
+
+    Does nothing when crs_canonical is None.
+    """
+    if not crs_canonical:
+        return
+    crs_var = nc.createVariable("crs", "i4")
+    crs_var.grid_mapping_name = "latitude_longitude"
+    crs_var.crs_canonical = crs_canonical
+    # Also store the WKT via rasterio so readers that look for crs_wkt find it.
+    try:
+        from rasterio.crs import CRS
+
+        rio_crs = CRS.from_user_input(crs_canonical)
+        crs_var.crs_wkt = rio_crs.to_wkt()
+        epsg = rio_crs.to_epsg()
+        if epsg is not None:
+            crs_var.spatial_epsg = int(epsg)
+    except Exception:
+        # Fallback: just store the canonical string; wkt derivation failed.
+        pass
+
+
 @dataclass
 class NetcdfCommitMessage(WriterCommitMessage):
     paths: List[str] = field(default_factory=list)
@@ -135,7 +183,11 @@ def _raster_records_from_frags(frags: List[str]) -> List[dict]:
         transform = tuple(
             float(x) for x in md.get(b"transform", b"").decode().split(",")
         )
+        # Prefer crs_canonical (carries non-EPSG CRS such as ESRI:54008);
+        # fall back to crs_epsg for fragments written by an older writer version.
+        crs_canonical_raw = md.get(b"crs_canonical", b"").decode()
         epsg_raw = md.get(b"crs_epsg", b"").decode()
+        crs_canonical = crs_canonical_raw or (f"EPSG:{epsg_raw}" if epsg_raw else None)
         nodata_raw = md.get(b"nodata", b"").decode()
         arr = np.array(tbl.column("value").to_pylist(), dtype=dtype).reshape(
             height, width
@@ -147,6 +199,8 @@ def _raster_records_from_frags(frags: List[str]) -> List[dict]:
                 "height": height,
                 "dtype": dtype,
                 "transform": transform,
+                "crs_canonical": crs_canonical,
+                # Keep epsg for legacy callers that only check this key.
                 "epsg": int(epsg_raw) if epsg_raw else None,
                 "nodata": float(nodata_raw) if nodata_raw else None,
                 "array": arr,
@@ -173,10 +227,36 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
             f = float(lats[0]) - e / 2.0
             transform = (a, 0.0, c, 0.0, e, f)
             epsg = None
+            crs_canonical: Optional[str] = None
             if "crs" in nc.variables:
-                se = getattr(nc.variables["crs"], "spatial_epsg", None)
-                if se is not None:
-                    epsg = int(se)
+                crs_v = nc.variables["crs"]
+                # Prefer crs_canonical (authority string or WKT for non-EPSG CRS);
+                # fall back to spatial_epsg for files written by older writer versions.
+                cc = getattr(crs_v, "crs_canonical", None)
+                if cc is not None:
+                    crs_canonical = str(cc)
+                    try:
+                        from rasterio.crs import CRS as _CRS
+
+                        epsg = _CRS.from_user_input(crs_canonical).to_epsg()
+                    except Exception:
+                        pass
+                else:
+                    # Legacy path: read crs_wkt or spatial_epsg
+                    wkt = getattr(crs_v, "crs_wkt", None)
+                    if wkt is not None:
+                        crs_canonical = str(wkt)
+                        try:
+                            from rasterio.crs import CRS as _CRS
+
+                            epsg = _CRS.from_wkt(crs_canonical).to_epsg()
+                        except Exception:
+                            pass
+                    else:
+                        se = getattr(crs_v, "spatial_epsg", None)
+                        if se is not None:
+                            epsg = int(se)
+                            crs_canonical = f"EPSG:{epsg}"
             for name in nc.variables:
                 if name in ("lat", "lon", "crs"):
                     continue
@@ -193,6 +273,7 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
                         "height": int(len(lats)),
                         "dtype": np.dtype(v.dtype).str,
                         "transform": transform,
+                        "crs_canonical": crs_canonical,
                         "epsg": epsg,
                         "nodata": float(nodata) if nodata is not None else None,
                         "array": arr,
@@ -214,11 +295,11 @@ def _merge_raster_grids(records: List[dict], tmp_path: str) -> int:
     if not records:
         raise ValueError("netcdf_gbx merge: no grid records to merge.")
     ref = records[0]
-    ref_w, ref_h, ref_epsg, ref_t = (
-        ref["width"],
-        ref["height"],
-        ref["epsg"],
-        ref["transform"],
+    ref_w, ref_h, ref_t = ref["width"], ref["height"], ref["transform"]
+    # Use crs_canonical for CRS comparison: supports non-EPSG CRS (ESRI:54008).
+    # Fall back to epsg-based key for records from an older writer.
+    ref_crs = ref.get("crs_canonical") or (
+        f"EPSG:{ref['epsg']}" if ref.get("epsg") else None
     )
     seen_vars: set = set()
     for r in records:
@@ -227,10 +308,13 @@ def _merge_raster_grids(records: List[dict], tmp_path: str) -> int:
                 f"netcdf_gbx merge: tiles have incompatible grids (sizes "
                 f"{(ref_w, ref_h)} vs {(r['width'], r['height'])}); {_MERGE_POINTER}"
             )
-        if r["epsg"] != ref_epsg:
+        r_crs = r.get("crs_canonical") or (
+            f"EPSG:{r['epsg']}" if r.get("epsg") else None
+        )
+        if r_crs != ref_crs:
             raise ValueError(
-                f"netcdf_gbx merge: tiles have incompatible grids (CRS EPSG "
-                f"{ref_epsg} vs {r['epsg']}); {_MERGE_POINTER}"
+                f"netcdf_gbx merge: tiles have incompatible grids (CRS "
+                f"{ref_crs!r} vs {r_crs!r}); {_MERGE_POINTER}"
             )
         if not np.allclose(
             np.array(r["transform"]), np.array(ref_t), rtol=1e-9, atol=0.0
@@ -263,14 +347,13 @@ def _merge_raster_grids(records: List[dict], tmp_path: str) -> int:
         vlon.standard_name = "longitude"
         vlon.units = "degrees_east"
         vlon[:] = lon
-        if ref_epsg and ref_epsg != 4326:
-            crs_var = nc.createVariable("crs", "i4")
-            crs_var.grid_mapping_name = "latitude_longitude"
-            crs_var.spatial_epsg = int(ref_epsg)
+        # Write CRS for any non-default (non-4326) CRS, including non-EPSG.
+        if ref_crs and ref_crs != "EPSG:4326":
+            _write_crs_var(nc, ref_crs)
         for r in records:
             kw = {} if r["nodata"] is None else {"fill_value": r["nodata"]}
             dv = nc.createVariable(r["varname"], r["dtype"][1:], ("lat", "lon"), **kw)
-            if ref_epsg and ref_epsg != 4326:
+            if ref_crs and ref_crs != "EPSG:4326":
                 dv.grid_mapping = "crs"
             dv[:] = r["array"]
     finally:
@@ -470,7 +553,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
             with MemoryFile(raster_bytes) as mf, mf.open() as ds:
                 arr = ds.read(1)
                 transform = ds.transform
-                epsg = ds.crs.to_epsg() if ds.crs else None
+                crs_canonical = _crs_canonical_str(ds.crs)
                 nodata = ds.nodata
             h, w = arr.shape[-2], arr.shape[-1]
             # pixel-centre 1-D coords; array_2d is north-up so transform.e < 0
@@ -515,12 +598,13 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                     vlon[:] = lon
                     kw = {} if nodata is None else {"fill_value": nodata}
                     dv = nc.createVariable(var, arr.dtype.str[1:], ("lat", "lon"), **kw)
-                    if epsg and epsg != 4326:
-                        # Preserve the source EPSG via a CF grid_mapping variable so
-                        # _netcdf._crs_string can recover it on re-read (reads spatial_epsg).
-                        crs_var = nc.createVariable("crs", "i4")
-                        crs_var.grid_mapping_name = "latitude_longitude"
-                        crs_var.spatial_epsg = int(epsg)
+                    # Preserve CRS via a CF grid_mapping variable so _netcdf._crs_string
+                    # can recover it on re-read. Writes crs_canonical (authority string
+                    # or WKT) + crs_wkt + spatial_epsg (when EPSG) to support both
+                    # non-EPSG CRS (ESRI:54008) and legacy readers expecting spatial_epsg.
+                    # Skips only when CRS is EPSG:4326 (the default; no attribute needed).
+                    if crs_canonical and crs_canonical != "EPSG:4326":
+                        _write_crs_var(nc, crs_canonical)
                         dv.grid_mapping = "crs"
                     dv[:] = arr
                 finally:
@@ -558,7 +642,16 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
             with MemoryFile(raster_bytes) as mf, mf.open() as ds:
                 arr = ds.read(1)
                 transform = ds.transform
-                epsg = ds.crs.to_epsg() if ds.crs else None
+                crs_canonical = _crs_canonical_str(ds.crs)
+                # Derive EPSG int from the canonical string for legacy compat.
+                _epsg: Optional[int] = None
+                if crs_canonical:
+                    try:
+                        from rasterio.crs import CRS as _CRS
+
+                        _epsg = _CRS.from_user_input(crs_canonical).to_epsg()
+                    except Exception:
+                        pass
                 nodata = ds.nodata
             h, w = int(arr.shape[-2]), int(arr.shape[-1])
             var = self._resolve_var(row, source)
@@ -571,7 +664,13 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 b"height": str(h).encode(),
                 b"dtype": arr.dtype.str.encode(),
                 b"transform": ",".join(repr(x) for x in t).encode(),
-                b"crs_epsg": (b"" if epsg is None else str(int(epsg)).encode()),
+                # Store the full canonical CRS string so non-EPSG CRS (ESRI:54008)
+                # survives the feather fragment -> merge -> .nc path without loss.
+                # crs_epsg kept for backward-compat with any external fragment reader.
+                b"crs_canonical": (
+                    b"" if not crs_canonical else crs_canonical.encode()
+                ),
+                b"crs_epsg": (b"" if _epsg is None else str(int(_epsg)).encode()),
                 b"nodata": (b"" if nodata is None else repr(float(nodata)).encode()),
             }
             tbl = pa.table(

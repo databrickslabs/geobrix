@@ -113,9 +113,29 @@ def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
 
 
 def _crs_string(ds) -> str:
-    # Look for a CF grid_mapping variable carrying an EPSG/authority code.
+    """Return the CRS string for a CF grid dataset.
+
+    Check order (first match wins):
+    1. ``crs_canonical``: authority string ("EPSG:4326", "ESRI:54008") or WKT
+       written by the current writer.  Handles non-EPSG CRS that to_epsg()
+       would have silently dropped.
+    2. ``crs_wkt``: CF standard WKT attribute written by the current writer and
+       compliant producers.
+    3. ``epsg_code`` / ``spatial_epsg``: legacy integer attribute; returns
+       "EPSG:<int>".
+    4. Default: "EPSG:4326" (geographic lon/lat).
+    """
     for name in list(ds.variables):
         v = ds[name]
+        # 1. crs_canonical (authority string or WKT — written by current writer)
+        canonical = getattr(v, "crs_canonical", None)
+        if canonical is not None:
+            return str(canonical)
+        # 2. crs_wkt (CF standard; rioxarray and compliant writers emit this)
+        wkt = getattr(v, "crs_wkt", None)
+        if wkt is not None:
+            return str(wkt)
+        # 3. Legacy EPSG integer attributes
         epsg = getattr(v, "epsg_code", None) or getattr(v, "spatial_epsg", None)
         if epsg is not None:
             code = _epsg_int(epsg)

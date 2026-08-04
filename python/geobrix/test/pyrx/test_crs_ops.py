@@ -203,6 +203,49 @@ def test_setcrs_virtual_pending_crs_supersedes_pending_srid():
         os.unlink(tif_path)
 
 
+def test_setsrid_after_setcrs_clears_pending_crs():
+    """rst_setsrid on a virtual tile must clear a stale pending_crs so the later
+    int SRID wins (reverse of the supersede case). Regression: without the pop,
+    a prior rst_setcrs's pending_crs supersedes and the setsrid relabel is lost.
+    """
+    b = _epsg4326_tif()
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as f:
+        f.write(b)
+        tif_path = f.name
+    try:
+        import rasterio
+
+        with rasterio.open(tif_path) as ds:
+            w, h = ds.width, ds.height
+        # A virtual tile that already carries a pending_crs (from a prior setcrs);
+        # apply rst_setsrid(3857) through the public UDF and confirm it wins.
+        from pyspark.sql import SparkSession
+        from pyspark.sql import functions as f
+        from pyspark.sql.types import StructField, StructType
+
+        from databricks.labs.gbx.pyrx import functions as prx
+        from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+        spark = SparkSession.builder.master("local[2]").getOrCreate()
+        vt = VirtualTile(
+            cellid=-1,
+            raster=None,
+            path=tif_path,
+            window=(0, 0, w, h),
+            metadata={ot.PENDING_CRS: "ESRI:54008"},
+        )
+        schema = StructType([StructField("tile", V2_TILE_SCHEMA, False)])
+        df = spark.createDataFrame([(vt.to_row(),)], schema)
+        row = df.select(
+            prx.rst_crs(prx.rst_setsrid("tile", f.lit(3857))).alias("c")
+        ).first()
+        assert (
+            row["c"] == "EPSG:3857"
+        ), f"rst_setsrid must clear stale pending_crs and win; got {row['c']!r}"
+    finally:
+        os.unlink(tif_path)
+
+
 def test_setcrs_virtual_open_header_reflects_pending_crs():
     """open_header on a virtual tile with pending_crs reflects it without pixel read."""
     b = _epsg4326_tif()

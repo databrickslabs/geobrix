@@ -1377,6 +1377,10 @@ def _setsrid_udf(tile, srid):
     if vt.is_virtual():
         md = dict(vt.metadata or {})
         md[ot.PENDING_SRID] = str(s)
+        # Remove any stale pending_crs so this int SRID is the sole authority
+        # (mirrors _setcrs_udf popping pending_srid). Without this, a prior
+        # rst_setcrs's pending_crs would supersede and silently ignore this call.
+        md.pop(ot.PENDING_CRS, None)
         vt.metadata = md
         return vt.to_row()
     # materialized: apply eagerly to bytes, emit v2

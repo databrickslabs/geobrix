@@ -38,6 +38,10 @@ This is how ESRI codes, WKT, and PROJ4 definitions all flow through the same str
 
 When GeoBrix emits a CRS string — from `rst_crs`, in the tile struct's `crs` field, or in a NetCDF `crs_wkt` attribute — it uses a canonical form: the **authority string** (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS carries one, otherwise the full **WKT**. Authority-else-WKT is more readable than PROJ4 and round-trips cleanly through both GDAL (heavyweight) and rasterio/pyproj (lightweight).
 
+:::note Compare CRS meaning, not the exact string
+For a CRS that has an authority code (e.g. `ESRI:54008`), both tiers emit the identical authority string. For an **authority-less** CRS — one carrying only embedded WKT with no code — the two tiers can emit **different but equivalent** WKT serializations (GDAL's WKT flavor on the heavyweight tier, pyproj's on the lightweight tier). They describe the **same** CRS and compare equal as CRS objects; only the text differs. So compare CRS **meaning** (reproject/round-trip, or `SpatialReference.IsSame` / a pyproj CRS-equality check), not raw string equality. To pin a stable, identical string across tiers, stamp the CRS explicitly with `rst_setcrs` (e.g. `rst_setcrs(tile, 'ESRI:54008')`).
+:::
+
 ## RasterX
 
 RasterX exposes both names through parallel functions. See the [RasterX Function Reference](./raster-functions) for full signatures and examples.
@@ -102,6 +106,6 @@ Visualization helpers such as [`plot_static`](./vizx-vector#static-maps) reproje
 VectorX augments the product's built-in ST functions and follows the native-ST CRS conventions:
 
 - **Geometry input encodings** — every `gbx_st_*` geometry input accepts **WKB, EWKB, WKT, and EWKT** interchangeably. WKB/WKT carry no SRID; **EWKB/EWKT carry one** — pass whichever encoding your upstream produces.
-- **SRID is applied at ingestion.** Functions that return plain WKB (e.g. `gbx_st_legacyaswkb`) carry no SRID; assign the CRS when you read the geometry back with `ST_GeomFromWKB(wkb, srid)`.
+- **SRID is applied at ingestion.** Functions that return plain WKB/WKT (e.g. `gbx_st_legacyaswkb`) carry no SRID; assign the CRS when you read the geometry back, e.g. with `ST_GeomFromWKB(wkb, srid)` or `ST_GeomFromWKT(wkt, srid)`.
 
 See the [VectorX Function Reference](./vectorx-functions) for details.

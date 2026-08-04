@@ -82,6 +82,7 @@ MATERIALIZED_EXAMPLE = [
     ("path", "null"),
     ("window", "0,0,512,512"),
     ("clip_polygon", "null"),
+    ("clip_crs", "null"),
     ("crs", "EPSG:32633"),
     ("metadata", '{driver→"GTiff", size→"188416"}'),
 ]
@@ -91,6 +92,7 @@ VIRTUAL_EXAMPLE = [
     ("path", "/Vol/…/scene.cog"),
     ("window", "512,0,512,512"),
     ("clip_polygon", "<WKB polygon>"),
+    ("clip_crs", "EPSG:4326"),
     ("crs", "EPSG:32633"),
     ("metadata", '{driver→"GTiff"}'),
 ]

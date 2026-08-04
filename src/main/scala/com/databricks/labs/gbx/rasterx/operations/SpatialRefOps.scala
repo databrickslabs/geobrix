@@ -30,11 +30,20 @@ object SpatialRefOps {
         val sr = new SpatialReference()
         Try(trimmed.toInt).toOption match {
             case Some(epsg) =>
-                val rc = sr.ImportFromEPSG(epsg)
+                // ImportFromEPSG auto-recovers ESRI codes (e.g. 54008 -> ESRI:54008), so an
+                // int-castable string classifies as EPSG or ESRI. A code in neither authority
+                // returns a non-zero OGRERR — but the GDAL Java binding may ALSO throw a native
+                // RuntimeException before returning; normalise both into IllegalArgumentException.
+                val rc = Try(sr.ImportFromEPSG(epsg)).recover {
+                    case e: Throwable =>
+                        sr.delete()
+                        throw new IllegalArgumentException(
+                          s"resolveCrs: $epsg is not a valid EPSG or ESRI code", e)
+                }.get
                 if (rc != 0) {
                     sr.delete()
                     throw new IllegalArgumentException(
-                      s"resolveCrs: unknown EPSG code $epsg (OGRERR=$rc)")
+                      s"resolveCrs: $epsg is not a valid EPSG or ESRI code (OGRERR=$rc)")
                 }
             case None =>
                 // SetFromUserInput returns a non-zero OGRERR for unparseable input, but

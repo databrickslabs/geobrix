@@ -51,4 +51,27 @@ class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         // No ImportFromEPSG or other authority set -> GetAuthorityName(null) typically null
         SpatialRefOps.getEPSGCode(sr) shouldBe 0
     }
+
+    // --- resolveCrs int-string path: the SRID resolution rule (epsg -> esri) ---
+    // ImportFromEPSG auto-recovers an ESRI code, so an int-castable SRID string is
+    // classified as EPSG or ESRI (mirrors the light tier's resolve_crs), and a code in
+    // neither authority raises. This is the int path RST_SetSrid stamps through.
+
+    test("resolveCrs: int-string ESRI-only code (54008) -> ESRI, not mislabeled EPSG") {
+        val sr = SpatialRefOps.resolveCrs("54008")
+        sr should not be null
+        SpatialRefOps.crsToCanonical(sr) shouldBe "ESRI:54008"
+        sr.delete()
+    }
+
+    test("resolveCrs: int-string EPSG code (4326) -> EPSG") {
+        val sr = SpatialRefOps.resolveCrs("4326")
+        sr should not be null
+        SpatialRefOps.crsToCanonical(sr) shouldBe "EPSG:4326"
+        sr.delete()
+    }
+
+    test("resolveCrs: int-string code in neither authority (99999999) throws") {
+        an[IllegalArgumentException] should be thrownBy SpatialRefOps.resolveCrs("99999999")
+    }
 }

@@ -49,15 +49,19 @@ object RST_Transform extends WithExpressionInfo {
         )
 
     def execute(ds: Dataset, options: Map[String, String], srid: Int): (Dataset, Map[String, String]) = {
-        // ImportFromEPSG(0) or an unknown code returns a non-zero OGRERR but does NOT throw,
-        // leaving dstSR empty — warp would then silently no-op and produce an invalid raster.
-        // Validate up-front so the caller gets a clear error.
-        require(srid > 0, s"rst_transform requires a positive EPSG code; got $srid")
+        // A target SRID must be positive: reprojecting to "no CRS" (0) is meaningless.
+        // ImportFromEPSG(0) or a code in neither the EPSG nor ESRI authority returns a
+        // non-zero OGRERR but does NOT throw, leaving dstSR empty — warp would then
+        // silently no-op and produce an invalid raster. Validate up-front so the caller
+        // gets a clear error. (ImportFromEPSG auto-recovers ESRI codes like 54008, so a
+        // positive EPSG *or* ESRI code is accepted.)
+        require(srid > 0, s"rst_transform requires a positive EPSG or ESRI code; got $srid")
         val dstSR = new SpatialReference()
         val rc = dstSR.ImportFromEPSG(srid)
         if (rc != 0) {
             dstSR.delete()
-            throw new IllegalArgumentException(s"rst_transform: unknown EPSG code $srid (OGRERR=$rc)")
+            throw new IllegalArgumentException(
+              s"rst_transform: $srid is not a valid EPSG or ESRI code (OGRERR=$rc)")
         }
         RasterProject.project(ds, options, dstSR)
     }

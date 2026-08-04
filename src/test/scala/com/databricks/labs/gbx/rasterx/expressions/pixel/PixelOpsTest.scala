@@ -177,6 +177,51 @@ class PixelOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
+    test("RST_SetSrid stamps a non-EPSG ESRI code (54008) as ESRI, not a mislabel") {
+        import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
+        val src = buildRaster(4, 3, (c, _) => c.toFloat) // CRS already 32633
+        try {
+            // 54008 = ESRI World Sinusoidal (no EPSG code). ImportFromEPSG auto-recovers
+            // it to ESRI:54008, so the stamped SR must carry the ESRI authority.
+            val (out, _) = track(RST_SetSrid.execute(src, Map.empty, 54008))
+            out should not be null
+            SpatialRefOps.crsToCanonical(out.GetSpatialRef) shouldBe "ESRI:54008"
+        } finally {
+            src.delete()
+        }
+    }
+
+    test("RST_SetSrid(0) clears the CRS (dumb-storage 'no CRS'), no exception") {
+        val src = buildRaster(4, 3, (c, _) => c.toFloat) // CRS already 32633
+        try {
+            val (out, _) = track(RST_SetSrid.execute(src, Map.empty, 0))
+            out should not be null
+            // SR header cleared — no spatial reference on the output.
+            out.GetSpatialRef shouldBe null
+        } finally {
+            src.delete()
+        }
+    }
+
+    test("RST_SetSrid rejects a negative SRID (the one set-time bound)") {
+        val src = buildRaster(4, 3, (c, _) => c.toFloat)
+        try {
+            an[IllegalArgumentException] should be thrownBy RST_SetSrid.execute(src, Map.empty, -1)
+        } finally {
+            src.delete()
+        }
+    }
+
+    test("RST_SetSrid raises for a positive code in neither EPSG nor ESRI (apply moment)") {
+        val src = buildRaster(4, 3, (c, _) => c.toFloat)
+        try {
+            an[IllegalArgumentException] should be thrownBy
+                RST_SetSrid.execute(src, Map.empty, 99999999)
+        } finally {
+            src.delete()
+        }
+    }
+
     test("RST_Histogram on a uniform-distribution raster produces counts evenly across buckets") {
         // 10x10 raster with column ramp 0..9. Histogram with 10 buckets over [0,10]
         // should have ~10 pixels per bucket (10 rows x 1 column per value).

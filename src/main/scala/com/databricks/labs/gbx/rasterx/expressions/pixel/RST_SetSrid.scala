@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.pixel
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -10,13 +11,17 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
-import org.gdal.osr.SpatialReference
 
 /**
-  * Stamp an EPSG code on a raster tile's SpatialReference, without reprojecting
-  * the pixels. Equivalent to `gdal_edit.py -a_srs EPSG:<srid> <file>` — used when
-  * the source file lost its CRS metadata or arrived with the wrong / missing
-  * SR header but you know what the correct CRS should be.
+  * Stamp a SRID on a raster tile's SpatialReference, without reprojecting the
+  * pixels. Equivalent to `gdal_edit.py -a_srs EPSG:<srid> <file>` — used when the
+  * source file lost its CRS metadata or arrived with the wrong / missing SR header
+  * but you know what the correct CRS should be.
+  *
+  * SRID is dumb storage: only a negative SRID is rejected. `0` clears the CRS; a
+  * positive code is classified through the shared resolver (an EPSG or ESRI code —
+  * see `SpatialRefOps.resolveCrs`), and a code in neither authority raises when
+  * stamped. Use `gbx_rst_setcrs` to stamp from a CRS string.
   *
   * For actual reprojection (with pixel-grid warp) use `gbx_rst_transform`. This
   * function only rewrites the SR header / WKT; pixel coordinates and GeoTransform
@@ -74,15 +79,22 @@ object RST_SetSrid extends WithExpressionInfo {
       */
     def execute(ds: Dataset, options: Map[String, String], srid: Int): (Dataset, Map[String, String]) = {
         require(ds != null, "RST_SetSrid.execute: source Dataset is null")
-        require(srid > 0, s"gbx_rst_setsrid requires a positive EPSG code; got $srid")
-        val dstSR = new SpatialReference()
-        val rc = dstSR.ImportFromEPSG(srid)
-        if (rc != 0) {
-            dstSR.delete()
-            throw new IllegalArgumentException(s"gbx_rst_setsrid: unknown EPSG code $srid (OGRERR=$rc)")
-        }
-        val wkt = dstSR.ExportToWkt()
-        dstSR.delete()
+        // Dumb storage bound: only a negative SRID is rejected. `0` clears the CRS
+        // (parity with the light tier); a positive code is classified through the
+        // shared resolver (`SpatialRefOps.resolveCrs`) — an EPSG or ESRI code (GDAL's
+        // ImportFromEPSG auto-recovers ESRI codes like 54008), and a code in neither
+        // authority raises. Stamping CRS bytes into the materialised copy IS the apply
+        // moment, so an unresolvable positive code fails here, by design.
+        require(srid >= 0, s"gbx_rst_setsrid: SRID must be >= 0; got $srid")
+        val wkt =
+            if (srid == 0) {
+                "" // empty WKT clears the SR header
+            } else {
+                val dstSR = SpatialRefOps.resolveCrs(srid.toString)
+                val w = dstSR.ExportToWkt()
+                dstSR.delete()
+                w
+            }
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val extension = GDAL.getExtension(ds.GetDriver.getShortName)
         val outPath = s"/vsimem/setsrid_$uuid.$extension"

@@ -216,6 +216,30 @@ def set_srid(ds, srid: int) -> bytes:
     return _write(profile, ds.read())
 
 
+def set_crs(ds, crs_value) -> bytes:
+    """Stamp the CRS WITHOUT reprojecting.
+
+    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
+    string accepted by ``rasterio.crs.CRS.from_user_input`` (``"ESRI:54008"``,
+    WKT, PROJ4, …).  Pixel values and the GeoTransform are unchanged; only the
+    CRS metadata is rewritten.  Use ``rst_transformcrs`` for an actual
+    reprojecting warp.
+
+    Args:
+        ds:        Open rasterio DatasetReader.
+        crs_value: CRS descriptor — int EPSG, int-castable string, or CRS string.
+
+    Returns:
+        GTiff bytes with the same pixels/transform but the new CRS.
+    """
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    crs = resolve_crs(crs_value)
+    profile = ds.profile.copy()
+    profile.update(driver="GTiff", crs=crs)
+    return _write(profile, ds.read())
+
+
 def band(ds, band_index: int) -> bytes:
     """Extract a single 1-based band as a new single-band GTiff tile.
 

@@ -49,12 +49,18 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 PENDING_NODATA = "pending_nodata"
 PENDING_SRID = "pending_srid"
 PENDING_BANDS = "pending_bands"
+PENDING_CRS = "pending_crs"
 
-_PENDING_KEYS = (PENDING_NODATA, PENDING_SRID, PENDING_BANDS)
+_PENDING_KEYS = (PENDING_NODATA, PENDING_SRID, PENDING_BANDS, PENDING_CRS)
 
 
 def _parse_pending(metadata):
-    """Return (bands|None, nodata|None, srid|None) from a tile metadata map."""
+    """Return (bands|None, nodata|None, srid|None, crs_str|None) from tile metadata.
+
+    ``pending_crs`` (a canonical CRS string e.g. 'ESRI:54008') supersedes
+    ``pending_srid`` when both are present — the caller should prefer
+    ``pending_crs`` for CRS relabelling to support non-EPSG targets.
+    """
     md = metadata or {}
     bands = None
     if md.get(PENDING_BANDS):
@@ -63,7 +69,8 @@ def _parse_pending(metadata):
         float(md[PENDING_NODATA]) if md.get(PENDING_NODATA) not in (None, "") else None
     )
     srid = int(md[PENDING_SRID]) if md.get(PENDING_SRID) not in (None, "") else None
-    return bands, nodata, srid
+    crs_str = md[PENDING_CRS] if md.get(PENDING_CRS) not in (None, "") else None
+    return bands, nodata, srid, crs_str
 
 
 def _without_pending(metadata):
@@ -82,11 +89,13 @@ def _epsg_of(crs) -> Optional[int]:
         return None
 
 
-def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> bytes:
+def _window_dataset_bytes(
+    src, window: Window, pending=(None, None, None, None)
+) -> bytes:
     """Read one window into standalone GTiff bytes, applying pending instructions.
 
-    pending = (bands|None, nodata|None, srid|None); applied in fixed order:
-    band-select (which bands to read) -> nodata (profile) -> setsrid (crs relabel).
+    pending = (bands|None, nodata|None, srid|None, crs_str|None); applied in
+    fixed order: band-select -> nodata -> CRS relabel (crs_str supersedes srid).
 
     Nodata "ensure/preserve" semantics (matches edit.init_nodata):
     - If the source already carries a nodata value, PRESERVE it (do not override
@@ -99,7 +108,12 @@ def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> by
     """
     import rasterio.crs as _rcrs
 
-    bands, nodata, srid = pending
+    # Unpack — tolerate the legacy 3-tuple form (srid only, no crs_str).
+    if len(pending) == 4:
+        bands, nodata, srid, crs_str = pending
+    else:
+        bands, nodata, srid = pending
+        crs_str = None
     indexes = bands if bands else None  # rasterio: 1-based band list or None=all
     # src.read with indexes as a list always returns 3D (bands, h, w); the
     # 2D-collapse path is unreachable here and has been removed.
@@ -124,7 +138,12 @@ def _window_dataset_bytes(src, window: Window, pending=(None, None, None)) -> by
             if _nodata_fits_dtype(nodata, out_dtype):
                 profile["nodata"] = nodata
             # else: default doesn't fit the dtype; leave nodata unset.
-    if srid is not None:
+    # CRS relabel: pending_crs (full string) supersedes pending_srid.
+    if crs_str is not None:
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        profile["crs"] = resolve_crs(crs_str)
+    elif srid is not None:
         profile["crs"] = _rcrs.CRS.from_epsg(srid)
     # Route through the compression authority: ZSTD + dtype-predictor baseline.
     out_dtype = profile.get("dtype", src.dtypes[0])
@@ -221,7 +240,7 @@ def open_tile(tile: VirtualTile) -> Iterator[DatasetReader]:
         c, r, w, h = tile.window
         window = Window(c, r, w, h)
         pending = _parse_pending(tile.metadata)
-        bands, _nodata, pending_srid = pending
+        bands, _nodata, pending_srid, _pending_crs_str = pending
         with rasterio.open(local_path) as src:
             src_epsg = src.crs.to_epsg() if src.crs else None
             want = _epsg_of(tile.crs) if tile.crs else None
@@ -459,10 +478,15 @@ def open_header(tile) -> Iterator[DatasetReader]:
         src = stack.enter_context(rasterio.open(local_path))
 
         # Parse pending instructions to reflect band-select / setsrid / nodata in header.
-        bands, raw_nodata, srid = _parse_pending(vt.metadata)
+        bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
         pending_count = len(bands) if bands else None
+        # pending_crs: pending_crs (string) supersedes pending_srid.
         pending_crs = None
-        if srid is not None:
+        if crs_str is not None:
+            from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+            pending_crs = resolve_crs(crs_str)
+        elif srid is not None:
             import rasterio.crs as _rcrs
 
             pending_crs = _rcrs.CRS.from_epsg(srid)

@@ -58,8 +58,9 @@ def test_materialized_row_is_v2_with_populated_raster(spark, tmp_path):
     assert tile["path"] is not None  # provenance populated
     # whole-file GTiff passthrough -> window is the whole file
     assert tile["window"]["width"] > 0 and tile["window"]["height"] > 0
-    # new v2 clip/crs fields are null for a plain materialized tile
-    assert tile["clip_polygon"] is None and tile["crs"] is None
+    # clip_polygon is null for a plain materialized tile; crs is populated from source
+    assert tile["clip_polygon"] is None
+    assert tile["crs"] == "EPSG:4326"  # reader now populates tile.crs from source
     # pixels still decode
     with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as out:
         assert out.width > 0

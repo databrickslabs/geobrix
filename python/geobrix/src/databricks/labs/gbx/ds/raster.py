@@ -772,6 +772,11 @@ class RasterGbxReader(DataSourceReader):
         # ------------------------------------------------------------------
         # Virtual tile: bytes-free emission (path + whole-file window).
         # No staging, no encode — header opened locally for metadata.
+        # NOTE: tile.crs is intentionally left None for virtual tiles.
+        # The field doubles as the open_tile warp-target instruction; setting
+        # it to the source CRS here would activate the warp path when a user
+        # subsequently calls rst_setsrid (pending_srid != tile.crs -> spurious
+        # warp).  For virtual tiles the source CRS is implicit in the path.
         # ------------------------------------------------------------------
         if getattr(partition, "emit_virtual", False):
             with rasterio.open(partition.file_path) as ds:
@@ -808,10 +813,12 @@ class RasterGbxReader(DataSourceReader):
             from rasterio.io import MemoryFile
 
             from databricks.labs.gbx.pyrx.core import _clip
+            from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
             local_path = _get_or_stage_file(partition.file_path)
             with rasterio.Env(GDAL_CACHEMAX=128):
                 with rasterio.open(local_path) as ds:
+                    tile_crs = crs_to_canonical(ds.crs)
                     _cellid, win_bytes, meta = _encode.encode_tile(
                         ds,
                         window=partition.window,
@@ -835,6 +842,7 @@ class RasterGbxReader(DataSourceReader):
                     metadata=meta,
                     clip_polygon=partition.clip_polygon,
                     clip_crs=partition.clip_crs,
+                    crs=tile_crs,
                 ),
             )
             return
@@ -843,7 +851,10 @@ class RasterGbxReader(DataSourceReader):
         # Passthrough tile: emit original file bytes, no decode.
         # ------------------------------------------------------------------
         if partition.is_passthrough:
+            from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
+
             with rasterio.open(partition.file_path) as ds:
+                tile_crs = crs_to_canonical(ds.crs)
                 width, height = ds.width, ds.height
                 compression = str(ds.profile.get("compress") or "DEFLATE").upper()
             cellid, raster_bytes, meta = _encode.passthrough_tile(
@@ -862,6 +873,7 @@ class RasterGbxReader(DataSourceReader):
                     path=partition.file_path,
                     window=(0, 0, width, height),
                     metadata=meta,
+                    crs=tile_crs,
                 ),
             )
             return
@@ -869,10 +881,13 @@ class RasterGbxReader(DataSourceReader):
         # ------------------------------------------------------------------
         # Windowed / whole-image encode: stage source once, read one window.
         # ------------------------------------------------------------------
+        from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
+
         local_path = _get_or_stage_file(partition.file_path)
 
         with rasterio.Env(GDAL_CACHEMAX=128):
             with rasterio.open(local_path) as ds:
+                tile_crs = crs_to_canonical(ds.crs)
                 cellid, raster_bytes, meta = _encode.encode_tile(
                     ds,
                     window=partition.window,
@@ -890,6 +905,7 @@ class RasterGbxReader(DataSourceReader):
                 path=partition.file_path,
                 window=partition.window,
                 metadata=meta,
+                crs=tile_crs,
             ),
         )
 

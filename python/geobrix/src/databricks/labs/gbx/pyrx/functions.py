@@ -1397,6 +1397,56 @@ def _setsrid_v2_udf(tile, srid, virtualize_dir, virtualize_prefix, materialize):
     )
 
 
+# --- rst_setcrs: string-taking CRS relabel (pending-instruction on virtual) --
+def _setcrs_bytes(tile, crs_value):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return edit.set_crs(ds, crs_value)
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _setcrs_udf(tile, crs_value):
+    if _tile_is_empty(tile) or crs_value is None:
+        return None
+    from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
+
+    canonical = crs_to_canonical(resolve_crs(str(crs_value)))
+    vt = ot._to_virtual_tile(tile)
+    if vt.is_virtual():
+        md = dict(vt.metadata or {})
+        md[ot.PENDING_CRS] = canonical
+        # Remove any stale pending_srid so the canonical CRS string is sole authority.
+        md.pop(ot.PENDING_SRID, None)
+        vt.metadata = md
+        return vt.to_row()
+    # Materialized: apply eagerly to bytes.
+    new_bytes = _setcrs_bytes(tile, str(crs_value))
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+    ).to_row()
+
+
+# --- rst_transformcrs: string-taking reproject (non-EPSG targets) -------------
+def _transformcrs_bytes(tile, crs_value):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return warp.reproject_to_crs(ds, str(crs_value))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _transformcrs_udf(tile, crs_value):
+    if _tile_is_empty(tile) or crs_value is None:
+        return None
+    new_bytes = _transformcrs_bytes(tile, crs_value)
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
+    ).to_row()
+
+
 def _band_bytes(tile, band_index):
     from databricks.labs.gbx.pyrx import _env
 
@@ -1738,6 +1788,65 @@ def rst_setsrid(
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
     return _setsrid_udf(_col(tile), _col(srid))
+
+
+def rst_setcrs(
+    tile: ColLike,
+    crs: ColLike,
+) -> Column:
+    """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
+
+    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
+    string accepted by ``rasterio.crs.CRS.from_user_input`` such as
+    ``"ESRI:54008"``, WKT, or PROJ4 strings.  Pixel values and the
+    GeoTransform are unchanged; only the CRS metadata is rewritten.  Use
+    ``rst_transformcrs`` for an actual reprojecting warp.
+
+    On a virtual tile the CRS relabel is recorded as a pending instruction
+    (``pending_crs`` in metadata) and applied at the next read.  A pending
+    ``pending_crs`` supersedes any stale ``pending_srid``.
+
+    Note: equivalent to ``rst_setsrid`` when ``crs`` is an int-castable
+    string (``"4326"`` == ``rst_setsrid(tile, 4326)``).
+
+    Args:
+        tile: Tile struct column.
+        crs:  CRS descriptor — int EPSG code, int-castable string, authority
+              string (``"EPSG:4326"``, ``"ESRI:54008"``), WKT, or PROJ4.
+
+    Returns:
+        Tile with the same pixels/transform but the new CRS. (T7 deferred:
+        ``gbx_rst_setcrs`` SQL name registered via SQL_REGISTRY below; full
+        binding-parity wiring — registered_functions.txt + function-info.json
+        + heavy Scala — is Task 7.)
+    """
+    return _setcrs_udf(_col(tile), _col(crs))
+
+
+def rst_transformcrs(
+    tile: ColLike,
+    crs: ColLike,
+) -> Column:
+    """Reproject the raster to a string-given target CRS.
+
+    Accepts any CRS descriptor accepted by ``rasterio.crs.CRS.from_user_input``:
+    int EPSG, int-castable string, authority string (``"EPSG:3857"``,
+    ``"ESRI:54008"``), WKT, or PROJ4.  Unlike ``rst_transform`` (int EPSG only)
+    this supports non-EPSG targets such as ESRI codes or custom projections.
+
+    Pixel-producing: always materializes (a new reprojected tile is emitted).
+
+    Args:
+        tile: Tile struct column.
+        crs:  Target CRS descriptor — int EPSG, int-castable string, authority
+              string, WKT, or PROJ4.
+
+    Returns:
+        Tile reprojected to the target CRS. (T7 deferred: ``gbx_rst_transformcrs``
+        SQL name registered via SQL_REGISTRY; full binding-parity wiring is
+        Task 7.)
+    """
+    return _transformcrs_udf(_col(tile), _col(crs))
 
 
 def rst_band(
@@ -6069,6 +6178,8 @@ _sql_tile_ops = {
     "gbx_rst_initnodata": _init_nodata_udf,
     "gbx_rst_tryopen": _tryopen_udf,
     "gbx_rst_setsrid": _setsrid_udf,
+    "gbx_rst_setcrs": _setcrs_udf,
+    "gbx_rst_transformcrs": _transformcrs_udf,
     "gbx_rst_band": _band_udf,
     "gbx_rst_asformat": _asformat_udf,
     "gbx_rst_buildoverviews": _buildoverviews_udf,

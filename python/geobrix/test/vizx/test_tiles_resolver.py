@@ -73,7 +73,6 @@ def test_resolve_v1_three_field_dict():
 
 def test_resolve_row_with_tile_col(tmp_path):
     # a Row-like dict whose tile_col holds the struct
-    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
     from databricks.labs.gbx.vizx._tiles import resolve_tile_row
 
     p = str(tmp_path / "v.tif")

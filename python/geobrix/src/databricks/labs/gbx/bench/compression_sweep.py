@@ -24,12 +24,9 @@ from __future__ import annotations
 import argparse
 import json
 import multiprocessing
-import os
 import platform
 import sys
-import tempfile
-import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -159,7 +156,6 @@ def _encode_worker(
     import time as _time
 
     import numpy as _np
-    import rasterio
     from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
 
@@ -377,7 +373,6 @@ def run_sweep(
 
     for mib in sizes_mib:
         for dtype in DTYPES:
-            decoded_bytes = mib * 1024 * 1024
             if verbose:
                 print(
                     f"  [{dtype:>7s} {mib:>4d} MiB] synthesising...",
@@ -685,7 +680,8 @@ def main() -> None:
 
         vm = psutil.virtual_memory()
         print(
-            f"RAM: total={vm.total/1024**3:.1f} GiB, available={vm.available/1024**3:.1f} GiB"
+            f"RAM: total={vm.total / 1024**3:.1f} GiB, "
+            f"available={vm.available / 1024**3:.1f} GiB"
         )
     except ImportError:
         print("psutil not available; using 8 GiB RAM estimate")

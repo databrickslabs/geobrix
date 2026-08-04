@@ -3,7 +3,6 @@ initialise NoData, threshold, stamp SRID, extract band. Each returns new
 GTiff bytes."""
 
 import numpy as np
-import rasterio
 import shapely
 import shapely.wkb
 from rasterio.io import MemoryFile

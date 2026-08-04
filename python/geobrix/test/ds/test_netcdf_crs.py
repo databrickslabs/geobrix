@@ -156,7 +156,6 @@ def test_netcdf_raster_write_esri54008_crs_preserved_in_file(tmp_path):
     import os
 
     nc4 = _netcdf4()
-    import numpy as np
     from pyspark.sql import Row
     from pyspark.sql.types import (
         BinaryType,

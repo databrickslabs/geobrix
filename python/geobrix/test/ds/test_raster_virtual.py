@@ -6,9 +6,9 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from databricks.labs.gbx.ds.raster import RasterGbxDataSource
-from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
+from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+from databricks.labs.gbx.ds.raster import RasterGbxDataSource
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
@@ -211,8 +211,9 @@ def test_cog_gbx_virtualtiles_false_materializes(spark, tmp_path):
 
 def test_netcdf_gbx_still_materializes(spark, tmp_path):
     """netcdf_gbx should still materialize by default (unchanged behavior)."""
-    from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
     from netCDF4 import Dataset
+
+    from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
 
     # Write a minimal netcdf file
     nc_path = tmp_path / "grid.nc"
@@ -237,6 +238,4 @@ def test_netcdf_gbx_still_materializes(spark, tmp_path):
     )
     assert len(rows) >= 1, "netcdf_gbx should produce at least one row"
     t = rows[0]["tile"]
-    assert (
-        t["raster"] is not None
-    ), "netcdf_gbx must materialize by default (unchanged)"
+    assert t["raster"] is not None, "netcdf_gbx must materialize by default (unchanged)"

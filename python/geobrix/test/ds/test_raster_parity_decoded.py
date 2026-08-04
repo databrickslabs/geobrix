@@ -13,17 +13,16 @@ and verifies:
 Demonstrates the gate is correctly decoded-pixel based and robust to codec-level variation.
 """
 
-import logging
-from pathlib import Path
-
 import pytest
 
-rasterio = pytest.importorskip("rasterio", reason="rasterio not installed (geobrix[light] required)")
-import numpy as np
-from rasterio.io import MemoryFile
-from rasterio.transform import from_bounds
+rasterio = pytest.importorskip(
+    "rasterio", reason="rasterio not installed (geobrix[light] required)"
+)
+import numpy as np  # noqa: E402
+from rasterio.io import MemoryFile  # noqa: E402
+from rasterio.transform import from_bounds  # noqa: E402
 
-from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx import _serde  # noqa: E402
 
 
 def _create_gridded_raster():
@@ -86,14 +85,18 @@ def test_decoded_pixel_parity_different_zstd_levels():
         transform9 = ds9.transform
 
     # Pixel arrays must be bit-identical (lossless codec)
-    assert np.array_equal(arr16, arr9), "Decoded pixels must be identical for same-level lossless codec"
+    assert np.array_equal(
+        arr16, arr9
+    ), "Decoded pixels must be identical for same-level lossless codec"
 
     # Metadata must match
     assert width16 == width9, f"Width mismatch: {width16} != {width9}"
     assert height16 == height9, f"Height mismatch: {height16} != {height9}"
     assert nodata16 == nodata9, f"NoData mismatch: {nodata16} != {nodata9}"
     assert crs16 == crs9, f"CRS mismatch: {crs16} != {crs9}"
-    assert transform16 == transform9, f"Transform mismatch: {transform16} != {transform9}"
+    assert (
+        transform16 == transform9
+    ), f"Transform mismatch: {transform16} != {transform9}"
 
 
 def test_byte_identical_comparison_would_fail_on_different_levels():

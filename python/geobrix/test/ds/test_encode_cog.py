@@ -48,14 +48,19 @@ def test_encode_tile_cog_auto_resolves_to_zstd():
     Verify that when compression="auto" and tile_format="cog", the output is valid.
     We verify it opens successfully and has proper structure.
     """
-    from pathlib import Path
     import tempfile
+    from pathlib import Path
 
     with _open() as ds:
         # Encode with auto (should be ZSTD per FIX 2)
         _, b_auto, md_auto = _encode.encode_tile(
-            ds, (0, 0, 512, 512), "/x.tif", "", tile_format="cog",
-            compression="auto", cog_blocksize=256
+            ds,
+            (0, 0, 512, 512),
+            "/x.tif",
+            "",
+            tile_format="cog",
+            compression="auto",
+            cog_blocksize=256,
         )
 
     # Verify that auto produces valid output

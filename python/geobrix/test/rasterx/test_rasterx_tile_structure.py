@@ -324,8 +324,14 @@ def test_tile_schema_documentation(spark):
     # The tile is the v2 8-field struct (shared by both tiers).
     fields = {fld.name: fld for fld in schema.dataType.fields}
     assert set(fields) == {
-        "cellid", "raster", "path", "window",
-        "clip_polygon", "clip_crs", "crs", "metadata",
+        "cellid",
+        "raster",
+        "path",
+        "window",
+        "clip_polygon",
+        "clip_crs",
+        "crs",
+        "metadata",
     }
 
     # cellid: LongType, not nullable

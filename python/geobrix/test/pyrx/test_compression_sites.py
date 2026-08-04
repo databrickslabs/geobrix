@@ -85,7 +85,7 @@ def test_materialize_to_bytes_is_zstd(tmp_path, dt):
         sz = ds.width
     vt = VirtualTile(cellid=-1, raster=None, path=p, window=(0, 0, sz, sz))
     mat = ot.materialize_to_bytes(vt)
-    pred = _assert_zstd(mat.raster, context=f"materialize_to_bytes[{dt}]")
+    _assert_zstd(mat.raster, context=f"materialize_to_bytes[{dt}]")
     # Ensure pending keys are stripped from the output tile.
     for k in ("pending_nodata", "pending_srid", "pending_bands"):
         assert k not in (

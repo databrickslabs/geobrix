@@ -106,8 +106,6 @@ def _window_dataset_bytes(
       (e.g. -9999 for uint16), leave nodata unset rather than writing an invalid
       value.
     """
-    import rasterio.crs as _rcrs
-
     # Unpack — tolerate the legacy 3-tuple form (srid only, no crs_str).
     if len(pending) == 4:
         bands, nodata, srid, crs_str = pending

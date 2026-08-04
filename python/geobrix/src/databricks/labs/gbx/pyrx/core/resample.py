@@ -2,7 +2,6 @@
 returns new GTiff bytes. CRS and geographic extent are preserved; only the
 pixel grid (dimensions / resolution) changes."""
 
-import numpy as np
 from affine import Affine
 from rasterio.io import MemoryFile
 

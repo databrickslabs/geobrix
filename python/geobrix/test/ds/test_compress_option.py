@@ -13,7 +13,6 @@ Run:
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -246,7 +245,7 @@ def test_cog_gbx_auto_produces_zstd(spark_session, src_tif, tmp_path):
     for auto; it should return 'ZSTD'.
     """
     df = _read_df(spark_session, src_tif)
-    with _write_and_open(df, tmp_path / "cog_gbx_auto") as ds:
+    with _write_and_open(df, tmp_path / "cog_gbx_auto") as _:
         # cog_gbx default (no compress option) should produce ZSTD
         pass  # covered by the explicit-auto test below
 

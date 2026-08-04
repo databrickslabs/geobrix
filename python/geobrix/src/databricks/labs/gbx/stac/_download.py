@@ -16,7 +16,6 @@ import tempfile
 import time
 from typing import Callable, Optional
 
-import numpy as np
 import requests
 
 from databricks.labs.gbx.pyrx.core import compression as _comp

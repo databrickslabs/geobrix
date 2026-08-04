@@ -23,7 +23,9 @@ def test_auto_level_scales_down_with_size():
 
 
 def test_creation_opts_auto_zstd_with_predictor():
-    o = C.creation_opts("float32", decoded_bytes=1 * 1024**2, compress="auto", driver="GTiff")
+    o = C.creation_opts(
+        "float32", decoded_bytes=1 * 1024**2, compress="auto", driver="GTiff"
+    )
     assert o["compress"] == "zstd"
     assert o["predictor"] == "3"
     assert int(o["zstd_level"]) == C.auto_level(1 * 1024**2)
@@ -61,7 +63,9 @@ def test_auto_without_decoded_bytes_uses_balanced_default():
 
 def test_creation_opts_cog_driver_emits_level_not_zstd_level():
     """FIX 1: COG driver uses LEVEL (not zstd_level) for ZSTD level."""
-    o = C.creation_opts("float32", decoded_bytes=1 * 1024**2, compress="auto", driver="COG")
+    o = C.creation_opts(
+        "float32", decoded_bytes=1 * 1024**2, compress="auto", driver="COG"
+    )
     assert o["compress"] == "zstd"
     assert "LEVEL" in o  # COG driver option
     assert "zstd_level" not in o  # GTiff-only option
@@ -70,7 +74,9 @@ def test_creation_opts_cog_driver_emits_level_not_zstd_level():
 
 def test_creation_opts_gtiff_driver_emits_zstd_level():
     """FIX 1: GTiff driver uses zstd_level (as before)."""
-    o = C.creation_opts("float32", decoded_bytes=1 * 1024**2, compress="auto", driver="GTiff")
+    o = C.creation_opts(
+        "float32", decoded_bytes=1 * 1024**2, compress="auto", driver="GTiff"
+    )
     assert o["compress"] == "zstd"
     assert "zstd_level" in o  # GTiff option
     assert "LEVEL" not in o  # COG-only option

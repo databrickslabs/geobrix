@@ -51,7 +51,12 @@ def test_materialized_row_is_v2_with_populated_raster(spark, tmp_path):
     f = tmp_path / "sample.tif"
     _write_sample(str(f))
     spark.dataSource.register(RasterGbxDataSource)
-    row = spark.read.format("raster_gbx").option("virtualTiles", "false").load(str(f)).collect()[0]
+    row = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(str(f))
+        .collect()[0]
+    )
     tile = row["tile"]
     assert tile["cellid"] == -1
     assert tile["raster"] is not None  # materialized: bytes present
@@ -166,7 +171,12 @@ def test_whole_file_gtiff_is_passthrough(spark, tmp_path):
     raw = f.read_bytes()
 
     spark.dataSource.register(RasterGbxDataSource)
-    rows = spark.read.format("raster_gbx").option("virtualTiles", "false").load(str(f)).collect()
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(str(f))
+        .collect()
+    )
     assert len(rows) == 1
     tile = rows[0]["tile"]
     assert (
@@ -301,7 +311,9 @@ def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
     _write_big_incompressible(str(f))
 
     # Opt-in split with explicit splitStrategy=serverless.
-    reader = RasterGbxReader({"path": str(f), "splitStrategy": "serverless", "virtualTiles": "false"})
+    reader = RasterGbxReader(
+        {"path": str(f), "splitStrategy": "serverless", "virtualTiles": "false"}
+    )
     parts = reader.partitions()
 
     # One-tile-per-partition: the split must produce more than one partition.

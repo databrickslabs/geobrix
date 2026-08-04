@@ -26,7 +26,7 @@ from pyspark.sql.types import (
 
 from databricks.labs.gbx import _register
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx._udf import ColLike, _col, _raster_field
+from databricks.labs.gbx.pyrx._udf import ColLike, _col
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core

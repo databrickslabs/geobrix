@@ -215,7 +215,6 @@ def test_extract_tile_wrapper_with_sibling_path(tmp_path):
     import rasterio
     from rasterio.transform import from_bounds
 
-    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
     from databricks.labs.gbx.vizx._tiles import resolve_tile_row
 
     p = str(tmp_path / "sib.tif")

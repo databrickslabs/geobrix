@@ -21,7 +21,6 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile

@@ -3,9 +3,12 @@ import tempfile
 
 import numpy as np
 import rasterio
+from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 
+from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx.pyrx import functions as rx
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
@@ -89,8 +92,6 @@ def test_materialize_strips_pending_keys():
     assert PENDING_NODATA not in (mat.metadata or {})
     assert "pending_srid" not in (mat.metadata or {})
     # and the bytes actually honor the instructions
-    from rasterio.io import MemoryFile
-
     with MemoryFile(mat.raster) as mf, mf.open() as ds:
         assert ds.nodata == -9999.0
         assert ds.crs.to_epsg() == 3857
@@ -99,12 +100,6 @@ def test_materialize_strips_pending_keys():
 # ---------------------------------------------------------------------------
 # Task 2: rst_initnodata records pending nodata on virtual tiles, emits v2
 # ---------------------------------------------------------------------------
-from pyspark.sql import SparkSession
-
-from databricks.labs.gbx.ds.register import register
-from databricks.labs.gbx.pyrx import functions as rx
-
-
 def _spark():
     return (
         SparkSession.builder.master("local[2]")
@@ -341,8 +336,6 @@ def test_eager_init_nodata_uint16_no_nodata_does_not_raise():
     with rasterio.open(path) as ds:
         result = edit.init_nodata(ds)
     # open the produced bytes and check nodata
-    from rasterio.io import MemoryFile
-
     with MemoryFile(result) as mf, mf.open() as out:
         assert (
             out.nodata is None
@@ -358,8 +351,6 @@ def test_eager_init_nodata_float32_no_nodata_sets_default():
     _write_tif(path, "float32", nodata=None)
     with rasterio.open(path) as ds:
         result = edit.init_nodata(ds)
-    from rasterio.io import MemoryFile
-
     with MemoryFile(result) as mf, mf.open() as out:
         assert (
             out.nodata == -9999.0
@@ -375,8 +366,6 @@ def test_eager_init_nodata_preserves_existing():
     _write_tif(path, "uint16", nodata=0)
     with rasterio.open(path) as ds:
         result = edit.init_nodata(ds)
-    from rasterio.io import MemoryFile
-
     with MemoryFile(result) as mf, mf.open() as out:
         assert (
             out.nodata == 0.0

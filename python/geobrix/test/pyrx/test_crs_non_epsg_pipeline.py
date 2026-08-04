@@ -238,7 +238,6 @@ def test_transform_bytes_identity_for_epsg4326_raster():
     Post-fix, identity check uses CRS-object comparison: ds.crs == CRS.from_epsg(4326).
     For a standard EPSG:4326 raster this is equivalent to the to_epsg() path.
     """
-    from databricks.labs.gbx.pyrx import _serde
     from databricks.labs.gbx.pyrx import functions as prx
 
     tile_bytes = _small_4326_bytes()

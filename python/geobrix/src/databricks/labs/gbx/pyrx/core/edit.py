@@ -191,26 +191,34 @@ def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
 
 
 def set_srid(ds, srid: int) -> bytes:
-    """Stamp the CRS as ``EPSG:<srid>`` WITHOUT reprojecting.
+    """Stamp the CRS from a SRID integer WITHOUT reprojecting.
 
     Mirrors the heavyweight ``gbx_rst_setsrid`` (``gdal_edit.py -a_srs``):
     pixel values and the GeoTransform are unchanged; only the CRS metadata is
     rewritten. Use ``rst_transform`` for an actual reprojecting warp.
 
+    SRID bound: ``srid >= 0`` — a negative SRID is rejected (the one set-time
+    guard). ``0`` means "no CRS" and clears the CRS metadata. A positive code is
+    classified via the authoritative EPSG/ESRI rule (so ESRI codes like 54008
+    work); a code in neither registry raises here — writing CRS bytes is the
+    apply moment.
+
     Args:
         ds:   Open rasterio DatasetReader.
-        srid: Positive EPSG code to stamp.
+        srid: Non-negative SRID (EPSG or ESRI code; ``0`` clears the CRS).
 
     Returns:
-        GTiff bytes with the same pixels/transform but CRS = EPSG:srid.
+        GTiff bytes with the same pixels/transform but the resolved CRS
+        (or no CRS when ``srid == 0``).
     """
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
     srid = int(srid)
-    if srid <= 0:
-        raise ValueError(f"rst_setsrid requires a positive EPSG code; got {srid}")
-    try:
-        crs = rasterio.crs.CRS.from_epsg(srid)
-    except Exception as exc:  # invalid / unknown EPSG
-        raise ValueError(f"rst_setsrid: unknown EPSG code {srid}") from exc
+    if srid < 0:
+        raise ValueError(f"rst_setsrid: SRID must be >= 0; got {srid}")
+    crs = (
+        None if srid == 0 else resolve_crs(srid)
+    )  # raises for an invalid positive code
     profile = ds.profile.copy()
     profile.update(driver="GTiff", crs=crs)
     return _write(profile, ds.read())

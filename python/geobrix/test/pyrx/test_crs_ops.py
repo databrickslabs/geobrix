@@ -84,6 +84,31 @@ def _make_esri54008_bytes() -> bytes:
 # ---------------------------------------------------------------------------
 
 
+def test_set_srid_bounds_and_esri_and_zero():
+    """set_srid: >=0 storage bound; positive resolves (ESRI works); 0 clears; -1 raises."""
+    from databricks.labs.gbx.pyrx.core import edit
+
+    b = _epsg4326_tif()
+    # negative -> reject (the one set-time bound)
+    with _tile_from_bytes(b) as ds:
+        with pytest.raises(ValueError, match=">= 0"):
+            edit.set_srid(ds, -1)
+    # ESRI code (54008) now stamps ESRI:54008 (resolves via authoritative sets)
+    with _tile_from_bytes(b) as ds:
+        esri_bytes = edit.set_srid(ds, 54008)
+    with _tile_from_bytes(esri_bytes) as ds:
+        assert crs_to_canonical(ds.crs) == "ESRI:54008"
+    # 0 -> "no CRS": clears the CRS (no raise)
+    with _tile_from_bytes(b) as ds:
+        zero_bytes = edit.set_srid(ds, 0)
+    with _tile_from_bytes(zero_bytes) as ds:
+        assert ds.crs is None
+    # unresolvable positive code -> raise (materialized stamp is an apply moment)
+    with _tile_from_bytes(b) as ds:
+        with pytest.raises(ValueError):
+            edit.set_srid(ds, 99999999)
+
+
 def test_setcrs_esri54008_relabels_no_reproject():
     """rst_setcrs('ESRI:54008') stamps CRS but keeps pixels identical."""
     from databricks.labs.gbx.pyrx.core import edit

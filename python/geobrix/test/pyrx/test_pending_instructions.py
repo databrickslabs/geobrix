@@ -2,6 +2,7 @@ import glob
 import tempfile
 
 import numpy as np
+import pytest
 import rasterio
 from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
@@ -19,7 +20,13 @@ def _a_tif():
         glob.glob("sample-data/Volumes/main/default/bench-corpus/rows/*.tif")
     ):
         return c
-    return sorted(glob.glob("target/test-classes/modis/*_B02.TIF"))[0]
+    modis = sorted(glob.glob("target/test-classes/modis/*_B02.TIF"))
+    if not modis:
+        # Neither the sample-data bundle nor the Maven-built MODIS fixture is present
+        # (e.g. the lightweight CI job runs without data / test-resources). Skip rather
+        # than IndexError — these tests exercise real tiles, not structure.
+        pytest.skip("no sample raster available (sample-data bundle / MODIS fixture)")
+    return modis[0]
 
 
 def _virtual(tif, **meta):

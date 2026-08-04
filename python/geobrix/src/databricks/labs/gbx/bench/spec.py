@@ -1145,6 +1145,44 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetSrid.scala",),
         core=False,
     ),
+    # --- CRS-string ops (Sub-spec R): string companions to the srid ops ---
+    "rst_crs": FnSpec(
+        "rst_crs",
+        "gbx_rst_crs",
+        "accessor",
+        _BOTH,
+        {},
+        core_fn=lambda ds, a: accessors.crs(ds),
+        col_fn=lambda t, a: prx.rst_crs(t),
+        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Crs.scala",),
+        core=False,
+    ),
+    "rst_setcrs": FnSpec(
+        "rst_setcrs",
+        "gbx_rst_setcrs",
+        "edit",
+        _BOTH,
+        {"crs": "EPSG:4326"},
+        core_fn=lambda ds, a: edit.set_crs(ds, a["crs"]),
+        # F.lit the STRING crs arg (bare str would resolve as a column name).
+        col_fn=lambda t, a: prx.rst_setcrs(t, F.lit(a["crs"])),
+        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetCrs.scala",),
+        core=False,
+    ),
+    "rst_transformcrs": FnSpec(
+        "rst_transformcrs",
+        "gbx_rst_transformcrs",
+        "warp",
+        _BOTH,
+        {"target_crs": "EPSG:3857"},
+        # core=False: rst_transform is already the representative "warp" core fn;
+        # rst_transformcrs is the string companion, covered by the family.
+        core=False,
+        core_fn=lambda ds, a: warp.reproject_to_crs(ds, a["target_crs"]),
+        # F.lit the STRING crs arg (bare str would resolve as a column name).
+        col_fn=lambda t, a: prx.rst_transformcrs(t, F.lit(a["target_crs"])),
+        sources=_WARP_LIGHT + (_HEAVY + "RST_TransformCrs.scala",),
+    ),
     "rst_updatetype": FnSpec(
         "rst_updatetype",
         "gbx_rst_updatetype",

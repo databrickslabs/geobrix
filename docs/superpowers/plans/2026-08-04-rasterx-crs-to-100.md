@@ -465,7 +465,43 @@ Write concrete assertions using `_epsg4326_tif()`/`make_geotiff_bytes` helpers f
 
 ---
 
-## Task 10: Group F — Coordinate Reference Systems docs page + master table
+## Task 10: Group G — VizX CRS consistency (crs override + canonical routing)
+
+**Files:**
+- Modify: `python/geobrix/src/databricks/labs/gbx/vizx/_cog.py` (the `ds.crs`/`src.crs` read sites + basemap `add_basemap(crs=…)`), `vizx/_raster.py`
+- Modify: VizX plot entry points that accept a tile/raster: `plot_tile`, `plot_cog`, `plot_raster`, `plot_file`, `plot_static` (add optional `crs`)
+- Test: `python/geobrix/test/vizx/test_vizx_crs.py` (create)
+
+**Interfaces:** Consumes `crs.crs_to_canonical` / `crs.resolve_crs` (Task 1). VizX is light-tier only — no heavy counterpart. `crs` param is source-role (same semantics as Group C's `rst_rastertogrid` override).
+
+- [ ] **Step 1: Write failing test** — light, no network (basemap off):
+
+```python
+# test_vizx_crs.py
+# - plot_tile(tile, crs="EPSG:32633") on a CRS-LESS raster does not raise and the
+#   figure's CRS used for extent/basemap resolves to 32633 (assert via the resolved
+#   crs the plot computes, exposed through a small helper or the Axes extent).
+# - plot_tile on a CRS-less raster with NO crs override does not raise (basemap-less).
+# - a CRS-bearing raster ignores the crs override (embedded wins), no error.
+# Use matplotlib Agg backend (no display), basemap=False to avoid network egress;
+# assert the resolved-CRS decision, not pixels.
+```
+Since basemap fetch needs network, assert the *CRS resolution decision* VizX makes (factor a tiny `_resolve_plot_crs(ds_crs, crs_override)` helper in `_cog.py` and unit-test it directly: CRS-less+override→override; CRS-bearing+override→embedded; CRS-less+none→None).
+
+- [ ] **Step 2: Run — RED** (`crs` kwarg unknown; `_resolve_plot_crs` not defined).
+
+- [ ] **Step 3: Implement**
+  - Add `_resolve_plot_crs(ds_crs, crs_override)` in `_cog.py`: `ds_crs` present → `crs_to_canonical(ds_crs)` (canonical routing, G2); else `crs_override` given → `crs_to_canonical(resolve_crs(crs_override))`; else None. Never raises on absent.
+  - Route the existing `crs = ds.crs` / `src.crs` sites through it; pass the resolved CRS to `add_basemap(crs=…)`.
+  - Thread an optional `crs=None` param through `plot_tile`/`plot_cog`/`plot_raster`/`plot_file`/`plot_static` to `_cog.py`/`_raster.py`.
+
+- [ ] **Step 4: Run — GREEN** + regression `pytest python/geobrix/test/vizx/ -q` (Agg backend; no network).
+
+- [ ] **Step 5: Commit** — `feat(vizx): crs override + canonical CRS routing on plot functions (Group G)`
+
+---
+
+## Task 11: Group F — Coordinate Reference Systems docs page + master table
 
 **Files:**
 - Modify: `docs/docs/api/coordinate-reference-systems.mdx`
@@ -476,7 +512,7 @@ Write concrete assertions using `_epsg4326_tif()`/`make_geotiff_bytes` helpers f
 **Interfaces:** Consumes the shipped behavior of Tasks 1–9. Doc tests import real code via raw-loader per the docs-are-source rule.
 
 - [ ] **Step 1:** Add CRS-page sections per spec Group F items 1–6: "Source CRS vs output CRS" (two roles + naming table + §6 subsets), the per-geom source precedence + mixed-column table, the never-error invariant + error matrix (`:::note`), produce-new-raster reprojection, rastertogrid auto-reproject + `crs` override, the performance note.
-- [ ] **Step 2:** Add the **master CRS-function cross-reference table** (Group F item 7): columns Package/Function/Tiers/CRS param(s)/Role/CRS-in behavior/Notes; seed ALL RasterX rows (Groups A–E + shipped R/R2 funcs); add VectorX/GridX sub-headers with an explicit "see the VectorX / GridX CRS spec" deferral row. Every row links to its function reference entry.
+- [ ] **Step 2:** Add the **master CRS-function cross-reference table** (Group F item 7): columns Package/Function/Tiers/CRS param(s)/Role/CRS-in behavior/Notes; seed ALL RasterX rows (Groups A–E + shipped R/R2 funcs) AND the VizX plot rows (Group G — `plot_tile`/`plot_cog`/`plot_raster`/`plot_file`/`plot_static`, `crs` source param); add VectorX/GridX sub-headers with an explicit "see the VectorX / GridX CRS spec" deferral row. Every row links to its function reference entry.
 - [ ] **Step 3:** Write the three doc tests (real data, real assertions) and wire them into the MDX via raw-loader. Add per-function cross-links + new-param docs in `raster-functions.mdx`.
 - [ ] **Step 4:** Run `gbx:test:docs` (Docker) GREEN; regenerate `function-info.json` (`gbx:docs:function-info`); `gbx:test:bindings` green; voice-grep `grep -rn -iE "wave [0-9]+" docs/docs/` empty; `gbx:docs:build` GREEN (dev-server-aware).
 - [ ] **Step 5: Commit** — `docs(crs): source/output roles, mixed-column + never-error rules, master cross-reference table`
@@ -485,7 +521,7 @@ Write concrete assertions using `_epsg4326_tif()`/`make_geotiff_bytes` helpers f
 
 ## Self-Review
 
-**Spec coverage:** Task 1/2 = shared primitives (transformer cache §3.4, resolve_source_crs §1.1). Task 3 = Group C (§Group C, correctness fix). Task 4/5 = Group A (§Group A, both tiers). Task 6/7 = Group B (§Group B, out_* + Rule-2 §3.2). Task 8 = Group E (§Group E relocation). Task 9 = Group D (§Group D reader). Task 10 = Group F (§Group F docs + master table). All six groups + both foundations covered. ✓
+**Spec coverage:** Task 1/2 = shared primitives (transformer cache §3.4, resolve_source_crs §1.1). Task 3 = Group C (§Group C, correctness fix). Task 4/5 = Group A (§Group A, both tiers). Task 6/7 = Group B (§Group B, out_* + Rule-2 §3.2). Task 8 = Group E (§Group E relocation). Task 9 = Group D (§Group D reader). Task 10 = Group G (§Group G VizX). Task 11 = Group F (§Group F docs + master table; must enumerate Group G's VizX row + `crs` param). All seven groups + both foundations covered. ✓
 
 **Placeholder scan:** Task 3/4/6 test steps describe assertions with enough concrete setup (UTM raster, EWKB-4326 geom, ESRI:54008) that an implementer can write them; the shared-core code (crs.py, SpatialRefOps) is given verbatim. The per-function param threading (Tasks 4–7) is mechanical repetition of one pattern across enumerated functions — the pattern is shown once (rst_clip/rasterize) and the sites are enumerated, not re-transcribed. ✓
 

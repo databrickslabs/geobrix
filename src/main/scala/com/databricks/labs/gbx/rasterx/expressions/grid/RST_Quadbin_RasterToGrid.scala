@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.grid
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.gridx.grid.Quadbin
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.expressions.grid.GridReprojection
 import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
@@ -15,8 +16,9 @@ import scala.collection.mutable
 /** Shared helper for `RST_Quadbin_RasterToGrid*` expressions — mirrors `RST_H3_RasterToGrid`
   * but delegates per-pixel cell math to [[Quadbin.pointToCell]] (CARTO quadbin v0).
   *
-  * The geotransform interprets the raster as EPSG:4326 lon/lat (matching the H3 family's
-  * existing contract — callers reproject upstream via `RST_Transform` when source CRS differs).
+  * The geotransform interprets the raster as EPSG:4326 lon/lat; a differently-CRS'd raster
+  * is auto-reprojected to 4326 (nearest-neighbour) up front via [[GridReprojection.toGridCrs]],
+  * so easting/northing are never read as lon/lat. A CRS-less raster is assumed already-4326.
   *
   * Resolution range: [0, 20]. Capped well below the CARTO v0 max of 26 because the
   * per-band cell count at z>=21 over a continental raster (~10^6) is dominated by GDAL I/O
@@ -46,6 +48,17 @@ object RST_Quadbin_RasterToGrid {
           resolution >= 0 && resolution <= MAX_AGG_RESOLUTION,
           s"raster→quadbin: resolution must be in [0, $MAX_AGG_RESOLUTION]; got $resolution"
         )
+        // Auto-reproject to grid-native EPSG:4326 (nearest) unless already there or CRS-less.
+        val (workDs, reprojected) = GridReprojection.toGridCrs(ds, 4326)
+        try executeOn(workDs, resolution, fAgg)
+        finally if (reprojected) RasterDriver.releaseDataset(workDs)
+    }
+
+    private def executeOn[T](
+        ds: Dataset,
+        resolution: Int,
+        fAgg: mutable.ArrayBuffer[Double] => T
+    ): Array[Array[(Long, T)]] = {
 
         val gt = ds.GetGeoTransform
         val xSize = ds.getRasterXSize

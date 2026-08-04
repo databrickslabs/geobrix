@@ -193,8 +193,60 @@ def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
     return uniq, [float(m) for m in out]
 
 
-def raster_to_grid(ds, resolution: int, grid: str, agg: str) -> list:
+def _stamp_crs_bytes(ds, target_crs) -> bytes:
+    """Return GTiff bytes identical to ``ds`` but with ``target_crs`` stamped —
+    used to give a CRS-less-but-known raster its source CRS before warping."""
+    from rasterio.io import MemoryFile
+
+    profile = ds.profile.copy()
+    profile.update(driver="GTiff", crs=target_crs)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(ds.read())
+        return mf.read()
+
+
+def _warp_to_4326_if_needed(ds, crs):
+    """Return GTiff bytes reprojected to EPSG:4326, or ``None`` when no warp is
+    needed (already 4326, or CRS-less with no override -> assume grid-native).
+
+    The embedded raster CRS wins as the source; else the ``crs`` override (int
+    SRID or CRS string) for a CRS-less raster; else None (never errors)."""
+    from rasterio.crs import CRS as _RioCRS
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core import warp
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    _WGS84 = _RioCRS.from_epsg(4326)
+
+    if ds.crs is not None:
+        if ds.crs == _WGS84:
+            return None  # already grid-native
+        return warp.reproject_to_crs(ds, "EPSG:4326", resampling="nearest")
+
+    # CRS-less raster: use the override if given, else assume grid-native (4326).
+    if crs is None:
+        return None
+    override = resolve_crs(crs)
+    if override == _WGS84:
+        return None  # override says it is already 4326
+    stamped = _stamp_crs_bytes(ds, override)
+    with MemoryFile(stamped) as mf, mf.open() as stamped_ds:
+        return warp.reproject_to_crs(stamped_ds, "EPSG:4326", resampling="nearest")
+
+
+def raster_to_grid(ds, resolution: int, grid: str, agg: str, crs=None) -> list:
     """Aggregate raster pixel values into discrete-global-grid cells, per band.
+
+    H3 and quadbin operate in EPSG:4326 lon/lat. The raster is auto-reprojected
+    to EPSG:4326 (nearest-neighbour, so pixel statistics are never interpolated)
+    when it carries a CRS that differs — mirroring what BNG already does for
+    EPSG:27700. This closes a prior silent-wrong-answer footgun where a non-4326
+    (e.g. UTM) raster had its easting/northing read directly as lon/lat.
+
+    Never errors on an absent CRS: a raster with no CRS (and no ``crs`` override)
+    is assumed already-in-grid-native (4326) and processed unchanged.
 
     Args:
         ds:         An open rasterio ``DatasetReader``.
@@ -203,6 +255,9 @@ def raster_to_grid(ds, resolution: int, grid: str, agg: str) -> list:
         grid:       ``"h3"``, ``"quadbin"`` or ``"bng"``.
         agg:        One of ``"avg"``, ``"count"``, ``"min"``, ``"max"``,
                     ``"median"``, ``"sum"``, ``"variance"``, ``"stddev"``.
+        crs:        Optional source-CRS override (int SRID or CRS string) for a
+                    CRS-less-but-known raster. Ignored when the raster already
+                    carries a CRS. When neither is set, grid-native is assumed.
 
     Returns:
         One list per band; each is a list of ``{"cellID": id, "measure":
@@ -214,40 +269,53 @@ def raster_to_grid(ds, resolution: int, grid: str, agg: str) -> list:
         raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
 
     if grid == "bng":
-        return _raster_to_bng(ds, _bng.get_resolution(resolution), agg)
+        return _raster_to_bng(ds, _bng.get_resolution(resolution), agg, crs=crs)
 
     resolution = int(resolution)
     encode = _h3_cells if grid == "h3" else _quadbin_cells
-    gt = ds.transform.to_gdal()  # (c, a, b, f, d, e) == GDAL geotransform
 
-    out = []
-    for bi in range(1, ds.count + 1):
-        band = ds.read(bi).astype("float64")
-        mask = ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+    def _run(work_ds):
+        gt = work_ds.transform.to_gdal()  # (c, a, b, f, d, e) GDAL geotransform
+        out = []
+        for bi in range(1, work_ds.count + 1):
+            band = work_ds.read(bi).astype("float64")
+            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
 
-        ys, xs = np.nonzero(mask)  # valid pixels only (matches mask==0 skip)
-        if ys.size == 0:
-            out.append([])
-            continue
+            ys, xs = np.nonzero(mask)  # valid pixels only (matches mask==0 skip)
+            if ys.size == 0:
+                out.append([])
+                continue
 
-        x_off = xs + 0.5
-        y_off = ys + 0.5
-        lon = gt[0] + x_off * gt[1] + y_off * gt[2]
-        lat = gt[3] + x_off * gt[4] + y_off * gt[5]
-        vals = band[ys, xs]
+            x_off = xs + 0.5
+            y_off = ys + 0.5
+            lon = gt[0] + x_off * gt[1] + y_off * gt[2]
+            lat = gt[3] + x_off * gt[4] + y_off * gt[5]
+            vals = band[ys, xs]
 
-        cids = encode(lon, lat, resolution)
-        uniq, measures = _grouped_measures(cids, vals, agg)
-        out.append(
-            [
-                {"cellID": int(cid), "measure": m}
-                for cid, m in zip(uniq.tolist(), measures)  # vectorscan: ok (per-cell)
-            ]
-        )
-    return out
+            cids = encode(lon, lat, resolution)
+            uniq, measures = _grouped_measures(cids, vals, agg)
+            out.append(
+                [
+                    # vectorscan: ok (per-cell)
+                    {"cellID": int(cid), "measure": m}
+                    for cid, m in zip(uniq.tolist(), measures)
+                ]
+            )
+        return out
+
+    # Auto-reproject to 4326 when a source CRS is known and differs. The embedded
+    # raster CRS wins; else the `crs` override (for a CRS-less-but-known raster);
+    # else None -> assume grid-native 4326 and process unchanged (never errors).
+    warped_bytes = _warp_to_4326_if_needed(ds, crs)
+    if warped_bytes is None:
+        return _run(ds)
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(warped_bytes) as mf, mf.open() as work_ds:
+        return _run(work_ds)
 
 
-def _raster_to_bng(ds, resolution: int, agg: str) -> list:
+def _raster_to_bng(ds, resolution: int, agg: str, crs=None) -> list:
     """BNG raster->grid: warp to EPSG:27700, bin per pixel, render String ids.
 
     Mirrors heavy ``RST_BNG_RasterToGrid``: BNG has no lon/lat input path, so the
@@ -257,10 +325,23 @@ def _raster_to_bng(ds, resolution: int, agg: str) -> list:
     pixels whose cell falls outside GB are dropped via ``pygx._bng.is_valid``;
     ids are rendered to the user-facing BNG ``str`` via ``pygx._bng.format`` at
     the output boundary. Grouping stays Long-keyed (reuses ``_grouped_measures``).
+
+    ``crs`` is a source-CRS override for a CRS-less-but-known raster (stamped
+    before the warp so a georeferenced-but-unlabeled raster reprojects correctly);
+    ignored when the raster already carries a CRS.
     """
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core import warp
+
+    # A CRS-less raster whose true CRS is given via override -> stamp it first so
+    # the warp to 27700 has a source CRS to project from.
+    if ds.crs is None and crs is not None:
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        stamped = _stamp_crs_bytes(ds, resolve_crs(crs))
+        with MemoryFile(stamped) as _mf, _mf.open() as _stamped_ds:
+            return _raster_to_bng(_stamped_ds, resolution, agg, crs=None)
 
     # Reproject to EPSG:27700 (nearest) unless already there. epsg may be None
     # for an undefined CRS -> warp (rasterio treats an unset src crs as an error

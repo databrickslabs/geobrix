@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.grid
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.gridx.grid.H3
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.expressions.grid.GridReprojection
 import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
@@ -25,6 +26,19 @@ object RST_H3_RasterToGrid {
     }
 
     def execute[T](
+        ds: Dataset,
+        resolution: Int,
+        fAgg: mutable.ArrayBuffer[Double] => T
+    ): Array[Array[(Long, T)]] = {
+        // H3 operates in EPSG:4326 lon/lat. Auto-reproject a differently-CRS'd raster
+        // to 4326 (nearest-neighbour) so easting/northing are never read as lon/lat.
+        // A CRS-less raster is assumed already-4326 and processed unchanged (no error).
+        val (workDs, reprojected) = GridReprojection.toGridCrs(ds, H3.crsID)
+        try executeOn(workDs, resolution, fAgg)
+        finally if (reprojected) RasterDriver.releaseDataset(workDs)
+    }
+
+    private def executeOn[T](
         ds: Dataset,
         resolution: Int,
         fAgg: mutable.ArrayBuffer[Double] => T

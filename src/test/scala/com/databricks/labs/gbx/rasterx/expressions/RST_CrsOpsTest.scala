@@ -190,4 +190,36 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
             RST_Crs.execute(out) should not be null
         } finally out.delete()
     }
+
+    // --- Group A: source-CRS params (clip_crs / crs) both tiers ---
+
+    test("RST_Clip.execute with clip_crs override on a plain cutline resolves + clips") {
+        import com.databricks.labs.gbx.rasterx.expressions.RST_Clip
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        // A plain-WKB cutline (SRID 0) covering the MODIS fixture's footprint, with the
+        // source CRS supplied via clip_crs = the raster's own CRS string (ESRI:54008).
+        val crsStr = RST_Crs.execute(ds) // the fixture's canonical CRS
+        val env = ds.GetGeoTransform()
+        val w = ds.GetRasterXSize; val h = ds.GetRasterYSize
+        val minX = env(0); val maxY = env(3)
+        val maxX = minX + env(1) * w; val minY = maxY + env(5) * h
+        val wkt =
+            s"POLYGON(($minX $minY, $maxX $minY, $maxX $maxY, $minX $maxY, $minX $minY))"
+        val geom = JTS.fromWKT(wkt) // SRID 0 (plain)
+        val (out, _) = RST_Clip.execute(ds, Map.empty, geom, cutlineAllTouched = false,
+            clipCrs = Some(crsStr))
+        try out should not be null
+        finally out.delete()
+    }
+
+    test("RST_Sample.execute is CRS-pre-aligned; reprojection is done in doInvoke") {
+        import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Sample
+        // execute() samples at raster-CRS coords: the fixture centre pixel must read back.
+        val gt = ds.GetGeoTransform()
+        val cx = gt(0) + gt(1) * (ds.GetRasterXSize / 2.0)
+        val cy = gt(3) + gt(5) * (ds.GetRasterYSize / 2.0)
+        val vals = RST_Sample.execute(ds, cx, cy)
+        vals should not be null
+        vals.length shouldBe ds.GetRasterCount
+    }
 }

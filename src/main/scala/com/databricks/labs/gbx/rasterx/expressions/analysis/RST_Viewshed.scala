@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.analysis
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -34,24 +35,26 @@ case class RST_Viewshed(
     observerGeomExpr: Expression,
     observerHeightExpr: Expression,
     targetHeightExpr: Expression,
-    maxDistanceExpr: Expression
+    maxDistanceExpr: Expression,
+    crsExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
         tileExpr, observerGeomExpr, observerHeightExpr, targetHeightExpr, maxDistanceExpr,
-        ExpressionConfigExpr()
+        crsExpr, ExpressionConfigExpr()
     )
     // observer_geom is BinaryType (WKB) or StringType (WKT) — accept the geom
-    // expr's type; heights are Double, max_distance Double (nullable).
+    // expr's type; heights are Double, max_distance Double (nullable), crs String.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, observerGeomExpr.dataType, DoubleType, DoubleType, DoubleType, StringType
+        tileExpr.dataType, observerGeomExpr.dataType, DoubleType, DoubleType, DoubleType,
+        StringType, StringType
     )
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Viewshed.name
     override def replacement: Expression = invoke(RST_Viewshed)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5))
 
 }
 
@@ -60,11 +63,18 @@ object RST_Viewshed extends WithExpressionInfo {
     def eval(
         row: InternalRow, geom: Any, observerHeight: Double, targetHeight: Double,
         maxDistance: Any, conf: UTF8String
-    ): InternalRow = runDispatch(row, geom, observerHeight, targetHeight, maxDistance, conf, BinaryType)
+    ): InternalRow =
+        runDispatch(row, geom, observerHeight, targetHeight, maxDistance, null, conf, BinaryType)
+
+    def eval(
+        row: InternalRow, geom: Any, observerHeight: Double, targetHeight: Double,
+        maxDistance: Any, crs: UTF8String, conf: UTF8String
+    ): InternalRow =
+        runDispatch(row, geom, observerHeight, targetHeight, maxDistance, crs, conf, BinaryType)
 
     private def runDispatch(
         row: InternalRow, geomArg: Any, observerHeight: Double, targetHeight: Double,
-        maxDistance: Any, conf: UTF8String, dt: DataType
+        maxDistance: Any, crs: UTF8String, conf: UTF8String, dt: DataType
     ): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {
@@ -82,6 +92,10 @@ object RST_Viewshed extends WithExpressionInfo {
               require(parsed.getGeometryType == "Point",
                   s"gbx_rst_viewshed requires a POINT observer_geom; got ${parsed.getGeometryType}")
               val coord = parsed.getCoordinate
+              // Rule 1 source-CRS reprojection: embedded SRID wins; else the crs arg;
+              // else assume the observer is already in the raster CRS (never errors).
+              val clip = Option(crs).map(_.toString).filter(_.nonEmpty)
+              val (ox, oy) = reprojectObserver(ds, coord.x, coord.y, parsed.getSRID, clip)
               val maxDistOpt = maxDistance match {
                   case null         => None
                   case d: Double    => Some(d)
@@ -89,7 +103,7 @@ object RST_Viewshed extends WithExpressionInfo {
                   case _            => None
               }
               val (resDs, resMtd) = execute(
-                  ds, options, coord.x, coord.y, observerHeight, targetHeight, maxDistOpt
+                  ds, options, ox, oy, observerHeight, targetHeight, maxDistOpt
               )
               RasterDriver.releaseDataset(ds)
               val out = RasterSerializationUtil.tileToRow((cell, resDs, resMtd), dt, exprConf.hConf)
@@ -99,6 +113,32 @@ object RST_Viewshed extends WithExpressionInfo {
           row,
           dt
         )
+
+    /** Reproject an observer point from its source CRS to the raster's CRS. Rule 1:
+      * embedded SRID wins; else the explicit `crs`; else assume aligned. A missing
+      * source or raster CRS, or any transform failure, returns the point as-is. */
+    private def reprojectObserver(
+        ds: Dataset, x: Double, y: Double, srid: Int, crs: Option[String]
+    ): (Double, Double) = {
+        val dsSR = ds.GetSpatialRef
+        if (dsSR == null) return (x, y)
+        val srcSR =
+            if (srid > 0) Some(SpatialRefOps.resolveCrs(srid.toString))
+            else crs.map(SpatialRefOps.resolveCrs)
+        srcSR match {
+            case Some(sr) =>
+                try {
+                    if (sr.IsSame(dsSR) == 1) (x, y)
+                    else {
+                        val tf = new org.gdal.osr.CoordinateTransformation(sr, dsSR)
+                        val pt = tf.TransformPoint(x, y)
+                        tf.delete(); sr.delete()
+                        (pt(0), pt(1))
+                    }
+                } catch { case _: Throwable => (x, y) }
+            case None => (x, y)
+        }
+    }
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
@@ -181,13 +221,17 @@ object RST_Viewshed extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_viewshed"
 
-    override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 3 => RST_Viewshed(c(0), c(1), c(2), Literal(1.6), Literal(null, DoubleType))
-        case 4 => RST_Viewshed(c(0), c(1), c(2), c(3), Literal(null, DoubleType))
-        case 5 => RST_Viewshed(c(0), c(1), c(2), c(3), c(4))
-        case n => throw new IllegalArgumentException(
-            s"gbx_rst_viewshed takes 3 to 5 arguments (tile, observer_geom, observer_height, [target_height, [max_distance]]); got $n"
-        )
+    override def builder(): FunctionBuilder = (c: Seq[Expression]) => {
+        val nullCrs = Literal(null, StringType)
+        c.length match {
+            case 3 => RST_Viewshed(c(0), c(1), c(2), Literal(1.6), Literal(null, DoubleType), nullCrs)
+            case 4 => RST_Viewshed(c(0), c(1), c(2), c(3), Literal(null, DoubleType), nullCrs)
+            case 5 => RST_Viewshed(c(0), c(1), c(2), c(3), c(4), nullCrs)
+            case 6 => RST_Viewshed(c(0), c(1), c(2), c(3), c(4), c(5)) // + crs override
+            case n => throw new IllegalArgumentException(
+                s"gbx_rst_viewshed takes 3 to 6 arguments (tile, observer_geom, observer_height, [target_height, [max_distance, [crs]]]); got $n"
+            )
+        }
     }
 
 }

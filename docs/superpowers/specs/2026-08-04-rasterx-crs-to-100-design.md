@@ -62,36 +62,67 @@ This is the spine: absence always degrades to a sensible assumption; only explic
 
 All routed through the R2 resolver (`resolve_crs` light / `SpatialRefOps.resolveCrs` heavy). No new v2 schema. GDAL registration only via `GDALManager`. Beta + no-aliases → param renames (`srid`→`out_srid`) are expected, not a break to avoid.
 
+### 2.0 Verified tier map (audited directly against Scala + Python sources, NOT the recon table)
+
+The recon table's tier labels were wrong for several functions. The following was verified by matching every function against `override def name` in `src/main/scala/` (heavy) and `def rst_*` / registered names in `pyrx/functions.py` (light):
+
+| Function | Heavy | Light | Note |
+|---|---|---|---|
+| `rst_clip` | ✅ | ✅ | both |
+| `rst_sample` | ✅ | ✅ | **both** (recon said light-only — WRONG) |
+| `rst_viewshed` | ✅ | ✅ | **both** (recon said light-only — WRONG) |
+| `rst_rasterize` / `rst_rasterize_agg` | ✅ | ✅ | both |
+| `rst_gridfrompoints` / `rst_gridfrompoints_agg` | ✅ | ✅ | **both** (recon said light-only — WRONG) |
+| `rst_dtmfromgeoms` / `rst_dtmfromgeoms_agg` | ✅ | ✅ | both |
+| `rst_{h3,quadbin,bng}_rasterize_agg` | ✅ | ✅ | both |
+| `rst_{h3,quadbin,bng}_rastertogrid*` (24 fns) | ✅ | ✅ | both |
+| `rst_h3_gridspec` | ❌ | ✅ | **light-only** (confirmed no heavy expr); a **DataFrame-level helper** (`df` first arg), not a per-row Column expression |
+| `gbx_h3_cell_bbox` | ✅ | ✅ | both; registered under the **`gbx_h3_*` (GridX)** namespace, NOT `rst_*`. No raster dependency (light uses only `cellraster._h3_str`/`_reproject`; heavy uses only `H3.*` + OSR reprojection). **Relocated to GridX by this spec (Q11-3).** |
+
+**Every function in this spec is BOTH-tiers unless the table above says otherwise.** Only `rst_h3_gridspec` is light-only.
+
 ### Group A — source-CRS declaration on geometry inputs (keeps bare `crs`/`clip_crs`)
 
 | Fn | Tiers | Change |
 |---|---|---|
 | **A1 `rst_clip`** | Both | Add `clip_crs` (string) to the **Column API** + heavy `RST_Clip` builder/eval. Light reader + `_clip.clip_dataset` already honor `clipCrs`; wire the public function. **Fix** `_clip.py:_epsg_int` (int-castable only) → route through `resolve_crs` so ESRI/WKT cutline CRS work. |
-| **A2 `rst_sample`** | Light (+heavy if present) | Add `crs` (string). `ops.sample` already routes embedded SRID through `resolve_crs` (R2 T3); add the explicit-param fallback path. |
-| **A3 `rst_viewshed`** | Light | Add `crs` (string) for a plain-WKB observer. |
+| **A2 `rst_sample`** | Both | Add `crs` (string). `ops.sample` already routes embedded SRID through `resolve_crs` (R2 T3); add the explicit-param fallback path. Heavy `RST_Sample` mirrors. |
+| **A3 `rst_viewshed`** | Both | Add `crs` (string) for a plain-WKB observer, both tiers. |
 
 ### Group B — output-CRS as a string (`srid`→`out_srid`, add `out_crs`)
 
 | Fn | Tiers | Change |
 |---|---|---|
 | **B1 `rst_rasterize` / `rst_rasterize_agg`** | Both | `srid`→`out_srid`; add `out_crs`. Adopt Rule-2 reprojection (§3.2). |
-| **B2 `rst_gridfrompoints` / `_agg`** | Light | `srid`→`out_srid`; add `out_crs`. Rule-2 reprojection. |
+| **B2 `rst_gridfrompoints` / `_agg`** | Both | `srid`→`out_srid`; add `out_crs`. Rule-2 reprojection. |
 | **B3 `rst_dtmfromgeoms` / `_agg`** | Both | `srid`→`out_srid`; add `out_crs`. Rule-2 reprojection. |
 | **B4 `rst_{h3,quadbin,bng}_rasterize_agg`** | Both | `srid`→`out_srid` (already optional, grid-native default); add `out_crs`. bng output stays 27700 (out param ignored, documented). |
-| **B5 `rst_h3_gridspec` (light), `RST_H3_CellBBox` (heavy)** | Both | `srid`→`out_srid`; add `out_crs`. (Q5 — included for true 100%.) |
+| **B5a `rst_h3_gridspec`** | **Light only** | `srid`→`out_srid`; add `out_crs`. DataFrame-level helper (`df` first arg) — no heavy parity twin; the `out_crs` change is DataFrame-shaped, not a Column expression. |
+| **B5b `gbx_h3_cell_bbox`** | Both | `srid`→`out_srid`; add `out_crs` (Rule-2 output CRS for the bbox). **AND relocate** (see Group E) — this is the H3-rasterize helper that gets the `rst_h3_*` surface to 100%. |
 
 ### Group C — the `rastertogrid` correctness fix (source `crs`, target intrinsic)
 
 | Fn | Tiers | Change |
 |---|---|---|
 | **C1 `rst_{h3,quadbin}_rastertogrid*`** (16 fns, shared `raster_to_grid` core) | Both | **Auto-reproject** the tile to grid-native 4326 (nearest-neighbour, so pixel stats aren't interpolated) when the tile HAS a CRS that differs — mirroring what BNG already does for 27700. Add optional **`crs`** override (source role) for a CRS-less-but-known raster. **Never error:** absent + CRS-less → assume 4326 (today's behavior preserved). |
-| **C2 `rst_bng_rastertogrid*`** | Both | Already auto-warps to 27700; add the same `crs` override for parity; confirm. |
+| **C2 `rst_bng_rastertogrid*`** (8 fns) | Both | Already auto-warps to 27700; add the same `crs` override for parity; confirm. |
 
 ### Group D — heavy reader `clipCrs` (parity with light)
 
 | Fn | Tiers | Change |
 |---|---|---|
 | **D1 heavy GDAL/GTiff reader** | Heavy | Add `clipCrs` reader option (light has it), populating the v2 tile's `clip_crs` field via the reader path. |
+
+### Group E — relocate `gbx_h3_cell_bbox` to GridX (Q11-3)
+
+`gbx_h3_cell_bbox` registers under the `gbx_h3_*` (GridX) SQL prefix and has **no raster dependency** (light uses only `cellraster._h3_str` / `_reproject`, both raster-free; heavy uses only `H3.*` + OSR reprojection, no `Dataset`). It was placed in the raster package by proximity to its consumer (the H3-rasterize workflow). This spec relocates it to its architectural home while doing its CRS work (B5b):
+
+| Tier | From | To |
+|---|---|---|
+| Light | `pyrx/functions.py` (`gbx_h3_cell_bbox`, `_h3_cell_bbox_udf`); the two symbols it uses from `pyrx/core/cellraster.py` | `pygx` (light GridX) — extract the raster-free `_h3_str`/`_reproject` helpers or import them without pulling raster deps |
+| Heavy | `com.databricks.labs.gbx.rasterx.expressions.grid.RST_H3_CellBBox` | `com.databricks.labs.gbx.gridx.*` (GridX package) |
+
+Update `register` wiring, `registered_functions.txt`, `function-info.json`, and binding parity in lockstep. The registered SQL name `gbx_h3_cell_bbox` is unchanged (no user-facing rename), only its package home.
 
 ---
 
@@ -150,11 +181,12 @@ Binding parity (`gbx:test:bindings`) updated for every renamed/added param and a
 - **GridX complete surface** — reproject input geom in a custom CRS into a grid's fixed SRID for `bng/quadbin/h3` `polyfill`/`tessellate`/`pointascell`; BNG cell-geometry SRID stamp; grid `crs`/`srid` accessors.
 - **`st_asmvt_pyramid`** EPSG:4326 assumption (VectorX; B2 in recon) — deferred with VectorX.
 - **`st_interpolateelevation*`** `out_*` rename — deferred with VectorX (applies the same standard there).
+- **GridX CRS surface** (`bng/quadbin/h3` `polyfill`/`tessellate`/`pointascell` input-geom `crs`, BNG cell-geometry SRID stamp, grid `crs`/`srid` accessors) — deferred to the GridX spec. Note `gbx_h3_cell_bbox` lands in GridX (Group E) but its CRS work is done here because it serves the `rst_h3_*` 100% goal.
 
 ---
 
 ## 6. Naming standard summary (codify on the CRS page)
 
-- **Output-CRS params → `out_srid` / `out_crs`.** Subset: `rst_rasterize`(+`_agg`), `rst_gridfrompoints`(+`_agg`), `rst_dtmfromgeoms`(+`_agg`), `rst_{h3,quadbin,bng}_rasterize_agg`, `rst_h3_gridspec`, `RST_H3_CellBBox`.
+- **Output-CRS params → `out_srid` / `out_crs`.** Subset: `rst_rasterize`(+`_agg`), `rst_gridfrompoints`(+`_agg`), `rst_dtmfromgeoms`(+`_agg`), `rst_{h3,quadbin,bng}_rasterize_agg`, `rst_h3_gridspec` (light DataFrame helper), `gbx_h3_cell_bbox` (relocated to GridX).
 - **Source-CRS params → `srid` / `crs` / `clip_crs`.** Subset: `rst_clip`(`clip_crs`), `rst_sample`(`crs`), `rst_viewshed`(`crs`), `rst_{h3,quadbin,bng}_rastertogrid*`(`crs`).
 - No RasterX function needs both an explicit source param and an explicit output param in one signature, so `srid`/`out_srid` never collide.

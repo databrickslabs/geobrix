@@ -428,16 +428,23 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
                 new_h, new_w = h, w
 
             transform = from_bounds(0, 0, new_w, new_h, new_w, new_h)
-            with rasterio.open(
-                out_cog,
-                "w",
+            from databricks.labs.gbx.pyrx.core import compression as _comp
+
+            _profile = dict(
                 driver="GTiff",
                 height=new_h,
                 width=new_w,
                 count=bands,
                 dtype=str(resized.dtype),
                 transform=transform,
-            ) as dst:
+            )
+            # Compress the render intermediate via the authority (auto = ZSTD+predictor).
+            _profile.update(
+                _comp.creation_opts(
+                    str(resized.dtype), decoded_bytes=resized.nbytes, compress="auto"
+                )
+            )
+            with rasterio.open(out_cog, "w", **_profile) as dst:
                 dst.write(resized.astype(resized.dtype))
 
         else:
@@ -460,10 +467,12 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
 
             from databricks.labs.gbx.pyrx.core import compression as _comp
 
-            # Route through the compression authority with compress="lzw" (kept for
-            # viz-only output compat; the authority adds the correct dtype predictor).
+            # Route through the compression authority (auto = ZSTD + dtype predictor,
+            # size-adaptive level). This is a small (<=raster_max_px) in-cluster render
+            # intermediate, so auto picks a high level cheaply; ZSTD beats LZW on ratio
+            # and speed here (LZW can even expand float/uint16 data).
             _comp_opts = _comp.creation_opts(
-                str(data.dtype), decoded_bytes=data.nbytes, compress="lzw"
+                str(data.dtype), decoded_bytes=data.nbytes, compress="auto"
             )
             profile.update(
                 driver="GTiff",

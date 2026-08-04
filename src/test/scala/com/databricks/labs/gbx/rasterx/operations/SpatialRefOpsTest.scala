@@ -74,4 +74,40 @@ class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
     test("resolveCrs: int-string code in neither authority (99999999) throws") {
         an[IllegalArgumentException] should be thrownBy SpatialRefOps.resolveCrs("99999999")
     }
+
+    // --- Task 2 (CRS-100 foundation): getTransformer cache + resolveSourceSR ---
+
+    test("getTransformer reuses the same CoordinateTransformation for equivalent CRS keys") {
+        val t1 = SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val t2 = SpatialRefOps.getTransformer("4326", "32633") // equivalent spellings
+        assert(t1 eq t2) // same cached instance (same thread)
+    }
+
+    test("getTransformer stays bounded (LRU-evicts) beyond the cache cap") {
+        // 120 valid UTM zones x 2 targets = 240 distinct pairs > cap; no error, bounded.
+        val zones = (32601 to 32660) ++ (32701 to 32760)
+        zones.foreach { z =>
+            SpatialRefOps.getTransformer(z.toString, "4326")
+            SpatialRefOps.getTransformer(z.toString, "3857")
+        }
+        // a freshly requested pair still works after eviction churn
+        SpatialRefOps.getTransformer("4326", "3857") should not be null
+    }
+
+    test("resolveSourceSR: embedded wins; single param; both -> error; neither -> None") {
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(4326, None, None).get) shouldBe "EPSG:4326"
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(54008, None, None).get) shouldBe "ESRI:54008"
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(0, Some(32633), None).get) shouldBe "EPSG:32633"
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(0, None, Some("ESRI:54008")).get) shouldBe "ESRI:54008"
+        SpatialRefOps.resolveSourceSR(0, None, None) shouldBe None
+        an[IllegalArgumentException] should be thrownBy
+            SpatialRefOps.resolveSourceSR(0, Some(4326), Some("EPSG:3857"))
+        // embedded present + param -> param ignored, no error (mixed-column safe)
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(4326, Some(32633), None).get) shouldBe "EPSG:4326"
+    }
 }

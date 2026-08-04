@@ -1,11 +1,25 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import org.gdal.osr.SpatialReference
+import org.gdal.osr.{CoordinateTransformation, SpatialReference}
 
+import scala.collection.mutable
 import scala.util.Try
 
 /** Helpers for OSR SpatialReference: EPSG code extraction and construction from EPSG code. */
 object SpatialRefOps {
+
+    // 120 WGS84 UTM zones + 4326/27700/3857 + headroom. A workload touching every
+    // UTM zone plus the common CRSes never evicts.
+    private val TRANSFORMER_CACHE_SIZE = 128
+
+    // A CoordinateTransformation is NOT thread-safe for concurrent use, and executors
+    // run multiple Spark tasks per JVM. One LRU cache per worker thread — reuse within
+    // a thread, zero cross-thread contention (no lock on the hot path).
+    private val txCache =
+        new ThreadLocal[mutable.LinkedHashMap[String, CoordinateTransformation]] {
+            override def initialValue(): mutable.LinkedHashMap[String, CoordinateTransformation] =
+                mutable.LinkedHashMap.empty
+        }
 
     /** Returns the EPSG authority code as Int, or 0 if not EPSG (e.g. ESRI). */
     def getEPSGCode(spatialRef: SpatialReference): Int = {
@@ -74,6 +88,44 @@ object SpatialRefOps {
             case (name: String, code: String) if name != null && name.nonEmpty &&
                 code != null && code.nonEmpty => s"$name:$code"
             case _ => spatialRef.ExportToWkt()
+        }
+    }
+
+    /** Thread-local, LRU-bounded CoordinateTransformation keyed by canonical CRS pair.
+      * Mirrors the light `crs.get_transformer`: equivalent spellings (`4326` /
+      * `"EPSG:4326"`) resolve to the same canonical key and share one transformation. */
+    def getTransformer(srcKey: String, dstKey: String): CoordinateTransformation = {
+        val srcC = crsToCanonical(resolveCrs(srcKey))
+        val dstC = crsToCanonical(resolveCrs(dstKey))
+        val key = s"$srcC->$dstC"
+        val cache = txCache.get()
+        cache.get(key) match {
+            case Some(tf) =>
+                cache.remove(key); cache.put(key, tf) // move-to-end (most-recent)
+                tf
+            case None =>
+                val tf = new CoordinateTransformation(resolveCrs(srcKey), resolveCrs(dstKey))
+                cache.put(key, tf)
+                if (cache.size > TRANSFORMER_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
+                tf
+        }
+    }
+
+    /** Rule 1 (per-geom) source-CRS resolution — mirror of the light `resolve_source_crs`.
+      * Embedded SRID (from EWKB/EWKT) always wins; else the single explicit `srid` or
+      * `crs` (both set -> error); else None (CRS-less). The explicit param is a per-geom
+      * fallback for plain WKB/WKT — a geom carrying an embedded SRID ignores the param
+      * (mixed-column safe), no error. */
+    def resolveSourceSR(
+        embeddedSrid: Int, srid: Option[Int], crs: Option[String]
+    ): Option[SpatialReference] = {
+        if (embeddedSrid > 0) Some(resolveCrs(embeddedSrid.toString))
+        else (srid, crs) match {
+            case (Some(_), Some(_)) =>
+                throw new IllegalArgumentException("resolveSourceSR: provide srid OR crs, not both")
+            case (_, Some(c)) => Some(resolveCrs(c))
+            case (Some(s), _) => Some(resolveCrs(s.toString))
+            case _            => None
         }
     }
 

@@ -172,6 +172,38 @@ warn_if_jar_stale() {
     fi
 }
 
+# Print the port(s) of any running gbx:docs:dev / serve server, one per line.
+# Detects them via the /tmp/docusaurus-<port>.pid files written by the docs
+# commands (only ports whose PID is still alive). Empty output = none running.
+detect_docs_dev_servers() {
+    local pid_file pid port
+    for pid_file in /tmp/docusaurus-*.pid; do
+        [ -f "$pid_file" ] || continue
+        pid=$(cat "$pid_file" 2>/dev/null)
+        port=$(echo "$pid_file" | sed 's/.*docusaurus-\([0-9]*\)\.pid/\1/')
+        if [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
+            echo "$port"
+        fi
+    done
+}
+
+# Warn (non-fatal) before a host-side `npm run build` when a docs server is
+# running. A build rewrites the shared <siteDir>/.docusaurus cache the server
+# relies on, so its rendered routes go stale/blank until it is restarted. Prefer
+# gbx:docs:build, which stops the server for the build and restarts it after.
+# Usage: warn_if_docs_server_running
+warn_if_docs_server_running() {
+    local ports
+    ports=$(detect_docs_dev_servers)
+    if [ -n "$ports" ]; then
+        echo -e "${YELLOW}⚠️  A docs server is running on port(s): $(echo "$ports" | tr '\n' ' ')${NC}"
+        echo -e "${YELLOW}   A host-side build rewrites the shared .docusaurus/ cache it uses, so its${NC}"
+        echo -e "${YELLOW}   rendered routes will go stale until you restart it (gbx:docs:dev).${NC}"
+        echo -e "${YELLOW}   To build safely, use: ${GREEN}gbx:docs:build${YELLOW} (stops → builds → restarts).${NC}"
+        echo ""
+    fi
+}
+
 # Aliases for backward compatibility
 print_banner() { show_banner "$@"; }
 print_separator() { show_separator "$@"; }

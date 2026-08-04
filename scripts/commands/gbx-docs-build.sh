@@ -75,17 +75,12 @@ done
 show_banner "📚 GeoBrix: Docs Build (Dev-Server-Aware)"
 setup_log_file "$LOG_PATH"
 
-# Detect a running dev server via its PID file(s). Capture the port(s) so we can
-# bring the server back up on the same one.
+# Detect a running dev server (shared helper reads /tmp/docusaurus-<port>.pid).
+# Capture the port(s) so we can bring the server back up on the same one.
 RUNNING_PORTS=()
-for pid_file in /tmp/docusaurus-*.pid; do
-    [ -f "$pid_file" ] || continue
-    pid=$(cat "$pid_file" 2>/dev/null)
-    port=$(echo "$pid_file" | sed 's/.*docusaurus-\([0-9]*\)\.pid/\1/')
-    if [ -n "$pid" ] && ps -p "$pid" > /dev/null 2>&1; then
-        RUNNING_PORTS+=("$port")
-    fi
-done
+while IFS= read -r port; do
+    [ -n "$port" ] && RUNNING_PORTS+=("$port")
+done < <(detect_docs_dev_servers)
 
 if [ ${#RUNNING_PORTS[@]} -gt 0 ]; then
     echo -e "${CYAN}Dev server running on port(s): ${YELLOW}${RUNNING_PORTS[*]}${NC}"

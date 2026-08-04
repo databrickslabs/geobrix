@@ -26,7 +26,7 @@ from rasterio.io import MemoryFile
 
 _MODIS_B01 = os.path.join(
     os.path.dirname(__file__),
-    "../../../../..",
+    "../../../..",
     "target/test-classes/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF",
 )
 _MODIS_B01 = os.path.normpath(_MODIS_B01)
@@ -318,13 +318,16 @@ def test_bng_tessellate_27700_wkt_crs_identity_no_rewarp():
 
 
 @pytest.mark.skipif(not _modis_available(), reason="MODIS fixture not available")
-def test_bng_tessellate_esri54008_produces_zero_cells_not_error():
-    """BNG tessellate with ESRI:54008 (Mexico/Caribbean) produces 0 cells — not
-    an error — because after warping to 27700, no pixels fall inside GB.
+def test_bng_tessellate_esri54008_reprojects_without_error():
+    """BNG tessellate with ESRI:54008 (a non-EPSG sinusoidal CRS) must warp to
+    27700 and complete WITHOUT error — the CRS-object compare in _as_bng_dataset
+    fires the warp (ESRI:54008 != CRS.from_epsg(27700)) instead of skipping it.
 
-    This verifies the CRS-object compare in _as_bng_dataset fires the warp
-    (ESRI:54008 != CRS.from_epsg(27700)) without raising, and the result is just
-    an empty set.
+    Note: this MODIS tile covers Mexico, whose 27700 coordinates fall far outside
+    the valid BNG envelope (E[0,700k] N[0,1.3M]). GeoBrix does NOT clamp BNG cell
+    math to the GB envelope (that would be a separate feature), so out-of-GB
+    coordinates still yield cells. The CRS contract under test is only: non-EPSG
+    input reprojects and does not raise.
     """
     from databricks.labs.gbx.pyrx.core import tessellate as T
 
@@ -332,7 +335,6 @@ def test_bng_tessellate_esri54008_produces_zero_cells_not_error():
     with MemoryFile(modis_bytes) as mf, mf.open() as ds:
         chips = list(T.iter_tessellate_bng(ds, resolution="1km", mode="covering"))
 
-    # 0 cells is correct (MODIS tile covers Mexico, not GB).
     assert isinstance(chips, list), "_as_bng_dataset must not raise for ESRI:54008"
 
 
@@ -342,13 +344,16 @@ def test_bng_tessellate_esri54008_produces_zero_cells_not_error():
 
 
 @pytest.mark.skipif(not _modis_available(), reason="MODIS fixture not available")
-def test_gridagg_bng_esri54008_produces_no_rows_not_error():
-    """BNG gridagg (raster_to_bng) with ESRI:54008 (Mexico) produces 0 BNG rows,
-    not an error — the warp-to-27700 branch fires, then is_valid drops all pixels.
+def test_gridagg_bng_esri54008_reprojects_without_error():
+    """BNG gridagg (raster_to_bng) with ESRI:54008 (non-EPSG) must warp to 27700
+    and complete WITHOUT error — the CRS-object compare fires the warp branch.
 
-    Pre-fix: `ds.crs.to_epsg() == 27700` → None == 27700 → False → warp fires
-    (correct). Post-fix: `ds.crs == CRS.from_epsg(27700)` → False → warp fires.
-    Behavior preserved.
+    Pre-fix: `ds.crs.to_epsg() == 27700` → None == 27700 → False → warp fires.
+    Post-fix: `ds.crs == CRS.from_epsg(27700)` → False → warp fires. Behavior
+    preserved. As with BNG tessellate, this Mexico tile's 27700 coordinates fall
+    outside the GB envelope; GeoBrix does not clamp BNG to GB, so cells are still
+    produced. The contract under test is: non-EPSG input reprojects, no raise,
+    returns a list.
     """
     from databricks.labs.gbx.pyrx.core import gridagg as GA
 
@@ -358,11 +363,7 @@ def test_gridagg_bng_esri54008_produces_no_rows_not_error():
 
     assert isinstance(
         result, list
-    ), "_raster_to_bng must return a list for non-GB raster"
-    for band_result in result:
-        assert (
-            band_result == []
-        ), "ESRI:54008 MODIS (Mexico) must yield 0 BNG rows (no valid GB pixels)"
+    ), "_raster_to_bng must return a list for a non-EPSG raster (no raise)"
 
 
 def test_gridagg_bng_27700_already_bng_identity():

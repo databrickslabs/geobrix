@@ -583,8 +583,10 @@ def test_pixel_ops_sql_example(spark, rasters_view, example_attr, fallback_sql):
     # cog_convert returns a tile; proximity returns a tile (Float32 distance
     # raster); contour returns ARRAY<struct(geom_wkb, value)>; viewshed
     # returns a tile (Byte 0/255 visibility mask).
+    # Executed with an explicit codec (ZSTD, the baseline) so it runs on BOTH
+    # tiers — the light-only 'AUTO' sentinel is not understood by the heavy tier.
     ("rst_cog_convert_sql_example",
-     "SELECT gbx_rst_cog_convert(tile, 'DEFLATE', 256, 'AVERAGE') AS cog FROM rasters"),
+     "SELECT gbx_rst_cog_convert(tile, 'ZSTD', 256, 'AVERAGE') AS cog FROM rasters"),
     ("rst_proximity_sql_example",
      "SELECT gbx_rst_proximity(tile, '', 'PIXEL', cast(100.0 as double)) AS dist FROM rasters"),
     ("rst_contour_sql_example",

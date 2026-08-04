@@ -2035,7 +2035,7 @@ def rst_proximity(
 
 def rst_cog_convert(
     tile: ColLike,
-    compression: ColLike = "DEFLATE",
+    compression: ColLike = "AUTO",
     blocksize: ColLike = 512,
     overview_resampling: ColLike = "AVERAGE",
     virtualize_dir: Optional[str] = None,
@@ -2051,8 +2051,9 @@ def rst_cog_convert(
 
     Args:
         tile:                Tile struct column.
-        compression:         COG compression name (default "DEFLATE"; e.g.
-                             LZW, ZSTD, WEBP, JPEG, LERC, RAW).
+        compression:         COG compression (default "AUTO" = size-adaptive
+                             ZSTD + dtype predictor; or a codec name: ZSTD,
+                             DEFLATE, LZW, WEBP, JPEG, LERC, RAW).
         blocksize:           Internal tile size in pixels, square (default 512).
         overview_resampling: Overview-pyramid resampling (default "AVERAGE").
         virtualize_dir:    Force-output (light-tier, Python API only): write the

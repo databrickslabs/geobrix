@@ -56,7 +56,7 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_clip( tile, 'POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))', true ) as clipped FROM rasters;"
     },
     "gbx_rst_cog_convert": {
-      "examples": "Examples:\n      > SELECT gbx_rst_cog_convert(tile, 'DEFLATE', 512, 'AVERAGE') AS cog FROM rasters;"
+      "examples": "Examples:\n      > SELECT gbx_rst_cog_convert(tile, 'ZSTD', 512, 'AVERAGE') AS cog FROM rasters;"
     },
     "gbx_rst_color_relief": {
       "examples": "Examples:\n      > SELECT gbx_rst_color_relief(tile, '/Volumes/main/default/test-data/geobrix-examples/colortables/elevation.clr') AS rgba FROM rasters;"

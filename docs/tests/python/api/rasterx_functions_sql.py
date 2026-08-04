@@ -2464,8 +2464,11 @@ rst_band_sql_example_output = """
 def rst_cog_convert_sql_example():
     """Re-layout a tile as a Cloud Optimized GeoTIFF for HTTP range serving."""
     return """
--- Convert to COG with DEFLATE compression, 512-pixel blocks, AVERAGE overviews.
-SELECT gbx_rst_cog_convert(tile, 'DEFLATE', 512, 'AVERAGE') AS cog
+-- Convert to COG with ZSTD compression, 512-pixel blocks, AVERAGE overviews.
+-- The lightweight tier also accepts 'AUTO' (size-adaptive ZSTD + dtype
+-- predictor, the default); pass 'DEFLATE' for a portable hand-off file.
+-- See the Materialized Compression page.
+SELECT gbx_rst_cog_convert(tile, 'ZSTD', 512, 'AVERAGE') AS cog
 FROM rasters;
 """
 

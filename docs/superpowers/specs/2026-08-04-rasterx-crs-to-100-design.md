@@ -2,7 +2,7 @@
 
 **Status:** Design (approved decisions Q1–Q10 baked in). Successor to Spec R (raster CRS-string) and Spec R2 (SRID resolution rule). Branch `branch/0.5.0`, v0.5.0 beta.
 
-**Goal:** Close every remaining CRS gap in the **RasterX** package so that (a) every geometry-accepting raster function lets the caller declare the geometry's *source* CRS, (b) every function that projects an *output* accepts a CRS string (ESRI/WKT/PROJ4), not just an int EPSG code, (c) `rst_{h3,quadbin}_rastertogrid*` stop silently assuming EPSG:4326, and (d) **the full nuance of every rule below is taught on the Coordinate Reference Systems docs page** (Group F) — all routed through the R2 resolver, and all honoring the invariant **absent CRS never throws**. VectorX (`st_crs`/`st_setcrs`/`st_transformcrs`) and GridX remain separate follow-on specs.
+**Goal:** Close every remaining CRS gap in the **RasterX** package so that (a) every geometry-accepting raster function lets the caller declare the geometry's *source* CRS, (b) every function that projects an *output* accepts a CRS string (ESRI/WKT/PROJ4), not just an int EPSG code, (c) `rst_{h3,quadbin}_rastertogrid*` stop silently assuming EPSG:4326, (d) **VizX** plots the same CRS-aware way with a matching `crs` override (Group G), and (e) **the full nuance of every rule below is taught on the Coordinate Reference Systems docs page** (Group F) — all routed through the R2 resolver, and all honoring the invariant **absent CRS never throws**. VectorX (`st_crs`/`st_setcrs`/`st_transformcrs`) and GridX remain separate follow-on specs.
 
 ---
 
@@ -124,6 +124,24 @@ The recon table's tier labels were wrong for several functions. The following wa
 | Heavy | `com.databricks.labs.gbx.rasterx.expressions.grid.RST_H3_CellBBox` | `com.databricks.labs.gbx.gridx.*` (GridX package) |
 
 Update `register` wiring, `registered_functions.txt`, `function-info.json`, and binding parity in lockstep. The registered SQL name `gbx_h3_cell_bbox` is unchanged (no user-facing rename), only its package home.
+
+---
+
+### Group G — VizX CRS consistency (the "X" surface of raster CRS)
+
+VizX already reads a tile's CRS and reprojects correctly for basemaps and PMTiles (static COG/raster plots pass `ds.crs` to contextily's `add_basemap(crs=…)`; dynamic vector layers `to_crs(4326)` before tiling). Two consistencies are missing versus the model this spec standardizes:
+
+1. **No shared-helper routing.** VizX reads `ds.crs` / `src.crs` directly (`_cog.py`) rather than through the canonical CRS authority (`crs_to_canonical` / `resolve_crs`). It is a parallel CRS implementation, not the one authority.
+2. **No `crs` override for a CRS-less raster.** When `ds.crs is None`, VizX silently drops the basemap (`if crs is not None`). That honors the never-error invariant (no crash) but leaves a gap: a user with a CRS-less-but-known raster can now get a correct **grid** result (Group C's `crs` override) yet still **cannot** get a correct basemap **plot**. Inconsistent escape-hatch coverage.
+
+Changes (light `vizx` only — VizX is a light-tier visualization surface):
+
+| Fn | File | Change |
+|---|---|---|
+| **G1 `plot_tile` / `plot_cog` / `plot_raster` / `plot_file` / `plot_static`** | `vizx/_cog.py`, `vizx/_raster.py`, entry points | Add an optional **`crs`** param (source role, same semantics as Group C): when the tile/raster is CRS-less, use it as the raster's CRS for basemap alignment; ignored when the raster already carries a CRS; absent + CRS-less → basemap-less (today's behavior), never errors. |
+| **G2 canonical routing** | `vizx/_cog.py` | Route the CRS the plot hands to contextily through `crs_to_canonical`/`resolve_crs` so VizX shares the one authority (equivalent spellings, ESRI/WKT support) instead of a parallel read. No behavior change for a CRS-bearing raster. |
+
+Never-error invariant preserved throughout: an absent CRS with no override degrades to a basemap-less plot (as today), never a raise. This is the recon's "Sub-spec X depends on R" work, folded in to complete the raster-CRS story end-to-end (read → operate → **visualize**).
 
 ---
 

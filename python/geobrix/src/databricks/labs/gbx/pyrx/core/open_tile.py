@@ -185,6 +185,36 @@ def _warp_window_bytes(
                 return out_mf.read()
 
 
+def _warp_window_bytes_crs(
+    src, window: Window, want_crs, pending=(None, None, None, None)
+) -> bytes:
+    """Materialize a window, lazily reproject it to a CRS object, return GTiff bytes.
+
+    Like ``_warp_window_bytes`` but accepts any rasterio CRS object (not just an
+    EPSG int), so non-EPSG targets (ESRI:54008, WKT, PROJ4) work correctly.
+    ``want_crs`` must be a ``rasterio.crs.CRS`` instance.
+    """
+    win_bytes = _window_dataset_bytes(src, window, pending=pending)
+    with MemoryFile(win_bytes) as mf, mf.open() as wds:
+        with WarpedVRT(wds, crs=want_crs) as vrt:
+            prof = vrt.profile.copy()
+            prof.update(driver="GTiff")
+            data = vrt.read()
+            out_dtype = prof.get("dtype", vrt.dtypes[0])
+            decoded_bytes = (
+                vrt.count * vrt.width * vrt.height * np.dtype(out_dtype).itemsize
+            )
+            prof.update(
+                _comp.creation_opts(
+                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+                )
+            )
+            with MemoryFile() as out_mf:
+                with out_mf.open(**prof) as dst:
+                    dst.write(data)
+                return out_mf.read()
+
+
 def _empty_dataset_bytes(ref) -> bytes:
     """A valid 1x1 NoData GTiff mirroring ref's band count / dtype (disjoint clip).
 
@@ -251,6 +281,25 @@ def open_tile(tile: VirtualTile) -> Iterator[DatasetReader]:
             effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
             if want is not None and want != effective_src_epsg:
                 tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
+            elif tile.crs is not None and want is None:
+                # Non-EPSG tile.crs (e.g. 'ESRI:54008', WKT, PROJ4): _epsg_of returned
+                # None so the EPSG path above was skipped.  Resolve via CRS-object
+                # comparison: if the source CRS differs from the requested CRS, warp;
+                # otherwise passthrough (identity for non-EPSG sources).
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                want_crs = resolve_crs(tile.crs)
+                effective_src_crs = (
+                    rasterio.crs.CRS.from_epsg(pending_srid)
+                    if pending_srid is not None
+                    else src.crs
+                )
+                if effective_src_crs is None or effective_src_crs != want_crs:
+                    tile_bytes = _warp_window_bytes_crs(
+                        src, window, want_crs, pending=pending
+                    )
+                else:
+                    tile_bytes = _window_dataset_bytes(src, window, pending=pending)
             else:
                 tile_bytes = _window_dataset_bytes(src, window, pending=pending)
         # src is closed here; we hold only standalone bytes.

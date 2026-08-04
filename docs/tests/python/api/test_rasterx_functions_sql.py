@@ -150,6 +150,14 @@ def test_rst_srid_sql_example(spark, rasters_view):
     assert "srid" in result.columns
 
 
+def test_rst_crs_sql_example(spark, rasters_view):
+    """Test SQL CRS-string accessor example (returns a non-null CRS string)."""
+    sql = rasterx_functions_sql.rst_crs_sql_example().strip()
+    result = spark.sql(sql).collect()
+    assert len(result) >= 1
+    assert result[0]["crs"] is not None
+
+
 def test_rst_georeference_sql_example(spark, rasters_view):
     """Test SQL georeference example"""
     sql = rasterx_functions_sql.rst_georeference_sql_example().strip()
@@ -552,6 +560,10 @@ def test_rst_color_relief_sql_example(spark, rasters_view, tmp_path):
      "SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS vals FROM rasters"),
     ("rst_setsrid_sql_example",
      "SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters"),
+    ("rst_setcrs_sql_example",
+     "SELECT gbx_rst_setcrs(tile, 'EPSG:3857') AS tagged FROM rasters"),
+    ("rst_transformcrs_sql_example",
+     "SELECT gbx_rst_transformcrs(tile, 'EPSG:3857') AS reprojected FROM rasters"),
     ("rst_histogram_sql_example",
      "SELECT gbx_rst_histogram(tile, 16, cast(0 as double), cast(1000 as double), false) AS hist FROM rasters"),
     ("rst_threshold_sql_example",

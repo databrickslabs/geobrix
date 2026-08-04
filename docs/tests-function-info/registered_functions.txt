@@ -24,6 +24,7 @@ gbx_rst_scaley
 gbx_rst_skewx
 gbx_rst_skewy
 gbx_rst_srid
+gbx_rst_crs
 gbx_rst_subdatasets
 gbx_rst_summary
 gbx_rst_type
@@ -86,6 +87,7 @@ gbx_rst_rastertoworldcoord
 gbx_rst_rastertoworldcoordx
 gbx_rst_rastertoworldcoordy
 gbx_rst_transform
+gbx_rst_transformcrs
 gbx_rst_tryopen
 gbx_rst_updatetype
 gbx_rst_worldtorastercoord
@@ -122,6 +124,7 @@ gbx_rst_fillnodata
 gbx_rst_histogram
 gbx_rst_sample
 gbx_rst_setsrid
+gbx_rst_setcrs
 gbx_rst_threshold
 gbx_rst_cog_convert
 gbx_rst_contour

@@ -73,6 +73,9 @@
     "gbx_rst_convolve": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_convolve(tile, kernel) as filtered FROM rasters_with_kernels;"
     },
+    "gbx_rst_crs": {
+      "examples": "Examples:\n      > SELECT gbx_rst_crs(tile) as crs FROM rasters;"
+    },
     "gbx_rst_derivedband": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_derivedband(tile, 'def my_func(arr): return arr * 2', 'my_func') as derived FROM rasters;"
     },
@@ -304,6 +307,9 @@
     "gbx_rst_separatebands": {
       "examples": "Examples:\n      > SELECT path, bands[0] as red_band, bands[1] as green_band, bands[2] as blue_band FROM ( SELECT path, gbx_rst_separatebands(tile) as bands FROM rgb_rasters );"
     },
+    "gbx_rst_setcrs": {
+      "examples": "Examples:\n      > SELECT gbx_rst_setcrs(tile, 'EPSG:3857') AS tagged FROM rasters;"
+    },
     "gbx_rst_setsrid": {
       "examples": "Examples:\n      > SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters;"
     },
@@ -342,6 +348,9 @@
     },
     "gbx_rst_transform": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_transform(tile, 4326) as wgs84_tile, gbx_rst_srid(gbx_rst_transform(tile, 4326)) as new_srid FROM rasters;"
+    },
+    "gbx_rst_transformcrs": {
+      "examples": "Examples:\n      > SELECT path, gbx_rst_transformcrs(tile, 'EPSG:3857') as webmercator_tile, gbx_rst_crs(gbx_rst_transformcrs(tile, 'EPSG:3857')) as new_crs FROM rasters;"
     },
     "gbx_rst_tri": {
       "examples": "Examples:\n      > SELECT gbx_rst_tri(tile) AS tri FROM rasters;"

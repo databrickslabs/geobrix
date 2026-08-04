@@ -121,6 +121,24 @@ rst_srid_sql_example_output = """
 """
 
 
+def rst_crs_sql_example():
+    """Get the CRS as a string (authority code like EPSG:4326 / ESRI:54008, else WKT)."""
+    return """
+-- rst_crs always returns a CRS string, including non-EPSG rasters
+-- (ESRI codes, WKT, PROJ4) where rst_srid returns NULL.
+SELECT gbx_rst_crs(tile) as crs FROM rasters;
+"""
+
+
+rst_crs_sql_example_output = """
++-----------+
+|crs        |
++-----------+
+|EPSG:32618 |
++-----------+
+"""
+
+
 def rst_georeference_sql_example():
     """Get georeference (geotransform) parameters."""
     return """
@@ -654,6 +672,30 @@ rst_transform_sql_example_output = """
 +----+----------------------------------------------+--------+
 |... |{null, <raster bytes>, {driver -> GTiff, ...}}|4326    |
 +----+----------------------------------------------+--------+
+"""
+
+
+def rst_transformcrs_sql_example():
+    """Reproject a raster to a target CRS given as a string (accepts non-EPSG)."""
+    return """
+-- Reproject to Web Mercator using a CRS string.
+-- Unlike rst_transform (int EPSG only), rst_transformcrs also accepts
+-- ESRI codes, WKT, or PROJ4 targets. An int-castable string ('3857')
+-- is treated as an EPSG SRID.
+SELECT
+    path,
+    gbx_rst_transformcrs(tile, 'EPSG:3857') as webmercator_tile,
+    gbx_rst_crs(gbx_rst_transformcrs(tile, 'EPSG:3857')) as new_crs
+FROM rasters;
+"""
+
+
+rst_transformcrs_sql_example_output = """
++----+----------------------------------------------+----------+
+|path|webmercator_tile                              |new_crs   |
++----+----------------------------------------------+----------+
+|... |{null, <raster bytes>, {driver -> GTiff, ...}}|EPSG:3857 |
++----+----------------------------------------------+----------+
 """
 
 
@@ -2383,6 +2425,26 @@ SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters;
 
 
 rst_setsrid_sql_example_output = """
++----------------------------------------------+
+|tagged                                        |
++----------------------------------------------+
+|{null, <raster bytes>, {driver -> GTiff, ...}}|
++----------------------------------------------+
+"""
+
+
+def rst_setcrs_sql_example():
+    """Re-stamp the raster's CRS header from a CRS string (no reprojection)."""
+    return """
+-- Relabel the tile's CRS to Web Mercator without warping pixels.
+-- Accepts authority strings (EPSG:/ESRI:), WKT, or PROJ4; an int-castable
+-- string ('4326') behaves like rst_setsrid(tile, 4326).
+-- Use rst_transformcrs if you actually need a reprojection.
+SELECT gbx_rst_setcrs(tile, 'EPSG:3857') AS tagged FROM rasters;
+"""
+
+
+rst_setcrs_sql_example_output = """
 +----------------------------------------------+
 |tagged                                        |
 +----------------------------------------------+

@@ -14,15 +14,15 @@ GeoBrix names a CRS two ways, and both are first-class:
 | | **SRID (integer)** | **CRS string** |
 |---|---|---|
 | Type | `INT` | `STRING` |
-| Example | `4326` | `"EPSG:4326"`, `"ESRI:54008"`, WKT, PROJ4 |
-| Can represent | EPSG codes only | **any** CRS — EPSG, ESRI, WKT, PROJ4 |
-| No-EPSG value | `NULL` (lightweight) / `0` (heavyweight) | always a value |
-| Use for | the native ST bridge, EPSG-only workflows | non-EPSG rasters, lossless round trips |
+| Example | `4326`, `54008` | `"EPSG:4326"`, `"ESRI:54008"`, WKT, PROJ4 |
+| Can represent | an EPSG **or** ESRI code | **any** CRS — EPSG, ESRI, WKT, PROJ4 |
+| No-code value | `NULL` (lightweight) / `0` (heavyweight) | always a value |
+| Use for | the native ST bridge, authority-code workflows | authority-less CRSes, lossless round trips |
 
-The integer SRID is compact and maps directly onto Databricks' native ST functions (`ST_GeomFromWKB(wkb, srid)`), but it can **only** name a CRS that has an EPSG code. A great many real datasets don't: MODIS products use ESRI:54008 (World Sinusoidal), and plenty of imagery carries only an embedded WKT with no authority code. For those, the SRID is `NULL`/`0` and the CRS string is the only lossless representation.
+The integer SRID is compact and maps directly onto Databricks' native ST functions (`ST_GeomFromWKB(wkb, srid)`), but it can **only** name a CRS that carries an authority code — EPSG or ESRI (see [the resolution rule](#how-an-integer-srid-becomes-a-crs) below). A great many real datasets carry an ESRI code (MODIS products use ESRI:54008, World Sinusoidal), and some imagery carries only an embedded WKT with no authority code at all. For an authority-less CRS the SRID is `NULL`/`0` and the CRS string is the only lossless representation.
 
 :::tip Rule of thumb
-Reach for the **SRID** when you need the integer for the native ST bridge or an EPSG-only pipeline. Reach for the **CRS string** whenever a non-EPSG CRS might be in play — it never loses one.
+Reach for the **SRID** when you need the integer for the native ST bridge or an authority-code pipeline. Reach for the **CRS string** whenever an authority-less CRS (raw WKT/PROJ4) might be in play — it never loses one.
 :::
 
 ### The int-cast rule
@@ -33,6 +33,20 @@ Everywhere GeoBrix accepts a CRS *string*, one rule decides how it is interprete
 - **Otherwise** the string is parsed as a universal CRS definition — an authority code (`EPSG:4326`, `ESRI:54008`), WKT, or PROJ4 (`+proj=longlat +datum=WGS84 +no_defs`).
 
 This is how ESRI codes, WKT, and PROJ4 definitions all flow through the same string-taking API.
+
+### How an integer SRID becomes a CRS
+
+An integer SRID is **stored freely** — set and retrieved as any value `>= 0` (a negative SRID is rejected), whether or not it is currently a known code. Storing or reading a SRID never fails; matching the Databricks product, the interpretation and any error happen only when the SRID is **applied** to build a CRS (a reprojection, a stamp that writes CRS bytes). At that apply moment the integer is classified against the **authoritative PROJ code registries**:
+
+1. if the code is in the **EPSG** registry → `EPSG:<n>`;
+2. else if it is in the **ESRI** registry → `ESRI:<n>` (e.g. `54008` = World Sinusoidal);
+3. else it is **invalid** and applying it raises a clear error.
+
+The registries come from PROJ's `proj.db` (the SQLite database, since PROJ 6, that ships with the runtime) — they are authoritative and disjoint, so a code is classified correctly regardless of the numeric range. (This matters because the raw CRS constructors are lenient: `CRS.from_epsg(54008)` *succeeds* and would mislabel an ESRI code as EPSG — GeoBrix classifies by registry membership instead.)
+
+:::note EPSG / ESRI numeric collisions
+A few codes exist in **both** registries. GeoBrix resolves such a code as **EPSG first**. When your data is genuinely in the ESRI CRS of a colliding code, pass it explicitly as a CRS string (`"ESRI:<n>"`) via a `crs` argument or the reader's `geom_0_srid_proj`, rather than the bare integer.
+:::
 
 ### Canonical form
 
@@ -48,17 +62,17 @@ RasterX exposes both names through parallel functions. See the [RasterX Function
 
 **Read the CRS:**
 
-- [`rst_srid`](./raster-functions#rst_srid) — the integer EPSG code (`NULL`/`0` when the CRS has no EPSG code).
+- [`rst_srid`](./raster-functions#rst_srid) — the stored SRID integer (an EPSG or ESRI code); `NULL`/`0` when the raster carries no authority code.
 - [`rst_crs`](./raster-functions#rst_crs) — the CRS string; **always** returns a value, including for non-EPSG rasters.
 
 **Relabel the CRS header (no reprojection — the pixels don't move, only the label changes):**
 
-- [`rst_setsrid`](./raster-functions#rst_setsrid) — re-stamp from an integer EPSG SRID.
+- [`rst_setsrid`](./raster-functions#rst_setsrid) — re-stamp from an integer SRID (an EPSG or ESRI code; `0` clears the CRS).
 - [`rst_setcrs`](./raster-functions#rst_setcrs) — re-stamp from a CRS string (accepts ESRI/WKT/PROJ4; an int-castable string behaves like `rst_setsrid`).
 
 **Reproject (warp pixels into a new CRS):**
 
-- [`rst_transform`](./raster-functions#rst_transform) — reproject to an integer EPSG SRID.
+- [`rst_transform`](./raster-functions#rst_transform) — reproject to an integer SRID (an EPSG or ESRI code).
 - [`rst_transformcrs`](./raster-functions#rst_transformcrs) — reproject to a CRS string target (accepts non-EPSG ESRI/WKT/PROJ4).
 
 ```python

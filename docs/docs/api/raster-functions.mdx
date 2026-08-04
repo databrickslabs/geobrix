@@ -482,7 +482,7 @@ Powered by **rasterio**.
 Powered by **rasterio**.
 :::
 
-**Signature:** `rst_srid(tile: Column): Column` — Spatial reference ID (e.g. EPSG).
+**Signature:** `rst_srid(tile: Column): Column` — the stored spatial reference ID integer (an EPSG or ESRI code), or NULL when the tile has none. Returns the code as stored; it is classified only when applied. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model and the epsg→esri resolution rule.
 
 **SQL:**
 
@@ -496,7 +496,7 @@ Powered by **rasterio**.
 Powered by **rasterio** + **pyproj**.
 :::
 
-**Signature:** `rst_crs(tile: Column): Column` — the tile's CRS as a string.
+**Signature:** `rst_crs(tile: Column): Column` — the tile's CRS as a string (authority string like `EPSG:4326` / `ESRI:54008`, else WKT); **always** returns a value, including for non-EPSG rasters where `rst_srid` is NULL. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS has one, otherwise its WKT. Unlike `rst_srid` (which returns the integer EPSG code, or `NULL`/`0` for a CRS with no EPSG code), `rst_crs` always returns a value — including for non-EPSG rasters defined by an ESRI code, WKT, or PROJ4 string.
 
@@ -1750,7 +1750,7 @@ Powered by **rasterio**.
 Powered by **rasterio** (`rasterio.warp`). Reprojection uses the GDAL build bundled with rasterio, whose projection database and driver set may be narrower than the heavyweight tier.
 :::
 
-**Signature:** `rst_transform(tile: Column, targetSrid: Column): Column` — Reproject to target CRS. `targetSrid` must be a positive EPSG code; `0` or an unknown code is rejected with a clear error.
+**Signature:** `rst_transform(tile: Column, targetSrid: Column): Column` — Reproject to a target SRID (a positive EPSG or ESRI code, classified at apply time); `0` or a code in neither registry is rejected with a clear error. Use `rst_transformcrs` to reproject to a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 **SQL:**
 
@@ -1764,7 +1764,7 @@ Powered by **rasterio** (`rasterio.warp`). Reprojection uses the GDAL build bund
 Powered by **rasterio** (`rasterio.warp`) + **pyproj**. Reprojection uses the GDAL build bundled with rasterio, whose projection database and driver set may be narrower than the heavyweight tier.
 :::
 
-**Signature:** `rst_transformcrs(tile: Column, targetCrs: Column): Column` — reproject to a target CRS given as a *string*.
+**Signature:** `rst_transformcrs(tile: Column, targetCrs: Column): Column` — reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so you can reproject to a non-EPSG target. An int-castable string (`'3857'`) is treated as an EPSG SRID. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 
@@ -2237,7 +2237,7 @@ Powered by **rasterio**. Point geometries only; the point is assumed to be in th
 Powered by **rasterio**. Stamps the CRS without reprojecting.
 :::
 
-**Signature:** `rst_setsrid(tile: Column, srid: Column): Column` — Stamp an EPSG code onto a raster that lacks (or has a wrong) spatial reference. Does NOT reproject — only sets `ds.SetProjection(...)`. Use `rst_transform` when you need an actual reprojection.
+**Signature:** `rst_setsrid(tile: Column, srid: Column): Column` — Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a wrong) spatial reference; `0` clears the CRS. Does NOT reproject — only rewrites the CRS metadata. A negative SRID is rejected, and a positive code that is neither EPSG nor ESRI raises when stamped. Use `rst_transform` when you need an actual reprojection, or `rst_setcrs` to stamp from a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_setsrid_sql_example" outputConstant="rst_setsrid_sql_example_output" code={rasterxSqlCode} />
 
@@ -2249,7 +2249,7 @@ Powered by **rasterio**. Stamps the CRS without reprojecting.
 Powered by **rasterio** + **pyproj**. Stamps the CRS without reprojecting.
 :::
 
-**Signature:** `rst_setcrs(tile: Column, crs: Column): Column` — Stamp a CRS onto a raster that lacks (or has a wrong) spatial reference, from a CRS *string*. Does NOT reproject — only rewrites the CRS metadata. Use `rst_transformcrs` when you need an actual reprojection.
+**Signature:** `rst_setcrs(tile: Column, crs: Column): Column` — Stamp a CRS onto a raster that lacks (or has a wrong) spatial reference, from a CRS *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). Does NOT reproject — only rewrites the CRS metadata. Use `rst_transformcrs` when you need an actual reprojection. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
 Distinct from `rst_setsrid` (integer EPSG only): `rst_setcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so a non-EPSG CRS can be applied. An int-castable string (`'4326'`) behaves like `rst_setsrid(tile, 4326)`. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 

@@ -137,7 +137,15 @@ Every decision in this spec must be **user-visible on `docs/docs/api/coordinate-
 4. **Produce-new-raster reprojection (§3.2)** — document that `rst_rasterize`/`rst_gridfrompoints`/`rst_dtmfromgeoms` reproject the geometry from its source CRS into `out_crs`/`out_srid` before burning, so a geometry in one CRS and an output in another is correct (not garbage), and that absent `out_*` carries the geometry's source CRS (not a forced 4326).
 5. **The `rastertogrid` auto-reproject + `crs` override (Group C)** — `rst_{h3,quadbin}_rastertogrid*` now reproject a differently-CRS'd raster to grid-native automatically; the `crs` override is for CRS-less-but-known rasters; a CRS-less raster with no override is assumed grid-native (never errors). Note this closes a prior silent-wrong-answer footgun.
 6. **A brief performance note (§3.4)** — that CRS resolution and reprojection are cached internally (transformer reuse), so callers do not need to pre-warp or batch by CRS for performance; keep it short and non-normative (internal detail, not API).
-7. **Cross-link** — every function's reference entry that gained a `crs`/`out_crs`/`clip_crs` param links to the relevant section here (extends the R2 per-function-link work). Update the RasterX subsection's function bullets to name the new params.
+7. **A master CRS-function cross-reference table** — a single tabular enumeration of **every CRS-touching function across all of GeoBrix**, for easy reference/cross-reference. Columns:
+
+   | Package | Function | Tiers | CRS param(s) | Role | CRS-in behavior | Notes |
+   |---|---|---|---|---|---|---|
+
+   - **Package**: RasterX / VectorX / GridX. **Role**: `source` / `output` / `both` / `accessor`. **CRS param(s)**: `srid`, `crs`, `clip_crs`, `out_srid`, `out_crs`, or "—" (intrinsic/accessor). **CRS-in behavior**: one-liner (e.g. "reproject cutline→tile CRS", "auto-reproject raster→grid-native", "reproject geom→output before burn", "returns SRID int", "returns CRS string"). **Notes**: e.g. "bng out ignored (always 27700)", "light-only DataFrame helper".
+   - **This is a LIVING MATRIX seeded here with the complete RasterX surface** (all Group A–E functions, plus the already-shipped R/R2 functions: `rst_srid`, `rst_crs`, `rst_setsrid`, `rst_setcrs`, `rst_transform`, `rst_transformcrs`). Rows for **VectorX and GridX are added by their own follow-on specs** as those functions ship — each spec owns its rows and appends them. The table's column shape and the source/output-role vocabulary are fixed here so later specs slot in consistently.
+   - Group the rows by Package (RasterX rows populated; VectorX/GridX sub-headers present with a "see the VectorX / GridX CRS spec" placeholder row so the structure is visible and the deferral is explicit — this placeholder is documentation of scope, not a TODO).
+8. **Cross-link** — every function's reference entry that gained a `crs`/`out_crs`/`clip_crs` param links to the relevant section here (extends the R2 per-function-link work); and every row of the master table (item 7) links to that function's reference entry. Update the RasterX subsection's function bullets to name the new params.
 
 Voice-grep clean (no internal planning vocabulary); Docker docs build green via `gbx:docs:build` (dev-server-aware).
 
@@ -219,8 +227,8 @@ Binding parity (`gbx:test:bindings`) updated for every renamed/added param and a
 
 ## 5. Out of scope (explicitly deferred to later CRS specs)
 
-- **VectorX CRS family** — `st_crs`, `st_setcrs`, `st_transformcrs` (string complement; NOT duplicating product `st_srid`/`st_setsrid`/`st_transform`). Absent both tiers today.
-- **GridX complete surface** — reproject input geom in a custom CRS into a grid's fixed SRID for `bng/quadbin/h3` `polyfill`/`tessellate`/`pointascell`; BNG cell-geometry SRID stamp; grid `crs`/`srid` accessors.
+- **VectorX CRS family** — `st_crs`, `st_setcrs`, `st_transformcrs` (string complement; NOT duplicating product `st_srid`/`st_setsrid`/`st_transform`). Absent both tiers today. **That spec appends its rows to the master CRS cross-reference table (Group F item 7) and follows the source/output-role vocabulary + `out_*` naming standard fixed here.**
+- **GridX complete surface** — reproject input geom in a custom CRS into a grid's fixed SRID for `bng/quadbin/h3` `polyfill`/`tessellate`/`pointascell`; BNG cell-geometry SRID stamp; grid `crs`/`srid` accessors. **That spec appends its rows to the master CRS cross-reference table (Group F item 7); `gbx_h3_cell_bbox` is relocated to GridX by this spec (Group E) but its master-table row is seeded here.**
 - **`st_asmvt_pyramid`** EPSG:4326 assumption (VectorX; B2 in recon) — deferred with VectorX.
 - **`st_interpolateelevation*`** `out_*` rename — deferred with VectorX (applies the same standard there).
 - **GridX CRS surface** (`bng/quadbin/h3` `polyfill`/`tessellate`/`pointascell` input-geom `crs`, BNG cell-geometry SRID stamp, grid `crs`/`srid` accessors) — deferred to the GridX spec. Note `gbx_h3_cell_bbox` lands in GridX (Group E) but its CRS work is done here because it serves the `rst_h3_*` 100% goal.

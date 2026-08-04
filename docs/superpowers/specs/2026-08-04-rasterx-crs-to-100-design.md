@@ -2,7 +2,7 @@
 
 **Status:** Design (approved decisions Q1–Q10 baked in). Successor to Spec R (raster CRS-string) and Spec R2 (SRID resolution rule). Branch `branch/0.5.0`, v0.5.0 beta.
 
-**Goal:** Close every remaining CRS gap in the **RasterX** package so that (a) every geometry-accepting raster function lets the caller declare the geometry's *source* CRS, (b) every function that projects an *output* accepts a CRS string (ESRI/WKT/PROJ4), not just an int EPSG code, and (c) `rst_{h3,quadbin}_rastertogrid*` stop silently assuming EPSG:4326 — all routed through the R2 resolver, and all honoring the invariant **absent CRS never throws**. VectorX (`st_crs`/`st_setcrs`/`st_transformcrs`) and GridX remain separate follow-on specs.
+**Goal:** Close every remaining CRS gap in the **RasterX** package so that (a) every geometry-accepting raster function lets the caller declare the geometry's *source* CRS, (b) every function that projects an *output* accepts a CRS string (ESRI/WKT/PROJ4), not just an int EPSG code, (c) `rst_{h3,quadbin}_rastertogrid*` stop silently assuming EPSG:4326, and (d) **the full nuance of every rule below is taught on the Coordinate Reference Systems docs page** (Group F) — all routed through the R2 resolver, and all honoring the invariant **absent CRS never throws**. VectorX (`st_crs`/`st_setcrs`/`st_transformcrs`) and GridX remain separate follow-on specs.
 
 ---
 
@@ -127,6 +127,20 @@ Update `register` wiring, `registered_functions.txt`, `function-info.json`, and 
 
 ---
 
+### Group F — the Coordinate Reference Systems docs page (the nuance must land here)
+
+Every decision in this spec must be **user-visible on `docs/docs/api/coordinate-reference-systems.mdx`** — per the repo's "docs are the source of truth" rule, and because these rules only become real to users if the page teaches them. The page today covers SRID-vs-CRS-string, the int-cast rule, the resolution rule (R2), and canonical form; it does **not** yet cover the two-role model, the naming standard, the per-geom/mixed-column semantics, or the never-error invariant. This spec's docs task adds, with runnable examples wired from doc tests (`docs/tests/**`, no prose-only claims):
+
+1. **A new "Source CRS vs output CRS" section** — the two roles (§1), the naming standard table (`srid`/`crs`/`clip_crs` = source, "what my input already is"; `out_srid`/`out_crs` = target, "how to project the output"), and *why* the name tells you the role. Include the full subset lists from §6.
+2. **The source-CRS precedence + per-geom fallback (§1.1)** — the EWKB-wins / plain-WKB-uses-param / neither→CRS-less table, stated as universal. Explicitly document **mixed columns** (Q12): a Column can mix EWKB and plain-WKB rows; the scalar `crs`/`srid` labels only the plain-WKB rows, per-geom; this is **not** an error. Show a mixed-column example.
+3. **The never-error invariant (§1.3) + the conflict/error matrix (§3.3)** — spell out the *only* three things that raise (both source params, both output params, an explicitly-unresolvable string) and that everything else — including CRS-less inputs — degrades to a sensible assumption and never throws. This is the single most important user-facing promise; make it prominent (a `:::note`).
+4. **Produce-new-raster reprojection (§3.2)** — document that `rst_rasterize`/`rst_gridfrompoints`/`rst_dtmfromgeoms` reproject the geometry from its source CRS into `out_crs`/`out_srid` before burning, so a geometry in one CRS and an output in another is correct (not garbage), and that absent `out_*` carries the geometry's source CRS (not a forced 4326).
+5. **The `rastertogrid` auto-reproject + `crs` override (Group C)** — `rst_{h3,quadbin}_rastertogrid*` now reproject a differently-CRS'd raster to grid-native automatically; the `crs` override is for CRS-less-but-known rasters; a CRS-less raster with no override is assumed grid-native (never errors). Note this closes a prior silent-wrong-answer footgun.
+6. **A brief performance note (§3.4)** — that CRS resolution and reprojection are cached internally (transformer reuse), so callers do not need to pre-warp or batch by CRS for performance; keep it short and non-normative (internal detail, not API).
+7. **Cross-link** — every function's reference entry that gained a `crs`/`out_crs`/`clip_crs` param links to the relevant section here (extends the R2 per-function-link work). Update the RasterX subsection's function bullets to name the new params.
+
+Voice-grep clean (no internal planning vocabulary); Docker docs build green via `gbx:docs:build` (dev-server-aware).
+
 ## 3. Behavioral details
 
 ### 3.1 Source-CRS resolution (Groups A, C)
@@ -198,6 +212,8 @@ Group C correctness regression: a **non-4326 raster (UTM)** fed to `rst_h3_raste
 Group B correctness: an **EWKB-4326 geometry** rasterized with `out_crs="EPSG:32633"` reprojects the geometry before burning (extent coords in 32633), vs. today's garbage.
 
 Binding parity (`gbx:test:bindings`) updated for every renamed/added param and any new registered entry; `registered_functions.txt` + `function-info.json` + Scala `override def name` + Python binding all in lockstep.
+
+**Docs (Group F):** the CRS-page examples are backed by runnable doc tests under `docs/tests/**` (per the docs-are-the-source rule) — the mixed-column example, the produce-new-raster reprojection example, and the `rastertogrid` auto-reproject example each execute real code with assertions, so the page cannot drift from behavior. `gbx:test:docs` green; `gbx:docs:build` green.
 
 ---
 

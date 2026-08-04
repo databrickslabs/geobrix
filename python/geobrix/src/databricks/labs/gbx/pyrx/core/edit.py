@@ -84,7 +84,9 @@ def clip_to_geom(ds, geom, all_touched: bool = False):
             from rasterio.warp import transform_geom
             from shapely.geometry import mapping
 
-            src_crs = rasterio.crs.CRS.from_epsg(srid)
+            from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+            src_crs = resolve_crs(srid)  # epsg/esri classification (ESRI cutlines work)
             if src_crs != dst_crs:
                 # transform_geom returns a GeoJSON-like dict; rasterio.mask
                 # accepts GeoJSON geometries directly.

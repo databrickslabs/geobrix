@@ -49,8 +49,19 @@ def _esri_codes() -> frozenset:
 
 
 def _is_intlike(value) -> bool:
+    # Accept Python int, numpy integer (e.g. shapely.get_srid -> np.int32), and
+    # int-castable strings. bool is an int subclass but not a SRID — exclude it.
+    if isinstance(value, bool):
+        return False
     if isinstance(value, int):
         return True
+    try:
+        import numpy as _np
+
+        if isinstance(value, _np.integer):
+            return True
+    except Exception:
+        pass
     if isinstance(value, str):
         try:
             int(value.strip())

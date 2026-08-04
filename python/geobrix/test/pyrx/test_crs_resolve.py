@@ -59,6 +59,17 @@ def test_canonical_labels_esri_code_as_esri():
     assert C.crs_to_canonical(C.resolve_crs(4326)) == "EPSG:4326"
 
 
+def test_resolve_numpy_int_srid():
+    # shapely.get_srid returns np.int32 — resolve_crs must treat it as an int SRID,
+    # not fall to the string branch (which raises CRSError on a numpy scalar).
+    import numpy as np
+
+    assert C.resolve_crs(np.int32(4326)) == CRS.from_epsg(4326)
+    assert C.resolve_crs(np.int64(54008)).to_authority() == ("ESRI", "54008")
+    # bool is an int subclass but is not a SRID — must not be treated as int-like
+    assert not C._is_intlike(True)
+
+
 def test_resolve_deprecated_epsg_still_epsg():
     # A deprecated-but-real EPSG code must classify as EPSG (allow_deprecated), not raise.
     # EPSG:4226 (Cape, deprecated) is a classic deprecated geographic CRS.

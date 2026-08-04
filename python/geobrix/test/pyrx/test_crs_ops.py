@@ -203,6 +203,31 @@ def test_setcrs_virtual_records_pending_crs_stays_virtual():
         os.unlink(tif_path)
 
 
+def test_pending_srid_esri_code_materializes_as_esri():
+    """A virtual tile whose pending_srid is an ESRI code (54008) opens as ESRI:54008
+    — the apply-site routes through resolve_crs, not the EPSG-only from_epsg."""
+    b = _epsg4326_tif()
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as f:
+        f.write(b)
+        tif_path = f.name
+    try:
+        import rasterio
+
+        with rasterio.open(tif_path) as ds:
+            w, h = ds.width, ds.height
+        vt = VirtualTile(
+            cellid=-1,
+            raster=None,
+            path=tif_path,
+            window=(0, 0, w, h),
+            metadata={ot.PENDING_SRID: "54008"},
+        )
+        with ot.open_tile(vt) as ds:
+            assert crs_to_canonical(ds.crs) == "ESRI:54008"
+    finally:
+        os.unlink(tif_path)
+
+
 def test_setcrs_virtual_pending_crs_supersedes_pending_srid():
     """pending_crs takes precedence over pending_srid when both are present."""
     b = _epsg4326_tif()

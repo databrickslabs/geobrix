@@ -144,7 +144,11 @@ def _window_dataset_bytes(
 
         profile["crs"] = resolve_crs(crs_str)
     elif srid is not None:
-        profile["crs"] = _rcrs.CRS.from_epsg(srid)
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs as _resolve
+
+        profile["crs"] = _resolve(
+            srid
+        )  # epsg/esri classification, not lenient from_epsg
     # Route through the compression authority: ZSTD + dtype-predictor baseline.
     out_dtype = profile.get("dtype", src.dtypes[0])
     decoded_bytes = (
@@ -290,9 +294,7 @@ def open_tile(tile: VirtualTile) -> Iterator[DatasetReader]:
 
                 want_crs = resolve_crs(tile.crs)
                 effective_src_crs = (
-                    rasterio.crs.CRS.from_epsg(pending_srid)
-                    if pending_srid is not None
-                    else src.crs
+                    resolve_crs(pending_srid) if pending_srid is not None else src.crs
                 )
                 if effective_src_crs is None or effective_src_crs != want_crs:
                     tile_bytes = _warp_window_bytes_crs(
@@ -531,14 +533,10 @@ def open_header(tile) -> Iterator[DatasetReader]:
         pending_count = len(bands) if bands else None
         # pending_crs: pending_crs (string) supersedes pending_srid.
         pending_crs = None
-        if crs_str is not None:
+        if crs_str is not None or srid is not None:
             from databricks.labs.gbx.pyrx.core.crs import resolve_crs
 
-            pending_crs = resolve_crs(crs_str)
-        elif srid is not None:
-            import rasterio.crs as _rcrs
-
-            pending_crs = _rcrs.CRS.from_epsg(srid)
+            pending_crs = resolve_crs(crs_str if crs_str is not None else srid)
 
         # pending_nodata is passed to _WindowHeaderView, which applies the same
         # ensure/preserve+dtype-fit logic as _window_dataset_bytes so header and

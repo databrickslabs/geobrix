@@ -164,7 +164,9 @@ def sample(ds, geom) -> list:
         try:
             from rasterio.warp import transform as _transform
 
-            src_crs = rasterio.crs.CRS.from_epsg(srid)
+            from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+            src_crs = resolve_crs(srid)  # epsg/esri classification
             if src_crs != dst_crs:
                 xs, ys = _transform(src_crs, dst_crs, [x], [y])
                 x, y = xs[0], ys[0]

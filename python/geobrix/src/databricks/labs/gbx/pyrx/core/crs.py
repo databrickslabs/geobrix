@@ -7,10 +7,21 @@ else raise (a code in neither registry is invalid). The code sets come from PROJ
 ``proj.db`` via ``pyproj.database.get_codes`` and are built once + cached.
 """
 
+import threading
+from collections import OrderedDict
 from functools import lru_cache
 from typing import Optional, Union
 
 from rasterio.crs import CRS
+
+# 120 WGS84 UTM zones (EPSG 326xx N + 327xx S) + 4326/27700/3857 + headroom.
+# A workload touching every UTM zone plus the common CRSes never evicts.
+_TRANSFORMER_CACHE_SIZE = 128
+
+# Transformers/CRS objects are NOT thread-safe for concurrent use, and executors
+# run multiple Spark tasks per JVM. Keep one LRU cache per worker thread — reuse
+# within a thread's row loop, zero cross-thread contention (no lock on the hot path).
+_thread_local = threading.local()
 
 # CRS PJTypes a numeric SRID could name (projected / geographic / geocentric / compound).
 _CRS_PJTYPES = (
@@ -101,3 +112,61 @@ def crs_to_canonical(crs: Optional[CRS]) -> Optional[str]:
     if auth:
         return f"{auth[0]}:{auth[1]}"
     return crs.to_wkt()
+
+
+def _transformer_cache() -> "OrderedDict":
+    cache = getattr(_thread_local, "transformers", None)
+    if cache is None:
+        cache = OrderedDict()
+        _thread_local.transformers = cache
+    return cache
+
+
+def _as_crs(value) -> CRS:
+    """A CRS object passes through; anything else is resolved via resolve_crs."""
+    return value if isinstance(value, CRS) else resolve_crs(value)
+
+
+def get_transformer(src, dst):
+    """Thread-local, LRU-bounded ``pyproj.Transformer`` keyed by canonical CRS pair.
+
+    ``src``/``dst`` may each be an int SRID, a CRS string, or a CRS object. Built
+    with ``always_xy=True`` (lon/lat axis order — a classic silent-wrong-answer
+    source if unpinned). Equivalent spellings (``4326`` / ``"4326"`` /
+    ``"EPSG:4326"``) resolve to the same canonical key and share one transformer.
+    """
+    from pyproj import Transformer
+
+    src_crs = _as_crs(src)
+    dst_crs = _as_crs(dst)
+    key = (crs_to_canonical(src_crs), crs_to_canonical(dst_crs))
+    cache = _transformer_cache()
+    tr = cache.get(key)
+    if tr is None:
+        tr = Transformer.from_crs(src_crs, dst_crs, always_xy=True)
+        cache[key] = tr
+        if len(cache) > _TRANSFORMER_CACHE_SIZE:
+            cache.popitem(last=False)  # evict oldest (LRU)
+    else:
+        cache.move_to_end(key)
+    return tr
+
+
+def resolve_source_crs(embedded_srid, srid=None, crs=None) -> Optional[CRS]:
+    """Rule 1 (per-geom) source-CRS resolution.
+
+    Precedence: an embedded SRID (from EWKB/EWKT) always wins; else the single
+    explicit ``srid`` or ``crs`` param (both set -> error); else ``None``
+    (CRS-less). The explicit param is a per-geom fallback for plain WKB/WKT — a
+    geometry carrying an embedded SRID ignores the param (mixed-column safe), no
+    error. Never raises except the both-params conflict + an unresolvable string.
+    """
+    if embedded_srid and int(embedded_srid) > 0:
+        return resolve_crs(int(embedded_srid))
+    if srid is not None and crs is not None:
+        raise ValueError("resolve_source_crs: provide srid OR crs, not both")
+    if crs is not None:
+        return resolve_crs(crs)
+    if srid is not None:
+        return resolve_crs(srid)
+    return None

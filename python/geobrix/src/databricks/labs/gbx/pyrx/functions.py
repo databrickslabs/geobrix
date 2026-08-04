@@ -6040,12 +6040,13 @@ def rst_bng_rasterize_agg(
 
 
 @f.udf(_BBOX_SCHEMA)
-def _h3_cell_bbox_udf(cellid, srid, mode, kring_pad):
-    """Return STRUCT<xmin,ymin,xmax,ymax> for one H3 cell in *srid*.
+def _h3_cell_bbox_udf(cellid, srid, mode, kring_pad, out_crs=None):
+    """Return STRUCT<xmin,ymin,xmax,ymax> for one H3 cell in the output CRS.
 
     When *kring_pad* > 0 the cell is expanded to its k-ring neighbourhood
     before computing the bounding box, so the returned bbox covers the full
-    padded neighbourhood of that cell.
+    padded neighbourhood of that cell. Output CRS: ``out_crs`` (string) wins over
+    the int ``srid``; neither -> EPSG:4326.
     """
     if cellid is None:
         return None
@@ -6060,7 +6061,14 @@ def _h3_cell_bbox_udf(cellid, srid, mode, kring_pad):
     else:
         cells = [cstr]
 
-    _srid = int(srid) if srid is not None else 4326
+    # Output-CRS spec: out_crs string wins over the int srid; else grid-native.
+    # _cr._reproject accepts an int SRID or a CRS string interchangeably.
+    if out_crs is not None:
+        _srid = out_crs
+    elif srid is not None:
+        _srid = int(srid)
+    else:
+        _srid = 4326
     _mode = mode or "centroids"
 
     lons, lats = [], []
@@ -6079,22 +6087,28 @@ def _h3_cell_bbox_udf(cellid, srid, mode, kring_pad):
 
 
 def gbx_h3_cell_bbox(
-    cellid: ColLike, srid: ColLike = None, mode: ColLike = None
+    cellid: ColLike,
+    out_srid: ColLike = None,
+    mode: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
-    """Bounding box of one H3 cell in *srid* (centroid point or hexagon envelope).
+    """Bounding box of one H3 cell in the output CRS (centroid point or envelope).
 
     Returns a ``STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>``.
 
     Args:
-        cellid: Column holding the H3 cell id (integer).
-        srid:   Output CRS EPSG code. Defaults to 4326.
-        mode:   ``"centroids"`` (default) or ``"spatial_envelope"``.
+        cellid:   Column holding the H3 cell id (integer).
+        out_srid: Output CRS as an EPSG or ESRI code (int). Defaults to 4326.
+        mode:     ``"centroids"`` (default) or ``"spatial_envelope"``.
+        out_crs:  Output CRS string (``EPSG:x`` / ``ESRI:x`` / WKT); wins over
+                  ``out_srid`` when set.
     """
     return _h3_cell_bbox_udf(
         _col(cellid),
-        _col(srid) if srid is not None else f.lit(4326),
+        _col(out_srid) if out_srid is not None else f.lit(4326),
         _col(mode) if mode is not None else f.lit("centroids"),
         f.lit(0),
+        f.lit(out_crs) if out_crs is not None else f.lit(None),
     )
 
 
@@ -6102,10 +6116,11 @@ def rst_h3_gridspec(
     df,
     cell_col="cellid",
     *group_cols,
-    srid=4326,
+    out_srid=4326,
     pixel_size=None,
     mode="centroids",
     kring_pad=1,
+    out_crs=None,
 ):
     """Snapped shared-canvas grid spec per group of H3 cells.
 
@@ -6121,17 +6136,28 @@ def rst_h3_gridspec(
         df:          Input DataFrame.
         cell_col:    Column name holding H3 cell IDs (integer).
         *group_cols: Additional grouping columns (e.g. a tile/region key).
-        srid:        Output CRS EPSG code. Defaults to 4326.
+        out_srid:    Output CRS as an EPSG or ESRI code (int). Defaults to 4326.
         pixel_size:  Ground resolution in CRS units. ``None`` = auto from H3
                      resolution (edge-length heuristic, same as
                      ``cellraster.compute_gridspec``).
         mode:        ``"centroids"`` (default) or ``"spatial_envelope"``.
         kring_pad:   k-ring padding applied per cell before computing its bbox.
                      Defaults to 1 (matches ``compute_gridspec`` default).
+        out_crs:     Output CRS string (``EPSG:x`` / ``ESRI:x``); wins over
+                     ``out_srid``. The ``grid.srid`` field carries its EPSG code
+                     when it has one (else ``out_srid``), while the bbox
+                     coordinates are computed in the resolved CRS.
 
     Returns:
         DataFrame grouped by *group_cols* with a ``grid`` struct column added.
     """
+    # Resolve the output-CRS spec once (out_crs wins). The bbox coords use the
+    # resolved CRS; the grid.srid INT field carries its EPSG code when available.
+    _out_spec = out_crs if out_crs is not None else out_srid
+    _resolved = cellraster_core._norm_out_crs(_out_spec)
+    _is_geo = bool(_resolved.is_geographic)
+    _epsg = _resolved.to_epsg()
+    _srid_field = int(_epsg) if _epsg is not None else int(out_srid)
     # Sample one cell on the driver to obtain the H3 resolution for auto pixel_size.
     # An empty input is always an error: there is nothing to rasterize onto.
     _res = None
@@ -6145,8 +6171,17 @@ def rst_h3_gridspec(
 
         _res = _h3_driver.get_resolution(sample_str)
 
-    # Per-cell expanded bbox (kring_pad applied inside the scalar UDF).
-    b = _h3_cell_bbox_udf(_col(cell_col), f.lit(srid), f.lit(mode), f.lit(kring_pad))
+    # Per-cell expanded bbox (kring_pad applied inside the scalar UDF). The bbox is
+    # computed in the resolved output CRS: pass out_crs when set (string wins),
+    # else the int out_srid. _h3_cell_bbox_udf's out_crs wins over its srid arg.
+    if out_crs is not None:
+        b = _h3_cell_bbox_udf(
+            _col(cell_col), f.lit(None), f.lit(mode), f.lit(kring_pad), f.lit(out_crs)
+        )
+    else:
+        b = _h3_cell_bbox_udf(
+            _col(cell_col), f.lit(out_srid), f.lit(mode), f.lit(kring_pad)
+        )
     gcols = list(group_cols)
     enriched = df.withColumn("_bb", b)
     agg_expr = enriched.groupBy(*gcols) if gcols else enriched.groupBy()
@@ -6158,7 +6193,7 @@ def rst_h3_gridspec(
     )
 
     # Capture closure values for the snap UDF (driver-side constants).
-    _srid_val = srid
+    _srid_val = _srid_field
 
     @f.udf(_GRID_SCHEMA)
     def _snap_to_grid(bxmin, bymin, bxmax, bymax):
@@ -6176,7 +6211,7 @@ def rst_h3_gridspec(
                 if _res is not None
                 else 1.0
             )
-            if _srid_val == 4326:
+            if _is_geo:
                 ps = edge_m / (111320.0 * max(_math.cos(_math.radians(mid_lat)), 1e-6))
             else:
                 ps = edge_m

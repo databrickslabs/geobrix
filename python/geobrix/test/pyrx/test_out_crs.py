@@ -99,3 +99,26 @@ def test_cellraster_grid_out_crs_string_and_int_and_esri():
         b = cr.cells_to_raster(cells, *gs, resolution=6, grid="h3")
         with MemoryFile(b) as mf, mf.open() as ds:
             assert ds.crs is not None and ds.crs.to_authority() == want, (spec, ds.crs)
+
+
+# --- Task 7: gbx_h3_cell_bbox + rst_h3_gridspec output CRS -----------------
+
+
+def test_h3_cell_bbox_out_crs(spark):
+    """gbx_h3_cell_bbox(out_crs='EPSG:3857') returns a bbox in web-mercator metres;
+    out_srid=54008 (ESRI) resolves without error."""
+    import h3
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    cell = h3.str_to_int(h3.latlng_to_cell(42.0, 11.0, 6))
+    df = spark.createDataFrame([(cell,)], ["cellid"])
+    # Web-mercator: |x|,|y| are metres (large), not degrees.
+    row = df.select(
+        prx.gbx_h3_cell_bbox("cellid", out_crs=F.lit("EPSG:3857")).alias("b")
+    ).first()
+    assert abs(row["b"]["xmax"]) > 1000.0  # metres, not ~11 degrees
+    # ESRI out_srid resolves (no raise).
+    row2 = df.select(prx.gbx_h3_cell_bbox("cellid", out_srid=F.lit(54008)).alias("b")).first()
+    assert row2["b"] is not None

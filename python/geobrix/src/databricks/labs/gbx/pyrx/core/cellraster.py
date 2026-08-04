@@ -49,14 +49,15 @@ def _resolution(cell_strs) -> int:
 
 
 def _reproject(xs, ys, src, dst):
-    # src/dst may be an int SRID, int-like/CRS string, or a CRS object. Normalise
-    # both via pyproj so the identity short-circuit survives across spellings
-    # (e.g. 4326 (int) == "EPSG:4326" == a CRS(4326) object -> no reproject).
-    from pyproj import CRS as _PJCRS
+    # src/dst may be an int SRID, int-like/CRS string, or a CRS object. Route
+    # through the shared resolver (int/int-like classified EPSG-vs-ESRI via the
+    # authoritative rule — a bare int like 54008 is ESRI, NOT EPSG:54008 which
+    # pyproj's lenient from_user_input would reject). The identity short-circuit
+    # survives across spellings (4326 == "EPSG:4326" == CRS(4326)).
     from pyproj import Transformer
 
-    s = _PJCRS.from_user_input(src)
-    d = _PJCRS.from_user_input(dst)
+    s = _norm_out_crs(src)
+    d = _norm_out_crs(dst)
     if s == d:
         return np.asarray(xs, dtype="float64"), np.asarray(ys, dtype="float64")
     tr = Transformer.from_crs(s, d, always_xy=True)
@@ -65,10 +66,15 @@ def _reproject(xs, ys, src, dst):
 
 
 def _norm_out_crs(srid):
-    """Resolve an output-CRS spec (int SRID, int-like/CRS string) to a rasterio CRS
-    via the shared resolver — the single place grid rasterize output CRS is built."""
+    """Resolve an output-CRS spec (int SRID, int-like/CRS string, or CRS object) to
+    a rasterio CRS via the shared resolver — the single place grid rasterize output
+    CRS is built. Ints/int-like are classified EPSG-vs-ESRI (54008 -> ESRI:54008)."""
+    from rasterio.crs import CRS as _RioCRS
+
     from databricks.labs.gbx.pyrx.core.crs import resolve_crs
 
+    if isinstance(srid, _RioCRS):
+        return srid
     return resolve_crs(srid)
 
 

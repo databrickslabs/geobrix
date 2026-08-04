@@ -76,3 +76,26 @@ def test_rasterize_reprojects_ewkb_source_into_output():
         data = ds.read(1)
         # Some pixels burned (value 5.0 present) -> the reprojected geom landed in-extent.
         assert np.any(data == 5.0), "reprojected geometry should burn inside the extent"
+
+
+# --- Group B (B4): grid rasterize_agg output CRS via cellraster ------------
+
+
+def test_cellraster_grid_out_crs_string_and_int_and_esri():
+    """cellraster (backing rst_{h3,quadbin}_rasterize_agg) accepts an int SRID OR
+    a CRS string as the output-CRS spec, and labels ESRI codes correctly."""
+    import h3
+
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    cells = {h3.str_to_int(h3.latlng_to_cell(42.0, 11.0, 6)): 1.0}
+    keys = list(cells.keys())
+    for spec, want in [
+        (4326, ("EPSG", "4326")),
+        ("EPSG:3857", ("EPSG", "3857")),
+        ("ESRI:54008", ("ESRI", "54008")),
+    ]:
+        gs = cr.compute_gridspec(keys, srid=spec, mode="centroids", kring_pad=1)
+        b = cr.cells_to_raster(cells, *gs, resolution=6, grid="h3")
+        with MemoryFile(b) as mf, mf.open() as ds:
+            assert ds.crs is not None and ds.crs.to_authority() == want, (spec, ds.crs)

@@ -5432,6 +5432,7 @@ def _rst_h3_rasterize_agg_udf(
     height: pd.Series,
     mode: pd.Series,
     kring_pad: pd.Series,
+    out_crs: pd.Series = None,
 ) -> bytes:
     from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core import cellraster as cr
@@ -5470,7 +5471,14 @@ def _rst_h3_rasterize_agg_udf(
         cell_values[c] = v  # last-wins (cells of one res don't overlap)
 
     res = cr._resolution([cr._h3_str(c) for c in cells])
-    _srid = int(srid.iloc[0]) if srid is not None and srid.iloc[0] is not None else 4326
+    # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
+    # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
+    if out_crs is not None and out_crs.iloc[0] is not None:
+        _srid = out_crs.iloc[0]
+    elif srid is not None and srid.iloc[0] is not None:
+        _srid = int(srid.iloc[0])
+    else:
+        _srid = 4326
     _mode = (
         mode.iloc[0] if mode is not None and mode.iloc[0] is not None else "centroids"
     )
@@ -5516,6 +5524,7 @@ def _rst_quadbin_rasterize_agg_udf(
     height: pd.Series,
     mode: pd.Series,
     kring_pad: pd.Series,
+    out_crs: pd.Series = None,
 ) -> bytes:
     from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core import cellraster as cr
@@ -5555,7 +5564,14 @@ def _rst_quadbin_rasterize_agg_udf(
 
     _ad = cr._adapter("quadbin")
     res = _ad.resolution([_ad.to_key(c) for c in cells])
-    _srid = int(srid.iloc[0]) if srid is not None and srid.iloc[0] is not None else 4326
+    # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
+    # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
+    if out_crs is not None and out_crs.iloc[0] is not None:
+        _srid = out_crs.iloc[0]
+    elif srid is not None and srid.iloc[0] is not None:
+        _srid = int(srid.iloc[0])
+    else:
+        _srid = 4326
     _mode = (
         mode.iloc[0] if mode is not None and mode.iloc[0] is not None else "centroids"
     )
@@ -5601,6 +5617,7 @@ def _rst_bng_rasterize_agg_udf(
     height: pd.Series,
     mode: pd.Series,
     kring_pad: pd.Series,
+    out_crs: pd.Series = None,
 ) -> bytes:
     from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core import cellraster as cr
@@ -5857,7 +5874,7 @@ def rst_dtmfromgeoms_agg(
 def rst_h3_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
-    srid: ColLike = None,
+    out_srid: ColLike = None,
     pixel_size: ColLike = None,
     xmin: ColLike = None,
     ymin: ColLike = None,
@@ -5867,13 +5884,15 @@ def rst_h3_rasterize_agg(
     height: ColLike = None,
     mode: ColLike = None,
     kring_pad: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
     """Rasterize a group's H3 cells into one tile (pixel-centroid burn).
 
     ``value`` omitted -> presence mask (1.0/NoData). Supply an explicit extent
     (xmin..height, e.g. from ``rst_h3_gridspec``) for aligned band stacking;
-    else the grid is auto-derived per ``mode``/``kring_pad``. Use inside
-    ``.agg()``::
+    else the grid is auto-derived per ``mode``/``kring_pad``. Output CRS:
+    ``out_crs`` (string) wins over the int ``out_srid``; both -> error; neither
+    -> grid-native EPSG:4326. Use inside ``.agg()``::
 
         df.groupBy(k).agg(prx.rst_h3_rasterize_agg("cellid").alias("tile"))
 
@@ -5891,7 +5910,7 @@ def rst_h3_rasterize_agg(
         _rst_h3_rasterize_agg_udf(
             _cellid_col.cast("string"),
             _c(value, None),
-            _c(srid, 4326),
+            _c(out_srid, 4326),
             _c(pixel_size, None),
             _c(xmin, None),
             _c(ymin, None),
@@ -5901,6 +5920,7 @@ def rst_h3_rasterize_agg(
             _c(height, None),
             _c(mode, "centroids"),
             _c(kring_pad, 1),
+            _c(out_crs, None),
         )
     )
 
@@ -5908,7 +5928,7 @@ def rst_h3_rasterize_agg(
 def rst_quadbin_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
-    srid: ColLike = None,
+    out_srid: ColLike = None,
     pixel_size: ColLike = None,
     xmin: ColLike = None,
     ymin: ColLike = None,
@@ -5918,13 +5938,15 @@ def rst_quadbin_rasterize_agg(
     height: ColLike = None,
     mode: ColLike = None,
     kring_pad: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
     """Rasterize a group's quadbin cells into one tile (pixel-centroid burn).
 
     ``value`` omitted -> presence mask (1.0/NoData). Supply an explicit extent
     (xmin..height) for aligned band stacking; else the grid is auto-derived per
-    ``mode``/``kring_pad``. Quadbin cells are lon/lat (EPSG:4326). Use inside
-    ``.agg()``::
+    ``mode``/``kring_pad``. Quadbin cells are lon/lat (EPSG:4326). Output CRS:
+    ``out_crs`` (string) wins over the int ``out_srid``; both -> error; neither
+    -> grid-native EPSG:4326. Use inside ``.agg()``::
 
         df.groupBy(k).agg(prx.rst_quadbin_rasterize_agg("cellid").alias("tile"))
 
@@ -5942,7 +5964,7 @@ def rst_quadbin_rasterize_agg(
         _rst_quadbin_rasterize_agg_udf(
             _cellid_col.cast("string"),
             _c(value, None),
-            _c(srid, 4326),
+            _c(out_srid, 4326),
             _c(pixel_size, None),
             _c(xmin, None),
             _c(ymin, None),
@@ -5952,6 +5974,7 @@ def rst_quadbin_rasterize_agg(
             _c(height, None),
             _c(mode, "centroids"),
             _c(kring_pad, 1),
+            _c(out_crs, None),
         )
     )
 
@@ -5959,7 +5982,7 @@ def rst_quadbin_rasterize_agg(
 def rst_bng_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
-    srid: ColLike = None,
+    out_srid: ColLike = None,
     pixel_size: ColLike = None,
     xmin: ColLike = None,
     ymin: ColLike = None,
@@ -5969,6 +5992,7 @@ def rst_bng_rasterize_agg(
     height: ColLike = None,
     mode: ColLike = None,
     kring_pad: ColLike = None,
+    out_crs: ColLike = None,
 ) -> Column:
     """Rasterize a group's BNG cells into one tile (pixel-centroid burn).
 
@@ -5980,9 +6004,9 @@ def rst_bng_rasterize_agg(
 
         df.groupBy(k).agg(prx.rst_bng_rasterize_agg("cellid").alias("tile"))
 
-    BNG is EPSG:27700-native (British National Grid): the ``srid`` argument is
-    accepted for API consistency with the H3/quadbin variants but is a **no-op**
-    -- the output raster is always EPSG:27700, with no WGS84 reprojection.
+    BNG is EPSG:27700-native (British National Grid): the ``out_srid`` / ``out_crs``
+    arguments are accepted for API consistency with the H3/quadbin variants but are
+    a **no-op** -- the output raster is always EPSG:27700, with no reprojection.
 
     SQL returns BINARY (the raw grouped-agg UDF); Python returns a tile struct
     (wrapped by ``_as_tile_udf``).
@@ -5995,7 +6019,7 @@ def rst_bng_rasterize_agg(
         _rst_bng_rasterize_agg_udf(
             _col(cellid),
             _c(value, None),
-            _c(srid, 27700),
+            _c(out_srid, 27700),
             _c(pixel_size, None),
             _c(xmin, None),
             _c(ymin, None),
@@ -6005,6 +6029,7 @@ def rst_bng_rasterize_agg(
             _c(height, None),
             _c(mode, "centroids"),
             _c(kring_pad, 1),
+            _c(out_crs, None),
         )
     )
 

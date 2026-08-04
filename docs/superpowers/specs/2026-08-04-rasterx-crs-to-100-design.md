@@ -33,8 +33,9 @@ Precedence, applied wherever a WKB/EWKB/WKT/EWKT geometry is consumed, both tier
 | **WKB / WKT**, nothing provided | **0 / CRS-less** |
 
 Tight corollaries:
-- `srid` and `crs` are two spellings of the **same source param**. Both provided → **error** `"provide srid OR crs, not both"`.
-- The explicit source param is a fallback **for plain WKB/WKT only**. (Q8) An EWKB/EWKT geometry that *also* carries an explicit `srid`/`crs` param → **error** `"geometry already carries an SRID; do not also pass srid/crs"`.
+- `srid` and `crs` are two spellings of the **same source param**. Both provided → **error** `"provide srid OR crs, not both"`. This is a **call-level config** check (one value for the whole invocation, statically known) — cheap, unambiguous, always enforced.
+- The explicit source param is a **per-geom fallback for plain WKB/WKT only** (Q12). It is applied **per geometry**, and ONLY to geometries lacking an embedded SRID. A geometry carrying an embedded SRID always uses it; the param is ignored for that geometry — **no error**. This is exactly the existing `_clip.clip_dataset` behavior ("clip_crs applies ONLY when the geometry carries no embedded SRID").
+- **Mixed columns are first-class** (Q12). A Column of geometries may freely mix EWKB/EWKT (embedded SRID) and WKB/WKT (no SRID) rows; the scalar `srid`/`crs` param labels only the plain-WKB rows, per-geom. There is NO per-row "embedded SRID + param present → error": that case cannot be evaluated statically for a column, and erroring per-row would break the valid mixed-column workflow. The only conflict error is the call-level `srid`-AND-`crs`-both-set config mistake above.
 
 ### 1.2 Rule 2 — Target / output CRS (only functions that reproject or produce output)
 
@@ -148,11 +149,32 @@ This makes Group B obey the same framework as everything else and closes the sil
 
 | Condition | Result |
 |---|---|
-| both `srid` & `crs` (same source pair) provided | error |
-| both `out_srid` & `out_crs` provided | error |
-| EWKB/EWKT geom + explicit `srid`/`crs` source param | error (Q8) |
-| explicit `crs`/`out_crs`/`clip_crs` string unresolvable | error (R2 apply-time) |
+| both `srid` & `crs` (same source pair) provided | **error** — call-level config, statically checkable |
+| both `out_srid` & `out_crs` provided | **error** — call-level config |
+| explicit `crs`/`out_crs`/`clip_crs` string unresolvable | **error** — R2 apply-time semantics |
+| EWKB/EWKT geom + explicit source param (per-geom) | **no error** — embedded SRID wins per-geom, param ignored for that geom (Q12) |
+| mixed column (some EWKB, some WKB) + scalar param | **no error** — param labels plain-WKB rows per-geom (Q12) |
 | everything else (incl. all absent, CRS-less inputs) | proceed, never throw |
+
+Only the three call-level/explicit-garbage conditions throw. Every per-geom data condition — including embedded-SRID-plus-param and mixed columns — degrades to a sensible per-geom assumption.
+
+---
+
+### 3.4 Performance — transformer caching in the centralized helpers (Q13, Q14)
+
+The per-geom source-CRS check (Rule 1) is an O(1) field read (`shapely.get_srid` light / JTS `getSRID` heavy) on an already-parsed geometry — negligible against the WKB parse + reprojection that dominate these functions. It is **not** a perf concern and needs no user-facing mode; there is **no `strict`/`permissive` switch** (it would skip the cheap check while leaving the expensive one, and a permissive mode ignoring embedded SRIDs would reintroduce the silent-wrong-answer class Q12 eliminates).
+
+The real cost is **re-creating reprojection objects per row** — a `pyproj.Transformer` (light) / GDAL `CoordinateTransformation` (heavy). The fix is a bounded, thread-safe transformer cache in the **centralized helpers**, so no hot path rebuilds these per row:
+
+- **Light** — add `crs.get_transformer(src, dst)` in `pyrx/core/crs.py` (alongside the R2 resolver + its `lru_cache` code-sets). Returns a `pyproj.Transformer` built with **`always_xy=True`** (pin axis order — a classic silent-wrong-answer source). Also cache the resolved `CRS` object from `resolve_crs`. Route the scattered per-row transform sites through it: `cellraster.py:56`, `ops.py:171`, `tessellate.py:101/276`, and the Group-A/B/C reprojection paths.
+- **Heavy** — add `SpatialRefOps.getTransformer(srcKey, dstKey)` returning a cached `CoordinateTransformation`, replacing the raw `new CoordinateTransformation(...)` at `BoundingBox.scala:25`, `RasterTessellate.scala:168/441`, and the new Group-A/B/C sites.
+
+Cache design (identical semantics both tiers):
+- **Thread-local**, NOT process-global. Executors run multiple Spark tasks per JVM; a `pyproj.Transformer` / GDAL `CoordinateTransformation` is **not thread-safe** for concurrent use (same hazard class as [[gdal-ogr-register-via-guard]]). One LRU per worker thread gives intra-thread reuse with zero cross-thread contention — no lock on the hot path.
+- **Keyed by canonical CRS pair** (`src→dst`, each via `crs_to_canonical`), so `4326`, `"4326"`, `"EPSG:4326"` all hit the same entry.
+- **LRU-bounded, evict oldest** (your design). Size = a named constant `_TRANSFORMER_CACHE_SIZE = 128`, justified: 120 WGS84 UTM zones (EPSG:326xx north + 327xx south) + 4326/27700/3857 + headroom → a workload touching every UTM zone plus the common CRSes never evicts. Keyed by *pair*, but the target is near-always fixed (tile CRS / grid-native), so distinct pairs ≈ distinct sources ≈ the UTM count. A pathological many-distinct-target workload degrades gracefully (rebuild the evicted transformer, as today). Constant is tunable, not a magic literal.
+
+**Correctness is identical with or without the cache** — it's a pure speedup layered under the Q12 rules. It is an implementation-time optimization applied where a hot path warrants it, validated per the perf-review discipline ([[perf-parity-light-vs-heavy]], [[pyrx-udf-boundary-tax]]), not a premature build-out.
 
 ---
 
@@ -164,8 +186,12 @@ Per function, cross-tier:
 1. explicit `crs`/`out_crs` string (incl. an **ESRI:54008** and a WKT) drives reprojection/stamp;
 2. embedded EWKB SRID honored when no explicit source param;
 3. **CRS-less input does not raise** and yields the tile-CRS / grid-native / carried-source result;
-4. conflict cases (§3.3) raise the expected clear errors;
+4. conflict cases (§3.3) raise the expected clear errors (both-source-params, both-out-params, unresolvable string);
 5. `out_crs` wins semantics: with `out_crs` set, output SR == that CRS.
+
+**Mixed-column test (Q12), cross-tier:** a Column mixing EWKB(4326), WKB(no SRID), EWKB(32633) rows + a scalar `crs`/`srid` param → each EWKB row uses its embedded SRID, each plain-WKB row uses the param, **no error**; assert the per-row reprojection is correct for each row class in one call.
+
+**Transformer-cache test (Q14):** `crs.get_transformer` / `SpatialRefOps.getTransformer` returns the **same object** for equivalent CRS spellings (`4326` == `"4326"` == `"EPSG:4326"`), is thread-local (concurrent threads get independent instances — no shared-state corruption), evicts LRU beyond `_TRANSFORMER_CACHE_SIZE`, and produces `always_xy` axis order. This is a helper-level unit test, not per-function.
 
 Group C correctness regression: a **non-4326 raster (UTM)** fed to `rst_h3_rastertogrid*` now yields correct cell assignments (guards against the silent-wrong-answer bug); a CRS-less raster still returns the 4326-assumed result with no error.
 

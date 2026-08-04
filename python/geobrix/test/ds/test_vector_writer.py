@@ -210,6 +210,22 @@ def test_srid_to_crs():
     assert _srid_to_crs("", "") is None
 
 
+def test_srid_to_crs_esri_code_labels_esri():
+    # An ESRI-code SRID (54008 = World Sinusoidal, no EPSG code) must classify as
+    # ESRI, not be blindly prefixed "EPSG:" (the old authority-name gap that Spec R2
+    # subsumes). Routes through resolve_crs' authoritative epsg->esri classification.
+    assert _srid_to_crs("54008", "") == "ESRI:54008"
+    assert _srid_to_crs("102008", "") == "ESRI:102008"
+    # An EPSG code still classifies EPSG.
+    assert _srid_to_crs("27700", "") == "EPSG:27700"
+    # An unresolvable/garbage SRID falls back to the PROJ4 string (never raises).
+    assert _srid_to_crs("99999999", "+proj=longlat +datum=WGS84 +no_defs") == (
+        "+proj=longlat +datum=WGS84 +no_defs"
+    )
+    # Unresolvable with no PROJ4 fallback -> None (CRS-less, lenient, no raise).
+    assert _srid_to_crs("99999999", "") is None
+
+
 def test_writer_col_roles_named_geom():
     schema = StructType(
         [

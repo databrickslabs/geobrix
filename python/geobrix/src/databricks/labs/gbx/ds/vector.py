@@ -283,10 +283,22 @@ def _geometry_type_of(wkb: bytes) -> str:
 
 
 def _srid_to_crs(srid: str, proj4: str):
-    """Inverse of the reader's CRS encoding: authority code -> 'EPSG:<code>',
-    else the PROJ4 string, else None (CRS-less)."""
+    """Inverse of the reader's CRS encoding: classify a SRID into its canonical
+    authority string ('EPSG:<n>' or 'ESRI:<n>'), else the PROJ4 string, else None
+    (CRS-less).
+
+    The SRID is classified through the shared resolver (`resolve_crs`), so an ESRI
+    code (e.g. 54008) is labeled ``ESRI:54008`` rather than blindly prefixed
+    ``EPSG:``. This is a reader/writer edge, not an apply site, so it stays lenient:
+    a SRID in neither authority falls back to the PROJ4 string (or None), never
+    raising."""
     if srid and srid != "0":
-        return f"EPSG:{srid}"
+        from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
+
+        try:
+            return crs_to_canonical(resolve_crs(srid))
+        except Exception:
+            pass  # unresolvable SRID -> fall through to the PROJ4 string / None
     if proj4:
         return proj4
     return None

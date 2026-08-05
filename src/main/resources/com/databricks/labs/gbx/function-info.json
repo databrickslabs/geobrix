@@ -491,6 +491,9 @@
     "gbx_st_asmvt_pyramid": {
       "examples": "Examples:\n      > SELECT unhex('010300000001000000050000000000000000003EC000000000000024400000000000003E4000000000000024400000000000003E4000000000000034400000000000003EC000000000000034400000000000003EC00000000000002440') AS geom_wkb, named_struct('name', 'region-a', 'id', 1L) AS attrs ) SELECT t.tile.z AS z, length(t.tile.mvt_bytes) AS mvt_bytes_len FROM features LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 2, 2, 'regions') t AS tile;"
     },
+    "gbx_st_crs": {
+      "examples": "Examples:\n      > SELECT gbx_st_crs(geom) AS crs_string FROM geom_table;"
+    },
     "gbx_st_interpolateelevationbbox": {
       "examples": "Examples:\n      > SELECT gbx_st_interpolateelevationbbox(masspoints, breaklines, 0.0, 0.01, 'NONENCROACHING', 530000, 180000, 531000, 181000, 100, 100, 27700, 'constrained') AS elev_point FROM survey;"
     },
@@ -499,6 +502,12 @@
     },
     "gbx_st_legacyaswkb": {
       "examples": "Examples:\n      > SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_table;"
+    },
+    "gbx_st_setcrs": {
+      "examples": "Examples:\n      > SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS geom_with_crs FROM geom_table;"
+    },
+    "gbx_st_transformcrs": {
+      "examples": "Examples:\n      > SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS geom_utm33n FROM geom_table;"
     },
     "gbx_st_triangulate": {
       "examples": "Examples:\n      > SELECT gbx_st_triangulate(masspoints, breaklines, 0.01, 0.01, 'NONENCROACHING', 'constrained') AS triangle FROM survey;"

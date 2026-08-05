@@ -1,8 +1,9 @@
-"""pyvx light VectorX API — MVT, legacy-geometry, and TIN functions (Serverless-safe).
+"""pyvx light VectorX API — MVT, legacy-geometry, TIN, and CRS functions (Serverless-safe).
 
 Covers the MVT aggregator/pyramid (gbx_st_asmvt, gbx_st_asmvt_pyramid), legacy
-Mosaic-geometry decoding (gbx_st_legacyaswkb), and constrained-Delaunay TIN
-generators (gbx_st_triangulate, gbx_st_interpolateelevation{bbox,geom}).
+Mosaic-geometry decoding (gbx_st_legacyaswkb), constrained-Delaunay TIN
+generators (gbx_st_triangulate, gbx_st_interpolateelevation{bbox,geom}), and
+the CRS family (gbx_st_crs, gbx_st_setcrs, gbx_st_transformcrs).
 
 Signatures mirror databricks.labs.gbx.vectorx.functions so light <-> heavy is a
 one-line import swap. Register once with vx.register(spark), then use on columns.
@@ -14,11 +15,11 @@ import pandas as pd
 from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udtf
-from pyspark.sql.types import BinaryType
+from pyspark.sql.types import BinaryType, StringType
 
 from databricks.labs.gbx import _register
 
-from . import _env, _legacy, _mvt, _tin
+from . import _crs, _env, _legacy, _mvt, _tin
 
 ColLike = Union[Column, str, bool, int, float, bytes]
 
@@ -296,11 +297,21 @@ def _registrar_groups() -> List[_register.Group]:
         register_pmtiles_agg(s)
 
     pmtiles = {"gbx_pmtiles_agg": _reg_pmtiles}
+    crs = {
+        "gbx_st_crs": lambda s: s.udf.register("gbx_st_crs", _crs._udf_st_crs, StringType()),
+        "gbx_st_setcrs": lambda s: s.udf.register(
+            "gbx_st_setcrs", _crs._udf_st_setcrs, BinaryType()
+        ),
+        "gbx_st_transformcrs": lambda s: s.udf.register(
+            "gbx_st_transformcrs", _crs._udf_st_transformcrs, BinaryType()
+        ),
+    }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
         (lambda: _env.assert_legacy_available(), legacy),
         (lambda: _env.assert_tin_available(), tin),
         (lambda: None, pmtiles),
+        (lambda: None, crs),
     ]
 
 
@@ -428,3 +439,77 @@ def st_asmvt(geom_wkb: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
 def st_legacyaswkb(geom: ColLike) -> Column:
     """Decode a legacy Mosaic geometry struct to ISO WKB (Z + holes preserved)."""
     return f.call_function("gbx_st_legacyaswkb", _col(geom))
+
+
+def st_crs(geom: ColLike) -> Column:
+    """Return the canonical CRS string embedded in a geometry's SRID, or NULL.
+
+    Reads the integer SRID from EWKB / EWKT and classifies it via the authoritative
+    PROJ code sets (``EPSG:<n>`` or ``ESRI:<n>``). Returns NULL for plain WKB / WKT
+    geometries with no embedded SRID.
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+
+    Returns:
+        STRING column: canonical CRS string (e.g. ``'EPSG:4326'``, ``'ESRI:54008'``),
+        or NULL when no SRID is embedded.
+    """
+    return f.call_function("gbx_st_crs", _col(geom))
+
+
+def st_setcrs(geom: ColLike, crs: ColLike) -> Column:
+    """Stamp a CRS on a geometry without reprojecting (SQL surface, BINARY output).
+
+    Assigns the EPSG or ESRI SRID to the geometry. Authority-less CRS strings
+    (WKT / PROJ4 with no authority code) are rejected because a geometry SRID
+    must be an integer.
+
+    The SQL UDF always returns BINARY (EWKB), regardless of input encoding.
+    For the medium-preserving Python core (bytes -> bytes, str -> str) use
+    ``pyvx._crs.st_setcrs`` directly.
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        crs:  STRING or INTEGER column — EPSG/ESRI authority string
+              (``'EPSG:32633'``), integer SRID, or any ``resolve_crs``-parseable
+              string. WKT / PROJ4 strings raise at execution time.
+
+    Returns:
+        BINARY column: EWKB geometry with the new SRID stamped.
+    """
+    return f.call_function("gbx_st_setcrs", _col(geom), _col(crs))
+
+
+def st_transformcrs(
+    geom: ColLike,
+    target_crs: ColLike,
+    source_crs: Optional[ColLike] = None,
+) -> Column:
+    """Reproject a geometry to the target CRS (SQL surface, BINARY output).
+
+    Source CRS resolution order:
+    1. Embedded SRID from the geometry (EWKB / EWKT).
+    2. Explicit ``source_crs`` column / literal (for plain WKB / WKT inputs).
+    3. No source CRS resolvable -> input returned UNCHANGED (never-error).
+
+    The SQL UDF always returns BINARY (WKB / EWKB), regardless of input encoding.
+    For the medium-preserving Python core use ``pyvx._crs.st_transformcrs``.
+
+    Args:
+        geom:       BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        target_crs: STRING or INTEGER column — target CRS (EPSG/ESRI string,
+                    int SRID, WKT, or PROJ4).
+        source_crs: Optional STRING or INTEGER column — explicit source CRS for
+                    plain (SRID-less) geometries.
+
+    Returns:
+        BINARY column: reprojected geometry (EWKB when target has an authority
+        code, plain WKB when authority-less), or the original bytes when no
+        source CRS is resolvable.
+    """
+    if source_crs is None:
+        return f.call_function("gbx_st_transformcrs", _col(geom), _col(target_crs))
+    return f.call_function(
+        "gbx_st_transformcrs", _col(geom), _col(target_crs), _col(source_crs)
+    )

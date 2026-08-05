@@ -126,3 +126,69 @@ st_interpolateelevationgeom_sql_example_output = """
 |[BINARY]  |
 +----------+
 """
+
+
+def st_crs_sql_example():
+    """Return the canonical CRS authority string embedded in a geometry's SRID (SQL).
+
+    Reads the integer SRID from an EWKB or EWKT geometry and classifies it using
+    the authoritative PROJ code sets. Returns NULL for plain WKB / WKT with no
+    embedded SRID. ESRI codes (e.g. 54008) are returned as ``ESRI:<n>``, not
+    ``EPSG:<n>``, per the authoritative classification rule.
+    """
+    return """
+SELECT gbx_st_crs(geom) AS crs_string FROM geom_table;
+"""
+
+
+st_crs_sql_example_output = """
++-----------+
+|crs_string |
++-----------+
+|EPSG:4326  |
++-----------+
+"""
+
+
+def st_setcrs_sql_example():
+    """Stamp a new CRS on a geometry without reprojecting (SQL).
+
+    Assigns the given EPSG or ESRI integer SRID to the geometry and returns EWKB
+    (BINARY). Authority-less CRS strings (WKT / PROJ4) are rejected at execution
+    time because a geometry SRID must be an integer authority code.
+    """
+    return """
+SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS geom_with_crs FROM geom_table;
+"""
+
+
+st_setcrs_sql_example_output = """
++------------+
+|geom_with_crs|
++------------+
+|[BINARY]    |
++------------+
+"""
+
+
+def st_transformcrs_sql_example():
+    """Reproject a geometry to the target CRS (SQL).
+
+    Reprojects the input geometry from its embedded SRID (EWKB / EWKT) or an
+    explicit ``source_crs`` to the ``target_crs``. When no source CRS is
+    resolvable the input is returned unchanged (never-error invariant). Returns
+    EWKB (BINARY) with the target SRID stamped when the target has an EPSG or
+    ESRI authority code; plain WKB when the target is authority-less.
+    """
+    return """
+SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS geom_utm33n FROM geom_table;
+"""
+
+
+st_transformcrs_sql_example_output = """
++----------+
+|geom_utm33n|
++----------+
+|[BINARY]  |
++----------+
+"""

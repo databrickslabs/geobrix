@@ -178,3 +178,6 @@ gbx_st_triangulate
 gbx_st_interpolateelevationbbox
 gbx_st_interpolateelevationgeom
 gbx_pmtiles_agg
+gbx_st_crs
+gbx_st_setcrs
+gbx_st_transformcrs

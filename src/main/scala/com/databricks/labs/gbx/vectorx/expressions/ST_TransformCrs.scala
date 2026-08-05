@@ -13,6 +13,7 @@ import org.gdal.osr.CoordinateTransformation
 import org.locationtech.jts.geom.{Geometry => JTSGeometry}
 
 import scala.util.Try
+import scala.util.control.NonFatal
 
 /** 2-arg form: source CRS inferred from the geometry's embedded SRID only.
   * Separate case class (no Literal null third child) prevents Catalyst's
@@ -136,10 +137,16 @@ private[expressions] object TransformCrsCore {
         // re-parse) — never a bad target. Degrade to unchanged rather than raise, so the
         // never-error invariant holds for every source-side failure mode. A try/catch that does
         // not throw is zero-cost on the JVM, so this costs nothing on the hot path.
+        //
+        // NonFatal, not Throwable: a fatal error (OutOfMemoryError, StackOverflowError,
+        // InterruptedException) must propagate and fail the task. Swallowing one here would
+        // silently emit un-reprojected rows — a data-correctness failure disguised as success —
+        // and would make an interrupted task ignore cancellation. This matches the `Try`-based
+        // source-CRS degrade above, which is also NonFatal-only.
         val plan = try {
             SpatialRefOps.transformPlan(srcInfo.canonical, dstInfo.canonical)
         } catch {
-            case _: Throwable => return geom
+            case NonFatal(_) => return geom
         }
         val gProj = if (plan.identity) g else transformWithCachedCT(g, plan.transformation)
 

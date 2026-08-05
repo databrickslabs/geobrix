@@ -8,8 +8,6 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types.{DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 
-import scala.util.Try
-
 /** Stamps a CRS on a geometry without reprojecting (medium-preserving).
   *
   * Assigns an EPSG or ESRI integer SRID to the geometry. Authority-less CRS
@@ -55,11 +53,9 @@ object ST_SetCrs extends WithExpressionInfo {
 
         val sr = SpatialRefOps.resolveCrs(crs.toString)
         try {
-            val sridOpt = for {
-                name <- Option(sr.GetAuthorityName(null)) if name.nonEmpty
-                code <- Option(sr.GetAuthorityCode(null))
-                n    <- Try(code.toInt).toOption
-            } yield n
+            // Same authority rule as SpatialRefOps.crsInfo / ST_TransformCrs — one implementation,
+            // so st_setcrs and st_transformcrs can never disagree about which CRSes are stampable.
+            val sridOpt = SpatialRefOps.authoritySridOf(sr)
 
             sridOpt match {
                 case None =>

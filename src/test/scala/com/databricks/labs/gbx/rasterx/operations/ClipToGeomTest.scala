@@ -198,15 +198,41 @@ class ClipToGeomTest extends AnyFunSuite with BeforeAndAfterAll {
         val geomSR = new SpatialReference()
         geomSR.ImportFromEPSG(32610)
 
+        // The 2D equivalent of the same footprint — Z is irrelevant to a cutline's 2D extent,
+        // so the mixed-Z clip must produce a byte-identical window, not merely a non-empty one.
+        val geom2d = JTS.fromWKT(
+            "POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, " +
+            "-8880000 2220000, -8900000 2220000))")
+
         val (resultDs, metadata) = ClipToGeom.clip(ds, Map.empty, geom, geomSR, cutlineAllTouched = true)
+        val (expectedDs, _) = ClipToGeom.clip(ds, Map.empty, geom2d, geomSR, cutlineAllTouched = true)
 
         resultDs should not be null
         resultDs.GetRasterCount shouldBe ds.GetRasterCount
-        resultDs.GetRasterXSize should be > 0
-        resultDs.GetRasterYSize should be > 0
         metadata should contain key "path"
 
+        // Dimensions must match the 2D clip exactly. A weaker "> 0" assertion would still pass
+        // if the mixed-Z cutline were mangled into a degenerate or wrongly-placed window.
+        withClue("mixed-Z cutline must clip to the same window as its 2D equivalent: ") {
+            resultDs.GetRasterXSize shouldBe expectedDs.GetRasterXSize
+            resultDs.GetRasterYSize shouldBe expectedDs.GetRasterYSize
+        }
+
+        // And the pixels must actually match — same window filled with the same data, proving
+        // the Z ordinates did not perturb the reprojected cutline geometry.
+        val w = resultDs.GetRasterXSize
+        val h = resultDs.GetRasterYSize
+        val got = new Array[Short](w * h)
+        val want = new Array[Short](w * h)
+        val gt = org.gdal.gdalconst.gdalconstConstants.GDT_Int16
+        resultDs.GetRasterBand(1).ReadRaster(0, 0, w, h, w, h, gt, got)
+        expectedDs.GetRasterBand(1).ReadRaster(0, 0, w, h, w, h, gt, want)
+        withClue(s"mixed-Z clip pixels must equal the 2D clip pixels (${w}x$h): ") {
+            got shouldBe want
+        }
+
         resultDs.delete()
+        expectedDs.delete()
         geomSR.delete()
     }
 

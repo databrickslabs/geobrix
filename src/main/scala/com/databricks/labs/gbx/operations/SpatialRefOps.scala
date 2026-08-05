@@ -191,16 +191,26 @@ object SpatialRefOps {
 
     // A TransformPlan references a CoordinateTransformation, which is NOT safe to share between
     // threads — so this cache MUST be thread-local, exactly like txCache.
+    //
+    // Keyed by the (src, dst) canonical pair as a TUPLE rather than a concatenated string: an
+    // authority-less CRS canonicalizes to its full WKT, so building "$src->$dst" would allocate
+    // and hash a multi-hundred-character string on every row. The canonical strings come from
+    // the CrsInfo cache, so each row sees the SAME String instance — Tuple2 reuses those
+    // instances' cached hashCodes and String.equals short-circuits on reference equality.
     private val planCache =
-        new ThreadLocal[mutable.LinkedHashMap[String, TransformPlan]] {
-            override def initialValue(): mutable.LinkedHashMap[String, TransformPlan] =
+        new ThreadLocal[mutable.LinkedHashMap[(String, String), TransformPlan]] {
+            override def initialValue(): mutable.LinkedHashMap[(String, String), TransformPlan] =
                 mutable.LinkedHashMap.empty
         }
 
     /** Authority code as an Int when the CRS carries a numeric one (e.g. `EPSG:4326` -> 4326,
       * `ESRI:54008` -> 54008); None for authority-less CRS (raw WKT / PROJ4) and for
-      * non-numeric codes such as `OGC:CRS84`. */
-    private def authoritySridOf(spatialRef: SpatialReference): Option[Int] =
+      * non-numeric codes such as `OGC:CRS84`.
+      *
+      * The single home for the "what SRID can a geometry carry for this CRS?" rule — shared by
+      * [[crsInfo]] and by `ST_SetCrs`, which must apply exactly the same rule when deciding
+      * whether a CRS can be stamped onto a geometry at all. */
+    def authoritySridOf(spatialRef: SpatialReference): Option[Int] =
         for {
             name <- Option(spatialRef.GetAuthorityName(null)) if name.nonEmpty
             code <- Option(spatialRef.GetAuthorityCode(null))
@@ -250,7 +260,7 @@ object SpatialRefOps {
       * @param dstCanonical already-canonical target CRS string (from [[crsInfo]])
       */
     def transformPlan(srcCanonical: String, dstCanonical: String): TransformPlan = {
-        val key = s"$srcCanonical->$dstCanonical"
+        val key = (srcCanonical, dstCanonical)
         val cache = planCache.get()
         cache.get(key) match {
             case Some(plan) =>

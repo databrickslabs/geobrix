@@ -1,0 +1,298 @@
+package com.databricks.labs.gbx.vectorx
+
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.vectorx.expressions.{ST_Crs, ST_SetCrs, ST_TransformCrs}
+import com.databricks.labs.gbx.vectorx.jts.JTS
+import org.apache.spark.unsafe.types.UTF8String
+import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
+import org.scalatest.BeforeAndAfterAll
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.matchers.should.Matchers._
+
+/** Tests for ST_Crs, ST_SetCrs, ST_TransformCrs — heavy Scala tier.
+  *
+  * Requires GDAL native libs; run via gbx:test:scala or inside Docker.
+  *
+  * NOTE: eval() methods are Spark Catalyst expression evaluation — standard
+  * InvokedExpression framework, not code execution.
+  *
+  * NOTE: return type of eval is Any (both binary and string outputs); assertions
+  * use assert/isInstanceOf rather than ScalaTest AnyRef matchers to avoid
+  * "Cannot prove that Any <:< AnyRef" compile errors.
+  */
+class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
+
+    override def beforeAll(): Unit = {
+        GDALManager.loadSharedObjects(Iterable.empty[String])
+        GDALManager.configureGDAL("/tmp", "/tmp", logCPL = true, CPL_DEBUG = "OFF")
+    }
+
+    private val gf = new GeometryFactory()
+
+    /** EWKB of POINT(11, 42) with given SRID. */
+    private def ewkb(srid: Int): Array[Byte] = {
+        val g = gf.createPoint(new Coordinate(11.0, 42.0))
+        g.setSRID(srid)
+        JTS.toEWKB(g)
+    }
+
+    /** EWKT of POINT(11, 42) with given SRID. */
+    private def ewkt(srid: Int): UTF8String =
+        UTF8String.fromString(s"SRID=$srid;POINT (11 42)")
+
+    /** Plain WKB of POINT(11, 42) (no SRID). */
+    private def plainWkb(): Array[Byte] = {
+        val g = gf.createPoint(new Coordinate(11.0, 42.0))
+        JTS.toWKB(g)
+    }
+
+    /** Plain WKT of POINT(11, 42). */
+    private def plainWkt(): UTF8String = UTF8String.fromString("POINT (11 42)")
+
+    private val _CUSTOM_TM_WKT =
+        """PROJCS["Custom_TM",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["central_meridian",13.7],PARAMETER["scale_factor",0.9996],UNIT["metre",1]]"""
+    private val _PROJ4_UTM33 = "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs"
+
+    // ------------------------------------------------------------------
+    // ST_Crs
+    // ------------------------------------------------------------------
+
+    test("ST_Crs: EWKB EPSG:4326 -> 'EPSG:4326'") {
+        ST_Crs.eval(ewkb(4326)) shouldBe UTF8String.fromString("EPSG:4326")
+    }
+
+    test("ST_Crs: EWKB ESRI:54008 -> 'ESRI:54008'") {
+        ST_Crs.eval(ewkb(54008)) shouldBe UTF8String.fromString("ESRI:54008")
+    }
+
+    test("ST_Crs: plain WKB -> null") {
+        ST_Crs.eval(plainWkb()) shouldBe null
+    }
+
+    test("ST_Crs: unresolvable SRID -> null (never-error)") {
+        ST_Crs.eval(ewkb(999999)) shouldBe null
+    }
+
+    test("ST_Crs: EWKT EPSG:4326 -> 'EPSG:4326'") {
+        ST_Crs.eval(ewkt(4326)) shouldBe UTF8String.fromString("EPSG:4326")
+    }
+
+    test("ST_Crs: EWKT ESRI:54008 -> 'ESRI:54008'") {
+        ST_Crs.eval(ewkt(54008)) shouldBe UTF8String.fromString("ESRI:54008")
+    }
+
+    test("ST_Crs: plain WKT -> null") {
+        ST_Crs.eval(plainWkt()) shouldBe null
+    }
+
+    test("ST_Crs: null input -> null") {
+        ST_Crs.eval(null) shouldBe null
+    }
+
+    // ------------------------------------------------------------------
+    // ST_SetCrs
+    // ------------------------------------------------------------------
+
+    test("ST_SetCrs: WKB in -> EWKB out with SRID 32633") {
+        val result = ST_SetCrs.eval(plainWkb(), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 32633
+    }
+
+    test("ST_SetCrs: EWKB in -> EWKB out with SRID replaced to 32633") {
+        val result = ST_SetCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 32633
+    }
+
+    test("ST_SetCrs: WKT in -> EWKT out starting 'SRID=54008;'") {
+        val result = ST_SetCrs.eval(plainWkt(), UTF8String.fromString("ESRI:54008"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        result.asInstanceOf[UTF8String].toString should startWith("SRID=54008;")
+    }
+
+    test("ST_SetCrs: EWKT in -> EWKT out with SRID replaced") {
+        val result = ST_SetCrs.eval(ewkt(4326), UTF8String.fromString("ESRI:54008"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        result.asInstanceOf[UTF8String].toString should startWith("SRID=54008;")
+    }
+
+    test("ST_SetCrs: coordinate preservation (high precision)") {
+        val g = gf.createPoint(new Coordinate(11.123456789012345, 42.987654321098765))
+        val wkb = JTS.toWKB(g)
+        val result = ST_SetCrs.eval(wkb, UTF8String.fromString("EPSG:4326"))
+        val decoded = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        decoded.getCoordinate.getX shouldBe (11.123456789012345 +- 1e-12)
+        decoded.getCoordinate.getY shouldBe (42.987654321098765 +- 1e-12)
+    }
+
+    test("ST_SetCrs: null geom -> null") {
+        assert(ST_SetCrs.eval(null, UTF8String.fromString("EPSG:4326")) == null)
+    }
+
+    test("ST_SetCrs: authority-less PROJ4 -> throws") {
+        an[Exception] should be thrownBy
+            ST_SetCrs.eval(plainWkb(), UTF8String.fromString(_PROJ4_UTM33))
+    }
+
+    test("ST_SetCrs: authority-less WKT -> throws") {
+        an[Exception] should be thrownBy
+            ST_SetCrs.eval(plainWkb(), UTF8String.fromString(_CUSTOM_TM_WKT))
+    }
+
+    // ------------------------------------------------------------------
+    // ST_TransformCrs
+    // ------------------------------------------------------------------
+
+    test("ST_TransformCrs: EWKB + EPSG target -> EWKB with SRID=32633, coords reprojected") {
+        val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 32633
+        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        g.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+    }
+
+    test("ST_TransformCrs: EWKB + ESRI target -> EWKB with SRID=54008") {
+        val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("ESRI:54008"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 54008
+        g.getCoordinate.getX shouldBe (911358.0 +- 911358.0 * 1e-4)
+    }
+
+    test("ST_TransformCrs: EWKB + authority-less WKT target -> plain WKB, SRID=0") {
+        val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString(_CUSTOM_TM_WKT))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 0
+        // Should have been reprojected (x should differ from 11)
+        math.abs(g.getCoordinate.getX - 11.0) should be > 1.0
+    }
+
+    test("ST_TransformCrs: EWKB + PROJ4 target (UTM33) -> reprojected, SRID=0 (authority-less in GDAL)") {
+        // GDAL's GetAuthorityName/Code on a PROJ4-imported SpatialReference returns null
+        // (PROJ4 strings carry no EPSG/ESRI authority code). The heavy tier therefore
+        // treats PROJ4 the same as WKT: reprojects and clears SRID.
+        val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString(_PROJ4_UTM33))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 0
+        // Coordinates should be in UTM range (x ~168701 for lon=11, lat=42, zone 33)
+        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+    }
+
+    test("ST_TransformCrs: plain WKB + no source -> returned unchanged") {
+        val input = plainWkb()
+        val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        result.asInstanceOf[Array[Byte]] shouldEqual input
+    }
+
+    test("ST_TransformCrs: plain WKB + explicit source_crs -> reprojected") {
+        val result = ST_TransformCrs.eval(
+            plainWkb(),
+            UTF8String.fromString("EPSG:32633"),
+            UTF8String.fromString("EPSG:4326")
+        )
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 32633
+        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+    }
+
+    test("ST_TransformCrs: EWKT + EPSG target -> EWKT starting 'SRID=32633;'") {
+        val result = ST_TransformCrs.eval(ewkt(4326), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        result.asInstanceOf[UTF8String].toString should startWith("SRID=32633;")
+    }
+
+    test("ST_TransformCrs: EWKT + authority-less target -> plain WKT (no SRID prefix)") {
+        val result = ST_TransformCrs.eval(ewkt(4326), UTF8String.fromString(_CUSTOM_TM_WKT))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        val wkt = result.asInstanceOf[UTF8String].toString
+        wkt should not startWith "SRID="
+        wkt should startWith("POINT")
+    }
+
+    test("ST_TransformCrs: plain WKT + no source -> returned unchanged") {
+        val input = plainWkt()
+        val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        result.asInstanceOf[UTF8String].toString shouldEqual input.toString
+    }
+
+    test("ST_TransformCrs: plain WKT + explicit source_crs -> reprojected WKT") {
+        val result = ST_TransformCrs.eval(
+            plainWkt(),
+            UTF8String.fromString("EPSG:32633"),
+            UTF8String.fromString("EPSG:4326")
+        )
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        result.asInstanceOf[UTF8String].toString should startWith("SRID=32633;")
+    }
+
+    test("ST_TransformCrs: unresolvable embedded SRID (999999) -> returned unchanged") {
+        val input = ewkb(999999)
+        val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        result.asInstanceOf[Array[Byte]] shouldEqual input
+    }
+
+    test("ST_TransformCrs: unresolvable explicit source_crs -> returned unchanged") {
+        val input = plainWkb()
+        val result = ST_TransformCrs.eval(
+            input,
+            UTF8String.fromString("EPSG:32633"),
+            UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
+        )
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        result.asInstanceOf[Array[Byte]] shouldEqual input
+    }
+
+    test("ST_TransformCrs: unresolvable target -> throws") {
+        an[Exception] should be thrownBy
+            ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ"))
+    }
+
+    test("ST_TransformCrs: null target_crs -> null return") {
+        assert(ST_TransformCrs.eval(ewkb(4326), null.asInstanceOf[UTF8String]) == null)
+    }
+
+    test("ST_TransformCrs: coordinate round-trip precision (reproject and back, < 1e-8 error)") {
+        val xIn = 11.0
+        val yIn = 42.0
+        val g = gf.createPoint(new Coordinate(xIn, yIn))
+        g.setSRID(4326)
+        val wkb4326 = JTS.toEWKB(g)
+
+        // Forward: 4326 -> 32633
+        val wkb32633 = ST_TransformCrs.eval(wkb4326, UTF8String.fromString("EPSG:32633"))
+        assert(wkb32633 != null)
+
+        // Back: 32633 -> 4326
+        val wkbBack = ST_TransformCrs.eval(wkb32633, UTF8String.fromString("EPSG:4326"))
+        assert(wkbBack != null)
+        val gBack = JTS.fromWKB(wkbBack.asInstanceOf[Array[Byte]])
+        gBack.getCoordinate.getX shouldBe (xIn +- 1e-8)
+        gBack.getCoordinate.getY shouldBe (yIn +- 1e-8)
+    }
+}

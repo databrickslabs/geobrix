@@ -24,6 +24,7 @@ object JTS {
     private val wkbWriters = mutable.Map[Long, WKBWriter]()
     private val wkb3Writers = mutable.Map[Long, WKBWriter]()
     private val ewkbWriters = mutable.Map[Long, WKBWriter]()
+    private val ewkb3Writers = mutable.Map[Long, WKBWriter]()
     private val wtkWriters = mutable.Map[Long, WKTWriter]()
     private val wtkReaders = mutable.Map[Long, WKTReader]()
 
@@ -177,6 +178,17 @@ object JTS {
     def toEWKB(geom: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId
         val writer = ewkbWriters.getOrElseUpdate(tid, new WKBWriter(2, true))
+        writer.write(geom)
+    }
+
+    /** Encodes a JTS Geometry to PostGIS EWKB preserving Z (3 dimensions); embeds SRID when set.
+      *
+      * Use this instead of [[toEWKB]] when the input geometry may carry Z coordinates and
+      * Z preservation is required (e.g. st_setcrs, which stamps a CRS without touching
+      * coordinates). Per-thread writer. */
+    def toEWKB3(geom: Geometry): Array[Byte] = {
+        val tid = Thread.currentThread().getId
+        val writer = ewkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, true))
         writer.write(geom)
     }
 

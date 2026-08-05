@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.vectorx
 
 import com.databricks.labs.gbx.expressions.RegistryDelegate
-import com.databricks.labs.gbx.vectorx.expressions.{ST_AsMvt, ST_AsMvtPyramid, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_Triangulate}
+import com.databricks.labs.gbx.vectorx.expressions.{ST_AsMvt, ST_AsMvtPyramid, ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
@@ -41,6 +41,11 @@ object functions extends Serializable {
         rd.register(ST_Triangulate)
         rd.register(ST_InterpolateElevationBBox)
         rd.register(ST_InterpolateElevationGeom)
+
+        // CRS functions
+        rd.register(ST_Crs)
+        rd.register(ST_SetCrs)
+        rd.register(ST_TransformCrs)
 
         sc.getConf.set(flag, "true")
     }
@@ -97,5 +102,43 @@ object functions extends Serializable {
         geomWkb: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String, extent: Int
     ): Column =
         st_asmvt_pyramid(geomWkb, attrs, lit(minZ), lit(maxZ), lit(layerName), lit(extent))
+
+    /**
+      * Returns the canonical CRS string (e.g. `"EPSG:4326"`, `"ESRI:54008"`) for a geometry's
+      * embedded SRID, or null for plain WKB/WKT (no embedded SRID), null inputs, or unresolvable
+      * SRIDs (never-error: an unrecognized code returns null, not an exception).
+      */
+    def st_crs(geom: Column): Column = ColumnAdapter(ST_Crs.name, Seq(geom))
+
+    /**
+      * Stamps a CRS on a geometry without reprojecting.
+      * Binary (WKB/EWKB) in → EWKB out; text (WKT/EWKT) in → EWKT out.
+      * Authority-less CRS (WKT / PROJ4 with no EPSG/ESRI code) raises.
+      */
+    def st_setcrs(geom: Column, crs: Column): Column =
+        ColumnAdapter(ST_SetCrs.name, Seq(geom, crs))
+
+    /** Convenience overload — string CRS literal. */
+    def st_setcrs(geom: Column, crs: String): Column = st_setcrs(geom, lit(crs))
+
+    /**
+      * Reproject geometry to ``targetCrs``. Optional ``sourceCrs`` for plain (SRID-less) inputs.
+      * Returns input unchanged if source CRS is unresolvable (never-error invariant).
+      * Binary (WKB/EWKB) in → binary out; text (WKT/EWKT) in → text out.
+      */
+    def st_transformcrs(geom: Column, targetCrs: Column): Column =
+        ColumnAdapter(ST_TransformCrs.name, Seq(geom, targetCrs))
+
+    /** Convenience overload — string target CRS literal. */
+    def st_transformcrs(geom: Column, targetCrs: String): Column =
+        st_transformcrs(geom, lit(targetCrs))
+
+    /** 3-argument form: explicit source CRS for plain (SRID-less) inputs. */
+    def st_transformcrs(geom: Column, targetCrs: Column, sourceCrs: Column): Column =
+        ColumnAdapter(ST_TransformCrs.name, Seq(geom, targetCrs, sourceCrs))
+
+    /** Convenience overload — string target and source CRS literals. */
+    def st_transformcrs(geom: Column, targetCrs: String, sourceCrs: String): Column =
+        st_transformcrs(geom, lit(targetCrs), lit(sourceCrs))
 
 }

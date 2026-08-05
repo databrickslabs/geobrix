@@ -179,5 +179,68 @@ class ClipToGeomTest extends AnyFunSuite with BeforeAndAfterAll {
         geomSR.delete()
     }
 
+    test("ClipToGeom should clip with a mixed-Z cutline (some NaN Z) without throwing") {
+        // Regression guard for the shipped-rasterx break: OSRTransformGeometry must keep using
+        // the always-2D JTS.toWKB for its OGR hop. If it is switched to a Z-aware writer
+        // (any-coord rule), a user cutline where only SOME vertices carry Z produces 3D WKB
+        // with NaN Z ordinates, OGR fails with 'General Error', and the whole tile is silently
+        // error-flagged. ClipToGeom accepts user WKB/WKT cutlines, so mixed Z is reachable.
+        val gf = new org.locationtech.jts.geom.GeometryFactory()
+        val ring = gf.createLinearRing(Array(
+            new org.locationtech.jts.geom.Coordinate(-8900000, 2220000),            // Z = NaN
+            new org.locationtech.jts.geom.Coordinate(-8900000, 2200000, 123.5),     // Z = 123.5
+            new org.locationtech.jts.geom.Coordinate(-8880000, 2200000),            // Z = NaN
+            new org.locationtech.jts.geom.Coordinate(-8880000, 2220000),            // Z = NaN
+            new org.locationtech.jts.geom.Coordinate(-8900000, 2220000)             // Z = NaN (close)
+        ))
+        val geom = gf.createPolygon(ring)
+
+        val geomSR = new SpatialReference()
+        geomSR.ImportFromEPSG(32610)
+
+        val (resultDs, metadata) = ClipToGeom.clip(ds, Map.empty, geom, geomSR, cutlineAllTouched = true)
+
+        resultDs should not be null
+        resultDs.GetRasterCount shouldBe ds.GetRasterCount
+        resultDs.GetRasterXSize should be > 0
+        resultDs.GetRasterYSize should be > 0
+        metadata should contain key "path"
+
+        resultDs.delete()
+        geomSR.delete()
+    }
+
+    test("ClipToGeom should clip with a clean 3D cutline (all vertices have Z)") {
+        // Companion to the mixed-Z case: an all-Z cutline must clip identically to its 2D
+        // equivalent — Z is irrelevant to a 2D cutline footprint, and must not make OGR fail.
+        val gf = new org.locationtech.jts.geom.GeometryFactory()
+        val ring = gf.createLinearRing(Array(
+            new org.locationtech.jts.geom.Coordinate(-8900000, 2220000, 10.0),
+            new org.locationtech.jts.geom.Coordinate(-8900000, 2200000, 20.0),
+            new org.locationtech.jts.geom.Coordinate(-8880000, 2200000, 30.0),
+            new org.locationtech.jts.geom.Coordinate(-8880000, 2220000, 40.0),
+            new org.locationtech.jts.geom.Coordinate(-8900000, 2220000, 10.0)
+        ))
+        val geom3d = gf.createPolygon(ring)
+        val geom2d = JTS.fromWKT(
+            "POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, " +
+            "-8880000 2220000, -8900000 2220000))")
+
+        val geomSR = new SpatialReference()
+        geomSR.ImportFromEPSG(32610)
+
+        val (result3d, _) = ClipToGeom.clip(ds, Map.empty, geom3d, geomSR, cutlineAllTouched = true)
+        val (result2d, _) = ClipToGeom.clip(ds, Map.empty, geom2d, geomSR, cutlineAllTouched = true)
+
+        result3d should not be null
+        result3d.GetRasterXSize shouldBe result2d.GetRasterXSize
+        result3d.GetRasterYSize shouldBe result2d.GetRasterYSize
+        result3d.GetRasterCount shouldBe ds.GetRasterCount
+
+        result3d.delete()
+        result2d.delete()
+        geomSR.delete()
+    }
+
 }
 

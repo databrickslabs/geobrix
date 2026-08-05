@@ -260,4 +260,97 @@ class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         // They should be the same instance (same thread, same canonical key, same LRU cache)
         assert(ctOld eq ctNew)
     }
+
+    // --- crsInfo (handle-free cached CRS descriptor; removes per-row resolveCrs) ---
+
+    test("crsInfo: EPSG int spelling -> canonical EPSG:4326 with authority SRID 4326") {
+        val info = gbxops.SpatialRefOps.crsInfo("4326")
+        info.canonical shouldBe "EPSG:4326"
+        info.authoritySrid shouldBe Some(4326)
+    }
+
+    test("crsInfo: ESRI code -> canonical ESRI:54008 with authority SRID 54008") {
+        val info = gbxops.SpatialRefOps.crsInfo("54008")
+        info.canonical shouldBe "ESRI:54008"
+        info.authoritySrid shouldBe Some(54008)
+    }
+
+    test("crsInfo: equivalent spellings agree and hit the same cache entry") {
+        val a = gbxops.SpatialRefOps.crsInfo("EPSG:32633")
+        val b = gbxops.SpatialRefOps.crsInfo(" EPSG:32633 ") // trimmed to the same key
+        assert(a eq b)
+        a.canonical shouldBe "EPSG:32633"
+    }
+
+    test("crsInfo: cache hit returns the identical immutable record") {
+        val a = gbxops.SpatialRefOps.crsInfo("EPSG:3857")
+        val b = gbxops.SpatialRefOps.crsInfo("EPSG:3857")
+        assert(a eq b)
+    }
+
+    test("crsInfo: authority-less PROJ4 -> WKT canonical, no authority SRID") {
+        val info = gbxops.SpatialRefOps.crsInfo("+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs")
+        info.authoritySrid shouldBe None
+        info.canonical should startWith("PROJCS")
+    }
+
+    test("crsInfo: non-numeric authority code (OGC:CRS84) -> no authority SRID") {
+        val info = gbxops.SpatialRefOps.crsInfo("OGC:CRS84")
+        info.authoritySrid shouldBe None
+    }
+
+    test("crsInfo: unresolvable CRS throws and caches nothing (degrade stays repeatable)") {
+        // The never-error invariant in ST_TransformCrs relies on a MISS throwing every time
+        // rather than a poisoned cache entry silently succeeding later.
+        an[IllegalArgumentException] should be thrownBy gbxops.SpatialRefOps.crsInfo("999999")
+        an[IllegalArgumentException] should be thrownBy gbxops.SpatialRefOps.crsInfo("999999")
+        an[IllegalArgumentException] should be thrownBy
+            gbxops.SpatialRefOps.crsInfo("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
+    }
+
+    // --- transformPlan (cached identity flag + cache-owned CT) ---
+
+    test("transformPlan: distinct CRS pair -> non-identity plan with a non-null CT") {
+        val plan = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32633")
+        plan.identity shouldBe false
+        plan.transformation should not be null
+    }
+
+    test("transformPlan: same CRS both ends -> identity plan, null CT") {
+        val plan = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:4326")
+        plan.identity shouldBe true
+        plan.transformation shouldBe null
+    }
+
+    test("transformPlan: identity is decided by OSR IsSame, not canonical string equality") {
+        // EPSG:4326 and the equivalent OGC:CRS84 have different canonical strings but IsSame=1.
+        val plan = gbxops.SpatialRefOps.transformPlan(
+          "EPSG:4326", gbxops.SpatialRefOps.crsInfo("OGC:CRS84").canonical)
+        plan.identity shouldBe true
+    }
+
+    test("transformPlan: cache hit returns the identical plan and reuses the cached CT") {
+        val p1 = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32634")
+        val p2 = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32634")
+        assert(p1 eq p2)
+        assert(p1.transformation eq
+            gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32634"))
+    }
+
+    test("transformPlan: CT is axis-correct (POINT(11 42) 4326 -> 32633)") {
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val plan = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32633")
+        val ogrGeom = OGRGeometry.CreateFromWkt("POINT (11 42)")
+        ogrGeom.Transform(plan.transformation)
+        val g = JTS.fromWKB(ogrGeom.ExportToWkb())
+        ogrGeom.delete()
+        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+        g.getCoordinate.getY shouldBe (4657521.062149809 +- 1e-6)
+    }
+
+    test("transformPlan: unresolvable canonical raises (no silent identity)") {
+        an[IllegalArgumentException] should be thrownBy
+            gbxops.SpatialRefOps.transformPlan("EPSG:4326", "BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
+    }
 }

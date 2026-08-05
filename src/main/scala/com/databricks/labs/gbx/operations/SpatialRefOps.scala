@@ -162,6 +162,118 @@ object SpatialRefOps {
         }
     }
 
+    /** Everything a per-row CRS consumer needs about a resolved CRS, with NO live GDAL handle.
+      *
+      * `canonical` is the [[crsToCanonical]] string (authority `NAME:CODE`, else full WKT) and
+      * `authoritySrid` is the integer authority code when the CRS has a numeric one (the value a
+      * geometry can carry as its SRID), else None. Both are derived from a single short-lived
+      * `SpatialReference` that is released before this record is returned — so a `CrsInfo` is an
+      * immutable value that can be cached and reused indefinitely without any resource risk. */
+    final case class CrsInfo(canonical: String, authoritySrid: Option[Int])
+
+    /** A resolved src→dst transform: either the identity (CRSes are the same, per OSR `IsSame`)
+      * or a cache-owned [[CoordinateTransformation]]. `transformation` is null when
+      * `identity` is true. The CT is owned by [[txCache]] and must never be deleted by a caller. */
+    final case class TransformPlan(identity: Boolean, transformation: CoordinateTransformation)
+
+    // Same sizing rationale as TRANSFORMER_CACHE_SIZE, doubled: a CrsInfo key is the raw
+    // user-supplied CRS spelling, so one CRS can occupy several entries ("4326", "EPSG:4326").
+    private val CRS_INFO_CACHE_SIZE = 256
+
+    // CrsInfo holds no native handle, so this cache could be shared across threads. It is kept
+    // thread-local anyway so the per-row hot path needs no lock and no atomic, matching txCache.
+    // Per-thread duplication of a (String, Option[Int]) record is negligible.
+    private val crsInfoCache =
+        new ThreadLocal[mutable.LinkedHashMap[String, CrsInfo]] {
+            override def initialValue(): mutable.LinkedHashMap[String, CrsInfo] =
+                mutable.LinkedHashMap.empty
+        }
+
+    // A TransformPlan references a CoordinateTransformation, which is NOT safe to share between
+    // threads — so this cache MUST be thread-local, exactly like txCache.
+    private val planCache =
+        new ThreadLocal[mutable.LinkedHashMap[String, TransformPlan]] {
+            override def initialValue(): mutable.LinkedHashMap[String, TransformPlan] =
+                mutable.LinkedHashMap.empty
+        }
+
+    /** Authority code as an Int when the CRS carries a numeric one (e.g. `EPSG:4326` -> 4326,
+      * `ESRI:54008` -> 54008); None for authority-less CRS (raw WKT / PROJ4) and for
+      * non-numeric codes such as `OGC:CRS84`. */
+    private def authoritySridOf(spatialRef: SpatialReference): Option[Int] =
+        for {
+            name <- Option(spatialRef.GetAuthorityName(null)) if name.nonEmpty
+            code <- Option(spatialRef.GetAuthorityCode(null))
+            n    <- Try(code.toInt).toOption
+        } yield n
+
+    /** Cached [[CrsInfo]] for a raw CRS spelling — the per-row entry point that replaces
+      * `resolveCrs` + `crsToCanonical` + authority probing in hot loops.
+      *
+      * On a cache hit this makes ZERO GDAL calls. On a miss it resolves exactly one
+      * `SpatialReference`, reads the canonical string and authority code off it, and releases it
+      * in a `finally` before caching the resulting immutable record.
+      *
+      * Throws the same `IllegalArgumentException` as [[resolveCrs]] for an unresolvable CRS, and
+      * caches NOTHING on failure — so a caller that degrades on failure (the never-error
+      * invariant) keeps degrading on every subsequent row rather than seeing a poisoned entry. */
+    def crsInfo(value: String): CrsInfo = {
+        require(value != null, "crsInfo: CRS value is null")
+        val key = value.trim
+        val cache = crsInfoCache.get()
+        cache.get(key) match {
+            case Some(info) =>
+                cache.remove(key); cache.put(key, info) // move-to-end (most-recent)
+                info
+            case None =>
+                val sr = resolveCrs(key) // may throw; nothing is cached in that case
+                val info = try {
+                    CrsInfo(crsToCanonical(sr), authoritySridOf(sr))
+                } finally {
+                    sr.delete()
+                }
+                cache.put(key, info)
+                if (cache.size > CRS_INFO_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
+                info
+        }
+    }
+
+    /** Cached [[TransformPlan]] for a canonical CRS pair — the per-row entry point for
+      * reprojection. On a cache hit this makes ZERO GDAL calls.
+      *
+      * On a miss it resolves both CRSes once to evaluate OSR `IsSame` (so the identity
+      * short-circuit keeps exactly the semantics of comparing two live `SpatialReference`s,
+      * not mere canonical-string equality), releases both, and for the non-identity case takes
+      * the cache-owned CT from [[getTransformerByCanonical]].
+      *
+      * @param srcCanonical already-canonical source CRS string (from [[crsInfo]])
+      * @param dstCanonical already-canonical target CRS string (from [[crsInfo]])
+      */
+    def transformPlan(srcCanonical: String, dstCanonical: String): TransformPlan = {
+        val key = s"$srcCanonical->$dstCanonical"
+        val cache = planCache.get()
+        cache.get(key) match {
+            case Some(plan) =>
+                cache.remove(key); cache.put(key, plan) // move-to-end (most-recent)
+                plan
+            case None =>
+                val srcSR = resolveCrs(srcCanonical)
+                val same = try {
+                    val dstSR = resolveCrs(dstCanonical)
+                    try srcSR.IsSame(dstSR) == 1 finally dstSR.delete()
+                } finally {
+                    srcSR.delete()
+                }
+                val plan =
+                    if (same) TransformPlan(identity = true, null)
+                    else TransformPlan(
+                      identity = false, getTransformerByCanonical(srcCanonical, dstCanonical))
+                cache.put(key, plan)
+                if (cache.size > TRANSFORMER_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
+                plan
+        }
+    }
+
     /** Rule 1 (per-geom) source-CRS resolution — mirror of the light `resolve_source_crs`.
       * Embedded SRID (from EWKB/EWKT) always wins; else the single explicit `srid` or
       * `crs` (both set -> error); else None (CRS-less). The explicit param is a per-geom

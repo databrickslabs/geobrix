@@ -478,4 +478,81 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(allZ(0).isNaN, "First coord Z should remain NaN")
         allZ(1) shouldBe (5.0 +- 1e-9)
     }
+
+    // ------------------------------------------------------------------
+    // Round 4 — hot-path rewrite (cached CrsInfo + TransformPlan) guards
+    // ------------------------------------------------------------------
+
+    test("ST_TransformCrs: exact axis-order values for POINT(11 42) 4326 -> 32633") {
+        // Exact expected values, matching the light tier bit-for-bit. An axis-order bug
+        // silently yields x=3556703.20, y=1361574.16 — which the loose ±1e-4 relative
+        // tolerance elsewhere in this suite would also catch, but pinning the exact value
+        // guards the cached-plan path against picking up an authority-compliant CT.
+        val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+        g.getCoordinate.getY shouldBe (4657521.062149809 +- 1e-6)
+    }
+
+    test("ST_TransformCrs: identity 4326 -> 4326 preserves Z and stamps target SRID") {
+        val g3d = gf.createPoint(new Coordinate(11.0, 42.0, 500.0))
+        g3d.setSRID(4326)
+        val result = ST_TransformCrs.eval(JTS.toEWKBAdaptive(g3d), UTF8String.fromString("EPSG:4326"))
+        assert(result != null)
+        val decoded = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        decoded.getSRID shouldBe 4326
+        decoded.getCoordinate.z shouldBe (500.0 +- 1e-9)
+        decoded.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+        decoded.getCoordinate.getY shouldBe (42.0 +- 1e-12)
+    }
+
+    test("ST_TransformCrs: bad source degrades repeatably (cache miss must not poison)") {
+        // The CrsInfo cache stores nothing on a failed resolve, so an unresolvable source
+        // must degrade to 'return input unchanged' on EVERY row, not just the first.
+        val input = ewkb(999999)
+        for (_ <- 0 until 3) {
+            val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
+            result.asInstanceOf[Array[Byte]] shouldEqual input
+        }
+        val plain = plainWkb()
+        for (_ <- 0 until 3) {
+            val result = ST_TransformCrs.eval(plain, UTF8String.fromString("EPSG:32633"),
+                UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ"))
+            result.asInstanceOf[Array[Byte]] shouldEqual plain
+        }
+    }
+
+    test("ST_TransformCrs: bad target raises repeatably (cache miss must not poison)") {
+        for (_ <- 0 until 3) {
+            an[Exception] should be thrownBy ST_TransformCrs.eval(
+                ewkb(4326), UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ"))
+        }
+    }
+
+    test("ST_TransformCrs: repeated rows stay stable across cached-plan reuse") {
+        // Steady-state correctness guard: the cached CrsInfo / TransformPlan must give the
+        // same answer on row 1000 as on row 1 (no mutated or released state behind the cache).
+        val first = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
+            .asInstanceOf[Array[Byte]]
+        for (_ <- 0 until 1000) {
+            ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
+                .asInstanceOf[Array[Byte]] shouldEqual first
+        }
+    }
+
+    test("ST_TransformCrs: interleaved CRS pairs do not cross-contaminate cached plans") {
+        // Alternate two different targets so both plans stay live in the LRU; each must
+        // keep producing its own correct coordinates.
+        for (_ <- 0 until 50) {
+            val utm33 = JTS.fromWKB(ST_TransformCrs.eval(
+                ewkb(4326), UTF8String.fromString("EPSG:32633")).asInstanceOf[Array[Byte]])
+            utm33.getSRID shouldBe 32633
+            utm33.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+
+            val merc = JTS.fromWKB(ST_TransformCrs.eval(
+                ewkb(4326), UTF8String.fromString("EPSG:3857")).asInstanceOf[Array[Byte]])
+            merc.getSRID shouldBe 3857
+            merc.getCoordinate.getX shouldBe (1224514.3987260093 +- 1e-2)
+        }
+    }
 }

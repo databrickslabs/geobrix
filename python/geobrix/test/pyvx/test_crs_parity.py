@@ -895,3 +895,99 @@ def test_light_sql_surface_declares_binary(spark_with_jar, light):
     # TEXT geometry input, BINARY output — the same contract the heavy expression declares.
     assert get_srid(from_wkb(bytes(row["stamped"]))) == 32633
     assert get_srid(from_wkb(bytes(row["projected"]))) == 32633
+
+
+# ---------------------------------------------------------------------------
+# UNIFORM ZM geometries — cross-tier M truncation
+# ---------------------------------------------------------------------------
+
+# UNIFORM ZM: one dimensionality for the whole geometry, so these parse on the first
+# attempt and never touch the mixed-dimensionality normalizer. The only ZM shape covered
+# above is the MIXED-dim collection in _MIXED_DIM_SHAPES, which the partial-Z rescue turns
+# 2D before the measure can matter — so no uniform-ZM geometry was compared cross-tier at
+# all, and two light-tier divergences hid there: st_setcrs kept the measure heavy drops,
+# and st_transformcrs raised on all four ordinates.
+#
+# Heavy is the target by construction: JTS is XYZ-only, so its readers discard M before any
+# CRS code runs and both heavy functions answer with the 3D geometry.
+_UNIFORM_ZM_SHAPES = [
+    ("point", "POINT ZM (11 42 5 99)"),
+    ("linestring", "LINESTRING ZM (11 42 5 99, 12 43 6 98)"),
+    ("polygon", "POLYGON ZM ((11 42 5 99, 12 42 5 98, 12 43 5 97, 11 42 5 99))"),
+    ("multipoint", "MULTIPOINT ZM ((11 42 5 99), (12 43 6 98))"),
+]
+
+
+def _zm_ewkb(wkt: str, srid: int = 4326) -> bytes:
+    """EWKB with all FOUR ordinates written — a real ZM input, not a truncated one.
+
+    ``output_dimension=4`` matters: shapely's writer default would drop the M here and the
+    test would prove nothing about either tier's reader.
+    """
+    return to_wkb(
+        shapely.set_srid(shapely.from_wkt(wkt), srid),
+        output_dimension=4,
+        flavor="extended",
+        include_srid=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _UNIFORM_ZM_SHAPES], ids=[n for n, _ in _UNIFORM_ZM_SHAPES]
+)
+@pytest.mark.parametrize("medium", ["ewkt", "ewkb"])
+def test_st_setcrs_parity_uniform_zm(heavy, light, wkt, medium):
+    """st_setcrs must return the same XYZ geometry on both tiers for a uniform-ZM input.
+
+    Light used to hand the measure straight back (``SRID=4326;POINT ZM (11 42 5 99)``,
+    41-byte EWKB) where heavy returned 33-byte ``POINT Z (11 42 5)`` — so a column
+    round-tripped through the two tiers came back with a different geometry type.
+    """
+    geom = f"SRID=4326;{wkt}" if medium == "ewkt" else _zm_ewkb(wkt)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_setcrs(geom, "EPSG:32633")
+    assert heavy_value is not None and light_value is not None
+    # expect_z=True pins the shared answer: the measure is gone, the elevation is not.
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=True)
+    assert not shapely.has_m(
+        from_wkb(bytes(light_value))
+    ), "light kept the measure heavy drops"
+    assert not shapely.has_m(from_wkb(heavy_value))
+    # st_setcrs moves no coordinates, so the encoded lengths must match too.
+    assert len(bytes(light_value)) == len(heavy_value), (
+        f"encoded length differs: light={len(bytes(light_value))} "
+        f"heavy={len(heavy_value)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _UNIFORM_ZM_SHAPES], ids=[n for n, _ in _UNIFORM_ZM_SHAPES]
+)
+@pytest.mark.parametrize("medium", ["ewkt", "ewkb"])
+def test_st_transformcrs_parity_uniform_zm(heavy, light, wkt, medium):
+    """st_transformcrs must reproject a uniform-ZM geometry identically on both tiers.
+
+    On light this RAISED ``ValueError: The ordinate (last) dimension should be 2 or 3, got
+    4`` for every one of these shapes, in both media and through the registered UDF, while
+    heavy reprojected them fine — a never-error violation on the registered surface, where
+    one ZM row failed the whole stage.
+    """
+    geom = f"SRID=4326;{wkt}" if medium == "ewkt" else _zm_ewkb(wkt)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert heavy_value is not None and light_value is not None
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=True)
+    assert not shapely.has_m(from_wkb(bytes(light_value)))
+    assert not shapely.has_m(from_wkb(heavy_value))
+
+
+def test_st_crs_parity_uniform_zm(heavy, light):
+    """st_crs must read the SRID off a uniform-ZM geometry identically on both tiers."""
+    for wkt in (w for _, w in _UNIFORM_ZM_SHAPES):
+        for geom in (f"SRID=4326;{wkt}", _zm_ewkb(wkt)):
+            heavy_value = heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0]
+            assert light.st_crs(geom) == heavy_value == "EPSG:4326"

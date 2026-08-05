@@ -55,6 +55,18 @@ probes the authority at ``confidence_threshold=100`` so a PROJ4 or raw-WKT targe
 treated as authority-less rather than fuzzy-matched onto a nearby EPSG code — the same
 answer GDAL gives on the heavyweight tier.
 
+## M handling — dropped at the parse boundary
+
+The heavyweight tier is XYZ-only (JTS), so its readers discard any M ordinate before CRS
+code sees the geometry: ``POINT ZM (11 42 5 99)`` is read as ``POINT Z (11 42 5)`` and both
+heavy functions return the 3D form.  This tier matches that by dropping M in
+:func:`_drop_m`, called from the single parse entry point :func:`_parse_geom_safe` — so no
+function in this module can be reached with an M-carrying geometry, and both tiers agree in
+every input encoding.
+
+The measure is TRUNCATED, never traded for something else: an ``M``-only geometry
+(``POINT M (11 42 99)``) becomes plain 2D rather than gaining an invented ``Z=0``.
+
 ## Z handling (current behavior)
 
 A geometry where **every** vertex has a finite Z keeps its Z through both ``st_setcrs``
@@ -81,7 +93,16 @@ Serverless-safe: no ``spark.conf.set``, no ``_jvm``, no ``.rdd``.
 import re
 from typing import Optional, Union
 
-from shapely import force_2d, get_coordinates, get_srid, set_srid, to_wkb, to_wkt
+from shapely import (
+    force_2d,
+    from_wkb,
+    get_coordinates,
+    get_srid,
+    has_m,
+    set_srid,
+    to_wkb,
+    to_wkt,
+)
 from shapely.ops import transform
 
 from databricks.labs.gbx.core.crs import (
@@ -181,6 +202,44 @@ def _wkt_pad_z(wkt: str) -> str:
     return "".join(out)
 
 
+def _drop_m(g):
+    """Return ``g`` with any M (measure) ordinate removed, keeping X, Y, Z and the SRID.
+
+    THE M gate for the whole light CRS family, applied at the single parse entry point
+    (:func:`_parse_geom_safe`) so no function can be reached with an M-carrying geometry.
+    Placing it at the parse boundary is the exact analogue of the heavyweight tier: JTS is
+    XYZ-only, so heavy's WKB/WKT *readers* discard M before any CRS code sees the geometry —
+    ``POINT ZM (11 42 5 99)`` is read as ``POINT Z (11 42 5)``, and both ``st_setcrs`` and
+    ``st_transformcrs`` return the 33-byte 3D EWKB of that.
+
+    Without this gate the light tier diverged from heavy in two ways at once, and both were
+    on the registered SQL surface:
+
+    1. ``st_setcrs`` KEPT the measure (``SRID=4326;POINT ZM (11 42 5 99)``), so a column
+       round-tripped through the two tiers came back with different geometry types.
+    2. ``st_transformcrs`` RAISED ``ValueError: The ordinate (last) dimension should be 2 or
+       3, got 4`` on every uniform-ZM shape — ``shapely.ops.transform`` hands the full
+       ordinate array to the pyproj transformer, which takes 2 or 3 ordinates only. That
+       broke the never-error invariant: one ZM row failed the whole stage.
+
+    Truncation, never fabrication: the measure is DISCARDED, and a geometry that carries M
+    without Z (``POINT M (11 42 99)``) becomes plain 2D rather than gaining an invented
+    ``Z=0``. ``shapely.force_3d`` would do exactly that, which is why the M drop goes
+    through a WKB round-trip at the geometry's own dimensionality instead.
+
+    A geometry with no M is returned untouched (identity, no round-trip), so the clean-3D,
+    genuine-2D, and partial-Z paths are bit-for-bit unaffected.
+    """
+    if not has_m(g):
+        return g
+    srid = int(get_srid(g))
+    # output_dimension=3 keeps Z when there is one; 2 for an M-only geometry, which must
+    # NOT gain a fabricated Z. include_srid is not usable together with the round-trip
+    # (extended-flavor SRID + M is not a shape shapely re-reads), so the SRID is re-stamped.
+    g_xyz = from_wkb(to_wkb(g, output_dimension=3 if g.has_z else 2))
+    return set_srid(g_xyz, srid) if srid > 0 else g_xyz
+
+
 def _has_partial_z(g) -> bool:
     """True when the geometry claims Z but at least one vertex has a non-finite Z.
 
@@ -233,6 +292,12 @@ def _parse_geom_safe(geom):
     Binary input always parses (EWKB declares one dimensionality for the whole geometry),
     so the retry only ever fires for text.  Returns ``None`` when the input cannot be
     parsed at all — callers treat that as a pass-through, never as an error.
+
+    M is dropped here (:func:`_drop_m`) rather than in each function, so the invariant
+    "no geometry inside this module ever carries an M" holds by construction — the same
+    place heavy drops it (its JTS readers). ``_wkt_pad_z`` already truncates M on the
+    mixed-dimensionality retry path; this covers the far more common case of WKT/WKB that
+    parses on the first attempt, which is every UNIFORM ZM geometry.
     """
     try:
         g = parse_geom(geom)
@@ -243,7 +308,7 @@ def _parse_geom_safe(geom):
             g = parse_geom(_wkt_pad_z(geom))
         except Exception:  # noqa: BLE001
             return None
-    return g
+    return _drop_m(g) if g is not None else None
 
 
 def _to_wkb_preserving_z(g) -> bytes:

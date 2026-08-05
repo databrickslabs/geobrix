@@ -807,3 +807,217 @@ def test_column_wrappers_accept_literal_crs_string(spark):
     # st_transformcrs — same
     result_tr = bytes(df.select(pvx.st_transformcrs("geom", "EPSG:32633")).first()[0])
     assert get_srid(from_wkb(result_tr)) == 32633
+
+
+# ---------------------------------------------------------------------------
+# UNIFORM ZM geometries — M truncated to XYZ, matching heavy
+# ---------------------------------------------------------------------------
+
+# Every shape here is UNIFORM ZM: one dimensionality for the whole geometry, so it parses
+# on the FIRST attempt and never reaches the mixed-dimensionality normalizer. That is
+# exactly why the gap was invisible for so long — the only ZM coverage that existed was a
+# MIXED-dim collection, which the partial-Z rescue turns 2D before any M could matter.
+#
+# Two real divergences from heavy lived in this blind spot, both on the registered SQL
+# surface: st_setcrs KEPT the measure (heavy drops it), and st_transformcrs RAISED
+# ValueError("The ordinate (last) dimension should be 2 or 3, got 4") because
+# shapely.ops.transform hands all four ordinates to a transformer that takes 2 or 3 —
+# a never-error violation where one ZM row failed the whole stage.
+_UNIFORM_ZM_SHAPES = [
+    ("point", "POINT ZM (11 42 5 99)", [[11.0, 42.0, 5.0]]),
+    (
+        "linestring",
+        "LINESTRING ZM (11 42 5 99, 12 43 6 98)",
+        [[11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
+    ),
+    (
+        "polygon",
+        "POLYGON ZM ((11 42 5 99, 12 42 5 98, 12 43 5 97, 11 42 5 99))",
+        [
+            [11.0, 42.0, 5.0],
+            [12.0, 42.0, 5.0],
+            [12.0, 43.0, 5.0],
+            [11.0, 42.0, 5.0],
+        ],
+    ),
+    (
+        "multipoint",
+        "MULTIPOINT ZM ((11 42 5 99), (12 43 6 98))",
+        [[11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
+    ),
+    (
+        "geometrycollection",
+        "GEOMETRYCOLLECTION ZM (POINT ZM (11 42 5 99), "
+        "LINESTRING ZM (11 42 5 99, 12 43 6 98))",
+        [[11.0, 42.0, 5.0], [11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
+    ),
+]
+
+
+def _zm_ewkt(wkt, srid=4326):
+    """EWKT for a uniform-ZM shape."""
+    return f"SRID={srid};{wkt}"
+
+
+def _zm_ewkb(wkt, srid=4326):
+    """EWKB (extended flavor, 4 ordinates) for a uniform-ZM shape.
+
+    ``output_dimension=4`` is what makes this a real ZM input rather than a silently
+    truncated one — shapely's default would drop the M at the writer and the test would
+    prove nothing about the reader path.
+    """
+    import shapely as _sh
+
+    return to_wkb(
+        _sh.set_srid(from_wkt(wkt), srid),
+        output_dimension=4,
+        flavor="extended",
+        include_srid=True,
+    )
+
+
+def _zm_media(wkt):
+    """The (id, input) pairs for both media a caller can hand a ZM geometry in."""
+    return [("ewkt", _zm_ewkt(wkt)), ("ewkb", _zm_ewkb(wkt))]
+
+
+@pytest.mark.parametrize(
+    "wkt,expected_xyz",
+    [(w, c) for _, w, c in _UNIFORM_ZM_SHAPES],
+    ids=[n for n, _, _ in _UNIFORM_ZM_SHAPES],
+)
+@pytest.mark.parametrize("medium", ["ewkt", "ewkb"])
+def test_uniform_zm_setcrs_truncates_m_to_xyz(wkt, expected_xyz, medium):
+    """st_setcrs on a uniform-ZM geometry returns X, Y, Z — the measure is gone.
+
+    Asserted at BOTH layers: the medium-preserving core (str->str, bytes->bytes) and the
+    registered UDF (always BINARY). The core's text answer is the one that used to carry
+    ``ZM`` straight through in its output string.
+    """
+    geom = dict(_zm_media(wkt))[medium]
+
+    # --- core layer, medium-preserving ---
+    core = _crs.st_setcrs(geom, "EPSG:4326")
+    if medium == "ewkt":
+        assert isinstance(core, str), "text in must stay text out"
+        assert "ZM" not in core.upper(), f"core kept the measure: {core}"
+        g_core = from_wkt(core.split(";", 1)[1])
+    else:
+        assert isinstance(core, (bytes, bytearray)), "bytes in must stay bytes out"
+        g_core = from_wkb(bytes(core))
+    assert not shapely.has_m(g_core), "M must be dropped, matching heavy's XYZ-only JTS"
+    assert g_core.has_z, "Z must survive the M drop"
+    assert shapely.get_coordinates(g_core, include_z=True).tolist() == expected_xyz
+
+    # --- registered UDF layer, always BINARY ---
+    out = _crs._udf_st_setcrs(geom, "EPSG:4326")
+    assert isinstance(out, (bytes, bytearray))
+    g = from_wkb(bytes(out))
+    assert not shapely.has_m(g)
+    assert g.has_z
+    assert get_srid(g) == 4326
+    assert shapely.get_coordinates(g, include_z=True).tolist() == expected_xyz
+
+
+@pytest.mark.parametrize(
+    "wkt,expected_xyz",
+    [(w, c) for _, w, c in _UNIFORM_ZM_SHAPES],
+    ids=[n for n, _, _ in _UNIFORM_ZM_SHAPES],
+)
+@pytest.mark.parametrize("medium", ["ewkt", "ewkb"])
+def test_uniform_zm_transformcrs_never_raises_and_drops_m(wkt, expected_xyz, medium):
+    """st_transformcrs on a uniform-ZM geometry reprojects X/Y, keeps Z, and drops M.
+
+    This is the never-error regression: every one of these five shapes raised
+    ``ValueError: The ordinate (last) dimension should be 2 or 3, got 4`` in both media and
+    through the registered UDF, so a single ZM row killed the stage.
+    """
+    geom = dict(_zm_media(wkt))[medium]
+    expected_z = [c[2] for c in expected_xyz]
+
+    # --- core layer, medium-preserving ---
+    core = _crs.st_transformcrs(geom, "EPSG:32633")
+    if medium == "ewkt":
+        assert isinstance(core, str)
+        assert core.startswith("SRID=32633;"), f"reprojected, not degraded: {core}"
+        assert "ZM" not in core.upper(), f"core kept the measure: {core}"
+        g_core = from_wkt(core.split(";", 1)[1])
+    else:
+        assert isinstance(core, (bytes, bytearray))
+        g_core = from_wkb(bytes(core))
+        assert get_srid(g_core) == 32633, "reprojected, not degraded"
+    assert not shapely.has_m(g_core)
+    assert g_core.has_z, "Z rides through the reprojection unchanged"
+
+    # --- registered UDF layer, always BINARY ---
+    out = _crs._udf_st_transformcrs(geom, "EPSG:32633")
+    assert isinstance(out, (bytes, bytearray))
+    g = from_wkb(bytes(out))
+    assert not shapely.has_m(g)
+    assert g.has_z
+    assert get_srid(g) == 32633
+    coords = shapely.get_coordinates(g, include_z=True)
+    # Z is a passthrough (metres of elevation are not reprojected by a 2D CRS change).
+    assert coords[:, 2].tolist() == pytest.approx(expected_z)
+    # X/Y actually moved into UTM33N metres rather than staying in degrees.
+    assert coords[0][0] == _UTM33N_X
+    assert coords[0][1] == _UTM33N_Y
+
+
+def test_uniform_zm_point_matches_heavy_byte_count():
+    """A ZM POINT comes back as the 33-byte 3D EWKB heavy emits, from BOTH functions.
+
+    Heavy reads ``POINT ZM (11 42 5 99)`` through JTS (XYZ-only) as ``POINT Z (11 42 5)``
+    and encodes 33 bytes. Pinning the length catches an M that survived (41 bytes) and a Z
+    that did not (25 bytes) in one assertion.
+    """
+    for medium, geom in _zm_media("POINT ZM (11 42 5 99)"):
+        assert (
+            len(bytes(_crs._udf_st_setcrs(geom, "EPSG:4326"))) == 33
+        ), f"st_setcrs diverged from heavy's 33-byte XYZ EWKB ({medium})"
+        assert (
+            len(bytes(_crs._udf_st_transformcrs(geom, "EPSG:32633"))) == 33
+        ), f"st_transformcrs diverged from heavy's 33-byte XYZ EWKB ({medium})"
+
+
+def test_m_only_geometry_becomes_2d_without_fabricating_z():
+    """An ``M``-only geometry drops to plain 2D — it must NOT gain an invented ``Z=0``.
+
+    ``shapely.force_3d`` would produce ``POINT Z (11 42 0)`` here, and a downstream consumer
+    could not tell that fabricated 0 from a surveyed sea-level elevation. Dropping is
+    correct; inventing is not.
+    """
+    for geom in ("SRID=4326;POINT M (11 42 99)", _zm_ewkb("POINT M (11 42 99)")):
+        for out in (
+            _crs._udf_st_setcrs(geom, "EPSG:4326"),
+            _crs._udf_st_transformcrs(geom, "EPSG:32633"),
+        ):
+            g = from_wkb(bytes(out))
+            assert not shapely.has_m(g), "the measure is dropped"
+            assert not g.has_z, "no Z is invented to replace it"
+            assert len(bytes(out)) == 25, "plain 2D EWKB"
+
+
+def test_uniform_zm_st_crs_reads_srid():
+    """st_crs must read the SRID off a uniform-ZM geometry rather than returning None."""
+    for _, geom in _zm_media("POINT ZM (11 42 5 99)"):
+        assert _crs.st_crs(geom) == "EPSG:4326"
+
+
+def test_uniform_zm_degrade_returns_input_unchanged():
+    """A ZM geometry with no resolvable source CRS degrades to the input, still not raising.
+
+    The never-error invariant is medium-preserving on the degrade path too: the core hands
+    back the caller's own object untouched (measure included — nothing was reprojected, so
+    nothing was dropped), and the UDF re-encodes it to BINARY without raising.
+    """
+    plain_wkt = "POINT ZM (11 42 5 99)"
+    plain_wkb = to_wkb(from_wkt(plain_wkt), output_dimension=4, flavor="iso")
+
+    assert _crs.st_transformcrs(plain_wkt, "EPSG:32633") == plain_wkt
+    assert _crs.st_transformcrs(plain_wkb, "EPSG:32633") == plain_wkb
+    # Registered surface: BINARY out, no raise.
+    for geom in (plain_wkt, plain_wkb):
+        out = _crs._udf_st_transformcrs(geom, "EPSG:32633")
+        assert isinstance(out, (bytes, bytearray))
+        assert get_srid(from_wkb(bytes(out))) == 0, "no SRID was stamped by a degrade"

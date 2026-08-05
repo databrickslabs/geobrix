@@ -750,10 +750,13 @@ def test_st_crs_parity_mixed_dim_shapes(heavy, light, wkt):
 def test_st_transformcrs_parity_mixed_dim_shapes(heavy, light, wkt):
     """st_transformcrs must agree cross-tier on the mixed-dim shapes it can reproject.
 
-    The empty-component shape is excluded deliberately: heavy RAISES on it (OGR rejects an
-    empty geometry inside the collection), so there is no heavy answer to compare against.
-    That heavy-side limitation is out of scope here — this task's contract is that light
-    must not diverge where heavy succeeds, and light handles it without error.
+    The empty-component shape is excluded deliberately: heavy RAISES on it, so there is no
+    heavy answer to compare against. The trigger is specifically an **EMPTY POINT** — a
+    bare ``SRID=4326;POINT EMPTY`` raises on heavy too, while ``LINESTRING EMPTY``,
+    ``POLYGON EMPTY`` and ``GEOMETRYCOLLECTION EMPTY`` all reproject successfully — so it
+    is not "any empty component in a collection". That heavy-side limitation is tracked
+    separately; the contract asserted here is that light must not diverge where heavy
+    succeeds, and light handles this shape without error.
     """
     geom = f"SRID=4326;{wkt}"
     heavy_value = _heavy_binary(
@@ -762,6 +765,75 @@ def test_st_transformcrs_parity_mixed_dim_shapes(heavy, light, wkt):
     light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
     assert heavy_value is not None and light_value is not None
     assert_geom_parity(light_value, heavy_value, expect_srid=32633)
+
+
+# Mixed-dimensionality WKT that is NOT a GEOMETRYCOLLECTION. Heavy returns NULL for these
+# from all three functions; light handles them. Pinned as a KNOWN DIVERGENCE below.
+_NON_GC_MIXED_DIM_SHAPES = [
+    ("multipoint", "MULTIPOINT Z ((11 42 5), (12 43))"),
+    ("linestring", "LINESTRING Z (11 42 5, 12 43)"),
+]
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [w for _, w in _NON_GC_MIXED_DIM_SHAPES],
+    ids=[n for n, _ in _NON_GC_MIXED_DIM_SHAPES],
+)
+def test_non_gc_mixed_dim_known_divergence(heavy, light, wkt):
+    """KNOWN DIVERGENCE, pinned rather than fixed: non-collection mixed-dim WKT.
+
+    For a mixed-dimensionality geometry that is NOT a GEOMETRYCOLLECTION, the two tiers
+    disagree today:
+
+    - **heavy returns NULL** from all three functions — its WKT reader rejects the body and
+      the expressions treat an unparseable geometry as "no result";
+    - **light returns a real geometry**, because it normalizes such a body to uniform 3D
+      before parsing (the same normalization that makes the collection shapes work).
+
+    This test deliberately asserts what each tier does TODAY rather than forcing agreement.
+    The direction is unchanged from before light gained that normalization — light simply
+    handles strictly more input than heavy here, which does not violate the never-error
+    invariant on either side — so making them agree is a cross-tier semantics decision,
+    not a bug fix. Pinning it means the divergence is visible and any future change to
+    either tier is a deliberate, reviewed one instead of a surprise.
+
+    ``st_crs`` is included because it is the sharpest case: heavy returns NULL for a
+    geometry that plainly carries ``SRID=4326``.
+    """
+    geom = f"SRID=4326;{wkt}"
+
+    # --- heavy: NULL from all three ---
+    assert heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0] is None
+    assert (
+        _heavy_binary(heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:32633')")
+        is None
+    )
+    assert (
+        _heavy_binary(
+            heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+        )
+        is None
+    )
+
+    # --- light: real answers ---
+    assert light.st_crs(geom) == "EPSG:4326"
+
+    stamped = light._udf_st_setcrs(geom, "EPSG:32633")
+    assert stamped is not None
+    g_stamped, srid_stamped = _decoded(stamped)
+    assert srid_stamped == 32633
+    # st_setcrs never moves coordinates, so the partial Z is written back as-is.
+    assert g_stamped.has_z
+
+    projected = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert projected is not None
+    g_proj, srid_proj = _decoded(projected)
+    assert srid_proj == 32633
+    # A partial Z is dropped by the reproject, so this comes back 2D with X/Y intact.
+    assert not g_proj.has_z
+    for x, y in get_coordinates(g_proj).tolist():
+        assert x == x and y == y, "reprojected coordinates must not be NaN"
 
 
 def test_st_setcrs_parity_mixed_dim_wkt(heavy, light):

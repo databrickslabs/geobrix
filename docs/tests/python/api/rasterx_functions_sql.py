@@ -131,11 +131,11 @@ SELECT gbx_rst_crs(tile) as crs FROM rasters;
 
 
 rst_crs_sql_example_output = """
-+----------+
-|crs       |
-+----------+
-|EPSG:32618|
-+----------+
++---------+
+|crs      |
++---------+
+|EPSG:4326|
++---------+
 """
 
 

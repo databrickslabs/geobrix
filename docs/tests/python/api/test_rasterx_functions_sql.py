@@ -17,7 +17,17 @@ def sample_rasters(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     rx.register(spark)
 
-    # Use Volumes path (standardized; run in Docker with sample-data mount)
+    # Use Volumes path (standardized; run in Docker with sample-data mount).
+    #
+    # ORDER MATTERS and the fallthrough is SILENT, so it is announced. The first entry is
+    # tried first and later entries are only reached when an earlier one yields no rows —
+    # which is a real, non-obvious case: in the minimal bundle the sentinel2 rasters are
+    # placeholders whose every pixel equals the NoData value, so the reader legitimately
+    # emits 0 tiles and the fixture lands on the elevation raster instead. The two files
+    # have DIFFERENT CRSes (sentinel2 is EPSG:32618, elevation is EPSG:4326), so which one
+    # is used changes what the documented examples output. Printing the winner keeps that
+    # from being invisible the way it was when the rst_crs example documented the CRS of a
+    # file the example never actually read.
     raster_paths = [
         f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif",
         f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.tif",
@@ -26,8 +36,11 @@ def sample_rasters(spark):
         try:
             rasters = spark.read.format("gdal").load(path)
             if rasters.count() > 0:
+                print(f"ℹ️  sample_rasters: using {path}")
                 return rasters
-        except Exception:
+            print(f"ℹ️  sample_rasters: {path} yielded 0 rows — trying the next candidate")
+        except Exception as e:
+            print(f"ℹ️  sample_rasters: {path} failed to read ({e}) — trying the next")
             continue
 
     # Fallback: empty DataFrame with correct schema (tests that need data will fail)
@@ -151,11 +164,36 @@ def test_rst_srid_sql_example(spark, rasters_view):
 
 
 def test_rst_crs_sql_example(spark, rasters_view):
-    """Test SQL CRS-string accessor example (returns a non-null CRS string)."""
+    """Test SQL CRS-string accessor example: the ACTUAL value must match the docs.
+
+    Asserting the exact string, not merely `is not None`, is the point. The documented
+    output feeds DESCRIBE FUNCTION, so a value that drifts from what the example really
+    returns is a wrong answer shipped to users. The previous `is not None` assertion
+    passed happily while the documented value named a different CRS than the query
+    produced, which is exactly how that drift went unnoticed.
+
+    The expected value is parsed out of the documented ASCII table rather than hardcoded
+    here, so the table and the assertion cannot disagree: editing one without the other
+    fails this test.
+    """
     sql = rasterx_functions_sql.rst_crs_sql_example().strip()
     result = spark.sql(sql).collect()
     assert len(result) >= 1
-    assert result[0]["crs"] is not None
+
+    documented = [
+        line.strip().strip("|").strip()
+        for line in rasterx_functions_sql.rst_crs_sql_example_output.strip().splitlines()
+        if line.startswith("|")
+    ]
+    # ["crs", "EPSG:4326"] -> header, then the single data row.
+    assert documented[0] == "crs", f"unexpected documented header: {documented}"
+    expected = documented[1]
+
+    assert result[0]["crs"] == expected, (
+        f"documented rst_crs output is {expected!r} but the example returns "
+        f"{result[0]['crs']!r} — update the ASCII table in "
+        f"rasterx_functions_sql.rst_crs_sql_example_output to the real value"
+    )
 
 
 def test_rst_georeference_sql_example(spark, rasters_view):

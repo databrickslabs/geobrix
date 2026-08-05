@@ -25,9 +25,9 @@ which is the SQL-surface contract:
 - ``gbx_st_setcrs`` / ``gbx_st_transformcrs`` return BINARY (WKB/EWKB bytes
   regardless of whether the input was text). SQL callers always work in WKB.
 
-The private helpers ``_udf_st_crs``, ``_udf_st_setcrs``, ``_udf_st_transformcrs``
-are the scalar-UDF callables registered with Spark; they call the medium-
-preserving core and coerce the result to the fixed SQL return type.
+The private helpers ``_udf_st_setcrs``, ``_udf_st_transformcrs`` are the
+scalar-UDF callables registered with Spark; they call the medium-preserving
+core and coerce the result to the fixed SQL return type.
 
 ## CRS handling rules (mirrors raster tier, geometry-specific semantics)
 
@@ -38,25 +38,23 @@ preserving core and coerce the result to the fixed SQL return type.
 - ``st_setcrs`` stamps an integer SRID; authority-less CRS (WKT / PROJ4 with no
   EPSG/ESRI authority) cannot be stored in an int, so it raises ``ValueError``.
 - ``st_transformcrs`` reprojects coordinates.  If the source CRS is unresolvable
-  (no embedded SRID, no explicit ``source_crs``) it returns the input UNCHANGED
-  (never-error invariant).  Authority-less *target* CRS is allowed; it yields a
-  plain geometry with SRID cleared.
+  (no embedded SRID, no explicit ``source_crs``, or the SRID/string is not in
+  any known registry) it returns the input UNCHANGED (never-error invariant).
+  Authority-less *target* CRS is allowed; it yields a plain geometry with SRID
+  cleared.
 
 Serverless-safe: no ``spark.conf.set``, no ``_jvm``, no ``.rdd``.
 """
 
 from typing import Optional, Union
 
-import shapely
-from shapely import from_wkb, from_wkt, get_srid, set_srid, to_wkb, to_wkt
-from shapely.geometry.base import BaseGeometry
+from shapely import get_srid, set_srid, to_wkb, to_wkt
 from shapely.ops import transform
 
 from databricks.labs.gbx.core.crs import (
     crs_to_canonical,
     get_transformer,
     resolve_crs,
-    resolve_source_crs,
 )
 
 from ._geom import parse_geom
@@ -66,28 +64,9 @@ from ._geom import parse_geom
 # ---------------------------------------------------------------------------
 
 
-def _classify(x) -> tuple:
-    """Return ``(is_text: bool, has_srid: bool)`` for the raw input.
-
-    - ``is_text`` is True for str inputs, False for bytes/bytearray.
-    - ``has_srid`` is True when the input carries an embedded SRID (EWKB flag
-      byte or ``SRID=`` EWKT prefix).
-
-    Used downstream to reconstruct the same encoding on output.
-    """
-    if isinstance(x, (bytes, bytearray)):
-        b = bytes(x)
-        # EWKB: ISO WKB byte 4 (0-indexed) is the WKB type flags word (big-endian
-        # or little-endian). For little-endian (0x01) WKB the 4-byte type word
-        # starts at offset 1; bit 0x20000000 indicates SRID present.
-        # Simpler: let shapely from_wkb read it and check get_srid.
-        try:
-            g = from_wkb(b)
-            return False, int(get_srid(g)) > 0
-        except Exception:
-            return False, False
-    s = str(x).strip()
-    return True, s[:5].upper() == "SRID="
+def _is_text(x) -> bool:
+    """Return True if ``x`` is a str (WKT / EWKT), False for bytes/bytearray."""
+    return isinstance(x, str)
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +79,7 @@ def st_crs(geom) -> Optional[str]:
 
     Reads the integer SRID from EWKB / EWKT; classifies it via the authoritative
     PROJ code sets (EPSG or ESRI). Returns ``None`` for plain WKB / plain WKT
-    (no embedded SRID).
+    (no embedded SRID), None inputs, and any unresolvable SRID.
 
     Args:
         geom: WKB / EWKB bytes, or WKT / EWKT string.
@@ -133,8 +112,10 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
     - bytes in (WKB / EWKB) -> EWKB bytes out.
     - str in (WKT / EWKT) -> EWKT str out (``SRID=<n>;<WKT>``).
 
+    Coordinates are preserved exactly (``rounding_precision=-1``).
+
     Args:
-        geom: WKB / EWKB bytes, or WKT / EWKT string.
+        geom: WKB / EWKB bytes, or WKT / EWKT string. None returns None.
         crs: EPSG/ESRI authority string (``'EPSG:4326'``), integer SRID, or
             any string resolvable by ``resolve_crs``. WKT / PROJ4 are rejected.
 
@@ -145,6 +126,12 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
         ValueError: if ``crs`` resolves to an authority-less CRS (no EPSG/ESRI
             code — cannot be stored as an integer SRID).
     """
+    if geom is None:
+        return None
+    text = _is_text(geom)
+    g = parse_geom(geom)
+    if g is None:
+        return None
     c = resolve_crs(crs)
     auth = c.to_authority()  # (name, code) tuple or None
     if auth is None:
@@ -154,11 +141,9 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
             f"Resolved CRS: {c.to_wkt()[:120]!r}"
         )
     code = int(auth[1])
-    is_text, _ = _classify(geom)
-    g = parse_geom(geom)
     g = set_srid(g, code)
-    if is_text:
-        return f"SRID={code};{to_wkt(g)}"
+    if text:
+        return f"SRID={code};{to_wkt(g, rounding_precision=-1)}"
     return to_wkb(g, include_srid=True)
 
 
@@ -169,17 +154,20 @@ def st_transformcrs(
 ) -> Union[bytes, str]:
     """Reproject a geometry to ``target_crs`` (medium-preserving).
 
-    Source CRS resolution order (mirrors ``resolve_source_crs``):
+    Source CRS resolution order:
     1. Embedded SRID from the geometry (EWKB / EWKT).
     2. Explicit ``source_crs`` parameter (for plain WKB / WKT inputs).
     3. No source CRS resolvable -> return the input UNCHANGED (never-error
-       invariant: a plain geometry without a CRS cannot be reprojected).
+       invariant: a plain geometry without a CRS cannot be reprojected; an
+       unresolvable SRID or source_crs string also degrades gracefully).
 
     Output encoding follows the input medium (bytes -> bytes, str -> str).
     Output SRID:
     - Authority-coded target (``EPSG:n`` / ``ESRI:n``) -> SRID ``n`` stamped
       (E-form in the input medium).
     - Authority-less target (WKT / PROJ4) -> SRID cleared (plain form).
+
+    Coordinates are preserved exactly (``rounding_precision=-1``).
 
     Args:
         geom: WKB / EWKB bytes, or WKT / EWKT string.
@@ -192,15 +180,29 @@ def st_transformcrs(
     """
     if geom is None:
         return None
-    is_text, _ = _classify(geom)
+    text = _is_text(geom)
     g = parse_geom(geom)
     if g is None:
         return geom
 
+    # Resolve source CRS — never-error: any resolution failure -> return unchanged.
     embedded_srid = int(get_srid(g))
-    src = resolve_source_crs(embedded_srid if embedded_srid > 0 else None, crs=source_crs)
+    src = None
+    if embedded_srid > 0:
+        try:
+            src = resolve_crs(embedded_srid)
+        except Exception:
+            # Unresolvable embedded SRID — degrade gracefully, return unchanged.
+            return geom
+    elif source_crs is not None:
+        try:
+            src = resolve_crs(source_crs)
+        except Exception:
+            # Unresolvable explicit source_crs — degrade gracefully.
+            return geom
+
     if src is None:
-        # Never-error invariant: no source CRS -> return input unchanged.
+        # No source CRS at all (plain geometry, no explicit override).
         return geom
 
     tgt = resolve_crs(target_crs)
@@ -212,14 +214,14 @@ def st_transformcrs(
     if tgt_auth is not None:
         tgt_srid = int(tgt_auth[1])
         g_proj = set_srid(g_proj, tgt_srid)
-        if is_text:
-            return f"SRID={tgt_srid};{to_wkt(g_proj)}"
+        if text:
+            return f"SRID={tgt_srid};{to_wkt(g_proj, rounding_precision=-1)}"
         return to_wkb(g_proj, include_srid=True)
     else:
         # Authority-less target: clear SRID.
         g_proj = set_srid(g_proj, 0)
-        if is_text:
-            return to_wkt(g_proj)
+        if text:
+            return to_wkt(g_proj, rounding_precision=-1)
         return to_wkb(g_proj)
 
 
@@ -228,24 +230,18 @@ def st_transformcrs(
 # ---------------------------------------------------------------------------
 
 
-def _udf_st_crs(geom) -> Optional[str]:
-    """SQL UDF callable for gbx_st_crs (STRING return type).
-
-    Identical to the medium-preserving ``st_crs``: reads embedded SRID and
-    returns a canonical authority string, or None.
-    """
-    return st_crs(geom)
-
-
 def _udf_st_setcrs(geom, crs) -> Optional[bytes]:
     """SQL UDF callable for gbx_st_setcrs (BINARY return type).
 
     Coerces the result to EWKB bytes regardless of input medium — SQL callers
     always receive WKB.  Authority-less CRS raises (per core contract).
+    None geom or crs returns None.
     """
     if geom is None or crs is None:
         return None
     result = st_setcrs(geom, crs)
+    if result is None:
+        return None
     if isinstance(result, str):
         # Text input was processed medium-preserving -> convert to EWKB for SQL.
         # The EWKT result from st_setcrs already has the SRID embedded; parse and
@@ -260,10 +256,10 @@ def _udf_st_transformcrs(geom, target_crs, source_crs=None) -> Optional[bytes]:
     """SQL UDF callable for gbx_st_transformcrs (BINARY return type).
 
     Coerces the result to WKB/EWKB bytes regardless of input medium — SQL callers
-    always receive WKB.  Returns None if input is None; returns input bytes
-    unchanged when no source CRS is resolvable.
+    always receive WKB.  Returns None if geom or target_crs is None; returns
+    input bytes unchanged when no source CRS is resolvable.
     """
-    if geom is None:
+    if geom is None or target_crs is None:
         return None
     result = st_transformcrs(geom, target_crs, source_crs)
     if isinstance(result, str):

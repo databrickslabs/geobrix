@@ -19,7 +19,7 @@ from pyspark.sql.types import BinaryType, StringType
 
 from databricks.labs.gbx import _register
 
-from . import _crs, _env, _legacy, _mvt, _tin
+from . import _env, _legacy, _mvt, _tin
 
 ColLike = Union[Column, str, bool, int, float, bytes]
 
@@ -297,21 +297,33 @@ def _registrar_groups() -> List[_register.Group]:
         register_pmtiles_agg(s)
 
     pmtiles = {"gbx_pmtiles_agg": _reg_pmtiles}
+
+    def _reg_gbx_st_crs(s):
+        from . import _crs as _c
+
+        s.udf.register("gbx_st_crs", _c.st_crs, StringType())
+
+    def _reg_gbx_st_setcrs(s):
+        from . import _crs as _c
+
+        s.udf.register("gbx_st_setcrs", _c._udf_st_setcrs, BinaryType())
+
+    def _reg_gbx_st_transformcrs(s):
+        from . import _crs as _c
+
+        s.udf.register("gbx_st_transformcrs", _c._udf_st_transformcrs, BinaryType())
+
     crs = {
-        "gbx_st_crs": lambda s: s.udf.register("gbx_st_crs", _crs._udf_st_crs, StringType()),
-        "gbx_st_setcrs": lambda s: s.udf.register(
-            "gbx_st_setcrs", _crs._udf_st_setcrs, BinaryType()
-        ),
-        "gbx_st_transformcrs": lambda s: s.udf.register(
-            "gbx_st_transformcrs", _crs._udf_st_transformcrs, BinaryType()
-        ),
+        "gbx_st_crs": _reg_gbx_st_crs,
+        "gbx_st_setcrs": _reg_gbx_st_setcrs,
+        "gbx_st_transformcrs": _reg_gbx_st_transformcrs,
     }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
         (lambda: _env.assert_legacy_available(), legacy),
         (lambda: _env.assert_tin_available(), tin),
         (lambda: None, pmtiles),
-        (lambda: None, crs),
+        (lambda: _env.assert_crs_available(), crs),
     ]
 
 
@@ -441,6 +453,13 @@ def st_legacyaswkb(geom: ColLike) -> Column:
     return f.call_function("gbx_st_legacyaswkb", _col(geom))
 
 
+def _crs_col(x: ColLike) -> Column:
+    """Coerce a CRS argument: plain str -> f.lit (CRS string literal, not column name)."""
+    if isinstance(x, str):
+        return f.lit(x)
+    return _col(x)
+
+
 def st_crs(geom: ColLike) -> Column:
     """Return the canonical CRS string embedded in a geometry's SRID, or NULL.
 
@@ -471,14 +490,14 @@ def st_setcrs(geom: ColLike, crs: ColLike) -> Column:
 
     Args:
         geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        crs:  STRING or INTEGER column — EPSG/ESRI authority string
-              (``'EPSG:32633'``), integer SRID, or any ``resolve_crs``-parseable
-              string. WKT / PROJ4 strings raise at execution time.
+        crs:  Column, CRS string literal (e.g. ``'EPSG:32633'``), or integer
+              SRID. A plain Python str is treated as a CRS literal, not a column
+              name. WKT / PROJ4 strings raise at execution time.
 
     Returns:
         BINARY column: EWKB geometry with the new SRID stamped.
     """
-    return f.call_function("gbx_st_setcrs", _col(geom), _col(crs))
+    return f.call_function("gbx_st_setcrs", _col(geom), _crs_col(crs))
 
 
 def st_transformcrs(
@@ -498,10 +517,11 @@ def st_transformcrs(
 
     Args:
         geom:       BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        target_crs: STRING or INTEGER column — target CRS (EPSG/ESRI string,
-                    int SRID, WKT, or PROJ4).
-        source_crs: Optional STRING or INTEGER column — explicit source CRS for
-                    plain (SRID-less) geometries.
+        target_crs: Column, CRS string literal (e.g. ``'EPSG:32633'``), or
+                    integer SRID. A plain Python str is treated as a CRS literal,
+                    not a column name.
+        source_crs: Optional Column, CRS string literal, or integer SRID —
+                    explicit source CRS for plain (SRID-less) geometries.
 
     Returns:
         BINARY column: reprojected geometry (EWKB when target has an authority
@@ -509,7 +529,7 @@ def st_transformcrs(
         source CRS is resolvable.
     """
     if source_crs is None:
-        return f.call_function("gbx_st_transformcrs", _col(geom), _col(target_crs))
+        return f.call_function("gbx_st_transformcrs", _col(geom), _crs_col(target_crs))
     return f.call_function(
-        "gbx_st_transformcrs", _col(geom), _col(target_crs), _col(source_crs)
+        "gbx_st_transformcrs", _col(geom), _crs_col(target_crs), _crs_col(source_crs)
     )

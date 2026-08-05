@@ -3,43 +3,70 @@
 Covers:
 - Core medium-preserving layer (bytes in -> bytes out; str in -> str out)
 - SQL/UDF layer (always BINARY / STRING return types)
-- Encoding matrix: WKB / EWKB / WKT / EWKT inputs
-- ESRI code round-trip via authoritative classification
+- Full encoding matrix: WKB / EWKB / WKT / EWKT inputs x authority / authority-less targets
+- ESRI code and PROJ4 target paths
 - authority-less CRS rejection in st_setcrs
-- never-error invariant for st_transformcrs on unresolvable source
+- Never-error invariant: unresolvable embedded SRID and explicit source_crs both degrade
+- Coordinate preservation (rounding_precision=-1)
+- Text-vs-binary SQL-surface symmetry
+- Unresolvable target raises
 """
 
 import pytest
+from shapely import from_wkb, from_wkt, get_srid, to_wkb
+from shapely.geometry import Point
+
+from databricks.labs.gbx.pyvx import _crs
 
 shapely = pytest.importorskip("shapely")
-import shapely as _shapely  # noqa: E402 (already imported above via importorskip)
-from shapely import from_wkb, set_srid, to_wkb, to_wkt  # noqa: E402
-from shapely.geometry import Point  # noqa: E402
 
-from databricks.labs.gbx.pyvx import _crs  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+# POINT(11, 42) in EPSG:4326 -> EPSG:32633 (UTM33N) = (168701.015089, 4657521.062150)
+_UTM33N_X = pytest.approx(168701.015, rel=1e-4)
+_UTM33N_Y = pytest.approx(4657521.0, rel=1e-4)
+
+# POINT(11, 42) in EPSG:4326 -> ESRI:54008 (Sinusoidal) = (911358.377, 4651636.879)
+_ESRI54008_X = pytest.approx(911358.377, rel=1e-4)
+
+# Custom TM (central_meridian=13.7) applied to (11, 42) => x < 0
+_CUSTOM_TM_X_NEGATIVE = True
+
+_CUSTOM_TM_WKT = (
+    'PROJCS["Custom_TM",'
+    'GEOGCS["WGS 84",'
+    'DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
+    'PRIMEM["Greenwich",0],'
+    'UNIT["degree",0.0174532925199433]],'
+    'PROJECTION["Transverse_Mercator"],'
+    'PARAMETER["central_meridian",13.7],'
+    'PARAMETER["scale_factor",0.9996],'
+    'UNIT["metre",1]]'
+)
+
+_PROJ4_UTM33 = "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs"
+
 
 def _ewkb(srid):
-    """WKB bytes with embedded SRID (EWKB)."""
-    return to_wkb(_shapely.set_srid(Point(11.0, 42.0), srid), include_srid=True)
+    """EWKB bytes for POINT(11, 42) with given SRID."""
+    import shapely as _sh
+
+    return to_wkb(_sh.set_srid(Point(11.0, 42.0), srid), include_srid=True)
 
 
 def _ewkt(srid):
-    """EWKT string with embedded SRID prefix."""
+    """EWKT string POINT(11, 42) with SRID prefix."""
     return f"SRID={srid};POINT (11 42)"
 
 
 def _plain_wkb():
-    """Plain WKB bytes (no SRID)."""
     return to_wkb(Point(11.0, 42.0))
 
 
 def _plain_wkt():
-    """Plain WKT string (no SRID prefix)."""
     return "POINT (11 42)"
 
 
@@ -48,30 +75,25 @@ def _plain_wkt():
 # ---------------------------------------------------------------------------
 
 
-def test_st_crs_reads_embedded_srid():
+def test_st_crs_reads_embedded_srid_bytes():
     assert _crs.st_crs(_ewkb(4326)) == "EPSG:4326"
     assert _crs.st_crs(_ewkb(54008)) == "ESRI:54008"
-    assert _crs.st_crs(_plain_wkb()) is None  # plain WKB -> null
-    assert _crs.st_crs(_plain_wkt()) is None  # plain WKT -> null
+    assert _crs.st_crs(_plain_wkb()) is None
 
 
-def test_st_crs_ewkt_input():
-    """EWKT input (text medium) — read embedded SRID."""
+def test_st_crs_reads_embedded_srid_text():
     assert _crs.st_crs(_ewkt(4326)) == "EPSG:4326"
     assert _crs.st_crs(_ewkt(54008)) == "ESRI:54008"
+    assert _crs.st_crs(_plain_wkt()) is None
 
 
-def test_st_crs_plain_wkt_null():
-    """Plain WKT (no SRID) -> None."""
-    assert _crs.st_crs("POINT (0 0)") is None
+def test_st_crs_none_input():
+    assert _crs.st_crs(None) is None
 
 
-def test_st_crs_esri_roundtrip():
-    """ESRI code stored as bare int in EWKB must be re-classified as ESRI, not EPSG."""
-    # shapely stores srid as a bare int; get_srid returns 54008 (int).
-    # resolve_crs(54008) must return ESRI:54008 via authoritative classification.
-    result = _crs.st_crs(_ewkb(54008))
-    assert result == "ESRI:54008"
+def test_st_crs_unresolvable_srid_degrades():
+    """SRID that is not in EPSG or ESRI registries -> None (never-error)."""
+    assert _crs.st_crs(_ewkb(999999)) is None
 
 
 # ---------------------------------------------------------------------------
@@ -79,154 +101,275 @@ def test_st_crs_esri_roundtrip():
 # ---------------------------------------------------------------------------
 
 
-def test_st_setcrs_stamps_srid_encoding_preserving():
-    # WKB in -> EWKB bytes out
-    out = _crs.st_setcrs(to_wkb(Point(0, 0)), "EPSG:32633")
+def test_st_setcrs_wkb_in_ewkb_out():
+    out = _crs.st_setcrs(_plain_wkb(), "EPSG:32633")
     assert isinstance(out, (bytes, bytearray))
-    assert _shapely.get_srid(from_wkb(out)) == 32633
-
-    # WKT in -> EWKT str out
-    out2 = _crs.st_setcrs("POINT (0 0)", "ESRI:54008")
-    assert isinstance(out2, str)
-    assert out2.upper().startswith("SRID=54008;")
+    assert get_srid(from_wkb(out)) == 32633
 
 
-def test_st_setcrs_authority_less_raises():
-    """WKT/PROJ4 CRS (no EPSG/ESRI authority) must raise ValueError."""
-    with pytest.raises(ValueError):
-        _crs.st_setcrs(to_wkb(Point(0, 0)), "+proj=aea +lat_1=29.5 +datum=WGS84 +no_defs")
-
-
-def test_st_setcrs_ewkb_input():
-    """EWKB in -> EWKB out (replaces existing SRID)."""
-    ewkb_in = _ewkb(4326)
-    out = _crs.st_setcrs(ewkb_in, "EPSG:32633")
+def test_st_setcrs_ewkb_in_ewkb_out_replaces_srid():
+    out = _crs.st_setcrs(_ewkb(4326), "EPSG:32633")
     assert isinstance(out, (bytes, bytearray))
-    assert _shapely.get_srid(from_wkb(out)) == 32633
+    assert get_srid(from_wkb(out)) == 32633
 
 
-def test_st_setcrs_ewkt_input():
-    """EWKT in -> EWKT out (replaces existing SRID prefix)."""
-    ewkt_in = _ewkt(4326)
-    out = _crs.st_setcrs(ewkt_in, "EPSG:32633")
+def test_st_setcrs_wkt_in_ewkt_out():
+    out = _crs.st_setcrs(_plain_wkt(), "ESRI:54008")
+    assert isinstance(out, str)
+    assert out.upper().startswith("SRID=54008;")
+
+
+def test_st_setcrs_ewkt_in_ewkt_out_replaces_srid():
+    out = _crs.st_setcrs(_ewkt(4326), "EPSG:32633")
     assert isinstance(out, str)
     assert out.upper().startswith("SRID=32633;")
 
 
-def test_st_setcrs_wkt_authority_less_wkt_raises():
-    """Full WKT CRS with no authority must raise."""
-    wkt_crs = (
-        'PROJCS["Custom_TM",'
-        'GEOGCS["WGS 84",'
-        'DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
-        'PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],'
-        "PROJECTION[\"Transverse_Mercator\"],"
-        'PARAMETER["central_meridian",13.7],'
-        'PARAMETER["scale_factor",0.9996],'
-        'UNIT["metre",1]]'
-    )
-    with pytest.raises(ValueError):
-        _crs.st_setcrs(to_wkb(Point(0, 0)), wkt_crs)
+def test_st_setcrs_coordinate_preservation():
+    """Coordinates must not be rounded — rounding_precision=-1 required."""
+    pt_wkt = "POINT (11.123456789 42.987654321)"
+    out = _crs.st_setcrs(pt_wkt, "EPSG:4326")
+    assert isinstance(out, str)
+    g = from_wkt(out.split(";", 1)[1] if ";" in out else out)
+    assert g.x == pytest.approx(11.123456789, abs=1e-9)
+    assert g.y == pytest.approx(42.987654321, abs=1e-9)
+
+
+def test_st_setcrs_none_geom_returns_none():
+    assert _crs.st_setcrs(None, "EPSG:4326") is None
+
+
+def test_st_setcrs_empty_string_returns_none():
+    assert _crs.st_setcrs("", "EPSG:4326") is None
+
+
+def test_st_setcrs_authority_less_proj4_raises():
+    with pytest.raises(ValueError, match="authority-less"):
+        _crs.st_setcrs(_plain_wkb(), "+proj=aea +lat_1=29.5 +datum=WGS84 +no_defs")
+
+
+def test_st_setcrs_authority_less_wkt_raises():
+    with pytest.raises(ValueError, match="authority-less"):
+        _crs.st_setcrs(_plain_wkb(), _CUSTOM_TM_WKT)
 
 
 # ---------------------------------------------------------------------------
-# st_transformcrs — medium-preserving layer
+# st_transformcrs — per-cell matrix tests
 # ---------------------------------------------------------------------------
 
-_CUSTOM_TM_WKT = (
-    'PROJCS["Custom_TM",'
-    'GEOGCS["WGS 84",'
-    'DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
-    'PRIMEM["Greenwich",0],'
-    'UNIT["degree",0.0174532925199433]],'
-    "PROJECTION[\"Transverse_Mercator\"],"
-    'PARAMETER["central_meridian",13.7],'
-    'PARAMETER["scale_factor",0.9996],'
-    'UNIT["metre",1]]'
-)
 
-
-def test_st_transformcrs_matrix():
-    # EWKB + EPSG target -> EWKB, SRID=target; coords reprojected
+def test_st_transformcrs_ewkb_epsg_target():
+    """EWKB + authority-coded EPSG target -> EWKB, SRID=target, coords reprojected."""
     out = _crs.st_transformcrs(_ewkb(4326), "EPSG:32633")
-    g = from_wkb(out)
     assert isinstance(out, (bytes, bytearray))
-    assert _shapely.get_srid(g) == 32633
-    assert g.x > 100_000  # easting in UTM33N
+    g = from_wkb(out)
+    assert get_srid(g) == 32633
+    assert g.x == _UTM33N_X
+    assert g.y == _UTM33N_Y
 
-    # EWKB + WKT target -> WKB (SRID cleared, authority-less)
-    out2 = _crs.st_transformcrs(_ewkb(4326), _CUSTOM_TM_WKT)
-    assert isinstance(out2, (bytes, bytearray))
-    assert _shapely.get_srid(from_wkb(out2)) == 0
 
-    # plain WKB, no source_crs -> returned unchanged (never-error invariant)
+def test_st_transformcrs_ewkb_esri_target():
+    """EWKB + authority-coded ESRI target -> EWKB, SRID=54008, coords reprojected."""
+    out = _crs.st_transformcrs(_ewkb(4326), "ESRI:54008")
+    assert isinstance(out, (bytes, bytearray))
+    g = from_wkb(out)
+    assert get_srid(g) == 54008
+    assert g.x == _ESRI54008_X
+
+
+def test_st_transformcrs_ewkb_authority_less_wkt_target():
+    """EWKB + authority-less WKT target -> plain WKB, SRID cleared, coords reprojected."""
+    out = _crs.st_transformcrs(_ewkb(4326), _CUSTOM_TM_WKT)
+    assert isinstance(out, (bytes, bytearray))
+    g = from_wkb(out)
+    assert get_srid(g) == 0
+    assert g.x < 0  # central_meridian=13.7, point at lon=11 -> negative easting
+
+
+def test_st_transformcrs_ewkb_proj4_target():
+    """EWKB + PROJ4 target -> EWKB, coords reprojected.
+
+    Note: rasterio resolves '+proj=utm +zone=33 +datum=WGS84' -> EPSG:32633
+    (authority recognised), so SRID is stamped (32633) and output is EWKB.
+    This is correct: the output SRID follows what the target resolver returns.
+    """
+    out = _crs.st_transformcrs(_ewkb(4326), _PROJ4_UTM33)
+    assert isinstance(out, (bytes, bytearray))
+    g = from_wkb(out)
+    # PROJ4 UTM33 resolves to EPSG:32633 via rasterio authority detection
+    assert get_srid(g) == 32633
+    assert g.x == _UTM33N_X
+
+
+def test_st_transformcrs_plain_wkb_no_source_unchanged():
+    """Plain WKB, no source_crs -> returned unchanged (never-error invariant)."""
     plain = _plain_wkb()
     assert _crs.st_transformcrs(plain, "EPSG:32633") == plain
 
-    # plain WKB + explicit source_crs -> reprojected
-    out3 = _crs.st_transformcrs(plain, "EPSG:32633", source_crs="EPSG:4326")
-    assert from_wkb(out3).x > 100_000
+
+def test_st_transformcrs_plain_wkb_authority_less_target_unchanged():
+    """Plain WKB + authority-less target, no source_crs -> unchanged."""
+    plain = _plain_wkb()
+    assert _crs.st_transformcrs(plain, _CUSTOM_TM_WKT) == plain
 
 
-def test_st_transformcrs_ewkt_input_text_medium_preserved():
-    """EWKT text in -> WKT/EWKT text out (medium preserved)."""
-    ewkt_in = _ewkt(4326)
+def test_st_transformcrs_plain_wkb_with_explicit_source():
+    """Plain WKB + explicit source_crs -> reprojected."""
+    out = _crs.st_transformcrs(_plain_wkb(), "EPSG:32633", source_crs="EPSG:4326")
+    g = from_wkb(out)
+    assert get_srid(g) == 32633
+    assert g.x == _UTM33N_X
 
-    # EWKT + EPSG target -> EWKT out, SRID=target
-    out = _crs.st_transformcrs(ewkt_in, "EPSG:32633")
+
+def test_st_transformcrs_ewkt_epsg_target_text_medium():
+    """EWKT + EPSG target -> EWKT str, SRID=target, coords reprojected."""
+    out = _crs.st_transformcrs(_ewkt(4326), "EPSG:32633")
     assert isinstance(out, str)
     assert out.upper().startswith("SRID=32633;")
-
-    # EWKT + WKT target -> WKT out (plain, SRID cleared)
-    out2 = _crs.st_transformcrs(ewkt_in, _CUSTOM_TM_WKT)
-    assert isinstance(out2, str)
-    assert "SRID=" not in out2.upper()
-
-    # EWKT + explicit source override uses embedded SRID (not the override)
-    # per resolve_source_crs: embedded wins -> no-op on source
-    out3 = _crs.st_transformcrs(ewkt_in, "EPSG:32633", source_crs="EPSG:4326")
-    assert isinstance(out3, str)
-    assert out3.upper().startswith("SRID=32633;")
+    g = from_wkt(out.split(";", 1)[1])
+    assert get_srid(from_wkb(to_wkb(g))) == 0  # plain parse of WKT part has no srid
+    assert g.x == _UTM33N_X
 
 
-def test_st_transformcrs_plain_wkt_with_source_crs():
-    """Plain WKT string + explicit source_crs -> text out, reprojected."""
+def test_st_transformcrs_ewkt_authority_less_target_text_medium():
+    """EWKT + authority-less WKT target -> plain WKT str, SRID cleared, coords reprojected."""
+    out = _crs.st_transformcrs(_ewkt(4326), _CUSTOM_TM_WKT)
+    assert isinstance(out, str)
+    assert "SRID=" not in out.upper()
+    g = from_wkt(out)
+    assert g.x < 0
+
+
+def test_st_transformcrs_plain_wkt_no_source_unchanged():
+    """Plain WKT, no source -> unchanged."""
+    plain = _plain_wkt()
+    assert _crs.st_transformcrs(plain, "EPSG:32633") == plain
+
+
+def test_st_transformcrs_plain_wkt_authority_less_target_unchanged():
+    """Plain WKT + authority-less target, no source -> unchanged."""
+    plain = _plain_wkt()
+    assert _crs.st_transformcrs(plain, _CUSTOM_TM_WKT) == plain
+
+
+def test_st_transformcrs_plain_wkt_with_explicit_source():
+    """Plain WKT + explicit source_crs -> text output, reprojected."""
     out = _crs.st_transformcrs(_plain_wkt(), "EPSG:32633", source_crs="EPSG:4326")
     assert isinstance(out, str)
-    # should have easting > 100_000 when parsed
-    import shapely as _sh
-    from shapely import from_wkt
-
-    wkt_clean = out
-    if wkt_clean.upper().startswith("SRID="):
-        _, _, wkt_clean = wkt_clean.partition(";")
-    assert from_wkt(wkt_clean).x > 100_000
+    assert out.upper().startswith("SRID=32633;")
+    g = from_wkt(out.split(";", 1)[1])
+    assert g.x == _UTM33N_X
 
 
 # ---------------------------------------------------------------------------
-# SQL / UDF layer — BINARY / STRING normalization
+# Never-error invariant: unresolvable source
+# ---------------------------------------------------------------------------
+
+
+def test_st_transformcrs_unresolvable_embedded_srid_unchanged():
+    """EWKB with SRID not in EPSG or ESRI -> returned unchanged, no exception."""
+    bad = _ewkb(999999)
+    assert _crs.st_transformcrs(bad, "EPSG:32633") == bad
+
+
+def test_st_transformcrs_unresolvable_explicit_source_unchanged():
+    """Plain WKB + invalid explicit source_crs string -> unchanged, no exception."""
+    plain = _plain_wkb()
+    assert _crs.st_transformcrs(plain, "EPSG:32633", source_crs="NOT_A_CRS") == plain
+
+
+# ---------------------------------------------------------------------------
+# st_transformcrs: unresolvable TARGET raises
+# ---------------------------------------------------------------------------
+
+
+def test_st_transformcrs_unresolvable_target_raises():
+    """An explicitly invalid target CRS string must raise (not return unchanged)."""
+    with pytest.raises(Exception):
+        _crs.st_transformcrs(_ewkb(4326), "GARBAGE_CRS_STRING_XXXX")
+
+
+# ---------------------------------------------------------------------------
+# Coordinate preservation in st_transformcrs text medium
+# ---------------------------------------------------------------------------
+
+
+def test_st_transformcrs_coordinate_preservation_text():
+    """to_wkt rounding_precision=-1 must be used; no 6-dp truncation."""
+    # Reproject to UTM33N then back to 4326; round-trip error should be < 1 mm
+    out_utm = _crs.st_transformcrs(_ewkb(4326), "EPSG:32633")
+    out_back = _crs.st_transformcrs(out_utm, "EPSG:4326")
+    g = from_wkb(out_back)
+    assert g.x == pytest.approx(11.0, abs=1e-8)
+    assert g.y == pytest.approx(42.0, abs=1e-8)
+
+
+# ---------------------------------------------------------------------------
+# SQL/UDF layer — BINARY / STRING normalization
 # ---------------------------------------------------------------------------
 
 
 def test_udf_st_crs_returns_string():
-    """Registered UDF path: return type is STRING (not bytes)."""
-    result = _crs._udf_st_crs(_ewkb(4326))
-    assert isinstance(result, str)
-    assert result == "EPSG:4326"
-
-    result_null = _crs._udf_st_crs(_plain_wkb())
-    assert result_null is None
+    assert _crs.st_crs(_ewkb(4326)) == "EPSG:4326"
+    assert _crs.st_crs(_plain_wkb()) is None
 
 
-def test_udf_st_setcrs_returns_binary():
-    """Registered UDF path: return type is BINARY (bytes), even for text inputs."""
+def test_udf_st_setcrs_returns_binary_for_text_input():
+    """SQL surface returns BINARY (bytes) even when input is text."""
     out = _crs._udf_st_setcrs("POINT (0 0)", "EPSG:4326")
     assert isinstance(out, (bytes, bytearray))
-    assert _shapely.get_srid(from_wkb(out)) == 4326
+    assert get_srid(from_wkb(out)) == 4326
 
 
-def test_udf_st_transformcrs_returns_binary():
-    """Registered UDF path: return type is BINARY (bytes), even for text inputs."""
+def test_udf_st_setcrs_text_binary_symmetry():
+    """SQL surface: text input and bytes input must produce byte-identical EWKB."""
+    pt_wkb = to_wkb(Point(11.123456789, 42.987654321))
+    pt_wkt = "POINT (11.123456789 42.987654321)"
+    out_bytes = _crs._udf_st_setcrs(pt_wkb, "EPSG:4326")
+    out_text = _crs._udf_st_setcrs(pt_wkt, "EPSG:4326")
+    assert isinstance(out_bytes, (bytes, bytearray))
+    assert isinstance(out_text, (bytes, bytearray))
+    g_b = from_wkb(out_bytes)
+    g_t = from_wkb(out_text)
+    assert g_b.x == pytest.approx(g_t.x, abs=1e-9)
+    assert g_b.y == pytest.approx(g_t.y, abs=1e-9)
+    assert get_srid(g_b) == get_srid(g_t) == 4326
+
+
+def test_udf_st_transformcrs_returns_binary_for_text_input():
+    """SQL surface returns BINARY even when input is EWKT."""
     out = _crs._udf_st_transformcrs(_ewkt(4326), "EPSG:32633")
     assert isinstance(out, (bytes, bytearray))
-    assert _shapely.get_srid(from_wkb(out)) == 32633
+    assert get_srid(from_wkb(out)) == 32633
+
+
+def test_udf_st_transformcrs_null_target_returns_none():
+    """NULL target_crs must return None, not raise."""
+    assert _crs._udf_st_transformcrs(_ewkb(4326), None) is None
+
+
+# ---------------------------------------------------------------------------
+# Spark registration — Column wrappers and registrar group
+# ---------------------------------------------------------------------------
+
+
+def test_column_wrappers_accept_literal_crs_string(spark):
+    """st_crs/st_setcrs/st_transformcrs Column wrappers must accept plain CRS strings."""
+    from databricks.labs.gbx.pyvx import functions as pvx
+
+    pvx.register(spark)
+
+    ewkb_hex = _ewkb(4326).hex()
+    df = spark.sql(f"SELECT unhex('{ewkb_hex}') AS geom")
+
+    # st_crs
+    result_crs = df.select(pvx.st_crs("geom")).first()[0]
+    assert result_crs == "EPSG:4326"
+
+    # st_setcrs — CRS string literal must be wrapped as f.lit, not a column name
+    result_set = bytes(df.select(pvx.st_setcrs("geom", "EPSG:32633")).first()[0])
+    assert get_srid(from_wkb(result_set)) == 32633
+
+    # st_transformcrs — same
+    result_tr = bytes(df.select(pvx.st_transformcrs("geom", "EPSG:32633")).first()[0])
+    assert get_srid(from_wkb(result_tr)) == 32633

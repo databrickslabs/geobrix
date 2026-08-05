@@ -57,3 +57,26 @@ def assert_tin_available() -> None:
             + ", ".join(missing)
             + ". Install with: pip install 'geobrix[light]'"
         )
+
+
+def assert_crs_available() -> None:
+    """Raise a clear ImportError if the CRS light deps are missing."""
+    missing = []
+    try:
+        import pyproj  # noqa: F401
+    except Exception:  # noqa: BLE001
+        missing.append("pyproj")
+    try:
+        import rasterio  # noqa: F401
+    except Exception:  # noqa: BLE001
+        missing.append("rasterio")
+    try:
+        import shapely  # noqa: F401
+    except Exception:  # noqa: BLE001
+        missing.append("shapely")
+    if missing:
+        raise ImportError(
+            "pyvx CRS requires the [light] extra; missing: "
+            + ", ".join(missing)
+            + ". Install with: pip install 'geobrix[light]'"
+        )

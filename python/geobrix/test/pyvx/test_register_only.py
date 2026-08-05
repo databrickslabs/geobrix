@@ -50,5 +50,8 @@ def test_only_none_registers_all(spark):
         "gbx_st_legacyaswkb",
         "gbx_st_triangulate",
         "gbx_pmtiles_agg",
+        "gbx_st_crs",
+        "gbx_st_setcrs",
+        "gbx_st_transformcrs",
     ):
         assert _exists(spark, n)

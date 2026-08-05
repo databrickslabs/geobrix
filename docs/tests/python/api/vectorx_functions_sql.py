@@ -135,60 +135,82 @@ def st_crs_sql_example():
     the authoritative PROJ code sets. Returns NULL for plain WKB / WKT with no
     embedded SRID. ESRI codes (e.g. 54008) are returned as ``ESRI:<n>``, not
     ``EPSG:<n>``, per the authoritative classification rule.
+
+    Geometry input accepts WKB / EWKB (BINARY) and WKT / EWKT (STRING); the EWKT
+    literals below are the most readable way to show a carried SRID.
     """
     return """
-SELECT gbx_st_crs(geom) AS crs_string FROM geom_table;
+SELECT gbx_st_crs('SRID=4326;POINT (11 42)')  AS wgs84,
+       gbx_st_crs('SRID=54008;POINT (11 42)') AS sinusoidal,
+       gbx_st_crs('POINT (11 42)')            AS no_srid;
 """
 
 
 st_crs_sql_example_output = """
-+-----------+
-|crs_string |
-+-----------+
-|EPSG:4326  |
-+-----------+
++---------+----------+-------+
+|wgs84    |sinusoidal|no_srid|
++---------+----------+-------+
+|EPSG:4326|ESRI:54008|NULL   |
++---------+----------+-------+
 """
 
 
 def st_setcrs_sql_example():
-    """Stamp a new CRS on a geometry without reprojecting (SQL).
+    """Stamp a CRS on a geometry without reprojecting (SQL).
 
-    Assigns the given EPSG or ESRI integer SRID to the geometry and returns EWKB
-    (BINARY). Authority-less CRS strings (WKT / PROJ4) are rejected at execution
-    time because a geometry SRID must be an integer authority code.
+    Assigns the EPSG or ESRI integer SRID to the geometry, leaving coordinates
+    untouched. In SQL the result is always BINARY (EWKB), whichever encoding the
+    geometry argument arrived in — read the stamped SRID back with ``gbx_st_crs``.
+
+    A CRS with no integer authority code (raw WKT, PROJ4, or a non-numeric code
+    such as ``OGC:CRS84``) is rejected at execution time, because a geometry SRID
+    must be an integer.
     """
     return """
-SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS geom_with_crs FROM geom_table;
+SELECT gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'EPSG:4326'))   AS stamped_wgs84,
+       gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'ESRI:54008'))  AS stamped_esri,
+       gbx_st_crs(gbx_st_setcrs(
+           unhex('010100000000000000000026400000000000004540'), 32633))
+           AS stamped_from_wkb;
 """
 
 
 st_setcrs_sql_example_output = """
-+------------+
-|geom_with_crs|
-+------------+
-|[BINARY]    |
-+------------+
++-------------+----------+----------------+
+|stamped_wgs84|stamped_esri|stamped_from_wkb|
++-------------+----------+----------------+
+|EPSG:4326    |ESRI:54008|EPSG:32633      |
++-------------+----------+----------------+
 """
 
 
 def st_transformcrs_sql_example():
-    """Reproject a geometry to the target CRS (SQL).
+    """Reproject a geometry to a target CRS (SQL).
 
-    Reprojects the input geometry from its embedded SRID (EWKB / EWKT) or an
-    explicit ``source_crs`` to the ``target_crs``. When no source CRS is
-    resolvable the input is returned unchanged (never-error invariant). Returns
-    EWKB (BINARY) with the target SRID stamped when the target has an EPSG or
-    ESRI authority code; plain WKB when the target is authority-less.
+    Reprojects from the geometry's embedded SRID (EWKB / EWKT) or, for a plain
+    SRID-less geometry, from an explicit third ``source_crs`` argument. In SQL the
+    result is always BINARY.
+
+    The carried SRID follows the **target**: a target with an integer authority
+    code (``EPSG:n`` / ``ESRI:n``) stamps ``n``, while a target with none (raw WKT
+    or PROJ4) reprojects the coordinates and clears the now-stale SRID — so
+    ``gbx_st_crs`` returns NULL for that column. When no source CRS is resolvable
+    at all the geometry is returned unchanged rather than erroring.
     """
     return """
-SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS geom_utm33n FROM geom_table;
+SELECT gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633'))
+           AS to_utm33n,
+       gbx_st_crs(gbx_st_transformcrs('POINT (11 42)', 'ESRI:54008', 'EPSG:4326'))
+           AS to_sinusoidal,
+       gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (11 42)',
+           '+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs')) AS to_proj4;
 """
 
 
 st_transformcrs_sql_example_output = """
-+----------+
-|geom_utm33n|
-+----------+
-|[BINARY]  |
-+----------+
++----------+-------------+--------+
+|to_utm33n |to_sinusoidal|to_proj4|
++----------+-------------+--------+
+|EPSG:32633|ESRI:54008   |NULL    |
++----------+-------------+--------+
 """

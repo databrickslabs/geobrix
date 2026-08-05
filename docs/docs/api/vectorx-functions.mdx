@@ -19,6 +19,7 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 
 - **Vector tile encoding** — `gbx_st_asmvt` aggregator + `gbx_st_asmvt_pyramid` generator for publishing Mapbox Vector Tile (MVT) layers, available in **both** the lightweight (`pyvx`) and heavyweight (`vectorx`) tiers
 - **TIN surface modeling** — `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` for Delaunay triangulation and grid elevation interpolation from Z-valued points, in **both** tiers (with a `constrained`/`conforming` mode selector)
+- **CRS strings** — `gbx_st_crs`, `gbx_st_setcrs`, and `gbx_st_transformcrs` for reading, stamping, and reprojecting a geometry's coordinate reference system by **CRS string** (ESRI codes, WKT, PROJ4 — not just an EPSG integer), in **both** tiers
 - **OGR-based vector readers** — Shapefile, GeoJSON, GeoPackage, FileGDB (heavyweight only)
 - **Legacy Mosaic conversion** — `gbx_st_legacyaswkb` for migrating geometries written by DBLabs Mosaic, in **both** tiers
 
@@ -37,6 +38,9 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 | `st_triangulate` | Supported (`constrained`) | Supported (`constrained` + `conforming`) |
 | `st_interpolateelevationbbox` | Supported (`constrained`) | Supported (`constrained` + `conforming`) |
 | `st_interpolateelevationgeom` | Supported (`constrained`) | Supported (`constrained` + `conforming`) |
+| `st_crs` | Supported | Supported |
+| `st_setcrs` | Supported | Supported |
+| `st_transformcrs` | Supported | Supported |
 | `st_legacyaswkb` | Supported | Supported |
 
 ---
@@ -432,6 +436,110 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 **SQL** (works in both tiers):
 
 <CodeFromTest code={vectorxSqlCode} functionName="st_interpolateelevationgeom_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_interpolateelevationgeom_sql_example_output" />
+
+---
+
+## Coordinate reference systems {#crs}
+
+Read, stamp, and reproject a geometry's CRS by **CRS string** — an ESRI code, a WKT definition, or a PROJ4 string, not only an EPSG integer. These complement the product's built-in `ST_SRID` / `ST_SetSRID` / `ST_Transform`, which take an integer SRID: use the built-ins when an EPSG code is all you need, and these when the CRS can only be named as a string. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model shared with RasterX.
+
+All three are available in **both** tiers under the same names, so a CRS query is a one-line tier swap.
+
+### Shared contracts
+
+**Geometry input** — every geometry argument accepts **WKB, EWKB, WKT, and EWKT**. WKB/WKT carry no SRID; EWKB/EWKT carry one.
+
+**SQL output is always BINARY.** `gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB/EWKB) whichever encoding the geometry argument arrived in — a STRING geometry input still yields BINARY. One function has one declared return type: an input-dependent return type cannot be used in a view or any fixed schema, and WKB is how the rest of `gbx_st_*` and the built-in `ST_*` functions exchange geometries. To read a CRS back as text, wrap the result in `gbx_st_crs`; to hand it to a built-in, `ST_GeomFromWKB` accepts it directly. `gbx_st_crs` returns `STRING`.
+
+**Errors are the exception, not the rule.** These functions degrade rather than fail a whole column:
+
+| Situation | Result |
+|---|---|
+| NULL geometry | NULL |
+| NULL `target_crs` | NULL |
+| Geometry has no resolvable source CRS (plain WKB/WKT, no `source_crs`) | input returned **unchanged** |
+| Embedded SRID is in no registry (e.g. `999999`) | input returned **unchanged** |
+| `source_crs` cannot be parsed | input returned **unchanged** |
+| `target_crs` cannot be parsed | **raises** |
+| `gbx_st_setcrs` given a CRS with no integer authority code | **raises** |
+
+**Z coordinates.** A geometry whose vertices *all* carry a finite Z keeps its Z. A genuinely 2D geometry stays 2D — no Z ordinate is invented. For a geometry where only *some* vertices carry a Z, the current behavior is that `gbx_st_transformcrs` reprojects it as **2D**: reprojecting a missing Z would propagate it into X and Y and destroy the horizontal position, so the Z is dropped and every X/Y stays correct. A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream.
+
+---
+
+### st_crs
+
+<Tier both/>
+
+Returns the canonical CRS string for the geometry's embedded SRID, or `NULL`.
+
+**Signature:** `gbx_st_crs(geom)`
+
+**Parameters:**
+- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
+
+**Returns:** `STRING` — the authority string (`'EPSG:4326'`, `'ESRI:54008'`, …), or `NULL` for a plain WKB/WKT geometry with no embedded SRID, a NULL input, or an SRID in no known registry.
+
+An SRID is classified against the authoritative PROJ registries, so an ESRI-range code comes back as `ESRI:<n>` rather than being mislabelled `EPSG:<n>`.
+
+**SQL** (works in both tiers):
+
+<CodeFromTest code={vectorxSqlCode} functionName="st_crs_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_crs_sql_example_output" />
+
+---
+
+### st_setcrs
+
+<Tier both/>
+
+Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not move coordinates. The counterpart to the built-in `ST_SetSRID`, taking a CRS string instead of an integer.
+
+**Signature:** `gbx_st_setcrs(geom, crs)`
+
+**Parameters:**
+- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
+- `crs` (`STRING`) — Target CRS. An authority string (`'EPSG:4326'`, `'ESRI:54008'`) or an int-castable string / integer (`32633`, `'32633'`), which behaves like `ST_SetSRID(geom, 32633)`.
+
+**Returns:** `BINARY` — EWKB with the new SRID embedded. Coordinates are byte-preserved.
+
+**Raises** when `crs` has no integer authority code, because a geometry can store only an integer SRID. That covers:
+
+- **authority-less definitions** — a raw `PROJCS[...]` WKT or a PROJ4 string such as `'+proj=utm +zone=33 +datum=WGS84'`. PROJ's fuzzy matcher *would* pair that PROJ4 string with `EPSG:32633` at partial confidence, but a geometry SRID is an exact identity claim — a guess is never silently written into one. Use `gbx_st_transformcrs` if you want the coordinates in that CRS.
+- **non-numeric authority codes** — `'OGC:CRS84'`, `'IGNF:LAMB93'`: real, resolvable CRSes whose code simply is not an integer.
+
+**SQL** (works in both tiers):
+
+<CodeFromTest code={vectorxSqlCode} functionName="st_setcrs_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_setcrs_sql_example_output" />
+
+---
+
+### st_transformcrs
+
+<Tier both/>
+
+Reprojects a geometry's coordinates into `target_crs`. The counterpart to the built-in `ST_Transform`, taking a CRS string instead of an integer — so an ESRI code, a WKT definition, or a PROJ4 string can be a target.
+
+**Signature:** `gbx_st_transformcrs(geom, target_crs [, source_crs])`
+
+**Parameters:**
+- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
+- `target_crs` (`STRING`) — CRS to reproject into: authority string, int-castable string/integer, WKT, or PROJ4.
+- `source_crs` (`STRING`, optional) — CRS the input is in. Used **only** for a plain (SRID-less) geometry; a geometry that carries an embedded SRID ignores this argument, so a mixed column is safe.
+
+**Returns:** `BINARY` — the reprojected geometry.
+
+**Which SRID comes out** follows the **target**:
+
+| `target_crs` | Example | Output |
+|---|---|---|
+| Has an integer authority code | `'EPSG:32633'`, `'ESRI:54008'`, `32633` | EWKB with that SRID stamped — a plain input is upgraded to carry one |
+| Has no integer authority code | raw `PROJCS[...]` WKT, `'+proj=utm +zone=33 …'`, `'OGC:CRS84'` | plain WKB: coordinates reprojected, and the now-**stale** source SRID **cleared** — leaving it would label the geometry with a CRS it is no longer in |
+
+Source CRS resolution order: the geometry's embedded SRID first, then `source_crs`, and if neither resolves the geometry is returned unchanged.
+
+**SQL** (works in both tiers):
+
+<CodeFromTest code={vectorxSqlCode} functionName="st_transformcrs_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_transformcrs_sql_example_output" />
 
 ---
 

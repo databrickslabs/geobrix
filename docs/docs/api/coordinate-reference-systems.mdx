@@ -213,7 +213,40 @@ VectorX augments the product's built-in ST functions and follows the native-ST C
 - **Geometry input encodings** — every `gbx_st_*` geometry input accepts **WKB, EWKB, WKT, and EWKT** interchangeably. WKB/WKT carry no SRID; **EWKB/EWKT carry one** — pass whichever encoding your upstream produces.
 - **SRID is applied at ingestion.** Functions that return plain WKB/WKT (e.g. `gbx_st_legacyaswkb`) carry no SRID; assign the CRS when you read the geometry back, e.g. with `ST_GeomFromWKB(wkb, srid)` or `ST_GeomFromWKT(wkt, srid)`.
 
-See the [VectorX Function Reference](./vectorx-functions) for details.
+### The geometry CRS-string family
+
+Three functions mirror the raster family above, for geometries. They take a **CRS string** where the built-in `ST_SRID` / `ST_SetSRID` / `ST_Transform` take an integer — use the built-ins when an EPSG code is all you need, and these when the CRS can only be named as a string (an ESRI code, a WKT definition, a PROJ4 string). Both tiers register the same names.
+
+**Read the CRS:**
+
+- [`st_crs`](./vectorx-functions#st_crs) — the canonical CRS string for the geometry's embedded SRID; `NULL` for a plain WKB/WKT geometry, or for an SRID in no known registry.
+
+**Relabel (no reprojection — the coordinates don't move, only the label changes):**
+
+- [`st_setcrs`](./vectorx-functions#st_setcrs) — stamp an SRID from a CRS string.
+
+**Reproject:**
+
+- [`st_transformcrs`](./vectorx-functions#st_transformcrs) — reproject to a CRS-string target, with an optional third argument naming the source CRS for a plain SRID-less geometry.
+
+```sql
+-- Both tiers, same names. In SQL these always return BINARY, so read the CRS
+-- back with gbx_st_crs (or hand the bytes to ST_GeomFromWKB).
+SELECT gbx_st_crs(geom)                                        AS crs,
+       gbx_st_crs(gbx_st_setcrs(geom, 'ESRI:54008'))           AS relabelled,
+       gbx_st_crs(gbx_st_transformcrs(geom, 'EPSG:3857'))      AS webmercator
+FROM geometries;
+```
+
+Three behaviors are worth knowing before you use them:
+
+- **SQL output is always `BINARY`.** `gbx_st_setcrs` and `gbx_st_transformcrs` return WKB/EWKB even when the geometry argument was a WKT or EWKT string, so one function has one declared return type and the result can be used in a view or any fixed schema. `gbx_st_crs` returns `STRING`.
+- **A geometry can only carry an integer SRID.** So a target CRS with no integer authority code — a raw `PROJCS[...]` WKT, a PROJ4 string like `+proj=utm +zone=33 +datum=WGS84`, or a non-numeric code such as `OGC:CRS84` — behaves differently in the two operations: `st_transformcrs` reprojects the coordinates and **clears** the now-stale SRID (leaving it would label the geometry with a CRS it is no longer in), while `st_setcrs` **raises**, because there is no integer for it to stamp. Notably, a PROJ4 string is treated as authority-less on **both** tiers even though PROJ's fuzzy matcher could pair it with a nearby EPSG code: a geometry SRID is an exact identity claim, and a partial-confidence guess is never silently written into one.
+- **Z coordinates.** A geometry whose vertices all carry a finite Z keeps its Z; a 2D geometry stays 2D. Where only *some* vertices carry a Z, the current behavior is that `st_transformcrs` reprojects the geometry as 2D — reprojecting a missing Z would propagate it into X and Y and destroy the horizontal position. A missing Z is never filled in with a substitute value.
+
+Beyond the CRS family, `st_crs` also reads the SRID that a reader or a `gbx_st_*` generator embedded, so the same accessor works on geometries you produced elsewhere in GeoBrix.
+
+See the [VectorX Function Reference](./vectorx-functions#crs) for full signatures and the complete degrade table.
 
 ## CRS function reference
 
@@ -238,9 +271,16 @@ Every CRS-touching function across GeoBrix, with its CRS parameter(s) and role. 
 | RasterX | `rst_bng_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 27700 |
 | RasterX | `rst_h3_gridspec` | light | `out_srid` / `out_crs` | output | grid-spec output CRS (DataFrame helper) |
 | GridX | `gbx_h3_cell_bbox` | both | `out_srid` / `out_crs` | output | cell bbox in the output CRS |
+| VectorX | [`st_crs`](./vectorx-functions#st_crs) | both | — | accessor | returns the geometry's CRS string, or NULL when it carries no SRID |
+| VectorX | [`st_setcrs`](./vectorx-functions#st_setcrs) | both | `crs` | source | relabel from a CRS string; raises when the CRS has no integer authority code |
+| VectorX | [`st_transformcrs`](./vectorx-functions#st_transformcrs) | both | `target_crs`, `source_crs` | output (+ source) | reproject to a CRS string; `source_crs` names the input CRS for a plain SRID-less geometry |
 | RasterX | GDAL/GTiff reader `clipCrs` option | both | `clipCrs` | source | stamps the v2 tile `clip_crs` field |
 | VizX | [`plot_tile`](./vizx-raster) / [`plot_cog`](./vizx-raster) | light | `crs` | source | basemap CRS; override for a CRS-less raster |
 
-:::note VectorX and GridX CRS surfaces
-The **VectorX** CRS family (`st_crs` / `st_setcrs` / `st_transformcrs`) and the broader **GridX** CRS surface (custom-CRS input reprojection for `polyfill` / `tessellate` / `pointascell`, grid CRS accessors) are separate follow-on workstreams; their rows will be added here when those functions ship.
+:::note Geometry SRIDs are integers
+The three VectorX rows take a CRS **string**, but a geometry can only *carry* an integer SRID. So a target CRS with no integer authority code (raw WKT, PROJ4, or a non-numeric code such as `OGC:CRS84`) makes `st_transformcrs` clear the stale SRID while `st_setcrs` raises. Their SQL forms always return `BINARY`. See [the geometry CRS-string family](#vectorx) for the full rules.
+:::
+
+:::note GridX CRS surface
+The broader **GridX** CRS surface (custom-CRS input reprojection for `polyfill` / `tessellate` / `pointascell`, grid CRS accessors) is a separate follow-on; its rows will be added here when those functions ship. Each grid's fixed native CRS is documented in [GridX](#gridx) above.
 :::

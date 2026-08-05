@@ -492,7 +492,7 @@
       "examples": "Examples:\n      > SELECT unhex('010300000001000000050000000000000000003EC000000000000024400000000000003E4000000000000024400000000000003E4000000000000034400000000000003EC000000000000034400000000000003EC00000000000002440') AS geom_wkb, named_struct('name', 'region-a', 'id', 1L) AS attrs ) SELECT t.tile.z AS z, length(t.tile.mvt_bytes) AS mvt_bytes_len FROM features LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 2, 2, 'regions') t AS tile;"
     },
     "gbx_st_crs": {
-      "examples": "Examples:\n      > SELECT gbx_st_crs(geom) AS crs_string FROM geom_table;"
+      "examples": "Examples:\n      > SELECT gbx_st_crs('SRID=4326;POINT (11 42)')  AS wgs84, gbx_st_crs('SRID=54008;POINT (11 42)') AS sinusoidal, gbx_st_crs('POINT (11 42)')            AS no_srid;"
     },
     "gbx_st_interpolateelevationbbox": {
       "examples": "Examples:\n      > SELECT gbx_st_interpolateelevationbbox(masspoints, breaklines, 0.0, 0.01, 'NONENCROACHING', 530000, 180000, 531000, 181000, 100, 100, 27700, 'constrained') AS elev_point FROM survey;"
@@ -504,10 +504,10 @@
       "examples": "Examples:\n      > SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_table;"
     },
     "gbx_st_setcrs": {
-      "examples": "Examples:\n      > SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS geom_with_crs FROM geom_table;"
+      "examples": "Examples:\n      > SELECT gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'EPSG:4326'))   AS stamped_wgs84, gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'ESRI:54008'))  AS stamped_esri, gbx_st_crs(gbx_st_setcrs( unhex('010100000000000000000026400000000000004540'), 32633)) AS stamped_from_wkb;"
     },
     "gbx_st_transformcrs": {
-      "examples": "Examples:\n      > SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS geom_utm33n FROM geom_table;"
+      "examples": "Examples:\n      > SELECT gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633')) AS to_utm33n, gbx_st_crs(gbx_st_transformcrs('POINT (11 42)', 'ESRI:54008', 'EPSG:4326')) AS to_sinusoidal, gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (11 42)', '+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs')) AS to_proj4;"
     },
     "gbx_st_triangulate": {
       "examples": "Examples:\n      > SELECT gbx_st_triangulate(masspoints, breaklines, 0.01, 0.01, 'NONENCROACHING', 'constrained') AS triangle FROM survey;"

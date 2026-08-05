@@ -463,7 +463,12 @@ All three are available in **both** tiers under the same names, so a CRS query i
 | `target_crs` cannot be parsed | **raises** |
 | `gbx_st_setcrs` given a CRS with no integer authority code | **raises** |
 
-**Z coordinates.** A geometry whose vertices *all* carry a finite Z keeps its Z. A genuinely 2D geometry stays 2D — no Z ordinate is invented. For a geometry where only *some* vertices carry a Z, the current behavior is that `gbx_st_transformcrs` reprojects it as **2D**: reprojecting a missing Z would propagate it into X and Y and destroy the horizontal position, so the Z is dropped and every X/Y stays correct. A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream.
+**Z coordinates.** A geometry whose vertices *all* carry a finite Z keeps its Z. A genuinely 2D geometry stays 2D — no Z ordinate is invented. For a geometry where only *some* vertices carry a Z, the current behavior differs between the two operations, because only one of them touches coordinates:
+
+- `gbx_st_transformcrs` reprojects it as **2D**. Reprojecting a missing Z propagates it into X and Y and destroys the horizontal position, so dropping the Z is what keeps every X/Y correct.
+- `gbx_st_setcrs` keeps the partial Z as-is, since stamping an SRID never moves coordinates.
+
+A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream. Both tiers behave identically here, in every input encoding.
 
 ---
 
@@ -500,11 +505,13 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
 - `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
 - `crs` (`STRING`) — Target CRS. An authority string (`'EPSG:4326'`, `'ESRI:54008'`) or an int-castable string / integer (`32633`, `'32633'`), which behaves like `ST_SetSRID(geom, 32633)`.
 
-**Returns:** `BINARY` — EWKB with the new SRID embedded. Coordinates are byte-preserved.
+**Returns:** `BINARY` — EWKB with the new SRID embedded. Coordinate **values** are preserved exactly, to the last decimal place — no reprojection and no rounding. (The output bytes are not identical to the input's: embedding the SRID is what makes it EWKB.)
 
 **Raises** when `crs` has no integer authority code, because a geometry can store only an integer SRID. That covers:
 
 - **authority-less definitions** — a raw `PROJCS[...]` WKT or a PROJ4 string such as `'+proj=utm +zone=33 +datum=WGS84'`. PROJ's fuzzy matcher *would* pair that PROJ4 string with `EPSG:32633` at partial confidence, but a geometry SRID is an exact identity claim — a guess is never silently written into one. Use `gbx_st_transformcrs` if you want the coordinates in that CRS.
+
+  This distinction is not academic: a PROJ4 string that resembles a registry CRS is not necessarily equivalent to it. One that omits a datum shift (`+towgs84=0,0,0,0,0,0,0`) can place coordinates **hundreds of metres** from the EPSG code it superficially matches. GeoBrix treats such a definition as its own CRS throughout — including when selecting the transformation used to reproject — rather than silently substituting the near-match. If you want the registry CRS, name it explicitly (`'EPSG:28992'`).
 - **non-numeric authority codes** — `'OGC:CRS84'`, `'IGNF:LAMB93'`: real, resolvable CRSes whose code simply is not an integer.
 
 **SQL** (works in both tiers):

@@ -156,13 +156,19 @@ for f in "${RUN_FILES[@]}"; do
         "tail -6 $REPORT 2>/dev/null | grep -E 'passed|failed|skipped|no tests ran'" 2>/dev/null)
     N_PASSED=$(echo "$SUMMARY" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
     N_PASSED=${N_PASSED:-0}
+    N_SKIPPED=$(echo "$SUMMARY" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | head -1)
+    N_SKIPPED=${N_SKIPPED:-0}
     TOTAL_PASSED=$((TOTAL_PASSED + N_PASSED))
 
     if [ $FILE_EXIT -ne 0 ]; then
         FAILED_FILES+=("$f")
-    elif [ "$N_PASSED" -eq 0 ]; then
-        # Exit 0 with nothing run: the silent non-gate this command exists to catch.
-        TOTAL_SKIPPED_FILES+=("$f")
+    elif [ "$N_PASSED" -eq 0 ] || [ "$N_SKIPPED" -gt 0 ]; then
+        # Exit 0 while some or all of the file did not run: the silent non-gate this
+        # command exists to catch. Requiring ZERO skips (not merely >=1 pass) closes the
+        # partial-skip loophole -- a file where most tests skip and one passes would
+        # otherwise read green. Every test in every parity file transitively needs the
+        # JAR-bearing session, so in a healthy run no parity test skips at all.
+        TOTAL_SKIPPED_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped)")
     fi
     echo ""
 done

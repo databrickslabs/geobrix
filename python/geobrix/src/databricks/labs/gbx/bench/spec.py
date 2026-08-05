@@ -2826,7 +2826,7 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda cid, v, a: prx.rst_h3_rasterize_agg(
             cid,
             value=v,
-            srid=F.lit(a["grid"][6]),
+            out_srid=F.lit(a["grid"][6]),
             pixel_size=F.lit(a["pixel_size"]),
             xmin=F.lit(a["grid"][0]),
             ymin=F.lit(a["grid"][1]),

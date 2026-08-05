@@ -977,7 +977,7 @@ Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric inte
 
 Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries, with an optional array of breakline WKB geometries to preserve sharp terrain transitions.
 
-**Signature:** `rst_dtmfromgeoms(points: Column, breaklines: Column, mergeTolerance: Column, snapTolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, srid: Column): Column`
+**Signature:** `rst_dtmfromgeoms(points: Column, breaklines: Column, mergeTolerance: Column, snapTolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column, [no_data: Column, out_crs: Column = null]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 **Parameters:** `points` — Array of WKB point geometries with Z coordinates; `breaklines` — Array of WKB line/polygon geometries enforcing hard edges (pass `null` or empty array if unused); `mergeTolerance/snapTolerance` — Delaunay triangulation tolerances (vertex-merge distance and snapping distance; small values such as `0.0` and `0.01` are typical); `xmin/ymin/xmax/ymax` — output extent in CRS units; `width/height` — output raster dimensions in pixels (for N-metre cells set `width = round((xmax-xmin)/N)`); `srid` — EPSG code for the output CRS. An optional trailing `noData` argument overrides the default fill for cells outside the triangulated hull.
 
@@ -1015,7 +1015,7 @@ Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Inverse-distance interpolat
 
 IDW-interpolate an array of Z-valued point geometries to a Float64 GeoTIFF tile covering an explicit bounding box and pixel grid. Supply the points and their scalar values as arrays in a single row; use `rst_gridfrompoints_agg` when points arrive one per row.
 
-**Signature:** `rst_gridfrompoints(points: Column, values: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, widthPx: Column, heightPx: Column, srid: Column, power: Column, maxPts: Column): Column`
+**Signature:** `rst_gridfrompoints(points: Column, values: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, widthPx: Column, heightPx: Column, out_srid: Column, power: Column, maxPts: Column, [out_crs: Column = null]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 **Parameters:** `points` — `ARRAY<BINARY>` of WKB point geometries; `values` — `ARRAY<DOUBLE>` of scalar observations, one per point; `xmin/ymin/xmax/ymax` — output extent in CRS units; `widthPx/heightPx` — output dimensions in pixels; `srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is the standard); `maxPts` — maximum nearest neighbours considered per output pixel
 
@@ -1576,7 +1576,7 @@ Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL w
 Powered by **rasterio** (`rasterio.mask`). The clip geometry is assumed to be in the raster's CRS; the heavyweight tier has additional SRID-inheritance fallbacks.
 :::
 
-**Signature:** `rst_clip(tile: Column, clip: Column, cutlineAllTouched: Column): Column` — Clip by geometry. The `clip` argument must be **WKT** (string), **EWKT** (SRID-prefixed string), **WKB** (binary), or **EWKB** (SRID-embedded binary); do not use `st_geomfromtext()` or other DBR native geometry.
+**Signature:** `rst_clip(tile: Column, clip: Column, cutlineAllTouched: Column, [clip_crs: Column = null]): Column` — Clip by geometry. The `clip` argument must be **WKT** (string), **EWKT** (SRID-prefixed string), **WKB** (binary), or **EWKB** (SRID-embedded binary); do not use `st_geomfromtext()` or other DBR native geometry. Optional `clip_crs` (string, source role) declares the CRS of a plain WKB/WKT cutline — an EWKB/EWKT embedded SRID wins, absent → assumed already in the raster CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 **CRS handling:**
 - **EWKT** (`SRID=4326;POLYGON(...)`) or **EWKB** (SRID encoded in the byte header) — the SRID is read, and if it differs from the raster's CRS the cutline is reprojected before clipping. Use this form whenever the geometry and raster may be in different CRSs.
@@ -1956,7 +1956,7 @@ Move data between the raster (`tile`) and vector (`geom`) worlds.
 Powered by **rasterio** (`rasterio.features`).
 :::
 
-**Signature:** `rst_rasterize(geom: Column, burnValue: Column, xMin: Column, yMin: Column, xMax: Column, yMax: Column, width: Column, height: Column, srid: Column): Column` — Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData.
+**Signature:** `rst_rasterize(geom: Column, burnValue: Column, xMin: Column, yMin: Column, xMax: Column, yMax: Column, width: Column, height: Column, [out_srid: Column = null, out_crs: Column = null]): Column` — Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData. Output CRS (`out_crs` string wins over the int `out_srid`; both → error; neither → the geometry's carried source CRS); the geometry is reprojected from its source CRS into the output CRS before burning. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 **SQL:**
 
@@ -2225,7 +2225,7 @@ Powered by **rasterio** + **NumPy**. Per-band bucket counts via `numpy.histogram
 Powered by **rasterio**. Point geometries only; the point is assumed to be in the raster's CRS.
 :::
 
-**Signature:** `rst_sample(tile: Column, geom: Column): Column` — Sample the raster at the geometry's location(s). For a `POINT`, returns `ARRAY<DOUBLE>` of one value per band at the nearest pixel. Geometry is interpreted in EPSG:4326 lon/lat unless its EWKB carries a different SRID.
+**Signature:** `rst_sample(tile: Column, geom: Column, [crs: Column = null]): Column` — Sample the raster at the geometry's location(s). For a `POINT`, returns `ARRAY<DOUBLE>` of one value per band at the nearest pixel. The point is reprojected from its source CRS to the raster CRS: an EWKB/EWKT embedded SRID wins, else the optional `crs` (string, source role), else assumed already aligned. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_sample_sql_example" outputConstant="rst_sample_sql_example_output" code={rasterxSqlCode} />
 
@@ -2315,7 +2315,7 @@ Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geo
 Powered by **xarray-spatial** (`xrspatial.viewshed`). Returns a Byte tile (255 visible / 0 invisible) from a DEM tile and a POINT observer. The CPU line-of-sight scan differs from the heavyweight GDAL sweep (no earth-curvature correction), but the binary visible/invisible classification matches. Pulls `numba` — the heaviest pyrx dependency.
 :::
 
-**Signature:** `rst_viewshed(tile: Column, observerGeom: Column, observerHeight: Column, [targetHeight: Column = lit(1.6), maxDistance: Column = null]): Column` — Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is WKB / WKT POINT in the raster's CRS; non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited.
+**Signature:** `rst_viewshed(tile: Column, observerGeom: Column, observerHeight: Column, [targetHeight: Column = lit(1.6), maxDistance: Column = null]): Column` — Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is WKB / WKT POINT; it is reprojected from its source CRS to the raster CRS (an EWKB/EWKT embedded SRID wins, else the optional `crs` argument, else assumed already aligned). Non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_viewshed_sql_example" outputConstant="rst_viewshed_sql_example_output" code={rasterxSqlCode} />
 

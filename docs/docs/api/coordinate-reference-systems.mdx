@@ -25,6 +25,44 @@ The integer SRID is compact and maps directly onto Databricks' native ST functio
 Reach for the **SRID** when you need the integer for the native ST bridge or an authority-code pipeline. Reach for the **CRS string** whenever an authority-less CRS (raw WKT/PROJ4) might be in play — it never loses one.
 :::
 
+### The four CRS-string forms
+
+Every GeoBrix function that takes a CRS *string* accepts any of these four forms interchangeably — an authority code, an int-castable string, **WKT**, or **PROJ4**:
+
+```python
+from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx — same names
+
+# 1) Authority code (EPSG or ESRI)
+rx.rst_setcrs("tile", "EPSG:4326")
+rx.rst_setcrs("tile", "ESRI:54008")            # World Sinusoidal (no EPSG code)
+
+# 2) Int-castable string -> treated as an EPSG/ESRI SRID (the int-cast rule)
+rx.rst_setcrs("tile", "32633")                 # == rst_setsrid("tile", 32633)
+
+# 3) WKT — a full CRS definition with NO authority code (a custom projection that
+#    no EPSG/ESRI code names). WKT is the lossless form for such a CRS; paste an
+#    embedded .prj / GeoTIFF CRS verbatim. rst_crs echoes this WKT back unchanged.
+rx.rst_setcrs("tile", (
+    'PROJCS["Custom_TM",'
+    'GEOGCS["WGS 84",DATUM["WGS_1984",'
+    'SPHEROID["WGS 84",6378137,298.257223563]],'
+    'PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],'
+    'PROJECTION["Transverse_Mercator"],'
+    'PARAMETER["central_meridian",13.7],'
+    'PARAMETER["scale_factor",0.9996],'
+    'PARAMETER["false_easting",500000],UNIT["metre",1]]'
+))
+
+# 4) PROJ4 string — e.g. an Albers Equal Area with custom standard parallels
+#    that no authority code names exactly:
+rx.rst_transformcrs("tile", (
+    "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 "
+    "+x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+))
+```
+
+WKT and PROJ4 are how a CRS **without** an authority code (so no SRID) is named losslessly — the reason the CRS string exists alongside the integer SRID.
+
 ### The int-cast rule
 
 Everywhere GeoBrix accepts a CRS *string*, one rule decides how it is interpreted, and it lives in a single shared helper per tier (`pyrx.core.crs.resolve_crs` in the lightweight tier, `SpatialRefOps.resolveCrs` in the heavyweight tier):
@@ -55,6 +93,45 @@ When GeoBrix emits a CRS string — from `rst_crs`, in the tile struct's `crs` f
 :::note Compare CRS meaning, not the exact string
 For a CRS that has an authority code (e.g. `ESRI:54008`), both tiers emit the identical authority string. For an **authority-less** CRS — one carrying only embedded WKT with no code — the two tiers can emit **different but equivalent** WKT serializations (GDAL's WKT flavor on the heavyweight tier, pyproj's on the lightweight tier). They describe the **same** CRS and compare equal as CRS objects; only the text differs. So compare CRS **meaning** (reproject/round-trip, or `SpatialReference.IsSame` / a pyproj CRS-equality check), not raw string equality. To pin a stable, identical string across tiers, stamp the CRS explicitly with `rst_setcrs` (e.g. `rst_setcrs(tile, 'ESRI:54008')`).
 :::
+
+## Source CRS vs output CRS
+
+A geometry passed to a function has **two independent CRS roles**, and the parameter name tells you which:
+
+| Role | Parameter names | Meaning |
+|---|---|---|
+| **Source** | `srid` / `crs` / `clip_crs` | "my input geometry is already in this CRS" |
+| **Output / target** | `out_srid` / `out_crs` | "project the output into this CRS" |
+
+So a bare `crs` (or `clip_crs`) declares what the input *is*; an `out_`-prefixed parameter controls how the output is *projected*. Functions that operate on an existing raster (`rst_clip`, `rst_sample`, `rst_viewshed`) take only a **source** parameter — the target is the raster's own CRS. Functions that *produce a new raster* (`rst_rasterize`, `rst_gridfrompoints`, `rst_dtmfromgeoms`, the grid `rasterize_agg` family) take an **`out_*`** parameter for the output CRS.
+
+Everywhere, `srid`/`out_srid` (integer) and `crs`/`out_crs` (string) are two spellings of the *same* parameter: the string form wins, and setting **both** raises. See the [master table](#crs-function-reference) for every function's parameter and role.
+
+### How a source CRS is resolved (per geometry)
+
+For any geometry input, its **source** CRS is resolved per-geometry:
+
+1. an **EWKB/EWKT** geometry's embedded SRID **always wins**;
+2. else a plain **WKB/WKT** geometry uses the explicit `srid`/`crs`/`clip_crs` parameter;
+3. else the geometry is **CRS-less** (treated as already in the target CRS).
+
+The explicit parameter is a per-geometry *fallback for plain WKB/WKT only*. This makes **mixed columns** first-class: a Column that mixes EWKB rows (embedded SRID) and plain-WKB rows can share one scalar `crs`/`srid` parameter — the EWKB rows keep their embedded SRID, the plain rows use the parameter, and **no row errors**.
+
+:::note The never-error invariant
+Absent or CRS-less input **never throws** — it degrades to a sensible assumption (the geometry is treated as already in the target CRS; a CRS-less raster is assumed grid-native / basemap-less). The **only** conditions that raise are: (1) both `srid` and `crs` set, (2) both `out_srid` and `out_crs` set, or (3) an explicitly-supplied CRS string that is unresolvable. Everything else proceeds.
+:::
+
+### Reprojection before a produce-new-raster burn
+
+`rst_rasterize`, `rst_gridfrompoints`, and `rst_dtmfromgeoms` reproject the input geometry from its **source** CRS into the **output** CRS (`out_crs`/`out_srid`) before burning — so a geometry in one CRS burned into an extent declared in another is correct, not garbage. When no `out_*` is given, the output carries the geometry's own source CRS (not a forced default); a CRS-less geometry is assumed already in the output CRS.
+
+### Grid aggregation auto-reprojects to grid-native
+
+`rst_h3_rastertogrid*` and `rst_quadbin_rastertogrid*` interpret pixels as EPSG:4326, and `rst_bng_rastertogrid*` as EPSG:27700. A raster carrying a **different** CRS is **auto-reprojected** to the grid-native CRS (nearest-neighbour, so pixel statistics are never interpolated) before the pixel→cell mapping — closing a prior footgun where a non-4326 raster's easting/northing were silently read as lon/lat. A CRS-less raster is assumed grid-native; supply the optional `crs` argument to declare the CRS of a CRS-less-but-known raster.
+
+### Performance
+
+CRS resolution and reprojection are cached internally: the resolved CRS objects and a thread-local, bounded pool of coordinate transformers are reused across rows (keyed by canonical CRS pair). Callers do **not** need to pre-warp rasters or batch inputs by CRS for performance — the engine reuses one transformer per CRS pair per worker thread.
 
 ## RasterX
 
@@ -123,3 +200,33 @@ VectorX augments the product's built-in ST functions and follows the native-ST C
 - **SRID is applied at ingestion.** Functions that return plain WKB/WKT (e.g. `gbx_st_legacyaswkb`) carry no SRID; assign the CRS when you read the geometry back, e.g. with `ST_GeomFromWKB(wkb, srid)` or `ST_GeomFromWKT(wkt, srid)`.
 
 See the [VectorX Function Reference](./vectorx-functions) for details.
+
+## CRS function reference
+
+Every CRS-touching function across GeoBrix, with its CRS parameter(s) and role. **Role**: *source* = the CRS the input is in; *output* = the CRS to project the result into; *accessor* = reads/returns a CRS. Functions with an intrinsic CRS (grid-native, or the tile's own) take no CRS parameter.
+
+| Package | Function | Tiers | CRS param(s) | Role | Behavior |
+|---|---|---|---|---|---|
+| RasterX | [`rst_srid`](./raster-functions#rst_srid) | both | — | accessor | returns the stored SRID int (EPSG/ESRI) or NULL |
+| RasterX | [`rst_crs`](./raster-functions#rst_crs) | both | — | accessor | returns the canonical CRS string (always) |
+| RasterX | [`rst_setsrid`](./raster-functions#rst_setsrid) | both | `srid` | source | relabel from an int SRID (`0` clears; `>=0`) |
+| RasterX | [`rst_setcrs`](./raster-functions#rst_setcrs) | both | `crs` | source | relabel from a CRS string |
+| RasterX | [`rst_transform`](./raster-functions#rst_transform) | both | `srid` | output | reproject to an int SRID |
+| RasterX | [`rst_transformcrs`](./raster-functions#rst_transformcrs) | both | `crs` | output | reproject to a CRS string |
+| RasterX | [`rst_clip`](./raster-functions#rst_clip) | both | `clip_crs` | source | cutline CRS (reprojected to the tile CRS) |
+| RasterX | [`rst_sample`](./raster-functions#rst_sample) | both | `crs` | source | sample-point CRS (reprojected to the tile CRS) |
+| RasterX | [`rst_viewshed`](./raster-functions#rst_viewshed) | both | `crs` | source | observer-point CRS (reprojected to the tile CRS) |
+| RasterX | [`rst_rasterize`](./raster-functions#rst_rasterize) (+`_agg`) | both | `out_srid` / `out_crs` | output | geom reprojected source→output before burn |
+| RasterX | [`rst_gridfrompoints`](./raster-functions#rst_gridfrompoints) (+`_agg`) | both | `out_srid` / `out_crs` | output | output raster CRS (points assumed in it) |
+| RasterX | [`rst_dtmfromgeoms`](./raster-functions#rst_dtmfromgeoms) (+`_agg`) | both | `out_srid` / `out_crs` | output | output raster CRS (points assumed in it) |
+| RasterX | `rst_{h3,quadbin,bng}_rasterize_agg` | both | `out_srid` / `out_crs` | output | output raster CRS (bng always 27700) |
+| RasterX | `rst_{h3,quadbin}_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 4326 |
+| RasterX | `rst_bng_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 27700 |
+| RasterX | `rst_h3_gridspec` | light | `out_srid` / `out_crs` | output | grid-spec output CRS (DataFrame helper) |
+| GridX | `gbx_h3_cell_bbox` | both | `out_srid` / `out_crs` | output | cell bbox in the output CRS |
+| RasterX | GDAL/GTiff reader `clipCrs` option | both | `clipCrs` | source | stamps the v2 tile `clip_crs` field |
+| VizX | [`plot_tile`](./vizx-raster) / [`plot_cog`](./vizx-raster) | light | `crs` | source | basemap CRS; override for a CRS-less raster |
+
+:::note VectorX and GridX CRS surfaces
+The **VectorX** CRS family (`st_crs` / `st_setcrs` / `st_transformcrs`) and the broader **GridX** CRS surface (custom-CRS input reprojection for `polyfill` / `tessellate` / `pointascell`, grid CRS accessors) are separate follow-on workstreams; their rows will be added here when those functions ship.
+:::

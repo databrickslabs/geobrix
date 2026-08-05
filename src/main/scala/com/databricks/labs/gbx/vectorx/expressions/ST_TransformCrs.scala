@@ -3,10 +3,11 @@ package com.databricks.labs.gbx.vectorx.expressions
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.operations.SpatialRefOps
 import com.databricks.labs.gbx.operations.SpatialRefOps.CrsInfo
+import com.databricks.labs.gbx.vectorx.expressions.CrsExpressionUtil.CrsOutcome
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.types.{DataType, StringType}
+import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.ogr.{Geometry => OGRGeometry}
 import org.gdal.osr.CoordinateTransformation
@@ -17,13 +18,17 @@ import scala.util.control.NonFatal
 
 /** 2-arg form: source CRS inferred from the geometry's embedded SRID only.
   * Separate case class (no Literal null third child) prevents Catalyst's
-  * propagateNull from short-circuiting to NULL when source_crs is absent. */
+  * propagateNull from short-circuiting to NULL when source_crs is absent.
+  *
+  * Returns BINARY regardless of the geometry input encoding — see [[ST_TransformCrs]]
+  * for why the SQL surface pins one return type while the Scala core stays
+  * medium-preserving. */
 case class ST_TransformCrs(geom: Expression, targetCrs: Expression) extends InvokedExpression {
     override def children: Seq[Expression] = Seq(geom, targetCrs)
-    override def dataType: DataType = geom.dataType
+    override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = ST_TransformCrs.name
-    override def replacement: Expression = invoke(ST_TransformCrs)
+    override def replacement: Expression = invoke(ST_TransformCrs, methodName = "evalSql")
     override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
@@ -36,22 +41,37 @@ case class ST_TransformCrs3(
     sourceCrs: Expression
 ) extends InvokedExpression {
     override def children: Seq[Expression] = Seq(geom, targetCrs, sourceCrs)
-    override def dataType: DataType = geom.dataType
+    override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = ST_TransformCrs.name
-    override def replacement: Expression = invoke(ST_TransformCrs3)
+    override def replacement: Expression = invoke(ST_TransformCrs3, methodName = "evalSql")
     override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType, StringType)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 }
 
+/** Reprojects a geometry to a target CRS.
+  *
+  * Encoding contract — two layers:
+  * - The SQL surface ([[ST_TransformCrs]] / [[ST_TransformCrs3]]) always returns BINARY
+  *   (EWKB when the target carries an integer authority code, plain WKB when it does not),
+  *   whichever encoding the geometry argument arrived in. One function has one declared
+  *   return type: an input-dependent type cannot be used in a fixed-schema view, BINARY/WKB
+  *   is how the rest of `gbx_st_*` and the built-in `st_*` functions exchange geometries,
+  *   and it avoids a text-medium Z hazard — a 3D WKT writer emits the literal token `NaN`
+  *   for a missing Z, which `JTS.fromWKT` reads back as 2D, so chaining CRS calls through
+  *   text silently dropped Z.
+  * - The Scala core [[eval]] stays medium-preserving (binary in → binary out, text in →
+  *   text out) for callers working in text.
+  */
 object ST_TransformCrs extends WithExpressionInfo {
 
-    /** 2-argument form: infer source CRS from embedded SRID only. */
+    /** 2-argument form, medium-preserving: infer source CRS from embedded SRID only. */
     def eval(geom: Any, targetCrs: UTF8String): Any =
-        TransformCrsCore(geom, targetCrs, null)
+        CrsExpressionUtil.encodeAdaptive(
+          TransformCrsCore(geom, targetCrs, null), CrsExpressionUtil.isText(geom))
 
-    /** 3-argument form: explicit source CRS fallback for plain (SRID-less) inputs.
+    /** 3-argument form, medium-preserving: explicit source CRS fallback for plain inputs.
       *
       * @param geom       WKB/EWKB bytes or WKT/EWKT string (or UTF8String).
       * @param targetCrs  Target CRS: EPSG/ESRI authority string, int, WKT, PROJ4.
@@ -63,7 +83,16 @@ object ST_TransformCrs extends WithExpressionInfo {
       *                   the input unchanged when no source CRS is resolvable.
       */
     def eval(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Any =
-        TransformCrsCore(geom, targetCrs, sourceCrs)
+        CrsExpressionUtil.encodeAdaptive(
+          TransformCrsCore(geom, targetCrs, sourceCrs), CrsExpressionUtil.isText(geom))
+
+    /** SQL surface, 2-argument form: always BINARY. */
+    def evalSql(geom: Any, targetCrs: UTF8String): Array[Byte] =
+        CrsExpressionUtil.encodeBinary(TransformCrsCore(geom, targetCrs, null))
+
+    /** SQL surface, 3-argument form: always BINARY. */
+    def evalSql(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Array[Byte] =
+        CrsExpressionUtil.encodeBinary(TransformCrsCore(geom, targetCrs, sourceCrs))
 
     override def name: String = "gbx_st_transformcrs"
 
@@ -83,8 +112,14 @@ object ST_TransformCrs extends WithExpressionInfo {
 
 object ST_TransformCrs3 extends WithExpressionInfo {
 
+    /** Medium-preserving core (3-arg). */
     def eval(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Any =
-        TransformCrsCore(geom, targetCrs, sourceCrs)
+        CrsExpressionUtil.encodeAdaptive(
+          TransformCrsCore(geom, targetCrs, sourceCrs), CrsExpressionUtil.isText(geom))
+
+    /** SQL surface (3-arg): always BINARY. */
+    def evalSql(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Array[Byte] =
+        CrsExpressionUtil.encodeBinary(TransformCrsCore(geom, targetCrs, sourceCrs))
 
     override def name: String = "gbx_st_transformcrs"
 
@@ -111,11 +146,10 @@ private[expressions] object TransformCrsCore {
       * `source_crs`) returns the input unchanged. `crsInfo` caches nothing on failure, so a
       * bad source degrades on every row rather than poisoning the cache. Only an
       * unresolvable TARGET raises. */
-    def apply(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Any = {
-        if (geom == null || targetCrs == null) return null
-        val text = CrsExpressionUtil.isText(geom)
+    def apply(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): CrsOutcome = {
+        if (geom == null || targetCrs == null) return CrsOutcome.NullOut
         val g = CrsExpressionUtil.parseGeom(geom)
-        if (g == null) return geom  // parse failure → return unchanged
+        if (g == null) return CrsOutcome.Unchanged(geom)  // parse failure → return unchanged
 
         // --- Resolve source CRS (never-error: failure returns input unchanged) ---
         val embeddedSrid = g.getSRID
@@ -126,7 +160,9 @@ private[expressions] object TransformCrsCore {
 
         // Unresolvable / absent source CRS → unchanged. An empty canonical string would make
         // the transform-plan lookup raise, which would violate the never-error invariant.
-        if (srcInfo == null || srcInfo.canonical == null || srcInfo.canonical.isEmpty) return geom
+        if (srcInfo == null || srcInfo.canonical == null || srcInfo.canonical.isEmpty) {
+            return CrsOutcome.Unchanged(geom)
+        }
 
         // --- Resolve target CRS (allowed to throw on failure — user asked for a bad CRS) ---
         val dstInfo = SpatialRefOps.crsInfo(targetCrs.toString)
@@ -146,20 +182,13 @@ private[expressions] object TransformCrsCore {
         val plan = try {
             SpatialRefOps.transformPlan(srcInfo.canonical, dstInfo.canonical)
         } catch {
-            case NonFatal(_) => return geom
+            case NonFatal(_) => return CrsOutcome.Unchanged(geom)
         }
         val gProj = if (plan.identity) g else transformWithCachedCT(g, plan.transformation)
 
-        dstInfo.authoritySrid match {
-            case Some(srid) =>
-                gProj.setSRID(srid)
-                if (text) UTF8String.fromString(JTS.toEWKTAdaptive(gProj))
-                else JTS.toEWKBAdaptive(gProj)
-            case None =>
-                gProj.setSRID(0)
-                if (text) UTF8String.fromString(JTS.toWKTAdaptive(gProj))
-                else JTS.toWKBAdaptive(gProj)
-        }
+        // authoritySrid is None for an authority-less target (raw WKT / PROJ4) and for a
+        // non-numeric authority code (e.g. OGC:CRS84) — both clear the now-stale SRID.
+        CrsOutcome.Geom(gProj, dstInfo.authoritySrid)
     }
 
     /** Z-aware OGR reprojection through a cache-owned CoordinateTransformation.

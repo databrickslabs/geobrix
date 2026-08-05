@@ -13,6 +13,10 @@ import org.scalatest.matchers.should.Matchers._
   *
   * Requires GDAL native libs; run via gbx:test:scala or inside Docker.
   *
+  * Two entry points per function, tested separately:
+  * - `eval` is the medium-preserving Scala core (binary in → binary out, text in → text out).
+  * - `evalSql` is the registered SQL surface, which always returns BINARY.
+  *
   * NOTE: return type of eval is Any (both binary and string outputs); assertions
   * use assert/isInstanceOf rather than ScalaTest AnyRef matchers to avoid
   * "Cannot prove that Any <:< AnyRef" compile errors.
@@ -554,5 +558,95 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
             merc.getSRID shouldBe 3857
             merc.getCoordinate.getX shouldBe (1224514.3987260093 +- 1e-2)
         }
+    }
+
+    // ------------------------------------------------------------------
+    // SQL surface (evalSql): always BINARY, whatever the input encoding
+    // ------------------------------------------------------------------
+
+    test("ST_SetCrs.evalSql: TEXT input returns BINARY EWKB (not a string)") {
+        // The medium-preserving core returns EWKT for text input; the SQL surface must not.
+        // One registered function declares one return type — an input-dependent type cannot
+        // be used in a fixed-schema view.
+        val result = ST_SetCrs.evalSql(ewkt(4326), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        val g = JTS.fromWKB(result)
+        g.getSRID shouldBe 32633
+        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+    }
+
+    test("ST_SetCrs.evalSql: BINARY and TEXT inputs decode to the same geometry + SRID") {
+        val fromBin = JTS.fromWKB(ST_SetCrs.evalSql(ewkb(4326), UTF8String.fromString("EPSG:32633")))
+        val fromTxt = JTS.fromWKB(ST_SetCrs.evalSql(ewkt(4326), UTF8String.fromString("EPSG:32633")))
+        fromBin.getSRID shouldBe fromTxt.getSRID
+        fromBin.getCoordinate.getX shouldBe (fromTxt.getCoordinate.getX +- 1e-12)
+        fromBin.getCoordinate.getY shouldBe (fromTxt.getCoordinate.getY +- 1e-12)
+    }
+
+    test("ST_TransformCrs.evalSql: TEXT input returns BINARY EWKB with the target SRID") {
+        val result = ST_TransformCrs.evalSql(ewkt(4326), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        val g = JTS.fromWKB(result)
+        g.getSRID shouldBe 32633
+        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+    }
+
+    test("ST_TransformCrs.evalSql: authority-less target returns plain WKB (SRID cleared)") {
+        val g = JTS.fromWKB(
+            ST_TransformCrs.evalSql(ewkt(4326), UTF8String.fromString(_CUSTOM_TM_WKT)))
+        g.getSRID shouldBe 0
+    }
+
+    test("ST_TransformCrs.evalSql: 3-arg form with explicit source_crs returns BINARY") {
+        val g = JTS.fromWKB(ST_TransformCrs.evalSql(
+            plainWkt(), UTF8String.fromString("EPSG:32633"), UTF8String.fromString("EPSG:4326")))
+        g.getSRID shouldBe 32633
+        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+    }
+
+    test("ST_TransformCrs.evalSql: degrade path with BINARY input returns the input bytes") {
+        // Never-error invariant on the SQL surface: an unresolvable source returns the
+        // input verbatim, not a re-encoding of it.
+        val input = ewkb(999999)
+        ST_TransformCrs.evalSql(input, UTF8String.fromString("EPSG:32633")) shouldEqual input
+    }
+
+    test("ST_TransformCrs.evalSql: degrade path with TEXT input still returns BINARY") {
+        // A STRING cannot be handed back through a BINARY column, so the degrade re-encodes
+        // the parsed geometry — same coordinates, same SRID, binary medium.
+        val result = ST_TransformCrs.evalSql(
+            UTF8String.fromString("SRID=999999;POINT (11 42)"), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        val g = JTS.fromWKB(result)
+        g.getSRID shouldBe 999999
+        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+    }
+
+    test("ST_TransformCrs.evalSql: plain WKT + no source returns the unchanged geometry as WKB") {
+        val g = JTS.fromWKB(ST_TransformCrs.evalSql(plainWkt(), UTF8String.fromString("EPSG:32633")))
+        g.getSRID shouldBe 0
+        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+    }
+
+    test("ST_SetCrs.evalSql / ST_TransformCrs.evalSql: null geom and null crs -> null") {
+        assert(ST_SetCrs.evalSql(null, UTF8String.fromString("EPSG:4326")) == null)
+        assert(ST_SetCrs.evalSql(ewkb(4326), null.asInstanceOf[UTF8String]) == null)
+        assert(ST_TransformCrs.evalSql(null, UTF8String.fromString("EPSG:4326")) == null)
+        assert(ST_TransformCrs.evalSql(ewkb(4326), null.asInstanceOf[UTF8String]) == null)
+    }
+
+    test("ST_TransformCrs.evalSql: text-medium Z survives (no NaN token round-trip)") {
+        // The always-BINARY surface skips WKT entirely, so a 3D EWKT input keeps its Z.
+        // Through the old text path the WKT writer's literal `NaN` token was re-read as 2D.
+        val result = ST_TransformCrs.evalSql(
+            UTF8String.fromString("SRID=4326;POINT Z (11 42 500)"),
+            UTF8String.fromString("EPSG:32633"))
+        val g = JTS.fromWKB(result)
+        assert(!g.getCoordinate.z.isNaN, "Z must survive the text→binary SQL surface")
+        g.getSRID shouldBe 32633
+    }
+
+    test("ST_SetCrs.evalSql: 2D text input stays 2D binary (25-byte EWKB)") {
+        ST_SetCrs.evalSql(plainWkt(), UTF8String.fromString("EPSG:4326")).length shouldBe 25
     }
 }

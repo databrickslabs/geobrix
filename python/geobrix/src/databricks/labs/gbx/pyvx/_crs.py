@@ -25,6 +25,11 @@ which is the SQL-surface contract:
 - ``gbx_st_setcrs`` / ``gbx_st_transformcrs`` return BINARY (WKB/EWKB bytes
   regardless of whether the input was text). SQL callers always work in WKB.
 
+One registered function declares ONE return type: an input-dependent type cannot be
+used in a view or any fixed schema, and WKB is how the rest of the ``gbx_st_*`` surface
+and the built-in ``st_*`` functions exchange geometries. The heavyweight tier declares
+exactly the same contract, so a query is a one-line tier swap.
+
 The private helpers ``_udf_st_setcrs``, ``_udf_st_transformcrs`` are the
 scalar-UDF callables registered with Spark; they call the medium-preserving
 core and coerce the result to the fixed SQL return type.
@@ -35,23 +40,50 @@ core and coerce the result to the fixed SQL return type.
 - ``st_crs`` reads that integer and classifies it via ``resolve_crs`` /
   ``crs_to_canonical`` (authoritative PROJ rule: ESRI-range codes come back as
   ``ESRI:<n>``, not ``EPSG:<n>``).
-- ``st_setcrs`` stamps an integer SRID; authority-less CRS (WKT / PROJ4 with no
-  EPSG/ESRI authority) cannot be stored in an int, so it raises ``ValueError``.
+- ``st_setcrs`` stamps an integer SRID; a CRS with no integer authority code
+  cannot be stored in an int, so it raises ``ValueError``.  That covers both
+  authority-less definitions (raw WKT / PROJ4) and resolvable CRSes whose code is
+  non-numeric (``OGC:CRS84``, ``IGNF:LAMB93``).
 - ``st_transformcrs`` reprojects coordinates.  If the source CRS is unresolvable
   (no embedded SRID, no explicit ``source_crs``, or the SRID/string is not in
   any known registry) it returns the input UNCHANGED (never-error invariant).
-  Authority-less *target* CRS is allowed; it yields a plain geometry with SRID
-  cleared.
+  A target with no integer authority code is allowed; it yields a plain geometry
+  with the (now stale) SRID cleared.
+
+Both rules go through :func:`databricks.labs.gbx.core.crs.authority_srid_of`, which
+probes the authority at ``confidence_threshold=100`` so a PROJ4 or raw-WKT target is
+treated as authority-less rather than fuzzy-matched onto a nearby EPSG code — the same
+answer GDAL gives on the heavyweight tier.
+
+## Z handling (current behavior)
+
+A geometry where **every** vertex has a finite Z keeps its Z through both ``st_setcrs``
+and ``st_transformcrs``; a genuinely 2D geometry stays 2D.  For a **partial-Z** geometry
+(some vertices carry a Z, some do not):
+
+- ``st_transformcrs`` reprojects it as **2D**.  Reprojecting a non-finite Z propagates it
+  into X and Y, so the vertex would come back with no position at all — dropping the Z
+  keeps every X/Y correct.
+- ``st_setcrs`` writes the Z back verbatim, because it only stamps an SRID and never
+  touches coordinates.  The one exception is a *mixed-dimensionality WKT body*, which no
+  WKT parser accepts; it is re-read as 2D so the call still succeeds.
+
+Nothing raises (mixed-dimensionality input must not break a column) and nothing is
+fabricated — a missing Z is never filled with ``0``, which would be indistinguishable
+from measured elevation downstream.  This is the CURRENT rule, matching the heavyweight
+tier.
 
 Serverless-safe: no ``spark.conf.set``, no ``_jvm``, no ``.rdd``.
 """
 
+import re
 from typing import Optional, Union
 
-from shapely import get_srid, set_srid, to_wkb, to_wkt
+from shapely import force_2d, get_coordinates, get_srid, set_srid, to_wkb, to_wkt
 from shapely.ops import transform
 
 from databricks.labs.gbx.core.crs import (
+    authority_srid_of,
     crs_to_canonical,
     get_transformer,
     resolve_crs,
@@ -67,6 +99,104 @@ from ._geom import parse_geom
 def _is_text(x) -> bool:
     """Return True if ``x`` is a str (WKT / EWKT), False for bytes/bytearray."""
     return isinstance(x, str)
+
+
+# ---------------------------------------------------------------------------
+# Z normalization — mixed-Z geometries are handled as 2D
+# ---------------------------------------------------------------------------
+
+# A WKT numeric ordinate: decimal, exponent, or the non-finite tokens a 3D writer emits
+# for a missing Z (NaN / inf, optionally signed).
+_WKT_NUM = (
+    r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
+    r"|[-+]?[Nn][Aa][Nn]"
+    r"|[-+]?[Ii][Nn][Ff](?:inity)?"
+)
+# "x y z [m ...]" -> keep only "x y".
+_WKT_COORD_RE = re.compile(r"(?P<x>{n})\s+(?P<y>{n})(?:\s+(?:{n}))+".format(n=_WKT_NUM))
+# The ' Z' / ' M' / ' ZM' dimensionality tag that precedes a coordinate group.
+_WKT_DIMTAG_RE = re.compile(r"\s+(?:ZM|Z|M)\s*(?=\()", re.IGNORECASE)
+
+
+def _wkt_to_2d(wkt: str) -> str:
+    """Rewrite a WKT/EWKT string to 2D by dropping the Z (and M) ordinates.
+
+    Needed because a mixed-dimensionality WKT body cannot be parsed at all: GEOS
+    rejects ``GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))`` outright
+    (``Cannot mix dimensionality in a geometry``), so there is no geometry object to
+    call :func:`shapely.force_2d` on.  Stripping the extra ordinates textually leaves a
+    uniformly-2D WKT body that parses, which is the quiet-2D answer required by the
+    never-error invariant.
+    """
+    return _WKT_COORD_RE.sub(
+        lambda m: f"{m.group('x')} {m.group('y')}", _WKT_DIMTAG_RE.sub(" ", wkt)
+    )
+
+
+def _has_partial_z(g) -> bool:
+    """True when the geometry claims Z but at least one vertex has a non-finite Z.
+
+    ``get_coordinates(include_z=True)`` returns NaN in the Z column for any vertex that
+    carries no Z, so an all-or-nothing check is one array scan.  An empty geometry has no
+    coordinates and is never "partial".
+    """
+    if not g.has_z:
+        return False
+    coords = get_coordinates(g, include_z=True)
+    if coords.shape[0] == 0:
+        return False
+    z = coords[:, 2]
+    return bool((z != z).any() or (abs(z) == float("inf")).any())
+
+
+def _as_2d(g):
+    """Return the 2D form of ``g``, preserving its SRID (``force_2d`` clears it)."""
+    srid = int(get_srid(g))
+    g2d = force_2d(g)
+    return set_srid(g2d, srid) if srid > 0 else g2d
+
+
+def _drop_partial_z(g):
+    """Return ``g`` unchanged when its Z is uniformly finite (or absent), else its 2D form.
+
+    Applied before reprojection.  A partial-Z geometry cannot be reprojected in 3D: PROJ
+    propagates the non-finite Z into X and Y, so the vertex comes back ``NaN NaN NaN`` —
+    silent loss of the horizontal position, which is far worse than losing the Z.  Dropping
+    to 2D keeps every X/Y correct.  The heavyweight tier reaches the same 2D answer from the
+    other direction (OGR refuses non-finite ordinates outright).
+
+    Z is never fabricated: a vertex with no elevation stays without one rather than getting
+    an invented value (e.g. 0) that would be indistinguishable from measured elevation
+    downstream.  Never raises.
+
+    NOTE: this is the CURRENT rule for partial-Z input on both tiers.
+    """
+    return _as_2d(g) if _has_partial_z(g) else g
+
+
+def _parse_geom_safe(geom):
+    """Parse a geometry input, falling back to a 2D reparse for mixed-dimensionality WKT.
+
+    A WKT body whose parts disagree about dimensionality (e.g.
+    ``GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))``) is rejected outright by
+    GEOS, so there is no geometry object to downcast — the ordinates have to be stripped
+    textually first.  Returning a 2D geometry keeps the never-error invariant; raising
+    would break a whole column over one malformed vertex.
+
+    Binary input always parses (EWKB declares one dimensionality for the whole geometry),
+    so the fallback only ever fires for text.  Returns ``None`` when the input cannot be
+    parsed at all — callers treat that as a pass-through, never as an error.
+    """
+    try:
+        g = parse_geom(geom)
+    except Exception:  # noqa: BLE001 — mixed-dimensionality WKT and plain garbage alike
+        if not isinstance(geom, str):
+            return None
+        try:
+            g = parse_geom(_wkt_to_2d(geom))
+        except Exception:  # noqa: BLE001
+            return None
+    return g
 
 
 # ---------------------------------------------------------------------------
@@ -89,7 +219,7 @@ def st_crs(geom) -> Optional[str]:
     """
     if geom is None:
         return None
-    g = parse_geom(geom)
+    g = _parse_geom_safe(geom)
     if g is None:
         return None
     s = int(get_srid(g))
@@ -104,15 +234,17 @@ def st_crs(geom) -> Optional[str]:
 def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
     """Stamp a new CRS on a geometry without reprojecting (medium-preserving).
 
-    Assigns the EPSG/ESRI SRID to the geometry.  Authority-less CRS (WKT /
-    PROJ4 strings that resolve to no EPSG or ESRI authority) raise ``ValueError``
-    because a geometry can only store an integer SRID.
+    Assigns the EPSG/ESRI SRID to the geometry.  A CRS with no integer authority
+    code raises ``ValueError`` because a geometry can only store an integer SRID.
+    That covers authority-less definitions (raw WKT / PROJ4) and resolvable CRSes
+    whose authority code is non-numeric (``OGC:CRS84``, ``IGNF:LAMB93``).
 
     Encoding is preserved:
     - bytes in (WKB / EWKB) -> EWKB bytes out.
     - str in (WKT / EWKT) -> EWKT str out (``SRID=<n>;<WKT>``).
 
-    Coordinates are preserved exactly (``rounding_precision=-1``).
+    Coordinates are preserved exactly (``rounding_precision=-1``).  Z is preserved
+    when every vertex carries a finite one; a partial-Z geometry is stamped as 2D.
 
     Args:
         geom: WKB / EWKB bytes, or WKT / EWKT string. None returns None.
@@ -123,24 +255,28 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
         Geometry with stamped SRID in the same encoding as the input.
 
     Raises:
-        ValueError: if ``crs`` resolves to an authority-less CRS (no EPSG/ESRI
-            code — cannot be stored as an integer SRID).
+        ValueError: if ``crs`` resolves to a CRS with no integer authority code
+            (authority-less, or a non-numeric code — neither can be stored as an
+            integer SRID).
     """
     if geom is None:
         return None
     text = _is_text(geom)
-    g = parse_geom(geom)
+    g = _parse_geom_safe(geom)
     if g is None:
         return None
+    # NOTE: no _drop_partial_z here, deliberately. st_setcrs only stamps an integer
+    # SRID — it never touches coordinates, so a non-finite Z cannot corrupt X/Y the
+    # way it does through a reprojection. Whatever Z the input carried is written back
+    # verbatim, which is also what the heavyweight tier's ST_SetCrs does.
     c = resolve_crs(crs)
-    auth = c.to_authority()  # (name, code) tuple or None
-    if auth is None:
+    code = authority_srid_of(c)
+    if code is None:
         raise ValueError(
             "st_setcrs: cannot stamp an authority-less CRS (WKT / PROJ4) onto a "
             "geometry — a geometry SRID must be an EPSG or ESRI integer code. "
             f"Resolved CRS: {c.to_wkt()[:120]!r}"
         )
-    code = int(auth[1])
     g = set_srid(g, code)
     if text:
         return f"SRID={code};{to_wkt(g, rounding_precision=-1)}"
@@ -163,11 +299,14 @@ def st_transformcrs(
 
     Output encoding follows the input medium (bytes -> bytes, str -> str).
     Output SRID:
-    - Authority-coded target (``EPSG:n`` / ``ESRI:n``) -> SRID ``n`` stamped
-      (E-form in the input medium).
-    - Authority-less target (WKT / PROJ4) -> SRID cleared (plain form).
+    - Target with an integer authority code (``EPSG:n`` / ``ESRI:n``) -> SRID ``n``
+      stamped (E-form in the input medium).
+    - Target with no integer authority code (raw WKT / PROJ4, or a non-numeric code
+      such as ``OGC:CRS84``) -> the now-stale SRID is cleared (plain form).
 
-    Coordinates are preserved exactly (``rounding_precision=-1``).
+    Coordinates are preserved exactly (``rounding_precision=-1``).  Z is carried
+    through the reprojection when every vertex has a finite one; a partial-Z
+    geometry is reprojected as 2D (see the module docstring).
 
     Args:
         geom: WKB / EWKB bytes, or WKT / EWKT string.
@@ -181,9 +320,12 @@ def st_transformcrs(
     if geom is None:
         return None
     text = _is_text(geom)
-    g = parse_geom(geom)
+    g = _parse_geom_safe(geom)
     if g is None:
         return geom
+    # Partial-Z input is reprojected in 2D: PROJ would otherwise propagate the
+    # non-finite Z into X and Y and lose the horizontal position entirely.
+    g = _drop_partial_z(g)
 
     # Resolve source CRS — never-error: any resolution failure -> return unchanged.
     embedded_srid = int(get_srid(g))
@@ -209,16 +351,16 @@ def st_transformcrs(
     tr = get_transformer(src, tgt)
     g_proj = transform(tr.transform, g)
 
-    # Determine output SRID from target authority.
-    tgt_auth = tgt.to_authority()  # (name, code) or None
-    if tgt_auth is not None:
-        tgt_srid = int(tgt_auth[1])
+    # Determine output SRID from the target's integer authority code (None for a
+    # raw WKT / PROJ4 target, or for a non-numeric code such as OGC:CRS84).
+    tgt_srid = authority_srid_of(tgt)
+    if tgt_srid is not None:
         g_proj = set_srid(g_proj, tgt_srid)
         if text:
             return f"SRID={tgt_srid};{to_wkt(g_proj, rounding_precision=-1)}"
         return to_wkb(g_proj, include_srid=True)
     else:
-        # Authority-less target: clear SRID.
+        # No integer authority code to carry: clear the now-stale SRID.
         g_proj = set_srid(g_proj, 0)
         if text:
             return to_wkt(g_proj, rounding_precision=-1)

@@ -187,18 +187,51 @@ def test_st_transformcrs_ewkb_authority_less_wkt_target():
 
 
 def test_st_transformcrs_ewkb_proj4_target():
-    """EWKB + PROJ4 target -> EWKB, coords reprojected.
+    """EWKB + PROJ4 target -> plain WKB, SRID cleared, coords reprojected.
 
-    Note: rasterio resolves '+proj=utm +zone=33 +datum=WGS84' -> EPSG:32633
-    (authority recognised), so SRID is stamped (32633) and output is EWKB.
-    This is correct: the output SRID follows what the target resolver returns.
+    A PROJ4 string carries no authority code. PROJ's fuzzy matcher *would* pair
+    '+proj=utm +zone=33 +datum=WGS84' with EPSG:32633 at its default 70% confidence,
+    but a geometry SRID is an exact integer identity — a fuzzy match must never be
+    written into one. The authority probe therefore runs at full confidence, so a
+    PROJ4 target is authority-less: coordinates are reprojected and the stale source
+    SRID is cleared. This is also what GDAL reports on the heavyweight tier.
     """
     out = _crs.st_transformcrs(_ewkb(4326), _PROJ4_UTM33)
     assert isinstance(out, (bytes, bytearray))
     g = from_wkb(out)
-    # PROJ4 UTM33 resolves to EPSG:32633 via rasterio authority detection
-    assert get_srid(g) == 32633
+    assert get_srid(g) == 0
     assert g.x == _UTM33N_X
+
+
+def test_st_setcrs_proj4_raises_no_fuzzy_epsg_stamp():
+    """st_setcrs must NOT stamp a fuzzy-matched EPSG code for a PROJ4 CRS."""
+    with pytest.raises(ValueError, match="authority-less"):
+        _crs.st_setcrs(_plain_wkb(), _PROJ4_UTM33)
+
+
+# ---------------------------------------------------------------------------
+# Non-numeric authority codes (OGC:CRS84, IGNF:LAMB93)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("crs", ["OGC:CRS84", "IGNF:LAMB93"])
+def test_st_transformcrs_non_numeric_authority_code_clears_srid(crs):
+    """A resolvable CRS with a non-numeric code takes the authority-less path.
+
+    'OGC:CRS84' and 'IGNF:LAMB93' are real CRSes, but their authority codes
+    ('CRS84', 'LAMB93') are not integers, so no SRID can be carried. Under the
+    never-error invariant this must reproject and clear the SRID, not raise.
+    """
+    out = _crs.st_transformcrs(_ewkb(4326), crs)
+    assert isinstance(out, (bytes, bytearray))
+    assert get_srid(from_wkb(out)) == 0
+
+
+@pytest.mark.parametrize("crs", ["OGC:CRS84", "IGNF:LAMB93"])
+def test_st_setcrs_non_numeric_authority_code_raises(crs):
+    """st_setcrs on a non-numeric authority code raises a clean ValueError."""
+    with pytest.raises(ValueError, match="authority-less"):
+        _crs.st_setcrs(_plain_wkb(), crs)
 
 
 def test_st_transformcrs_plain_wkb_no_source_unchanged():
@@ -346,6 +379,113 @@ def test_udf_st_transformcrs_returns_binary_for_text_input():
 def test_udf_st_transformcrs_null_target_returns_none():
     """NULL target_crs must return None, not raise."""
     assert _crs._udf_st_transformcrs(_ewkb(4326), None) is None
+
+
+# ---------------------------------------------------------------------------
+# Z handling — clean 3D preserved, partial Z handled as 2D (never-error)
+# ---------------------------------------------------------------------------
+
+
+def _mixed_z_linestring_ewkb():
+    """EWKB (3D) for a LINESTRING whose second vertex has no Z."""
+    import shapely as _sh
+    from shapely.geometry import LineString
+
+    ls = LineString([(11.0, 42.0, 5.0), (12.0, 43.0, float("nan"))])
+    return to_wkb(_sh.set_srid(ls, 4326), include_srid=True, output_dimension=3)
+
+
+def test_st_transformcrs_clean_3d_preserves_z_binary():
+    """Every vertex has a finite Z -> Z survives the reprojection (33-byte 3D EWKB)."""
+    import shapely as _sh
+
+    pt = _sh.set_srid(from_wkt("POINT Z (11 42 500)"), 4326)
+    out = _crs.st_transformcrs(
+        to_wkb(pt, include_srid=True, output_dimension=3), "EPSG:32633"
+    )
+    g = from_wkb(out)
+    assert g.has_z
+    assert g.z == pytest.approx(500.0, abs=1e-9)
+    assert g.x == _UTM33N_X
+
+
+def test_st_transformcrs_clean_3d_preserves_z_text():
+    out = _crs.st_transformcrs("SRID=4326;POINT Z (11 42 500)", "EPSG:32633")
+    assert isinstance(out, str)
+    assert out.upper().startswith("SRID=32633;")
+    g = from_wkt(out.split(";", 1)[1])
+    assert g.has_z and g.z == pytest.approx(500.0, abs=1e-9)
+
+
+def test_st_transformcrs_2d_stays_2d_binary():
+    """A genuinely 2D geometry must not gain a Z slot: 2D EWKB is 25 bytes."""
+    assert len(_crs.st_transformcrs(_ewkb(4326), "EPSG:32633")) == 25
+    assert len(_crs.st_setcrs(_plain_wkb(), "EPSG:4326")) == 25
+
+
+def test_st_transformcrs_partial_z_binary_is_2d_no_coord_corruption():
+    """Partial-Z LINESTRING reprojects as 2D — X/Y correct, no NaN anywhere."""
+    out = _crs.st_transformcrs(_mixed_z_linestring_ewkb(), "EPSG:32633")
+    g = from_wkb(out)
+    assert not g.has_z, "partial-Z input must be handled as 2D"
+    coords = list(g.coords)
+    assert coords[0][0] == _UTM33N_X
+    for x, y in coords:
+        assert x == x and y == y, f"coordinate corrupted to NaN: {coords}"
+
+
+def test_st_transformcrs_partial_z_text_is_2d_no_coord_corruption():
+    """Partial-Z LINESTRING in text medium: no throw, no 'NaN NaN NaN' vertex."""
+    out = _crs.st_transformcrs(
+        "SRID=4326;LINESTRING Z (11 42 5, 12 43 NaN)", "EPSG:32633"
+    )
+    assert isinstance(out, str)
+    assert "NAN" not in out.upper(), f"X/Y corrupted by non-finite Z: {out}"
+    g = from_wkt(out.split(";", 1)[1])
+    assert not g.has_z
+    assert list(g.coords)[0][0] == _UTM33N_X
+
+
+def test_st_transformcrs_mixed_dimensionality_wkt_does_not_raise():
+    """A WKT body whose parts disagree about dimensionality must not throw.
+
+    GEOS rejects this WKT outright, so the geometry has to be re-read as 2D.
+    """
+    out = _crs.st_transformcrs(
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))",
+        "EPSG:32633",
+    )
+    assert isinstance(out, str)
+    assert out.upper().startswith("SRID=32633;")
+    assert "NAN" not in out.upper()
+
+
+def test_st_setcrs_mixed_dimensionality_wkt_does_not_raise():
+    """st_setcrs on mixed-dimensionality WKT must not throw either."""
+    out = _crs.st_setcrs(
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))",
+        "EPSG:32633",
+    )
+    assert isinstance(out, str)
+    assert out.upper().startswith("SRID=32633;")
+    assert "NAN" not in out.upper()
+
+
+def test_st_setcrs_partial_z_binary_preserves_z_verbatim():
+    """st_setcrs never touches coordinates, so a partial Z is written back as-is."""
+    out = _crs.st_setcrs(_mixed_z_linestring_ewkb(), "EPSG:32633")
+    g = from_wkb(out)
+    assert get_srid(g) == 32633
+    assert g.has_z, "st_setcrs must not silently downcast a 3D geometry"
+    zs = [c[2] for c in g.coords]
+    assert zs[0] == pytest.approx(5.0)
+    assert zs[1] != zs[1], "the missing Z must stay missing, never fabricated as 0"
+
+
+def test_st_setcrs_never_fabricates_z_for_2d_input():
+    """A 2D input must never come back with a Z ordinate of 0."""
+    g = from_wkb(_crs.st_setcrs(_plain_wkb(), "EPSG:4326"))
+    assert not g.has_z
 
 
 # ---------------------------------------------------------------------------

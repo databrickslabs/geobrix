@@ -104,4 +104,49 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
         val g = JTS.fromWKB(result)
         g.getSRID shouldBe 32633
     }
+
+    // ------------------------------------------------------------------
+    // Always-BINARY SQL contract: a STRING geometry argument still yields BINARY
+    // ------------------------------------------------------------------
+
+    test("gbx_st_setcrs: STRING (EWKT) geometry input declares and returns BINARY") {
+        val df = spark.sql("SELECT gbx_st_setcrs('SRID=4326;POINT (11 42)', 'EPSG:32633') AS g")
+        df.schema.fields(0).dataType shouldBe org.apache.spark.sql.types.BinaryType
+        val g = JTS.fromWKB(df.first().getAs[Array[Byte]](0))
+        g.getSRID shouldBe 32633
+        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+    }
+
+    test("gbx_st_transformcrs: STRING (EWKT) geometry input declares and returns BINARY") {
+        val df = spark.sql(
+            "SELECT gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633') AS g")
+        df.schema.fields(0).dataType shouldBe org.apache.spark.sql.types.BinaryType
+        val g = JTS.fromWKB(df.first().getAs[Array[Byte]](0))
+        g.getSRID shouldBe 32633
+        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+    }
+
+    test("gbx_st_transformcrs: BINARY and STRING geometry inputs agree via SQL") {
+        val hex = ewkbHex(4326)
+        val row = spark.sql(
+            s"""SELECT gbx_st_transformcrs(unhex('$hex'), 'EPSG:32633') AS from_bin,
+               |       gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633') AS from_txt
+             """.stripMargin).first()
+        val a = JTS.fromWKB(row.getAs[Array[Byte]]("from_bin"))
+        val b = JTS.fromWKB(row.getAs[Array[Byte]]("from_txt"))
+        a.getSRID shouldBe b.getSRID
+        a.getCoordinate.getX shouldBe (b.getCoordinate.getX +- 1e-9)
+        a.getCoordinate.getY shouldBe (b.getCoordinate.getY +- 1e-9)
+    }
+
+    test("gbx_st_transformcrs: PROJ4 target clears the SRID via SQL (authority-less)") {
+        val hex = ewkbHex(4326)
+        val result = spark.sql(
+            s"SELECT gbx_st_transformcrs(unhex('$hex'), " +
+            "'+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs')"
+        ).first().getAs[Array[Byte]](0)
+        val g = JTS.fromWKB(result)
+        g.getSRID shouldBe 0
+        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+    }
 }

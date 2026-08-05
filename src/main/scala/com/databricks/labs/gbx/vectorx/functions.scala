@@ -111,9 +111,10 @@ object functions extends Serializable {
     def st_crs(geom: Column): Column = ColumnAdapter(ST_Crs.name, Seq(geom))
 
     /**
-      * Stamps a CRS on a geometry without reprojecting.
-      * Binary (WKB/EWKB) in → EWKB out; text (WKT/EWKT) in → EWKT out.
-      * Authority-less CRS (WKT / PROJ4 with no EPSG/ESRI code) raises.
+      * Stamps a CRS on a geometry without reprojecting. Returns BINARY (EWKB) for both
+      * BINARY and STRING geometry inputs — the SQL surface has one fixed return type.
+      * A CRS with no integer authority code (raw WKT / PROJ4, or a non-numeric code such
+      * as `OGC:CRS84`) raises: a geometry SRID must be an integer.
       */
     def st_setcrs(geom: Column, crs: Column): Column =
         ColumnAdapter(ST_SetCrs.name, Seq(geom, crs))
@@ -124,7 +125,8 @@ object functions extends Serializable {
     /**
       * Reproject geometry to ``targetCrs``. Optional ``sourceCrs`` for plain (SRID-less) inputs.
       * Returns input unchanged if source CRS is unresolvable (never-error invariant).
-      * Binary (WKB/EWKB) in → binary out; text (WKT/EWKT) in → text out.
+      * Returns BINARY for both BINARY and STRING geometry inputs: EWKB with the target SRID
+      * when the target carries an integer authority code, plain WKB when it does not.
       */
     def st_transformcrs(geom: Column, targetCrs: Column): Column =
         ColumnAdapter(ST_TransformCrs.name, Seq(geom, targetCrs))

@@ -101,6 +101,41 @@ def resolve_crs(value: Union[int, str]) -> CRS:
     return CRS.from_user_input(value)
 
 
+def authority_srid_of(crs: Optional[CRS]) -> Optional[int]:
+    """Integer authority code a geometry can carry as its SRID, or None.
+
+    Returns ``n`` for a CRS whose authority code is numeric (``EPSG:4326`` -> 4326,
+    ``ESRI:54008`` -> 54008). Returns ``None`` for:
+
+    - **authority-less** CRS — raw WKT / PROJ4 definitions that match no registry entry
+      at full confidence;
+    - **non-numeric** authority codes — e.g. ``OGC:CRS84``, ``IGNF:LAMB93``: real,
+      resolvable CRSes whose code is not an integer and therefore cannot be stored in a
+      geometry's SRID slot.
+
+    ``confidence_threshold=100`` (vs. the ``to_authority`` default of 70) is deliberate
+    and load-bearing: a geometry SRID is an **exact integer identity**, so a
+    70%-confidence fuzzy match must never be silently written into a geometry. Without
+    the strict threshold, PROJ's fuzzy matcher maps ``+proj=utm +zone=33 +datum=WGS84``
+    onto ``EPSG:32633`` — a guess, stamped as fact, and indistinguishable downstream from
+    an SRID the user actually asserted. GDAL's ``GetAuthorityName``/``GetAuthorityCode``
+    (the heavyweight tier's rule) does no fuzzy matching at all, so the strict threshold
+    is also what makes the two tiers agree on which CRSes are stampable.
+
+    This is the single home for the "what SRID can a geometry carry for this CRS?"
+    question — the mirror of the heavyweight ``SpatialRefOps.authoritySridOf``.
+    """
+    if crs is None:
+        return None
+    auth = crs.to_authority(confidence_threshold=100)  # (name, code) or None
+    if not auth:
+        return None
+    try:
+        return int(auth[1])
+    except (TypeError, ValueError):
+        return None
+
+
 def crs_to_canonical(crs: Optional[CRS]) -> Optional[str]:
     """Authority string ('EPSG:4326'/'ESRI:54008') when available, else WKT.
 

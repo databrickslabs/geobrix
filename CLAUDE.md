@@ -177,6 +177,32 @@ When adding a new `gbx:<category>:<action>` command (or fixing an existing one �
 4. **Make executable**: `chmod +x scripts/commands/gbx-<category>-<action>.sh`.
 5. **Fixing a broken command**: reproduce the failure, fix the script (or its `.md`), re-run to confirm, commit. Don't add fallback ad-hoc shell invocations elsewhere.
 
+## Databricks authentication
+
+Work that touches a workspace (staging the wheel/JAR to a Volume, running Serverless jobs, `databricks-query`) needs a valid profile. **Never auto-select one** — pass `--profile <name>` explicitly and let the user choose. In Claude Code each Bash call is a separate shell, so `export DATABRICKS_CONFIG_PROFILE=…` on its own line does NOT carry to the next command; use `--profile`, or chain with `&&`.
+
+Profiles in `~/.databrickscfg` (check live status with `databricks auth profiles`):
+
+| Profile | Workspace | Use for |
+|---|---|---|
+| `oauth-fe` | `e2-demo-field-eng` | The usual one for geobrix — Volumes, jobs, warehouses |
+| `logfood` | `adb-2548836972759138` (Azure) | Internal metrics/logfood queries |
+| `oauth` | `fevm-serverless-stable-vqr02h` | FEVM serverless workspace |
+| `genie-map-env` | `fevm-serverless-stable-genie-map` | Genie Map app workspace |
+| `DEFAULT` | `e2-demo-field-eng` | PAT-based; prefer `oauth-fe` instead |
+
+**Why you get re-prompted, and what actually helps.** All the `oauth*` profiles use `auth_type = databricks-cli` — U2M OAuth. Access tokens last ~1 hour, but the CLI holds a **refresh token** and renews silently, so an expired access token is normal and not by itself a reason to log in again. Repeated browser prompts almost always mean one of:
+
+- **The refresh token itself expired** (idle too long for that workspace). Fix: `databricks auth login --host <url> --profile <name>` for that ONE profile. Re-authenticating every profile is unnecessary.
+- **A `DATABRICKS_HOST` / `DATABRICKS_TOKEN` env var is shadowing the profile** — these take precedence over `--profile` and silently bypass cached OAuth. Check with `env | grep -i databricks`.
+- **Genuinely idle-aged credentials across many workspaces.** Only fix the profile you need.
+
+**Do not diagnose from `~/.databricks/token-cache.json`.** On macOS, CLI v1.10.0 keeps OAuth tokens in the **system keychain**; that JSON file is a stale leftover from an older CLI. Its timestamps do not update on login and reading them will tell you a profile is expired when it is actually valid. `databricks auth profiles` (the `Valid` column) plus a real call like `databricks current-user me --profile <name>` are the only trustworthy signals.
+
+Token lifetimes are workspace/account-level policy and are **not** configurable per-profile from the CLI, so there is no local setting that extends them. Diagnose before re-authenticating: `databricks auth profiles` shows `Valid YES/NO` per profile, and only the `NO` ones need attention. A `Valid NO` on a profile you aren't using is harmless — don't fix it preemptively.
+
+For unattended/CI work, U2M is the wrong credential: use an OAuth **M2M service principal** (client ID + secret, no browser). That's a separate identity, so it needs its own UC grants on the geobrix catalogs/Volumes/warehouses, and the secret belongs in a secrets manager or env var — never in `~/.databrickscfg` and never committed. Don't use PATs: they expire (~90 days) and are long-lived plaintext bearer secrets.
+
 ## Session artifacts
 
 Two locations, by artifact class:

@@ -38,6 +38,33 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
 
     }
 
+    test("GDAL reader clipCrs option populates the v2 tile.clip_crs (parity with light)") {
+        rasterx.functions.register(spark)
+        val tifPath = this.getClass.getResource("/modis/").toString
+
+        // clipCrs given -> tile.clip_crs is the canonical CRS string (incl. ESRI).
+        val withOpt = spark.read
+            .format("gdal")
+            .option("sizeInMB", "1")
+            .option("clipCrs", "ESRI:54008")
+            .load(tifPath)
+            .limit(1)
+            .select(col("tile.clip_crs").alias("cc"))
+            .collect()
+        withOpt.length should be > 0
+        withOpt.foreach(r => r.getString(0) should be("ESRI:54008"))
+
+        // No clipCrs option -> clip_crs stays null (never errors).
+        val noOpt = spark.read
+            .format("gdal")
+            .option("sizeInMB", "1")
+            .load(tifPath)
+            .limit(1)
+            .select(col("tile.clip_crs").alias("cc"))
+            .collect()
+        noOpt.foreach(r => r.isNullAt(0) should be(true))
+    }
+
     test("GDAL Data Source must write valid tifs for rows") {
         functions.register(spark)
 

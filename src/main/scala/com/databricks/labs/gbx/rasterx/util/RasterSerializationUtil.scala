@@ -71,7 +71,18 @@ object RasterSerializationUtil {
     }
 
     /** Serialize (cellId, Dataset, metadata) to an InternalRow; writes raster to bytes. */
-    def tileToRow(tuple: (Long, Dataset, Map[String, String]), dataType: DataType, hconf: SerializableConfiguration): InternalRow = { // retained for signature compat
+    def tileToRow(tuple: (Long, Dataset, Map[String, String]), dataType: DataType, hconf: SerializableConfiguration): InternalRow = // retained for signature compat
+        tileToRow(tuple, dataType, hconf, None)
+
+    /** As above, plus an optional ``clipCrs`` canonical CRS string stamped into the
+      * v2 ``clip_crs`` field (position 5). Used by the GDAL/GTiff reader's clipCrs
+      * option (parity with the light reader); ``None`` leaves it null. */
+    def tileToRow(
+        tuple: (Long, Dataset, Map[String, String]),
+        dataType: DataType,
+        hconf: SerializableConfiguration,
+        clipCrs: Option[String]
+    ): InternalRow = {
         val metadata = SerializationUtil.toMapData[String, String](tuple._3)
         val bytes =
             if (tuple._2 == null) {
@@ -86,7 +97,7 @@ object RasterSerializationUtil {
             null,     // path (null — bytes are self-describing)
             null,     // window
             null,     // clip_polygon
-            null,     // clip_crs
+            clipCrs.map(org.apache.spark.unsafe.types.UTF8String.fromString).orNull, // clip_crs
             null,     // crs
             metadata  // metadata (position 7)
           )

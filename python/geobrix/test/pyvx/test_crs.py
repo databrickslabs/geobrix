@@ -49,6 +49,27 @@ _CUSTOM_TM_WKT = (
 
 _PROJ4_UTM33 = "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs"
 
+# Dutch RD (Amersfoort / RD New) written as PROJ4 with a NULL datum shift.
+# PROJ's fuzzy matcher pairs this with EPSG:28992 at its default 70% confidence, but the
+# +towgs84=0,0,0,0,0,0,0 forces a ballpark (identity) datum transformation, putting
+# coordinates ~177 m away from real EPSG:28992. It is therefore the case that catches a
+# fuzzy authority leaking into the reprojection MATH, which _PROJ4_UTM33 cannot: for
+# UTM33/WGS84 the fuzzy match and the exact definition happen to coincide numerically.
+_PROJ4_RD_NULL_SHIFT = (
+    "+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 "
+    "+x_0=155000 +y_0=463000 +ellps=bessel +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+)
+
+# A point inside the Dutch RD domain, where the null-shift error is large.
+_RD_LON, _RD_LAT = 5.39, 52.16
+
+
+def _ewkb_at(lon, lat, srid):
+    """EWKB bytes for POINT(lon, lat) with the given SRID."""
+    import shapely as _sh
+
+    return to_wkb(_sh.set_srid(Point(lon, lat), srid), include_srid=True)
+
 
 def _ewkb(srid):
     """EWKB bytes for POINT(11, 42) with given SRID."""
@@ -449,7 +470,9 @@ def test_st_transformcrs_partial_z_text_is_2d_no_coord_corruption():
 def test_st_transformcrs_mixed_dimensionality_wkt_does_not_raise():
     """A WKT body whose parts disagree about dimensionality must not throw.
 
-    GEOS rejects this WKT outright, so the geometry has to be re-read as 2D.
+    GEOS rejects this WKT outright, so the text is normalized to uniform 3D and then —
+    because the Z is only partial — reprojected as 2D, so no non-finite ordinate can
+    propagate into X or Y.
     """
     out = _crs.st_transformcrs(
         "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))",
@@ -457,18 +480,26 @@ def test_st_transformcrs_mixed_dimensionality_wkt_does_not_raise():
     )
     assert isinstance(out, str)
     assert out.upper().startswith("SRID=32633;")
+    # Reprojected output must carry no NaN: X and Y are intact for every vertex.
     assert "NAN" not in out.upper()
 
 
 def test_st_setcrs_mixed_dimensionality_wkt_does_not_raise():
-    """st_setcrs on mixed-dimensionality WKT must not throw either."""
+    """st_setcrs on mixed-dimensionality WKT must not throw, and keeps uniform 3D.
+
+    Unlike the transform, st_setcrs never touches coordinates, so there is no reason to
+    drop the Z: the vertex that had none keeps none, written as the NaN marker. This
+    matches the heavyweight tier, whose JTS reader produces exactly that geometry.
+    """
     out = _crs.st_setcrs(
         "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))",
         "EPSG:32633",
     )
     assert isinstance(out, str)
     assert out.upper().startswith("SRID=32633;")
-    assert "NAN" not in out.upper()
+    # NaN here is the ABSENCE of a Z, not a fabricated value — and it is what heavy emits.
+    assert "NAN" in out.upper()
+    assert "11 42 5" in out, "the vertex that had a Z must keep its exact value"
 
 
 def test_st_setcrs_partial_z_binary_preserves_z_verbatim():
@@ -486,6 +517,139 @@ def test_st_setcrs_never_fabricates_z_for_2d_input():
     """A 2D input must never come back with a Z ordinate of 0."""
     g = from_wkb(_crs.st_setcrs(_plain_wkb(), "EPSG:4326"))
     assert not g.has_z
+
+
+# ---------------------------------------------------------------------------
+# A fuzzy authority must not leak into the reprojection MATH (cache key)
+# ---------------------------------------------------------------------------
+
+
+def test_transformer_cache_key_separates_fuzzy_matched_crs():
+    """A PROJ4 CRS and the EPSG code it fuzzy-matches must NOT share a cache entry.
+
+    The transformer cache used to be keyed on ``crs_to_canonical``, which resolves at
+    PROJ's default 70% confidence — so this PROJ4 string and real EPSG:28992 produced the
+    SAME key. Whichever was requested first won the entry and silently answered for the
+    other, making the output depend on cache order: a ~177 m error, in both directions.
+    """
+    from rasterio.crs import CRS
+
+    from databricks.labs.gbx.core.crs import _transformer_key, crs_to_canonical
+
+    proj4 = CRS.from_user_input(_PROJ4_RD_NULL_SHIFT)
+    epsg = CRS.from_epsg(28992)
+
+    # The precondition that made this dangerous: they share a canonical NAME.
+    assert crs_to_canonical(proj4) == crs_to_canonical(epsg) == "EPSG:28992"
+    # ...but must not share a transformer cache KEY.
+    assert _transformer_key(proj4) != _transformer_key(epsg)
+    assert _transformer_key(epsg) == "EPSG:28992"
+
+
+def test_transformer_cache_key_still_shares_equivalent_spellings():
+    """Different spellings of ONE CRS must still share a key (cache hit rate matters)."""
+    from rasterio.crs import CRS
+
+    from databricks.labs.gbx.core.crs import _transformer_cache, get_transformer
+
+    _transformer_cache().clear()
+    assert get_transformer(4326, 3857) is get_transformer("EPSG:4326", "3857")
+    assert len(_transformer_cache()) == 1, "equivalent spellings must not double-cache"
+    assert (
+        CRS.from_epsg(4326).to_authority(confidence_threshold=100) is not None
+    ), "a registry CRS must still be identified at full confidence"
+
+
+@pytest.mark.parametrize("first", ["proj4", "epsg"], ids=["proj4-first", "epsg-first"])
+def test_st_transformcrs_result_independent_of_cache_order(first):
+    """The reprojected coordinates must not depend on which target was requested first.
+
+    Both orders are exercised, and each target's answer is pinned to the value its OWN
+    definition produces — so a cache collision in either direction fails.
+    """
+    from databricks.labs.gbx.core.crs import _transformer_cache
+
+    geom = _ewkb_at(_RD_LON, _RD_LAT, 4326)
+    targets = (
+        [_PROJ4_RD_NULL_SHIFT, "EPSG:28992"]
+        if first == "proj4"
+        else ["EPSG:28992", _PROJ4_RD_NULL_SHIFT]
+    )
+
+    _transformer_cache().clear()
+    got = {}
+    for target in targets:
+        key = "proj4" if target == _PROJ4_RD_NULL_SHIFT else "epsg"
+        got[key] = from_wkb(_crs.st_transformcrs(geom, target))
+
+    # Each CRS's own exact answer, independent of request order.
+    assert got["epsg"].x == pytest.approx(155191.353812, abs=1e-3)
+    assert got["epsg"].y == pytest.approx(463537.136273, abs=1e-3)
+    assert got["proj4"].x == pytest.approx(155161.545139, abs=1e-3)
+    assert got["proj4"].y == pytest.approx(463362.663804, abs=1e-3)
+    # They genuinely differ — which is exactly why they must not share a cache entry.
+    separation = (
+        (got["epsg"].x - got["proj4"].x) ** 2 + (got["epsg"].y - got["proj4"].y) ** 2
+    ) ** 0.5
+    assert separation > 100.0, f"expected a large true separation, got {separation} m"
+
+
+# ---------------------------------------------------------------------------
+# Never-error invariant AT THE REGISTERED UDF LEVEL (not just the core)
+# ---------------------------------------------------------------------------
+
+_MIXED_DIM_WKT = "GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))"
+
+
+@pytest.mark.parametrize(
+    "geom,target,source",
+    [
+        (f"SRID=999999;{_MIXED_DIM_WKT}", "EPSG:32633", None),
+        (_MIXED_DIM_WKT, "EPSG:32633", None),
+        (_MIXED_DIM_WKT, "EPSG:32633", "NOT_A_CRS_XYZ"),
+    ],
+    ids=["unresolvable-srid", "no-source", "bad-source-crs"],
+)
+def test_udf_st_transformcrs_mixed_dim_wkt_degrade_never_raises(geom, target, source):
+    """The registered UDF must not raise on mixed-dimensionality WKT in a DEGRADE path.
+
+    The core degrades by handing back the caller's ORIGINAL string; the UDF then has to
+    re-encode that string as BINARY. A bare re-parse there raised GEOSException — so the
+    core was correct while the surface users actually call still failed the stage.
+    """
+    out = _crs._udf_st_transformcrs(geom, target, source)
+    assert isinstance(out, (bytes, bytearray))
+    g = from_wkb(bytes(out))
+    assert g.geom_type == "GeometryCollection"
+    # Degrade = unchanged coordinates.
+    coords = shapely.get_coordinates(g).tolist()
+    assert coords == [[11.0, 42.0], [12.0, 43.0]]
+
+
+def test_udf_st_setcrs_mixed_dim_wkt_never_raises():
+    """The registered st_setcrs UDF must not raise on mixed-dimensionality WKT either."""
+    out = _crs._udf_st_setcrs(f"SRID=4326;{_MIXED_DIM_WKT}", "EPSG:32633")
+    assert isinstance(out, (bytes, bytearray))
+    assert get_srid(from_wkb(bytes(out))) == 32633
+
+
+def test_udf_st_crs_mixed_dim_wkt_never_raises():
+    """st_crs must read the SRID off mixed-dimensionality WKT rather than raising."""
+    assert _crs.st_crs(f"SRID=4326;{_MIXED_DIM_WKT}") == "EPSG:4326"
+
+
+def test_mixed_dim_wkt_setcrs_preserves_uniform_3d():
+    """Mixed-dim WKT normalizes UP to 3D (NaN for the absent Z), matching heavy's JTS.
+
+    st_setcrs never touches coordinates, so the vertex that had no Z keeps no Z — encoded
+    as the NaN marker both tiers already use internally, not as a fabricated 0.
+    """
+    out = _crs._udf_st_setcrs(f"SRID=4326;{_MIXED_DIM_WKT}", "EPSG:32633")
+    g = from_wkb(bytes(out))
+    assert g.has_z, "heavy returns uniform 3D here; light must match"
+    zs = shapely.get_coordinates(g, include_z=True)[:, 2].tolist()
+    assert zs[0] == pytest.approx(5.0)
+    assert zs[1] != zs[1], "absent Z stays absent (NaN), never fabricated as 0"
 
 
 # ---------------------------------------------------------------------------

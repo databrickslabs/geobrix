@@ -112,12 +112,12 @@ object ST_TransformCrs extends WithExpressionInfo {
 
 object ST_TransformCrs3 extends WithExpressionInfo {
 
-    /** Medium-preserving core (3-arg). */
-    def eval(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Any =
-        CrsExpressionUtil.encodeAdaptive(
-          TransformCrsCore(geom, targetCrs, sourceCrs), CrsExpressionUtil.isText(geom))
-
-    /** SQL surface (3-arg): always BINARY. */
+    /** SQL surface (3-arg): always BINARY.
+      *
+      * This companion exists ONLY as the invoke target for the 3-arg [[ST_TransformCrs3]]
+      * case class, so `evalSql` is its whole surface. There is deliberately no `eval` here:
+      * the medium-preserving 3-arg core is `ST_TransformCrs.eval(geom, target, source)`, and
+      * a second copy on this object would be dead code that could silently drift from it. */
     def evalSql(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Array[Byte] =
         CrsExpressionUtil.encodeBinary(TransformCrsCore(geom, targetCrs, sourceCrs))
 

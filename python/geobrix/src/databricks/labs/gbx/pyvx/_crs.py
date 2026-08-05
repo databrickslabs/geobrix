@@ -65,8 +65,10 @@ and ``st_transformcrs``; a genuinely 2D geometry stays 2D.  For a **partial-Z** 
   into X and Y, so the vertex would come back with no position at all — dropping the Z
   keeps every X/Y correct.
 - ``st_setcrs`` writes the Z back verbatim, because it only stamps an SRID and never
-  touches coordinates.  The one exception is a *mixed-dimensionality WKT body*, which no
-  WKT parser accepts; it is re-read as 2D so the call still succeeds.
+  touches coordinates.  A *mixed-dimensionality WKT body* (which no WKT parser accepts)
+  is normalized to uniform 3D first, carrying ``NaN`` for the absent Z — the same
+  representation the heavyweight tier's JTS reader produces, so both tiers return
+  identical results here.
 
 Nothing raises (mixed-dimensionality input must not break a column) and nothing is
 fabricated — a missing Z is never filled with ``0``, which would be indistinguishable
@@ -102,35 +104,51 @@ def _is_text(x) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Z normalization — mixed-Z geometries are handled as 2D
+# Z normalization
 # ---------------------------------------------------------------------------
 
 # A WKT numeric ordinate: decimal, exponent, or the non-finite tokens a 3D writer emits
 # for a missing Z (NaN / inf, optionally signed).
-_WKT_NUM = (
-    r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?"
-    r"|[-+]?[Nn][Aa][Nn]"
-    r"|[-+]?[Ii][Nn][Ff](?:inity)?"
+_WKT_NUM_RE = re.compile(
+    r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?" r"|[-+]?nan" r"|[-+]?inf(?:inity)?",
+    re.IGNORECASE,
 )
-# "x y z [m ...]" -> keep only "x y".
-_WKT_COORD_RE = re.compile(r"(?P<x>{n})\s+(?P<y>{n})(?:\s+(?:{n}))+".format(n=_WKT_NUM))
-# The ' Z' / ' M' / ' ZM' dimensionality tag that precedes a coordinate group.
-_WKT_DIMTAG_RE = re.compile(r"\s+(?:ZM|Z|M)\s*(?=\()", re.IGNORECASE)
 
 
-def _wkt_to_2d(wkt: str) -> str:
-    """Rewrite a WKT/EWKT string to 2D by dropping the Z (and M) ordinates.
+def _wkt_pad_z(wkt: str) -> str:
+    """Rewrite a WKT/EWKT string so EVERY coordinate has exactly 3 ordinates.
 
-    Needed because a mixed-dimensionality WKT body cannot be parsed at all: GEOS
+    A WKT body whose parts disagree about dimensionality cannot be parsed at all: GEOS
     rejects ``GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))`` outright
     (``Cannot mix dimensionality in a geometry``), so there is no geometry object to
-    call :func:`shapely.force_2d` on.  Stripping the extra ordinates textually leaves a
-    uniformly-2D WKT body that parses, which is the quiet-2D answer required by the
-    never-error invariant.
+    normalize — the text has to be made uniform first.
+
+    Padding UP to 3D (missing Z -> the ``NaN`` token) rather than stripping down to 2D is
+    what reproduces the heavyweight tier's representation exactly: JTS reads that same WKT
+    into a uniformly-3D geometry carrying ``NaN`` for the absent Z, which is why heavy's
+    ``st_setcrs`` returns ``POINT Z (12 43 NaN)`` for the vertex that had no Z. Stripping
+    to 2D instead would have made the two tiers disagree in the text medium.
+
+    ``NaN`` is not a fabricated elevation — it is the absence of one, the same marker JTS
+    and shapely both already use internally for "this vertex has no Z". Nothing invents a
+    number such as 0.
+
+    Splitting on WKT punctuation (rather than matching coordinates with one big regex)
+    keeps keyword chunks (``POINT``, ``Z``, ``EMPTY``) untouched and handles nesting,
+    exponent notation, and EMPTY geometries without special cases.
     """
-    return _WKT_COORD_RE.sub(
-        lambda m: f"{m.group('x')} {m.group('y')}", _WKT_DIMTAG_RE.sub(" ", wkt)
-    )
+    out = []
+    for chunk in re.split(r"([(),])", wkt):
+        if chunk in "(),":
+            out.append(chunk)
+            continue
+        nums = _WKT_NUM_RE.findall(chunk)
+        if len(nums) < 2:  # a keyword chunk, not a coordinate
+            out.append(chunk)
+            continue
+        ordinates = nums[:3] + ["NaN"] * max(0, 3 - len(nums))
+        out.append(" " + " ".join(ordinates) + " ")
+    return "".join(out)
 
 
 def _has_partial_z(g) -> bool:
@@ -175,16 +193,15 @@ def _drop_partial_z(g):
 
 
 def _parse_geom_safe(geom):
-    """Parse a geometry input, falling back to a 2D reparse for mixed-dimensionality WKT.
+    """Parse a geometry input, retrying mixed-dimensionality WKT as uniform 3D.
 
-    A WKT body whose parts disagree about dimensionality (e.g.
-    ``GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))``) is rejected outright by
-    GEOS, so there is no geometry object to downcast — the ordinates have to be stripped
-    textually first.  Returning a 2D geometry keeps the never-error invariant; raising
-    would break a whole column over one malformed vertex.
+    THE single parse entry point for every CRS function AND for the registered SQL UDFs.
+    Routing every parse through here is what keeps the never-error invariant true on the
+    surface users actually call: a bare ``parse_geom`` raises ``GEOSException`` on
+    mixed-dimensionality WKT, and one such row is enough to kill a whole stage.
 
     Binary input always parses (EWKB declares one dimensionality for the whole geometry),
-    so the fallback only ever fires for text.  Returns ``None`` when the input cannot be
+    so the retry only ever fires for text.  Returns ``None`` when the input cannot be
     parsed at all — callers treat that as a pass-through, never as an error.
     """
     try:
@@ -193,10 +210,21 @@ def _parse_geom_safe(geom):
         if not isinstance(geom, str):
             return None
         try:
-            g = parse_geom(_wkt_to_2d(geom))
+            g = parse_geom(_wkt_pad_z(geom))
         except Exception:  # noqa: BLE001
             return None
     return g
+
+
+def _to_wkb_preserving_z(g) -> bytes:
+    """Encode to (E)WKB, keeping 3D when the geometry carries Z and SRID when set.
+
+    ``shapely.to_wkb`` defaults to ``output_dimension=3``, but spelling it out here makes
+    the Z-preservation contract explicit at the SQL boundary, which is where a silent
+    downcast would be hardest to notice.
+    """
+    srid = int(get_srid(g))
+    return to_wkb(g, include_srid=srid > 0, output_dimension=3 if g.has_z else 2)
 
 
 # ---------------------------------------------------------------------------
@@ -372,12 +400,28 @@ def st_transformcrs(
 # ---------------------------------------------------------------------------
 
 
+def _text_result_to_wkb(result: str) -> Optional[bytes]:
+    """Re-encode a text-medium core result as (E)WKB for the BINARY SQL surface.
+
+    Uses :func:`_parse_geom_safe`, NOT a bare ``parse_geom``. On a DEGRADE the core
+    returns the caller's ORIGINAL string untouched, which for mixed-dimensionality WKT is
+    a string GEOS refuses to parse — so a bare re-parse here raised ``GEOSException`` on
+    the registered surface even though the core had degraded correctly. That broke the
+    never-error invariant exactly where it matters most: one such row fails the stage.
+    Returns ``None`` only when the text is unparseable even after normalization.
+    """
+    g = _parse_geom_safe(result)
+    if g is None:
+        return None
+    return _to_wkb_preserving_z(g)
+
+
 def _udf_st_setcrs(geom, crs) -> Optional[bytes]:
     """SQL UDF callable for gbx_st_setcrs (BINARY return type).
 
     Coerces the result to EWKB bytes regardless of input medium — SQL callers
-    always receive WKB.  Authority-less CRS raises (per core contract).
-    None geom or crs returns None.
+    always receive WKB.  A CRS with no integer authority code raises (per core
+    contract).  None geom or crs returns None.
     """
     if geom is None or crs is None:
         return None
@@ -386,11 +430,7 @@ def _udf_st_setcrs(geom, crs) -> Optional[bytes]:
         return None
     if isinstance(result, str):
         # Text input was processed medium-preserving -> convert to EWKB for SQL.
-        # The EWKT result from st_setcrs already has the SRID embedded; parse and
-        # re-encode as EWKB.
-        g = parse_geom(result)
-        srid = int(get_srid(g))
-        return to_wkb(g, include_srid=srid > 0)
+        return _text_result_to_wkb(result)
     return bytes(result)
 
 
@@ -399,18 +439,15 @@ def _udf_st_transformcrs(geom, target_crs, source_crs=None) -> Optional[bytes]:
 
     Coerces the result to WKB/EWKB bytes regardless of input medium — SQL callers
     always receive WKB.  Returns None if geom or target_crs is None; returns
-    input bytes unchanged when no source CRS is resolvable.
+    the input geometry unchanged when no source CRS is resolvable.
     """
     if geom is None or target_crs is None:
         return None
     result = st_transformcrs(geom, target_crs, source_crs)
-    if isinstance(result, str):
-        # Text-input round-trip: convert EWKT/WKT back to (E)WKB for SQL surface.
-        g = parse_geom(result)
-        if g is None:
-            return None
-        srid = int(get_srid(g))
-        return to_wkb(g, include_srid=srid > 0)
     if result is None:
         return None
+    if isinstance(result, str):
+        # Text-input round-trip (including the degrade path, which hands back the
+        # caller's own string) -> convert to (E)WKB for the SQL surface.
+        return _text_result_to_wkb(result)
     return bytes(result)

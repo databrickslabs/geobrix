@@ -140,10 +140,45 @@ def crs_to_canonical(crs: Optional[CRS]) -> Optional[str]:
     """Authority string ('EPSG:4326'/'ESRI:54008') when available, else WKT.
 
     None-safe: returns None when crs is None.
+
+    Uses PROJ's default match confidence, so a PROJ4/WKT definition that closely
+    resembles a registry CRS canonicalizes to that authority string. That is the right
+    answer for a *display / provenance* name (it is what the shipped raster surface
+    reports for such a CRS) but the WRONG answer for a cache key — see
+    :func:`_transformer_key`, which is deliberately stricter.
     """
     if crs is None:
         return None
     auth = crs.to_authority()  # (name, code) or None
+    if auth:
+        return f"{auth[0]}:{auth[1]}"
+    return crs.to_wkt()
+
+
+def _transformer_key(crs: CRS) -> str:
+    """Cache key that identifies a CRS EXACTLY — never a fuzzy-matched near-neighbour.
+
+    Deliberately NOT :func:`crs_to_canonical`. That function answers "what should this
+    CRS be *called*?" at PROJ's default 70% match confidence, which makes two
+    genuinely different CRSes share one name: the Dutch-RD PROJ4 string
+    ``+proj=sterea +lat_0=52.156… +ellps=bessel +towgs84=0,0,0,0,0,0,0`` canonicalizes
+    to ``EPSG:28992``, but its null datum shift puts coordinates ~177 m away from real
+    EPSG:28992. Keyed on the canonical name, whichever of the two was requested FIRST
+    won the cache entry and silently answered for the other — so the correct
+    ``EPSG:28992`` request could return the PROJ4 CRS's coordinates, and vice versa.
+    Cache-order-dependent georeferencing, in both directions.
+
+    Keying at full confidence keeps them distinct: an exactly-identified CRS keys on its
+    authority string, anything else on its full WKT. Equivalent *spellings* of one CRS
+    (``4326`` / ``"4326"`` / ``"EPSG:4326"``) still collapse to one key, so the cache
+    hit rate on the hot path is unchanged; only genuinely-different CRSes are separated.
+
+    The tradeoff is a long (WKT) key for an authority-less CRS. That is the same
+    tradeoff the heavyweight tier already makes — GDAL's ``crsToCanonical`` returns full
+    WKT for a CRS with no authority node, and ``transformPlan`` keys on it — and a
+    correct answer at the cost of a longer dict key is the right trade.
+    """
+    auth = crs.to_authority(confidence_threshold=100)
     if auth:
         return f"{auth[0]}:{auth[1]}"
     return crs.to_wkt()
@@ -168,13 +203,18 @@ def get_transformer(src, dst):
     ``src``/``dst`` may each be an int SRID, a CRS string, or a CRS object. Built
     with ``always_xy=True`` (lon/lat axis order — a classic silent-wrong-answer
     source if unpinned). Equivalent spellings (``4326`` / ``"4326"`` /
-    ``"EPSG:4326"``) resolve to the same canonical key and share one transformer.
+    ``"EPSG:4326"``) resolve to the same key and share one transformer.
+
+    The key comes from :func:`_transformer_key`, NOT :func:`crs_to_canonical`: the
+    transformer selected here decides the actual coordinate output, so two CRSes that
+    merely *look* alike must never share an entry. See ``_transformer_key`` for the
+    177 m failure that keying on the canonical name produced.
     """
     from pyproj import Transformer
 
     src_crs = _as_crs(src)
     dst_crs = _as_crs(dst)
-    key = (crs_to_canonical(src_crs), crs_to_canonical(dst_crs))
+    key = (_transformer_key(src_crs), _transformer_key(dst_crs))
     cache = _transformer_cache()
     tr = cache.get(key)
     if tr is None:

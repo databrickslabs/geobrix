@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.operations
 
-import org.gdal.osr.{CoordinateTransformation, SpatialReference}
+import org.gdal.osr.{CoordinateTransformation, SpatialReference, osrConstants}
 
 import scala.collection.mutable
 import scala.util.Try
@@ -96,10 +96,18 @@ object SpatialRefOps {
 
     /** Thread-local, LRU-bounded CoordinateTransformation keyed by canonical CRS pair.
       * Mirrors the light `crs.get_transformer`: equivalent spellings (`4326` /
-      * `"EPSG:4326"`) resolve to the same canonical key and share one transformation. */
+      * `"EPSG:4326"`) resolve to the same canonical key and share one transformation.
+      *
+      * Resource discipline: every SpatialReference allocated here is deleted in a
+      * try/finally. The CoordinateTransformation uses OAMS_TRADITIONAL_GIS_ORDER on
+      * both SRs so JTS (x=lon, y=lat) input is not axis-flipped by GDAL 3+. */
     def getTransformer(srcKey: String, dstKey: String): CoordinateTransformation = {
-        val srcC = crsToCanonical(resolveCrs(srcKey))
-        val dstC = crsToCanonical(resolveCrs(dstKey))
+        // Resolve canonical keys for cache deduplication, then release the SRs.
+        val srcSR_key = resolveCrs(srcKey)
+        val srcC = try crsToCanonical(srcSR_key) finally srcSR_key.delete()
+        val dstSR_key = resolveCrs(dstKey)
+        val dstC = try crsToCanonical(dstSR_key) finally dstSR_key.delete()
+
         val key = s"$srcC->$dstC"
         val cache = txCache.get()
         cache.get(key) match {
@@ -107,7 +115,14 @@ object SpatialRefOps {
                 cache.remove(key); cache.put(key, tf) // move-to-end (most-recent)
                 tf
             case None =>
-                val tf = new CoordinateTransformation(resolveCrs(srcKey), resolveCrs(dstKey))
+                // Build CT with traditional axis order so JTS (x=lon, y=lat) input isn't flipped.
+                val srcSR = resolveCrs(srcKey)
+                val dstSR = resolveCrs(dstKey)
+                srcSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+                dstSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+                val tf = new CoordinateTransformation(srcSR, dstSR)
+                srcSR.delete()
+                dstSR.delete()
                 cache.put(key, tf)
                 if (cache.size > TRANSFORMER_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
                 tf

@@ -185,4 +185,37 @@ class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
             SpatialRefOps.resolveSourceSR(4326, None, None).get)
         canonicalFwd shouldBe canonical
     }
+
+    // --- getTransformer: axis correctness and leak-free resource handling ---
+
+    test("getTransformer: returns non-null CoordinateTransformation") {
+        val ct = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        ct should not be null
+    }
+
+    test("getTransformer: cache hit returns same instance") {
+        val ct1 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        assert(ct1 eq ct2)
+    }
+
+    test("getTransformer: different key pair creates new CT (cache miss)") {
+        val ct1 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32634")
+        assert(!(ct1 eq ct2))
+    }
+
+    test("getTransformer: produces non-axis-flipped coordinates for EPSG:4326 -> EPSG:32633") {
+        // POINT (11, 42) in 4326 (lon=11, lat=42) should project to UTM zone 33N
+        // Expected: x ≈ 168701 m, y ≈ 4657521 m (NOT axis-flipped ~3.5M, 168701).
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val ct = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ogrGeom = OGRGeometry.CreateFromWkt("POINT (11 42)")
+        ogrGeom.Transform(ct)
+        val wkb = JTS.fromWKB(ogrGeom.ExportToWkb())
+        ogrGeom.delete()
+        wkb.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        wkb.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+    }
 }

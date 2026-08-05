@@ -28,11 +28,10 @@ object OSRTransformGeometry {
         srcClone.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
         dstClone.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
         try {
-            val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKB(geom))
+            val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKBAdaptive(geom))
             ogrGeom.AssignSpatialReference(srcClone)
             ogrGeom.TransformTo(dstClone)
-            val res = JTS.fromWKB(ogrGeom.ExportToWkb())
-            ogrGeom.delete()
+            val res = try JTS.fromWKB(ogrGeom.ExportToWkb()) finally ogrGeom.delete()
             res
         } finally {
             srcClone.delete()

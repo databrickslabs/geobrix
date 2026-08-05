@@ -368,6 +368,38 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         result.asInstanceOf[Array[Byte]].length shouldBe 25
     }
 
+    test("ST_TransformCrs: text medium preserves Z through reproject") {
+        // POINT Z (11 42 500) with SRID=4326 in EWKT
+        val ewktZ = UTF8String.fromString("SRID=4326;POINT Z (11 42 500)")
+        val result = ST_TransformCrs.eval(ewktZ, UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        val wkt = result.asInstanceOf[UTF8String].toString
+        wkt should startWith("SRID=32633;")
+        val body = wkt.split(";", 2)(1)
+        val g = JTS.fromWKT(body)
+        assert(!g.getCoordinate.z.isNaN, "Z ordinate must be preserved through reproject")
+    }
+
+    test("ST_SetCrs: 2D text stays 2D (no Z in output)") {
+        val result = ST_SetCrs.eval(plainWkt(), UTF8String.fromString("EPSG:4326"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        val wkt = result.asInstanceOf[UTF8String].toString
+        wkt should not include " Z "
+        wkt should startWith("SRID=4326;POINT")
+    }
+
+    test("ST_TransformCrs: 2D text stays 2D after reproject") {
+        val result = ST_TransformCrs.eval(plainWkt(), UTF8String.fromString("EPSG:32633"),
+            UTF8String.fromString("EPSG:4326"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        val wkt = result.asInstanceOf[UTF8String].toString
+        wkt should not include " Z "
+        wkt should startWith("SRID=32633;POINT")
+    }
+
     // ------------------------------------------------------------------
     // IMPORTANT 5 — text-medium coordinate assertions for ST_TransformCrs
     // ------------------------------------------------------------------

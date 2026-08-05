@@ -193,35 +193,37 @@ object JTS {
         writer.write(geom)
     }
 
+    /** Returns true if ANY coordinate in the geometry has a finite Z ordinate.
+      *
+      * Scans all coordinates (not just the first) so that a GEOMETRYCOLLECTION or
+      * LINESTRING where the first vertex has NaN Z but a later vertex has Z is
+      * correctly classified as 3D. */
+    private def geometryHasZ(geom: Geometry): Boolean = {
+        if (geom == null) return false
+        geom.getCoordinates.exists(c => !c.z.isNaN)
+    }
+
     /** Encodes to EWKB using 3D output only when the geometry carries Z.
       *
-      * 2D geometry (NaN Z) → standard EWKB (same as [[toEWKB]]);
-      * 3D geometry (finite Z) → 3D EWKB with Z ordinate.
+      * 2D geometry (NaN Z on ALL coordinates) → standard EWKB (same as [[toEWKB]]);
+      * 3D geometry (ANY coordinate has finite Z) → 3D EWKB with Z ordinate.
       * Prevents NaN-Z injection for 2D geometries that should stay 2D. */
-    def toEWKBAdaptive(geom: Geometry): Array[Byte] = {
-        val coord = geom.getCoordinate
-        val hasZ = coord != null && !coord.z.isNaN
-        if (hasZ) toEWKB3(geom) else toEWKB(geom)
-    }
+    def toEWKBAdaptive(geom: Geometry): Array[Byte] =
+        if (geometryHasZ(geom)) toEWKB3(geom) else toEWKB(geom)
 
     /** Encodes to plain WKB (no SRID) using 3D output only when the geometry carries Z.
       *
       * 2D geometry → standard WKB (same as [[toWKB]]);
       * 3D geometry → 3D WKB with Z ordinate. */
-    def toWKBAdaptive(geom: Geometry): Array[Byte] = {
-        val coord = geom.getCoordinate
-        val hasZ = coord != null && !coord.z.isNaN
-        if (hasZ) toWKB3(geom) else toWKB(geom)
-    }
+    def toWKBAdaptive(geom: Geometry): Array[Byte] =
+        if (geometryHasZ(geom)) toWKB3(geom) else toWKB(geom)
 
     /** Serializes to WKT using 3D writer only when the geometry carries Z.
       *
       * 2D geometry → standard WKT (same as [[toWKT]]);
       * 3D geometry → ISO WKT with Z ordinate (`POINT Z (x y z)`). */
     def toWKTAdaptive(geom: Geometry): String = {
-        val coord = geom.getCoordinate
-        val hasZ = coord != null && !coord.z.isNaN
-        if (hasZ) {
+        if (geometryHasZ(geom)) {
             val tid = Thread.currentThread().getId
             val writer = wtk3Writers.getOrElseUpdate(tid, new WKTWriter(3))
             writer.write(geom)

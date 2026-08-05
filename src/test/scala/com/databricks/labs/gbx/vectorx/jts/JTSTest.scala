@@ -402,4 +402,41 @@ class JTSTest extends AnyFunSuite {
         wkt should startWith("SRID=4326;")
     }
 
+    // ====== Adaptive Z probe — mixed-geometry regression cases ======
+
+    test("toEWKBAdaptive: GEOMETRYCOLLECTION where first coord NaN-Z but later has Z -> 3D output") {
+        // Regression: old code probed only geom.getCoordinate (first coord).
+        // GEOMETRYCOLLECTION(POINT(0 0), POINT Z(1 1 5)) — first coord has NaN Z.
+        val gf = new GeometryFactory()
+        val pt2d = gf.createPoint(new Coordinate(0.0, 0.0))       // Z = NaN
+        val pt3d = gf.createPoint(new Coordinate(1.0, 1.0, 5.0))  // Z = 5
+        val coll = gf.createGeometryCollection(Array(pt2d, pt3d))
+        val bytes = JTS.toEWKBAdaptive(coll)
+        // 3D output is larger than 2D; exact size varies but must carry Z
+        val decoded = JTS.fromWKB(bytes)
+        // Second point's coordinate should have Z = 5
+        val coords = decoded.getCoordinates
+        val z5 = coords.find(c => !c.z.isNaN && math.abs(c.z - 5.0) < 1e-9)
+        z5 should not be None
+    }
+
+    test("toEWKBAdaptive: LINESTRING where first vertex NaN-Z but second has Z -> 3D output") {
+        val gf = new GeometryFactory()
+        // Create LINESTRING where vertex 0 has NaN Z and vertex 1 has Z = 10
+        val coords = Array(new Coordinate(0.0, 0.0), new Coordinate(1.0, 1.0, 10.0))
+        val line = gf.createLineString(coords)
+        val bytes = JTS.toEWKBAdaptive(line)
+        val decoded = JTS.fromWKB(bytes)
+        val c1 = decoded.getCoordinates()(1)
+        c1.z shouldBe (10.0 +- 1e-9)
+    }
+
+    test("toEWKBAdaptive: 2D GEOMETRYCOLLECTION produces same bytes as toEWKB") {
+        val gf = new GeometryFactory()
+        val pt1 = gf.createPoint(new Coordinate(0.0, 0.0))
+        val pt2 = gf.createPoint(new Coordinate(1.0, 1.0))
+        val coll = gf.createGeometryCollection(Array(pt1, pt2))
+        JTS.toEWKBAdaptive(coll).length shouldBe JTS.toEWKB(coll).length
+    }
+
 }

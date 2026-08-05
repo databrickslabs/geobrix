@@ -128,14 +128,15 @@ object RST_Viewshed extends WithExpressionInfo {
         srcSR match {
             case Some(sr) =>
                 try {
-                    if (sr.IsSame(dsSR) == 1) (x, y)
+                    if (sr.IsSame(dsSR) == 1) (x, y) // already aligned; no transform
                     else {
                         val tf = new org.gdal.osr.CoordinateTransformation(sr, dsSR)
                         val pt = tf.TransformPoint(x, y)
-                        tf.delete(); sr.delete()
+                        tf.delete()
                         (pt(0), pt(1))
                     }
                 } catch { case _: Throwable => (x, y) }
+                finally sr.delete() // release the source SR on every path (incl. identity)
             case None => (x, y)
         }
     }

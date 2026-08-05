@@ -470,6 +470,26 @@ All three are available in **both** tiers under the same names, so a CRS query i
 
 A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream. Both tiers behave identically here, in every input encoding.
 
+:::caution Chaining these functions in the *text* medium can lose Z
+This applies only to the **Python and Scala core functions**, which preserve their input's encoding (text in → text out). It does **not** affect SQL, where these functions always return `BINARY`.
+
+Passing a WKT/EWKT string from one core call into the next round-trips the geometry through text, and a WKT vertex with no elevation is written as the token `NaN` — which the reader then treats as a 2D geometry. So a partial-Z geometry emerges from a `setcrs` → `transformcrs` text chain as 2D, and each extra text hop is another opportunity to lose precision (a reproject-and-back chain drifts in the last decimal places, where the binary path returns the original values exactly).
+
+Chain in **binary** to avoid this — pass WKB/EWKB between calls, or just use the SQL functions, which already do:
+
+```python
+from databricks.labs.gbx.pyvx import _crs
+
+# Loses Z on a partial-Z geometry, and accumulates rounding across hops
+out = _crs.st_transformcrs(_crs.st_setcrs(wkt_geom, "EPSG:4326"), "EPSG:32633")
+
+# Keeps Z and exact coordinates: bytes in, bytes out
+out = _crs.st_transformcrs(_crs.st_setcrs(wkb_geom, "EPSG:4326"), "EPSG:32633")
+```
+
+Separately, and regardless of medium: `st_setcrs` **relabels without reprojecting**, so stamping a CRS whose units do not match the coordinates leaves the geometry mislabelled, and a later `transformcrs` will transform nonsense — projected metres tagged `EPSG:4326` reproject to infinities. Use `st_transformcrs` when you want the coordinates moved.
+:::
+
 ---
 
 ### st_crs

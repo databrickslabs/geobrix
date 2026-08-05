@@ -102,6 +102,19 @@ _RD_LON, _RD_LAT = 5.39, 52.16
 # A WKT body whose parts disagree about dimensionality — no WKT parser accepts it as-is.
 _MIXED_DIM_WKT = "GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))"
 
+# Mixed-dimensionality WKT shapes BEYOND the flat one above. Each has a structural feature
+# the flat case does not, and each was a real light-vs-heavy divergence: an EMPTY component
+# has no ordinates to normalize, an M ordinate must be dropped the way JTS drops it, and a
+# NESTED collection needs its own dimensionality tag re-derived.
+_MIXED_DIM_SHAPES = [
+    ("empty-component", "GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT EMPTY)"),
+    ("zm-ordinates", "GEOMETRYCOLLECTION ZM (POINT ZM (1 2 3 4), POINT (5 6))"),
+    (
+        "nested-collection",
+        "GEOMETRYCOLLECTION Z (POINT Z (11 42 5), GEOMETRYCOLLECTION (POINT (1 2)))",
+    ),
+]
+
 
 # ---------------------------------------------------------------------------
 # Session
@@ -681,6 +694,74 @@ def test_st_transformcrs_parity_mixed_dim_wkt_degrade(
             [11.0, 42.0],
             [12.0, 43.0],
         ], f"coordinates moved on a degrade: {xy}"
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _MIXED_DIM_SHAPES], ids=[n for n, _ in _MIXED_DIM_SHAPES]
+)
+def test_st_setcrs_parity_mixed_dim_shapes(heavy, light, wkt):
+    """st_setcrs must agree cross-tier on mixed-dim shapes beyond the flat collection.
+
+    These three shapes each broke a normalizer that only handled the flat
+    ``GC Z (POINT Z, POINT)`` case, returning NULL from the light tier while heavy returned
+    real geometry. Comparing against heavy — rather than against a hardcoded expectation —
+    is what makes this a parity test: whatever heavy does with an EMPTY component, an M
+    ordinate, or a nested collection is by definition the target.
+    """
+    geom = f"SRID=4326;{wkt}"
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_setcrs(geom, "EPSG:32633")
+    assert heavy_value is not None, "heavy must not return NULL here"
+    assert (
+        light_value is not None
+    ), "light must not degrade to NULL where heavy succeeds"
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633)
+    # st_setcrs never moves coordinates, so the encodings should match byte-for-byte too —
+    # a stricter check than geometry parity, and the one that catches a dimensionality tag
+    # going missing at some nesting level.
+    assert len(bytes(light_value)) == len(heavy_value), (
+        f"encoded length differs: light={len(bytes(light_value))} "
+        f"heavy={len(heavy_value)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _MIXED_DIM_SHAPES], ids=[n for n, _ in _MIXED_DIM_SHAPES]
+)
+def test_st_crs_parity_mixed_dim_shapes(heavy, light, wkt):
+    """st_crs must read the embedded SRID off every mixed-dim shape on both tiers.
+
+    Returning NULL for a geometry that plainly carries ``SRID=4326`` is a WRONG answer,
+    not a missing one — worth its own assertion rather than folding into the setcrs test.
+    """
+    geom = f"SRID=4326;{wkt}"
+    heavy_value = heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0]
+    light_value = light.st_crs(geom)
+    assert light_value == heavy_value == "EPSG:4326"
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [w for n, w in _MIXED_DIM_SHAPES if n != "empty-component"],
+    ids=[n for n, _ in _MIXED_DIM_SHAPES if n != "empty-component"],
+)
+def test_st_transformcrs_parity_mixed_dim_shapes(heavy, light, wkt):
+    """st_transformcrs must agree cross-tier on the mixed-dim shapes it can reproject.
+
+    The empty-component shape is excluded deliberately: heavy RAISES on it (OGR rejects an
+    empty geometry inside the collection), so there is no heavy answer to compare against.
+    That heavy-side limitation is out of scope here — this task's contract is that light
+    must not diverge where heavy succeeds, and light handles it without error.
+    """
+    geom = f"SRID=4326;{wkt}"
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert heavy_value is not None and light_value is not None
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633)
 
 
 def test_st_setcrs_parity_mixed_dim_wkt(heavy, light):

@@ -114,28 +114,54 @@ _WKT_NUM_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A ``Z`` / ``M`` / ``ZM`` dimensionality tag standing as its own token, e.g. the ``Z`` in
+# ``POINT Z (...)`` or in ``POINT Z EMPTY``. Matched with word boundaries so the ``M`` in
+# ``MULTIPOINT`` or the ``Z`` inside a name is never touched.
+_WKT_DIMTAG_RE = re.compile(r"\s+\b(?:ZM|Z|M)\b", re.IGNORECASE)
+
+# The ``EMPTY`` keyword. An empty component carries no ordinates to pad, so its
+# dimensionality can only be restored by re-tagging it explicitly.
+_WKT_EMPTY_RE = re.compile(r"\bEMPTY\b", re.IGNORECASE)
+
 
 def _wkt_pad_z(wkt: str) -> str:
-    """Rewrite a WKT/EWKT string so EVERY coordinate has exactly 3 ordinates.
+    """Rewrite a WKT/EWKT body to uniform 3D: every coordinate gets exactly 3 ordinates.
 
-    A WKT body whose parts disagree about dimensionality cannot be parsed at all: GEOS
-    rejects ``GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))`` outright
-    (``Cannot mix dimensionality in a geometry``), so there is no geometry object to
-    normalize — the text has to be made uniform first.
+    ONLY meaningful for a body GEOS has already refused to parse. A WKT whose parts
+    disagree about dimensionality (``GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT
+    (12 43))``) is rejected outright — ``Cannot mix dimensionality in a geometry`` — so
+    there is no geometry object to normalize and the text must be made uniform first.
 
-    Padding UP to 3D (missing Z -> the ``NaN`` token) rather than stripping down to 2D is
-    what reproduces the heavyweight tier's representation exactly: JTS reads that same WKT
-    into a uniformly-3D geometry carrying ``NaN`` for the absent Z, which is why heavy's
-    ``st_setcrs`` returns ``POINT Z (12 43 NaN)`` for the vertex that had no Z. Stripping
-    to 2D instead would have made the two tiers disagree in the text medium.
+    PRECONDITION: call this only on WKT that failed to parse (see
+    :func:`_parse_geom_safe`, its sole caller). Applied to clean 2D WKT it would pad
+    ``POINT (11 42)`` to ``POINT (11 42 NaN)``, turning a 2D geometry 3D — so it must
+    never become an unconditional pre-parse step. :func:`_parse_geom_safe` enforces this
+    by trying a plain parse first and only falling back here.
 
-    ``NaN`` is not a fabricated elevation — it is the absence of one, the same marker JTS
-    and shapely both already use internally for "this vertex has no Z". Nothing invents a
-    number such as 0.
+    Padding UP to 3D (missing Z -> the ``NaN`` token) rather than stripping down to 2D
+    reproduces the heavyweight tier exactly: JTS reads that same WKT into a uniformly-3D
+    geometry carrying ``NaN`` for the absent Z, which is why heavy's ``st_setcrs`` returns
+    ``POINT Z (12 43 NaN)``. ``NaN`` is the ABSENCE of a Z — the marker JTS and shapely
+    both already use internally — not a fabricated elevation; nothing invents a 0.
 
-    Splitting on WKT punctuation (rather than matching coordinates with one big regex)
-    keeps keyword chunks (``POINT``, ``Z``, ``EMPTY``) untouched and handles nesting,
-    exponent notation, and EMPTY geometries without special cases.
+    Two structural rules make this work for every WKT shape rather than the flat
+    ``GEOMETRYCOLLECTION Z (POINT Z, POINT)`` case only:
+
+    1. **Strip every dimensionality tag first, then let the writer re-derive it.** Editing
+       ordinates while leaving the original tags in place produces contradictions that
+       GEOS rejects just as hard as the input did — a truncated ``POINT ZM (1 2 3)``, or a
+       nested ``GEOMETRYCOLLECTION`` whose coordinates gained a Z but whose tag did not.
+       With all tags removed, a uniform 3-ordinate body parses and shapely re-emits the
+       correct ``Z`` tags at every nesting level.
+    2. **A chunk with fewer than 2 numbers is a keyword, not a coordinate.** An ``EMPTY``
+       component has no ordinates to pad, so it is re-tagged ``Z EMPTY`` explicitly —
+       otherwise it would come back 2D inside an otherwise-3D collection and the encoded
+       bytes would differ from heavy's. A bare top-level ``GEOMETRYCOLLECTION EMPTY``
+       stays 2D, matching heavy (there is nothing to be 3D about).
+
+    **M is dropped**, matching heavy: JTS is XYZ-only, so heavy reads ``POINT ZM (1 2 3 4)``
+    as ``POINT Z (1 2 3)`` and the measure is gone. Keeping M here would make the tiers
+    disagree, and M is out of scope for this family (as it is for ``st_legacyaswkb``).
     """
     out = []
     for chunk in re.split(r"([(),])", wkt):
@@ -143,9 +169,13 @@ def _wkt_pad_z(wkt: str) -> str:
             out.append(chunk)
             continue
         nums = _WKT_NUM_RE.findall(chunk)
-        if len(nums) < 2:  # a keyword chunk, not a coordinate
-            out.append(chunk)
+        if len(nums) < 2:
+            # Keyword chunk (POINT, GEOMETRYCOLLECTION, EMPTY, ...): drop any dim tag so
+            # the writer re-derives it from the now-uniform ordinates, then re-assert Z on
+            # an EMPTY component, which has no ordinates to derive it from.
+            out.append(_WKT_EMPTY_RE.sub("Z EMPTY", _WKT_DIMTAG_RE.sub("", chunk)))
             continue
+        # Coordinate chunk: exactly 3 ordinates (M truncated, missing Z -> NaN).
         ordinates = nums[:3] + ["NaN"] * max(0, 3 - len(nums))
         out.append(" " + " ".join(ordinates) + " ")
     return "".join(out)

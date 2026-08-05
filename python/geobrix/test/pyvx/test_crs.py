@@ -13,7 +13,7 @@ Covers:
 """
 
 import pytest
-from shapely import from_wkb, from_wkt, get_srid, to_wkb
+from shapely import from_wkb, from_wkt, get_srid, to_wkb, to_wkt
 from shapely.geometry import Point
 
 from databricks.labs.gbx.pyvx import _crs
@@ -636,6 +636,136 @@ def test_udf_st_setcrs_mixed_dim_wkt_never_raises():
 def test_udf_st_crs_mixed_dim_wkt_never_raises():
     """st_crs must read the SRID off mixed-dimensionality WKT rather than raising."""
     assert _crs.st_crs(f"SRID=4326;{_MIXED_DIM_WKT}") == "EPSG:4326"
+
+
+# ---------------------------------------------------------------------------
+# Mixed-dim WKT shapes BEYOND the flat GC(POINT Z, POINT) case
+# ---------------------------------------------------------------------------
+
+# Each of these is mixed-dimensionality (so it only reaches the normalizer after a failed
+# parse) but exercises a different structural feature: an EMPTY component with no
+# ordinates to pad, an M ordinate, and a NESTED collection whose own tag must be
+# re-derived. Byte counts are heavy's, measured through the JAR.
+_SHAPES_BEYOND_FLAT = [
+    (
+        "empty-component",
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT EMPTY)",
+        71,
+    ),
+    (
+        "zm-ordinates",
+        "SRID=4326;GEOMETRYCOLLECTION ZM (POINT ZM (1 2 3 4), POINT (5 6))",
+        71,
+    ),
+    (
+        "nested-collection",
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), "
+        "GEOMETRYCOLLECTION (POINT (1 2)))",
+        80,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [w for _, w, _ in _SHAPES_BEYOND_FLAT],
+    ids=[n for n, _, _ in _SHAPES_BEYOND_FLAT],
+)
+def test_mixed_dim_wkt_shapes_never_return_none(wkt):
+    """None of these WKT shapes may degrade to NULL from ANY of the three functions.
+
+    An earlier normalizer handled only the flat ``GC Z (POINT Z, POINT)`` shape and turned
+    all three of these into NULL: the EMPTY component had no ordinates to pad, the M
+    ordinate was truncated leaving a ``ZM`` tag with 3 ordinates, and a nested collection
+    got padded coordinates but kept no ``Z`` tag. Each produced WKT that GEOS still
+    refused, so the parse returned None and every function answered NULL.
+
+    ``st_crs`` returning None here is the sharpest symptom: the geometry HAS an SRID, so
+    None is a WRONG answer, not merely a missing one.
+    """
+    assert (
+        _crs.st_crs(wkt) == "EPSG:4326"
+    ), "st_crs must read the SRID it plainly carries"
+    assert _crs._udf_st_setcrs(wkt, "EPSG:32633") is not None
+    assert _crs._udf_st_transformcrs(wkt, "EPSG:32633") is not None
+    # Core layer too, not just the UDFs.
+    assert _crs.st_setcrs(wkt, "EPSG:32633") is not None
+    assert _crs.st_transformcrs(wkt, "EPSG:32633") is not None
+
+
+@pytest.mark.parametrize(
+    "wkt,heavy_bytes",
+    [(w, b) for _, w, b in _SHAPES_BEYOND_FLAT],
+    ids=[n for n, _, _ in _SHAPES_BEYOND_FLAT],
+)
+def test_mixed_dim_wkt_shapes_match_heavy_encoding(wkt, heavy_bytes):
+    """st_setcrs on each shape must produce byte-identical output to the heavy tier.
+
+    The byte counts are measured from heavy through the JAR. Pinning the exact length is a
+    cheap proxy for "same dimensionality at every nesting level": an EMPTY component that
+    came back 2D, or a nested collection that lost its Z, changes the encoded size.
+    """
+    out = _crs._udf_st_setcrs(wkt, "EPSG:32633")
+    assert len(bytes(out)) == heavy_bytes, (
+        f"encoding diverged from heavy: got {len(bytes(out))} bytes, "
+        f"heavy emits {heavy_bytes} for {to_wkt(from_wkb(bytes(out)))}"
+    )
+
+
+def test_mixed_dim_wkt_zm_drops_m_like_heavy():
+    """M is DROPPED, matching heavy: JTS is XYZ-only, so 'POINT ZM (1 2 3 4)' -> Z (1 2 3).
+
+    Keeping the measure would make the tiers disagree, so the M ordinate is truncated
+    rather than preserved. The Z value must survive intact.
+    """
+    out = _crs._udf_st_setcrs(
+        "SRID=4326;GEOMETRYCOLLECTION ZM (POINT ZM (1 2 3 4), POINT (5 6))",
+        "EPSG:32633",
+    )
+    g = from_wkb(bytes(out))
+    coords = shapely.get_coordinates(g, include_z=True).tolist()
+    assert coords[0] == [1.0, 2.0, 3.0], "Z must be kept and M dropped, not shifted"
+    assert coords[1][:2] == [5.0, 6.0]
+    assert coords[1][2] != coords[1][2], "the vertex with no Z stays NaN"
+
+
+def test_mixed_dim_wkt_empty_component_stays_empty():
+    """An EMPTY component must remain empty — never gain a fabricated coordinate."""
+    out = _crs._udf_st_setcrs(
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT EMPTY)", "EPSG:32633"
+    )
+    g = from_wkb(bytes(out))
+    assert [p.is_empty for p in g.geoms] == [False, True]
+    # Only the non-empty component contributes coordinates.
+    assert shapely.get_coordinates(g).tolist() == [[11.0, 42.0]]
+
+
+def test_mixed_dim_wkt_nested_collection_preserves_structure():
+    """A nested collection keeps its nesting and gains the right dimensionality tag."""
+    out = _crs._udf_st_setcrs(
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), "
+        "GEOMETRYCOLLECTION (POINT (1 2)))",
+        "EPSG:32633",
+    )
+    g = from_wkb(bytes(out))
+    assert g.geom_type == "GeometryCollection"
+    assert [p.geom_type for p in g.geoms] == ["Point", "GeometryCollection"]
+    assert g.has_z
+
+
+def test_wkt_pad_z_precondition_would_alter_clean_2d():
+    """Documents the normalizer's precondition: it must only see WKT that failed to parse.
+
+    Called on clean 2D WKT it pads to 3D, which would silently turn 2D geometries 3D. The
+    guard is structural — ``_parse_geom_safe`` tries a plain parse first and only falls
+    back to the normalizer — so this test pins the hazard so a future unconditional caller
+    is an obvious mistake rather than a subtle one.
+    """
+    assert "NaN" in _crs._wkt_pad_z("POINT (11 42)")
+    # ...and the guarded path a caller actually uses leaves clean 2D alone.
+    g = _crs._parse_geom_safe("POINT (11 42)")
+    assert not g.has_z
+    assert len(_crs._udf_st_setcrs("POINT (11 42)", "EPSG:4326")) == 25
 
 
 def test_mixed_dim_wkt_setcrs_preserves_uniform_3d():

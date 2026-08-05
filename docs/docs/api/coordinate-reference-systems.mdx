@@ -133,6 +133,20 @@ Absent or CRS-less input **never throws** — it degrades to a sensible assumpti
 
 CRS resolution and reprojection are cached internally: the resolved CRS objects and a thread-local, bounded pool of coordinate transformers are reused across rows (keyed by canonical CRS pair). Callers do **not** need to pre-warp rasters or batch inputs by CRS for performance — the engine reuses one transformer per CRS pair per worker thread.
 
+## Datum grids & grid shift
+
+Some coordinate transformations cannot be done with a formula alone — the offset between two datums varies from place to place and is captured in a **grid file** (an [NTv2](https://proj.org/en/stable/operations/transformations/hgridshift.html) `.gsb`, a NADCON grid, or a PROJ [`.tif` geoid/deformation grid](https://proj.org/en/stable/operations/transformations/gridshift.html)). Classic cases: **NAD27 ↔ NAD83** (US), **OSGB36 ↔ ETRS89** via `OSTN15` (Great Britain), and vertical/geoid shifts. When you reproject with `rst_transform` / `rst_transformcrs` (or a differently-CRS'd cutline / observer point), GeoBrix delegates the coordinate transform to **PROJ**, so any WKT or PROJ4 CRS that references a grid — via `+nadgrids=…`, a `+proj=hgridshift +grids=…` pipeline, or a WKT `BOUNDCRS` — is honored **as long as PROJ can find the grid file**.
+
+**How PROJ finds a grid.** PROJ searches its data directories (the `PROJ_DATA` / `PROJ_LIB` path — a colon-separated list) and, if enabled, the online **PROJ CDN**. GeoBrix sets `PROJ_DATA` to the bundled PROJ data directory when it is not already set, so the grids shipped with your PROJ install resolve out of the box. To enable on-demand download of missing grids from the CDN, set `PROJ_NETWORK=ON` in the executor environment.
+
+:::warning A missing grid degrades silently — it does not error
+If a transformation's grid file is not found, PROJ falls back to a **lower-accuracy** transform (often a datum-shift approximation or a null shift) and continues — it does **not** raise. The reprojection "works" but can be off by metres. When your workflow depends on a datum grid (NADCON, OSTN15, a national grid), confirm the grid is present: PROJ emits a `proj_create: … grid … not found` warning, and `projinfo -s <src> -t <dst>` lists whether the chosen pipeline needs a grid you don't have.
+:::
+
+:::note Serverless / no-egress
+`PROJ_NETWORK=ON` needs outbound network access to the PROJ CDN, which is typically unavailable on Serverless. There, stage the grid files you need to a location PROJ searches instead of relying on the CDN. A GeoBrix-standardized way to reference **customer-supplied** grid files (staging to a Volume and extending the PROJ search path across both tiers) is a planned follow-up; today you can prepend your own directory to `PROJ_DATA` in the cluster/executor environment (e.g. `PROJ_DATA=/Volumes/<catalog>/<schema>/proj-grids:/databricks/native/proj-data`).
+:::
+
 ## RasterX
 
 RasterX exposes both names through parallel functions. See the [RasterX Function Reference](./raster-functions) for full signatures and examples.

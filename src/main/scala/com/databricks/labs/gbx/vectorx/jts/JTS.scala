@@ -26,6 +26,7 @@ object JTS {
     private val ewkbWriters = mutable.Map[Long, WKBWriter]()
     private val ewkb3Writers = mutable.Map[Long, WKBWriter]()
     private val wtkWriters = mutable.Map[Long, WKTWriter]()
+    private val wtk3Writers = mutable.Map[Long, WKTWriter]()
     private val wtkReaders = mutable.Map[Long, WKTReader]()
 
     /** Creates a JTS Point at (x, y); uses per-thread GeometryFactory. */
@@ -190,6 +191,49 @@ object JTS {
         val tid = Thread.currentThread().getId
         val writer = ewkb3Writers.getOrElseUpdate(tid, new WKBWriter(3, true))
         writer.write(geom)
+    }
+
+    /** Encodes to EWKB using 3D output only when the geometry carries Z.
+      *
+      * 2D geometry (NaN Z) → standard EWKB (same as [[toEWKB]]);
+      * 3D geometry (finite Z) → 3D EWKB with Z ordinate.
+      * Prevents NaN-Z injection for 2D geometries that should stay 2D. */
+    def toEWKBAdaptive(geom: Geometry): Array[Byte] = {
+        val coord = geom.getCoordinate
+        val hasZ = coord != null && !coord.z.isNaN
+        if (hasZ) toEWKB3(geom) else toEWKB(geom)
+    }
+
+    /** Encodes to plain WKB (no SRID) using 3D output only when the geometry carries Z.
+      *
+      * 2D geometry → standard WKB (same as [[toWKB]]);
+      * 3D geometry → 3D WKB with Z ordinate. */
+    def toWKBAdaptive(geom: Geometry): Array[Byte] = {
+        val coord = geom.getCoordinate
+        val hasZ = coord != null && !coord.z.isNaN
+        if (hasZ) toWKB3(geom) else toWKB(geom)
+    }
+
+    /** Serializes to WKT using 3D writer only when the geometry carries Z.
+      *
+      * 2D geometry → standard WKT (same as [[toWKT]]);
+      * 3D geometry → ISO WKT with Z ordinate (`POINT Z (x y z)`). */
+    def toWKTAdaptive(geom: Geometry): String = {
+        val coord = geom.getCoordinate
+        val hasZ = coord != null && !coord.z.isNaN
+        if (hasZ) {
+            val tid = Thread.currentThread().getId
+            val writer = wtk3Writers.getOrElseUpdate(tid, new WKTWriter(3))
+            writer.write(geom)
+        } else toWKT(geom)
+    }
+
+    /** Serializes to EWKT (`SRID=n;WKT` or plain WKT) using 3D writer only when the geometry
+      * carries Z. Reciprocal of [[fromWKT]] with Z preservation. */
+    def toEWKTAdaptive(geom: Geometry): String = {
+        val srid = geom.getSRID
+        val wkt = toWKTAdaptive(geom)
+        if (srid > 0) s"SRID=$srid;$wkt" else wkt
     }
 
     /** Parses OGC WKT or PostGIS EWKT to a JTS Geometry; uses per-thread WKTReader.

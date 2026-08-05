@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx.jts
 
-import org.locationtech.jts.geom.{Coordinate, Point, Polygon}
+import org.locationtech.jts.geom.{Coordinate, GeometryFactory, Point, Polygon}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
@@ -328,6 +328,78 @@ class JTSTest extends AnyFunSuite {
         val ewkb = JTS.toEWKB(poly)
         val parsed = JTS.fromWKB(ewkb)
         parsed.getSRID shouldBe 27700
+    }
+
+    // ====== Adaptive writers (Z-preserving without NaN-Z injection) ======
+
+    test("toEWKBAdaptive: 2D point produces same bytes as toEWKB") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        pt.setSRID(4326)
+        val adaptive = JTS.toEWKBAdaptive(pt)
+        val standard = JTS.toEWKB(pt)
+        adaptive.length shouldBe standard.length
+        adaptive shouldEqual standard
+    }
+
+    test("toEWKBAdaptive: 2D point is 25 bytes (no Z)") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        pt.setSRID(4326)
+        JTS.toEWKBAdaptive(pt).length shouldBe 25
+    }
+
+    test("toEWKBAdaptive: 3D point is 33 bytes (has Z)") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        pt.setSRID(4326)
+        JTS.toEWKBAdaptive(pt).length shouldBe 33
+    }
+
+    test("toEWKBAdaptive: 3D point round-trips Z") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.5, 2.5, 99.25))
+        pt.setSRID(4326)
+        val bytes = JTS.toEWKBAdaptive(pt)
+        val decoded = JTS.fromWKB(bytes)
+        decoded.getCoordinate.z shouldBe (99.25 +- 1e-9)
+        decoded.getSRID shouldBe 4326
+    }
+
+    test("toWKBAdaptive: 2D point produces same bytes as toWKB") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        JTS.toWKBAdaptive(pt) shouldEqual JTS.toWKB(pt)
+    }
+
+    test("toWKBAdaptive: 3D point round-trips Z") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.5, 2.5, 42.0))
+        val bytes = JTS.toWKBAdaptive(pt)
+        val decoded = JTS.fromWKB(bytes)
+        decoded.getCoordinate.z shouldBe (42.0 +- 1e-9)
+    }
+
+    test("toEWKTAdaptive: 2D point produces plain WKT (no Z marker)") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        val wkt = JTS.toEWKTAdaptive(pt)
+        wkt should not include "Z"
+    }
+
+    test("toEWKTAdaptive: 3D point includes Z ordinate") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        val wkt = JTS.toEWKTAdaptive(pt)
+        wkt should include ("3")  // Z value appears in the string
+    }
+
+    test("toEWKTAdaptive: SRID is included for 3D point") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        pt.setSRID(4326)
+        val wkt = JTS.toEWKTAdaptive(pt)
+        wkt should startWith("SRID=4326;")
     }
 
 }

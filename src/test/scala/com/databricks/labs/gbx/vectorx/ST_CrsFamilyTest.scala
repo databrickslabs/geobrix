@@ -13,9 +13,6 @@ import org.scalatest.matchers.should.Matchers._
   *
   * Requires GDAL native libs; run via gbx:test:scala or inside Docker.
   *
-  * NOTE: eval() methods are Spark Catalyst expression evaluation — standard
-  * InvokedExpression framework, not code execution.
-  *
   * NOTE: return type of eval is Any (both binary and string outputs); assertions
   * use assert/isInstanceOf rather than ScalaTest AnyRef matchers to avoid
   * "Cannot prove that Any <:< AnyRef" compile errors.
@@ -294,5 +291,107 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         val gBack = JTS.fromWKB(wkbBack.asInstanceOf[Array[Byte]])
         gBack.getCoordinate.getX shouldBe (xIn +- 1e-8)
         gBack.getCoordinate.getY shouldBe (yIn +- 1e-8)
+    }
+
+    // ------------------------------------------------------------------
+    // IMPORTANT 1 — non-numeric authority codes (OGC:CRS84)
+    // ------------------------------------------------------------------
+
+    test("ST_SetCrs: OGC:CRS84 target -> throws (non-numeric authority code)") {
+        // OGC:CRS84 resolves but GetAuthorityCode returns "CRS84" (non-numeric) → IllegalArgumentException
+        an[Exception] should be thrownBy
+            ST_SetCrs.eval(plainWkb(), UTF8String.fromString("OGC:CRS84"))
+    }
+
+    test("ST_TransformCrs: OGC:CRS84 target -> authority-less path (clear SRID)") {
+        // OGC:CRS84 resolves but has non-numeric code "CRS84" — falls through to authority-less path
+        val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("OGC:CRS84"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        g.getSRID shouldBe 0
+    }
+
+    // ------------------------------------------------------------------
+    // IMPORTANT 4 — Z preservation
+    // ------------------------------------------------------------------
+
+    test("ST_SetCrs: binary medium preserves Z") {
+        val g3d = gf.createPoint(new Coordinate(1.5, 2.5, 99.25))
+        val wkb3d = JTS.toWKB3(g3d)
+        val result = ST_SetCrs.eval(wkb3d, UTF8String.fromString("EPSG:4326"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val decoded = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        decoded.getCoordinate.z shouldBe (99.25 +- 1e-9)
+        decoded.getSRID shouldBe 4326
+    }
+
+    test("ST_SetCrs: text medium preserves Z") {
+        val result = ST_SetCrs.eval(
+            UTF8String.fromString("POINT Z (1.5 2.5 99.25)"),
+            UTF8String.fromString("EPSG:4326")
+        )
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        val wkt = result.asInstanceOf[UTF8String].toString
+        wkt should startWith("SRID=4326;")
+        val body = wkt.split(";", 2)(1)
+        val g = JTS.fromWKT(body)
+        g.getCoordinate.z shouldBe (99.25 +- 1e-9)
+    }
+
+    test("ST_TransformCrs: binary medium preserves Z through reproject") {
+        val g3d = gf.createPoint(new Coordinate(11.0, 42.0, 500.0))
+        g3d.setSRID(4326)
+        val wkb3d = JTS.toEWKBAdaptive(g3d)
+        val result = ST_TransformCrs.eval(wkb3d, UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        val decoded = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
+        assert(!decoded.getCoordinate.z.isNaN, "Z ordinate must be preserved through reproject")
+    }
+
+    test("ST_TransformCrs: 2D binary stays 2D (no NaN-Z injection)") {
+        val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        // 2D EWKB is 25 bytes; 3D EWKB would be 33 bytes
+        result.asInstanceOf[Array[Byte]].length shouldBe 25
+    }
+
+    test("ST_SetCrs: 2D binary stays 2D (no NaN-Z injection)") {
+        val result = ST_SetCrs.eval(plainWkb(), UTF8String.fromString("EPSG:4326"))
+        assert(result != null)
+        assert(result.isInstanceOf[Array[Byte]])
+        // 2D EWKB is 25 bytes; 3D EWKB would be 33 bytes
+        result.asInstanceOf[Array[Byte]].length shouldBe 25
+    }
+
+    // ------------------------------------------------------------------
+    // IMPORTANT 5 — text-medium coordinate assertions for ST_TransformCrs
+    // ------------------------------------------------------------------
+
+    test("ST_TransformCrs: EWKT + EPSG target -> coordinate values correct") {
+        val result = ST_TransformCrs.eval(ewkt(4326), UTF8String.fromString("EPSG:32633"))
+        assert(result != null)
+        assert(result.isInstanceOf[UTF8String])
+        val wkt = result.asInstanceOf[UTF8String].toString
+        val body = wkt.split(";", 2)(1)
+        val g = JTS.fromWKT(body)
+        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        g.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+    }
+
+    test("ST_TransformCrs: coordinate round-trip precision via text medium") {
+        val ewktIn = ewkt(4326)
+        val toUtm = ST_TransformCrs.eval(ewktIn, UTF8String.fromString("EPSG:32633"))
+        assert(toUtm.isInstanceOf[UTF8String])
+        val back = ST_TransformCrs.eval(toUtm, UTF8String.fromString("EPSG:4326"))
+        assert(back.isInstanceOf[UTF8String])
+        val body = back.asInstanceOf[UTF8String].toString.split(";", 2)(1)
+        val g = JTS.fromWKT(body)
+        g.getCoordinate.getX shouldBe (11.0 +- 1e-8)
+        g.getCoordinate.getY shouldBe (42.0 +- 1e-8)
     }
 }

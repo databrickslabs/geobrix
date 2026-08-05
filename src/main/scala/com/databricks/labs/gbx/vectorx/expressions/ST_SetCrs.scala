@@ -8,6 +8,8 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types.{DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 
+import scala.util.Try
+
 /** Stamps a CRS on a geometry without reprojecting (medium-preserving).
   *
   * Assigns an EPSG or ESRI integer SRID to the geometry. Authority-less CRS
@@ -30,6 +32,8 @@ case class ST_SetCrs(geom: Expression, crs: Expression) extends InvokedExpressio
     override def nullable: Boolean = true
     override def prettyName: String = ST_SetCrs.name
     override def replacement: Expression = invoke(ST_SetCrs)
+    // Pin the crs argument to StringType so integer SRIDs (e.g. 32633) are coerced by Catalyst.
+    override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
 }
@@ -51,21 +55,24 @@ object ST_SetCrs extends WithExpressionInfo {
 
         val sr = SpatialRefOps.resolveCrs(crs.toString)
         try {
-            val authName = sr.GetAuthorityName(null)
-            val authCode = sr.GetAuthorityCode(null)
-            val hasAuthority = authName != null && authName.nonEmpty &&
-                authCode != null && authCode.nonEmpty
-            if (!hasAuthority) {
-                throw new IllegalArgumentException(
-                    "st_setcrs: cannot stamp an authority-less CRS onto a geometry — " +
-                    "a geometry SRID must be an EPSG or ESRI integer code. " +
-                    s"Resolved CRS: ${sr.ExportToWkt().take(120)}"
-                )
+            val sridOpt = for {
+                name <- Option(sr.GetAuthorityName(null)) if name.nonEmpty
+                code <- Option(sr.GetAuthorityCode(null))
+                n    <- Try(code.toInt).toOption
+            } yield n
+
+            sridOpt match {
+                case None =>
+                    throw new IllegalArgumentException(
+                        "st_setcrs: cannot stamp an authority-less CRS onto a geometry — " +
+                        "a geometry SRID must be an EPSG or ESRI integer code. " +
+                        s"Resolved CRS: ${sr.ExportToWkt().take(120)}"
+                    )
+                case Some(srid) =>
+                    g.setSRID(srid)
+                    if (text) UTF8String.fromString(JTS.toEWKTAdaptive(g))
+                    else JTS.toEWKBAdaptive(g)
             }
-            val srid = authCode.toInt
-            g.setSRID(srid)
-            if (text) UTF8String.fromString(JTS.toEWKT(g))
-            else JTS.toEWKB3(g)
         } finally {
             sr.delete()
         }

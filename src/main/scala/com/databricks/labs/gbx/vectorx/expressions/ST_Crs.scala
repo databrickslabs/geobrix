@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.vectorx.expressions
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.operations.SpatialRefOps
-import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types.{DataType, StringType}

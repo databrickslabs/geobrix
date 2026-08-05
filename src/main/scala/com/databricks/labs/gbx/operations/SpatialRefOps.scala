@@ -129,6 +129,39 @@ object SpatialRefOps {
         }
     }
 
+    /** Get or build a cached CoordinateTransformation from already-canonical CRS strings.
+      *
+      * Unlike [[getTransformer]], this overload does NOT call `resolveCrs` for cache-key
+      * derivation — the caller guarantees the strings are already canonical (e.g. "EPSG:4326",
+      * "ESRI:54008", or a WKT string from [[crsToCanonical]]). On a cache hit this is O(1)
+      * with no GDAL calls. On a cache miss it calls `resolveCrs` twice to build the CT,
+      * forcing OAMS_TRADITIONAL_GIS_ORDER on both, then releases both SRs.
+      *
+      * @param srcCanonical  already-canonical source CRS string (from [[crsToCanonical]])
+      * @param dstCanonical  already-canonical target CRS string (from [[crsToCanonical]])
+      */
+    def getTransformerByCanonical(srcCanonical: String, dstCanonical: String): CoordinateTransformation = {
+        val key = s"$srcCanonical->$dstCanonical"
+        val cache = txCache.get()
+        cache.get(key) match {
+            case Some(tf) =>
+                cache.remove(key); cache.put(key, tf) // move-to-end (most-recent)
+                tf
+            case None =>
+                // Build CT with traditional axis order so JTS (x=lon, y=lat) input isn't flipped.
+                val srcSR = resolveCrs(srcCanonical)
+                val dstSR = resolveCrs(dstCanonical)
+                srcSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+                dstSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+                val tf = new CoordinateTransformation(srcSR, dstSR)
+                srcSR.delete()
+                dstSR.delete()
+                cache.put(key, tf)
+                if (cache.size > TRANSFORMER_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
+                tf
+        }
+    }
+
     /** Rule 1 (per-geom) source-CRS resolution — mirror of the light `resolve_source_crs`.
       * Embedded SRID (from EWKB/EWKT) always wins; else the single explicit `srid` or
       * `crs` (both set -> error); else None (CRS-less). The explicit param is a per-geom

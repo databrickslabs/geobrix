@@ -218,4 +218,46 @@ class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         wkb.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
         wkb.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
     }
+
+    // --- getTransformerByCanonical (Round 3 perf overload) ---
+
+    test("getTransformerByCanonical: returns non-null CoordinateTransformation") {
+        val ct = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        ct should not be null
+    }
+
+    test("getTransformerByCanonical: cache hit returns same instance") {
+        val ct1 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        assert(ct1 eq ct2)
+    }
+
+    test("getTransformerByCanonical: different key pair creates new CT (cache miss)") {
+        val ct1 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32634")
+        assert(!(ct1 eq ct2))
+    }
+
+    test("getTransformerByCanonical: produces non-axis-flipped coordinates for EPSG:4326 -> EPSG:32633") {
+        // Verify the canonical-overload CT gives the same result as getTransformer.
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val ct = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        val ogrGeom = OGRGeometry.CreateFromWkt("POINT (11 42)")
+        ogrGeom.Transform(ct)
+        val wkb = JTS.fromWKB(ogrGeom.ExportToWkb())
+        ogrGeom.delete()
+        wkb.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        wkb.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+    }
+
+    test("getTransformerByCanonical: result equivalent to getTransformer for same CRS pair") {
+        // Both should transform POINT (11, 42) to the same coordinates.
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val ctOld = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ctNew = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        // They should be the same instance (same thread, same canonical key, same LRU cache)
+        assert(ctOld eq ctNew)
+    }
 }

@@ -197,10 +197,24 @@ object JTS {
       *
       * Scans all coordinates (not just the first) so that a GEOMETRYCOLLECTION or
       * LINESTRING where the first vertex has NaN Z but a later vertex has Z is
-      * correctly classified as 3D. */
+      * correctly classified as 3D.
+      * Used for output encoding: a geometry with at least one 3D vertex should
+      * be encoded as 3D WKB/WKT so the Z ordinate is not silently dropped. */
     private def geometryHasZ(geom: Geometry): Boolean = {
         if (geom == null) return false
         geom.getCoordinates.exists(c => !c.z.isNaN)
+    }
+
+    /** Returns true only when ALL coordinates have non-NaN Z.
+      *
+      * Used before sending geometry to OGR: OGR rejects NaN Z ordinates, so
+      * 3D WKB is only safe when every vertex has a valid Z value.
+      * Mixed geometries (some NaN Z, some finite Z) return false — the caller
+      * should fall back to 2D WKB for OGR. */
+    private def geometryAllHaveZ(geom: Geometry): Boolean = {
+        if (geom == null) return false
+        val coords = geom.getCoordinates
+        coords.nonEmpty && coords.forall(c => !c.z.isNaN)
     }
 
     /** Encodes to EWKB using 3D output only when the geometry carries Z.
@@ -217,6 +231,17 @@ object JTS {
       * 3D geometry → 3D WKB with Z ordinate. */
     def toWKBAdaptive(geom: Geometry): Array[Byte] =
         if (geometryHasZ(geom)) toWKB3(geom) else toWKB(geom)
+
+    /** Encodes to plain WKB for use as OGR input.
+      *
+      * Uses 3D output ONLY when ALL coordinates have non-NaN Z (OGR rejects NaN ordinates).
+      * Mixed geometries (some NaN Z, some finite Z) are downcast to 2D — Z is partially lost
+      * for the transform but the transform succeeds rather than throwing.
+      *
+      * Use this instead of [[toWKBAdaptive]] when the bytes will be passed to
+      * `OGRGeometry.CreateFromWkb` or any OGR consumer that cannot handle NaN Z. */
+    def toWKBForOGR(geom: Geometry): Array[Byte] =
+        if (geometryAllHaveZ(geom)) toWKB3(geom) else toWKB(geom)
 
     /** Serializes to WKT using 3D writer only when the geometry carries Z.
       *

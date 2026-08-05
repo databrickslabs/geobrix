@@ -153,10 +153,12 @@ private[expressions] object TransformCrsCore {
 
     /** Z-aware transform using the thread-local cached CoordinateTransformation.
       *
-      * Looks up or builds a CoordinateTransformation via SpatialRefOps.getTransformer
+      * Looks up or builds a CoordinateTransformation via SpatialRefOps.getTransformerByCanonical
       * (OAMS_TRADITIONAL_GIS_ORDER baked in at CT construction time). Uses
       * ogrGeom.Transform(ct) — ~32x faster than per-row clone+TransformTo.
-      * Uses JTS.toWKBAdaptive so 3D geometries carry their Z through OGR. */
+      * Uses JTS.toWKBForOGR (all-coords-must-have-Z rule) so mixed-Z geometries
+      * (some NaN Z, some finite Z) are downcast to 2D for OGR rather than throwing;
+      * OGR refuses NaN Z ordinates (General Error). All-Z geometries still carry Z. */
     private def transformWithCachedCT(
         g: JTSGeometry,
         srcSR: SpatialReference,
@@ -165,8 +167,8 @@ private[expressions] object TransformCrsCore {
         if (srcSR.IsSame(dstSR) == 1) return g
         val srcKey = SpatialRefOps.crsToCanonical(srcSR)
         val dstKey = SpatialRefOps.crsToCanonical(dstSR)
-        val ct = SpatialRefOps.getTransformer(srcKey, dstKey)
-        val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKBAdaptive(g))
+        val ct = SpatialRefOps.getTransformerByCanonical(srcKey, dstKey)  // skip resolveCrs on cache hit
+        val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKBForOGR(g))  // safe for OGR: all-or-nothing Z
         ogrGeom.Transform(ct)
         val res = try JTS.fromWKB(ogrGeom.ExportToWkb()) finally ogrGeom.delete()
         res

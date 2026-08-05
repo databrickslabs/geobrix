@@ -28,7 +28,7 @@ object OSRTransformGeometry {
         srcClone.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
         dstClone.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
         try {
-            val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKBAdaptive(geom))
+            val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKB(geom))  // 2D only — safe for all rasterx callers
             ogrGeom.AssignSpatialReference(srcClone)
             ogrGeom.TransformTo(dstClone)
             val res = try JTS.fromWKB(ogrGeom.ExportToWkb()) finally ogrGeom.delete()

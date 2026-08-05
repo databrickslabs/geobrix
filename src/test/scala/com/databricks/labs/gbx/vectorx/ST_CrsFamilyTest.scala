@@ -426,4 +426,56 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         g.getCoordinate.getX shouldBe (11.0 +- 1e-8)
         g.getCoordinate.getY shouldBe (42.0 +- 1e-8)
     }
+
+    // ------------------------------------------------------------------
+    // Round 3 — mixed-Z never-error invariant
+    // ------------------------------------------------------------------
+
+    test("ST_TransformCrs: mixed-Z GEOMETRYCOLLECTION does not throw (never-error)") {
+        // GEOMETRYCOLLECTION(POINT(0 0), POINT Z(1 1 5)) with SRID=4326.
+        // First coord has NaN Z; toWKBAdaptive would produce 3D WKB that OGR rejects.
+        // toWKBForOGR downcasts to 2D; transform succeeds (never-error invariant).
+        val pt2d = gf.createPoint(new Coordinate(0.0, 0.0))       // Z = NaN
+        val pt3d = gf.createPoint(new Coordinate(1.0, 1.0, 5.0))  // Z = 5
+        val gc = gf.createGeometryCollection(Array[org.locationtech.jts.geom.Geometry](pt2d, pt3d))
+        gc.setSRID(4326)
+        val ewkbIn = JTS.toEWKBAdaptive(gc)  // 3D EWKB (any-coord rule) — has NaN Z for first point
+        // This must NOT throw
+        val result = ST_TransformCrs.eval(ewkbIn, UTF8String.fromString("EPSG:32633"))
+        assert(result != null, "Mixed-Z input must not throw — never-error invariant")
+        assert(result.isInstanceOf[Array[Byte]])
+    }
+
+    test("ST_TransformCrs: mixed-Z LINESTRING does not throw (never-error)") {
+        // LINESTRING where first vertex has NaN Z but second has Z=5
+        val ls = gf.createLineString(Array(
+            new Coordinate(0.0, 0.0),       // Z = NaN
+            new Coordinate(1.0, 1.0, 5.0)   // Z = 5
+        ))
+        ls.setSRID(4326)
+        val ewkbIn = JTS.toEWKBAdaptive(ls)  // 3D flag because any coord has Z
+        val result = ST_TransformCrs.eval(ewkbIn, UTF8String.fromString("EPSG:32633"))
+        assert(result != null, "Mixed-Z LINESTRING must not throw")
+        assert(result.isInstanceOf[Array[Byte]])
+    }
+
+    test("ST_SetCrs: mixed-Z GEOMETRYCOLLECTION preserves allZ (round-2 behavior intact)") {
+        // ST_SetCrs never goes through OGR — it just stamps the SRID.
+        // The any-coord rule for toEWKBAdaptive must still produce 3D EWKB with NaN Z for first point.
+        val pt2d = gf.createPoint(new Coordinate(0.0, 0.0))       // Z = NaN
+        val pt3d = gf.createPoint(new Coordinate(1.0, 1.0, 5.0))  // Z = 5
+        val gc = gf.createGeometryCollection(Array[org.locationtech.jts.geom.Geometry](pt2d, pt3d))
+        gc.setSRID(0)
+        val ewkbIn = JTS.toEWKBAdaptive(gc)  // 3D because any coord has Z
+        val result = ST_SetCrs.eval(ewkbIn, UTF8String.fromString("EPSG:4326"))
+        assert(result != null)
+        val bytes = result.asInstanceOf[Array[Byte]]
+        // 3D EWKB for a GEOMETRYCOLLECTION with two points must be larger than 2D version
+        assert(bytes.length > 50, s"Expected 3D EWKB (>50 bytes) but got ${bytes.length}")
+        // All Z values present (NaN for first point, 5.0 for second)
+        val decoded = JTS.fromWKB(bytes)
+        val allZ = decoded.getCoordinates.map(_.z)
+        assert(allZ(0).isNaN, "First coord Z should remain NaN")
+        allZ(1) shouldBe (5.0 +- 1e-9)
+    }
 }

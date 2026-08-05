@@ -439,4 +439,55 @@ class JTSTest extends AnyFunSuite {
         JTS.toEWKBAdaptive(coll).length shouldBe JTS.toEWKB(coll).length
     }
 
+    // ====== toWKBForOGR — all-coords-must-have-Z rule ======
+
+    test("toWKBForOGR: 2D geometry stays 2D") {
+        val p = JTS.point(11.0, 42.0)  // Z = NaN
+        val wkb = JTS.toWKBForOGR(p)
+        wkb.length shouldBe 21  // plain WKB for 2D point: 1+4+8+8
+    }
+
+    test("toWKBForOGR: all-Z geometry becomes 3D") {
+        val gf = new GeometryFactory()
+        val p = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        val wkb = JTS.toWKBForOGR(p)
+        wkb.length shouldBe 29  // 3D WKB for point: 1+4+8+8+8
+    }
+
+    test("toWKBForOGR: mixed-Z LINESTRING (any NaN) falls back to 2D") {
+        val gf = new GeometryFactory()
+        // LINESTRING where first vertex has NaN Z, second has Z=5 — mixed → 2D
+        val ls = gf.createLineString(Array(
+            new Coordinate(0.0, 0.0),       // Z = NaN
+            new Coordinate(1.0, 1.0, 5.0)   // Z = 5
+        ))
+        val wkb = JTS.toWKBForOGR(ls)
+        // 2D WKB LINESTRING: 1+4+4 + 2*(8+8) = 41 bytes
+        wkb.length shouldBe 41
+        val decoded = new org.locationtech.jts.io.WKBReader().read(wkb)
+        decoded.getCoordinate.z.isNaN shouldBe true  // no Z in 2D WKB
+    }
+
+    test("toWKBForOGR: mixed-Z GEOMETRYCOLLECTION falls back to 2D") {
+        val gf = new GeometryFactory()
+        val pt2d = gf.createPoint(new Coordinate(0.0, 0.0))       // Z = NaN
+        val pt3d = gf.createPoint(new Coordinate(1.0, 1.0, 5.0))  // Z = 5
+        val coll = gf.createGeometryCollection(Array(pt2d, pt3d))
+        val wkb = JTS.toWKBForOGR(coll)
+        val decoded = new org.locationtech.jts.io.WKBReader().read(wkb)
+        // 2D output: first coord should have NaN Z
+        decoded.getCoordinates.forall(c => c.z.isNaN) shouldBe true
+    }
+
+    test("toWKBForOGR: all-Z LINESTRING keeps Z") {
+        val gf = new GeometryFactory()
+        val ls = gf.createLineString(Array(
+            new Coordinate(0.0, 0.0, 1.0),  // Z = 1
+            new Coordinate(1.0, 1.0, 5.0)   // Z = 5
+        ))
+        val wkb = JTS.toWKBForOGR(ls)
+        val decoded = new org.locationtech.jts.io.WKBReader().read(wkb)
+        decoded.getCoordinates()(1).z shouldBe (5.0 +- 1e-9)
+    }
+
 }

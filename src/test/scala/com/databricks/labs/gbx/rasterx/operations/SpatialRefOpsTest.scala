@@ -6,6 +6,9 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
+// Neutral-package alias for dual-path assertions (Task 2)
+import com.databricks.labs.gbx.{operations => gbxops}
+
 /** Tests for SpatialRefOps (OSR SpatialReference helpers). Requires GDAL native libs (e.g. run in Docker). */
 class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -109,5 +112,77 @@ class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         // embedded present + param -> param ignored, no error (mixed-column safe)
         SpatialRefOps.crsToCanonical(
           SpatialRefOps.resolveSourceSR(4326, Some(32633), None).get) shouldBe "EPSG:4326"
+    }
+
+    // --- Task 2: dual-path assertions ---
+    // The neutral com.databricks.labs.gbx.operations.SpatialRefOps must resolve correctly,
+    // AND the rasterx.operations.SpatialRefOps forwarder must return identical results.
+    // This is the regression gate for the ~12 unchanged rasterx importers.
+
+    test("Task2: neutral SpatialRefOps.resolveCrs(54008) canonicalizes to ESRI:54008") {
+        val sr = gbxops.SpatialRefOps.resolveCrs("54008")
+        sr should not be null
+        gbxops.SpatialRefOps.crsToCanonical(sr) shouldBe "ESRI:54008"
+        sr.delete()
+    }
+
+    test("Task2: rasterx forwarder resolveCrs(54008) matches neutral path") {
+        val srNeutral = gbxops.SpatialRefOps.resolveCrs("54008")
+        val srForwarder = SpatialRefOps.resolveCrs("54008")
+        gbxops.SpatialRefOps.crsToCanonical(srNeutral) shouldBe
+            SpatialRefOps.crsToCanonical(srForwarder)
+        srNeutral.delete()
+        srForwarder.delete()
+    }
+
+    test("Task2: neutral SpatialRefOps.resolveCrs(4326) canonicalizes to EPSG:4326") {
+        val sr = gbxops.SpatialRefOps.resolveCrs("4326")
+        sr should not be null
+        gbxops.SpatialRefOps.crsToCanonical(sr) shouldBe "EPSG:4326"
+        sr.delete()
+    }
+
+    test("Task2: rasterx forwarder resolveCrs(4326) matches neutral path") {
+        val srNeutral = gbxops.SpatialRefOps.resolveCrs("4326")
+        val srForwarder = SpatialRefOps.resolveCrs("4326")
+        gbxops.SpatialRefOps.crsToCanonical(srNeutral) shouldBe
+            SpatialRefOps.crsToCanonical(srForwarder)
+        srNeutral.delete()
+        srForwarder.delete()
+    }
+
+    test("Task2: neutral getEPSGCode(4326) returns 4326") {
+        val sr = gbxops.SpatialRefOps.fromEPSGCode(4326)
+        gbxops.SpatialRefOps.getEPSGCode(sr) shouldBe 4326
+    }
+
+    test("Task2: rasterx forwarder getEPSGCode matches neutral path") {
+        val sr = gbxops.SpatialRefOps.fromEPSGCode(4326)
+        SpatialRefOps.getEPSGCode(sr) shouldBe gbxops.SpatialRefOps.getEPSGCode(sr)
+    }
+
+    test("Task2: neutral fromEPSGCode(27700) returns BNG SR") {
+        val sr = gbxops.SpatialRefOps.fromEPSGCode(27700)
+        sr should not be null
+        gbxops.SpatialRefOps.getEPSGCode(sr) shouldBe 27700
+    }
+
+    test("Task2: rasterx forwarder fromEPSGCode(27700) matches neutral path") {
+        val srNeutral = gbxops.SpatialRefOps.fromEPSGCode(27700)
+        val srForwarder = SpatialRefOps.fromEPSGCode(27700)
+        SpatialRefOps.getEPSGCode(srForwarder) shouldBe gbxops.SpatialRefOps.getEPSGCode(srNeutral)
+    }
+
+    test("Task2: neutral resolveSourceSR embedded SRID=4326 wins") {
+        val sr = gbxops.SpatialRefOps.resolveSourceSR(4326, None, None).get
+        gbxops.SpatialRefOps.crsToCanonical(sr) shouldBe "EPSG:4326"
+    }
+
+    test("Task2: rasterx forwarder resolveSourceSR matches neutral path") {
+        val canonical = gbxops.SpatialRefOps.crsToCanonical(
+            gbxops.SpatialRefOps.resolveSourceSR(4326, None, None).get)
+        val canonicalFwd = SpatialRefOps.crsToCanonical(
+            SpatialRefOps.resolveSourceSR(4326, None, None).get)
+        canonicalFwd shouldBe canonical
     }
 }

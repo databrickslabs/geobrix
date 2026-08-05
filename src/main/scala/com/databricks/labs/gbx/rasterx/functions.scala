@@ -394,13 +394,19 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
     def rst_bng_rastertogridstddev(tileExpr: Column, resolution: Column): Column =
         ColumnAdapter(RST_BNG_RasterToGridStddev.name, Seq(tileExpr, resolution))
 
-    /** Bounding box STRUCT<xmin,ymin,xmax,ymax> of one H3 cell in `srid`. */
+    /** Bounding box STRUCT<xmin,ymin,xmax,ymax> of one H3 cell in the output CRS
+     *  (`srid`, an EPSG or ESRI code; or an `outCrs` string that wins over it). */
     def gbx_h3_cell_bbox(cellid: Column): Column =
         ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, lit(4326), lit("centroids"), lit(0)))
     def gbx_h3_cell_bbox(cellid: Column, srid: Column, mode: Column, kringPad: Column): Column =
         ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid, mode, kringPad))
     def gbx_h3_cell_bbox(cellid: Column, srid: Int, mode: String, kringPad: Int): Column =
         gbx_h3_cell_bbox(cellid, lit(srid), lit(mode), lit(kringPad))
+    /** Output-CRS-string overload: `outCrs` (EPSG:x / ESRI:x / WKT) wins over `srid`. */
+    def gbx_h3_cell_bbox(
+        cellid: Column, srid: Column, mode: Column, kringPad: Column, outCrs: Column
+    ): Column =
+        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid, mode, kringPad, outCrs))
 
     // Operations
     def rst_asformat(tileExpr: Column, newFormat: Column): Column = ColumnAdapter(RST_AsFormat.name, Seq(tileExpr, newFormat))

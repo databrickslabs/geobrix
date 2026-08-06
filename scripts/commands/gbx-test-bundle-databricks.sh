@@ -22,7 +22,9 @@ show_help() {
     echo ""
     echo -e "${CYAN}Config:${NC}"
     echo -e "  Copy ${YELLOW}notebooks/tests/databricks_cluster_config.example.env${NC} to ${YELLOW}notebooks/tests/databricks_cluster_config.env${NC}"
-    echo -e "  Set: DATABRICKS_HOST, DATABRICKS_TOKEN (or profile), CLUSTER_ID, GBX_BUNDLE_VOLUME_*"
+    echo -e "  Set: ${GREEN}DATABRICKS_CONFIG_PROFILE${NC} (preferred, e.g. oauth-fe), CLUSTER_ID, GBX_BUNDLE_VOLUME_*"
+    echo -e "  ${YELLOW}DATABRICKS_HOST + DATABRICKS_TOKEN also work, but they are global and override${NC}"
+    echo -e "  ${YELLOW}any --profile for every SDK/CLI call in the shell — prefer the profile.${NC}"
     echo -e "  Optional: GBX_BUNDLE_RUNNER_NOTEBOOK_PATH, GBX_BUNDLE_WHEEL_VOLUME_PATH"
     echo ""
 }

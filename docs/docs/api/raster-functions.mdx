@@ -1995,9 +1995,11 @@ Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) deri
 
 :::note Lightweight tier (pyrx)
 Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close but not bit-identical: edge pixels are filled by replicating the border (gdaldem leaves them NoData) and NoData cells are not excluded from the 3×3 window.
+
+The lightweight Python binding also accepts **`xscale` and `yscale`** in place of the single `scale`, applying them per axis (`sqrt((dz/dx / xscale)² + (dz/dy / yscale)²)`). GDAL's `gdaldem -s` is one ratio for both axes, so anisotropic scaling has no heavyweight equivalent; pass both `xscale` and `yscale` or neither. Defaults match across tiers — when no scale is supplied, both derive the horizontal scale from the raster CRS — so only explicit-scale calls differ.
 :::
 
-**Signature:** `rst_slope(tile: Column, unit: Column, scale: Column): Column` — Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `scale` is the elevation/horizontal unit ratio (use `111120` for unprojected lon/lat in degrees).
+**Signature:** `rst_slope(tile: Column, unit: Column, scale: Column): Column` — Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `scale` is the elevation/horizontal unit ratio (use `111120` for unprojected lon/lat in degrees). Lightweight Python additionally offers `xscale`/`yscale` (see the note above).
 
 **SQL:**
 

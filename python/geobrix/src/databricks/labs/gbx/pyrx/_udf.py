@@ -20,10 +20,32 @@ ColLike = Union[Column, str, bool, int, float, bytes]
 
 
 def _col(x: ColLike) -> Union[Column, str]:
-    """Mirror rasterx: auto-wrap bool/int/float/bytes; pass str/Column through."""
+    """Mirror rasterx: auto-wrap bool/int/float/bytes; pass str/Column through.
+
+    The ``str`` passthrough is deliberate — it is how ``rst_avg("tile")`` names a column.
+    For CRS-shaped arguments that reading is wrong; use :func:`_crs_col` there.
+    """
     if isinstance(x, (Column, str)):
         return x
     return f.lit(x)
+
+
+def _crs_col(x: ColLike) -> Column:
+    """Coerce a CRS argument: plain str -> ``f.lit`` (CRS literal, NOT a column name).
+
+    A CRS descriptor is itself a string, so ``_col`` would hand ``"EPSG:4326"`` to Spark as a
+    column reference and the plan would die with
+    ``UNRESOLVED_COLUMN.WITH_SUGGESTION: ... name `EPSG:4326` cannot be resolved`` — while the
+    identical heavy-tier call succeeds, because heavy's ``String`` overloads ``lit()``-wrap.
+    A bare literal is the overwhelmingly common way to name a CRS, so it must be the shape
+    that works. Mirrors ``pyvx.functions._crs_col``.
+
+    Pass a ``Column`` (e.g. ``f.col("crs_column")``) to read the CRS per row; ``f.lit`` returns
+    a ``Column`` unchanged, so wrapping an already-lifted value stays correct.
+    """
+    if isinstance(x, str):
+        return f.lit(x)
+    return _col(x)
 
 
 def _raster_field(tile: ColLike) -> Column:

@@ -26,7 +26,7 @@ from pyspark.sql.types import (
 
 from databricks.labs.gbx import _register
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx._udf import ColLike, _col
+from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
@@ -1833,12 +1833,9 @@ def rst_setcrs(
               string (``"EPSG:4326"``, ``"ESRI:54008"``), WKT, or PROJ4.
 
     Returns:
-        Tile with the same pixels/transform but the new CRS. (T7 deferred:
-        ``gbx_rst_setcrs`` SQL name registered via SQL_REGISTRY below; full
-        binding-parity wiring — registered_functions.txt + function-info.json
-        + heavy Scala — is Task 7.)
+        Tile with the same pixels/transform but the new CRS.
     """
-    return _setcrs_udf(_col(tile), _col(crs))
+    return _setcrs_udf(_col(tile), _crs_col(crs))
 
 
 def rst_transformcrs(
@@ -1860,11 +1857,9 @@ def rst_transformcrs(
               string, WKT, or PROJ4.
 
     Returns:
-        Tile reprojected to the target CRS. (T7 deferred: ``gbx_rst_transformcrs``
-        SQL name registered via SQL_REGISTRY; full binding-parity wiring is
-        Task 7.)
+        Tile reprojected to the target CRS.
     """
-    return _transformcrs_udf(_col(tile), _col(crs))
+    return _transformcrs_udf(_col(tile), _crs_col(crs))
 
 
 def rst_band(

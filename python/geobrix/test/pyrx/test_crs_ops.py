@@ -420,6 +420,50 @@ def test_rst_setcrs_intcast_spark(spark):
     assert row["setcrs_crs"] == row["setsrid_crs"] == "EPSG:4326"
 
 
+def test_rst_setcrs_bare_string_crs_is_a_literal(spark):
+    """A BARE CRS string is a literal, not a column name.
+
+    Regression: every other Spark-path test here wraps the CRS in ``f.lit(...)``, so the
+    natural call went untested and ``_col`` handed the string to Spark as a column
+    reference — the plan failed analysis with
+    ``UNRESOLVED_COLUMN.WITH_SUGGESTION: ... name `ESRI:54008` cannot be resolved``, while
+    the identical heavy-tier call worked. Do NOT add ``f.lit`` here; the point is the
+    unwrapped shape.
+    """
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    b = _epsg4326_tif()
+    df = spark.createDataFrame([(b,)], ["raster"])
+    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    row = df.select(
+        prx.rst_crs(prx.rst_setcrs("tile", "ESRI:54008")).alias("set_bare"),
+        prx.rst_crs(prx.rst_transformcrs("tile", "EPSG:3857")).alias("xform_bare"),
+    ).first()
+    assert row["set_bare"] is not None
+    assert "ESRI" in row["set_bare"] and "54008" in row["set_bare"]
+    assert row["xform_bare"] == "EPSG:3857"
+
+
+def test_rst_setcrs_column_crs_still_works(spark):
+    """A real Column CRS argument is read per row (the escape hatch must survive)."""
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    b = _epsg4326_tif()
+    df = spark.createDataFrame([(b, "ESRI:54008")], ["raster", "crs_col"])
+    df = df.select(
+        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("crs_col")
+    )
+    row = df.select(
+        prx.rst_crs(prx.rst_setcrs("tile", f.col("crs_col"))).alias("c")
+    ).first()
+    assert row["c"] is not None
+    assert "ESRI" in row["c"] and "54008" in row["c"]
+
+
 def test_rst_transformcrs_spark_epsg(spark):
     """rst_transformcrs('EPSG:3857') reprojects; crs reflects new target."""
     from pyspark.sql import functions as f

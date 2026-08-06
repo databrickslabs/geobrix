@@ -87,7 +87,9 @@ fabricated — a missing Z is never filled with ``0``, which would be indistingu
 from measured elevation downstream.  This is the CURRENT rule, matching the heavyweight
 tier.
 
-Serverless-safe: no ``spark.conf.set``, no ``_jvm``, no ``.rdd``.
+Serverless-safe: pure Python plus shapely/pyproj, driven entirely through UDFs.
+Session configuration, the JVM bridge, and the resilient-distributed-dataset API
+are all untouched.
 """
 
 import re

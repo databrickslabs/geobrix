@@ -435,7 +435,7 @@ def test_rst_maketiles_sql_example(spark, rasters_view):
     sql = """
     SELECT
         path,
-        gbx_rst_maketiles(tile, 512) as tile_result
+        gbx_rst_maketiles(tile, 4) as tile_result
     FROM rasters
     LIMIT 10
     """

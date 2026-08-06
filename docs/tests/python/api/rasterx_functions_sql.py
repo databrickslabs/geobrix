@@ -1726,19 +1726,21 @@ rst_bng_rastertogridstddev_sql_example_output = """
 # ============================================================================
 
 def rst_maketiles_sql_example():
-    """Subdivide rasters into tiles"""
+    """Subdivide rasters into tiles by approximate size in MB"""
     return """
--- Subdivide and explode tiles
+-- Subdivide and explode tiles. The second argument is a target size in MB,
+-- not pixel dimensions: the tile grid is derived from the MB budget.
 SELECT
     path,
     tile_subtile as tile
 FROM rasters
-LATERAL VIEW explode(gbx_rst_maketiles(tile, 512, 512)) AS tile_subtile;
+LATERAL VIEW explode(gbx_rst_maketiles(tile, 4)) AS tile_subtile;
 
--- Count tiles per raster
+-- Count tiles per raster. Splits are powers of four (1, 4, 16, ...), so a
+-- smaller budget yields more tiles. Use -1 for a single tile, 0 for 64 MB.
 SELECT
     path,
-    SIZE(gbx_rst_maketiles(tile, 512, 512)) as num_tiles
+    SIZE(gbx_rst_maketiles(tile, 4)) as num_tiles
 FROM rasters;
 """
 
@@ -1753,7 +1755,7 @@ rst_maketiles_sql_example_output = """
 +----+---------+
 |path|num_tiles|
 +----+---------+
-|... |42       |
+|... |4        |
 +----+---------+
 """
 

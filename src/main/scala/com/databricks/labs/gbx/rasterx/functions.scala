@@ -336,8 +336,8 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
         ColumnAdapter(RST_BNG_Tessellate.name, Seq(tileExpr, resolution))
     def rst_bng_tessellate(tileExpr: Column, resolution: Column, mode: String): Column =
         ColumnAdapter(RST_BNG_Tessellate.name, Seq(tileExpr, resolution, lit(mode)))
-    def rst_maketiles(tileExpr: Column, tileWidth: Column, tileHeight: Column): Column =
-        ColumnAdapter(RST_MakeTiles.name, Seq(tileExpr, tileWidth, tileHeight))
+    def rst_maketiles(tileExpr: Column, sizeInMB: Column): Column =
+        ColumnAdapter(RST_MakeTiles.name, Seq(tileExpr, sizeInMB))
     def rst_retile(tileExpr: Column, tileWidth: Column, tileHeight: Column): Column =
         ColumnAdapter(RST_ReTile.name, Seq(tileExpr, tileWidth, tileHeight))
     def rst_separatebands(tileExpr: Column): Column = ColumnAdapter(RST_SeparateBands.name, Seq(tileExpr))
@@ -464,8 +464,8 @@ def rst_combineavg_agg(tileExpr: Column): Column = ColumnAdapter(RST_CombineAvgA
     def rst_bng_tessellate(tileExpr: Column, resolution: String): Column = rst_bng_tessellate(tileExpr, lit(resolution))
     def rst_bng_tessellate(tileExpr: Column, resolution: String, mode: String): Column =
         rst_bng_tessellate(tileExpr, lit(resolution), mode)
-    def rst_maketiles(tileExpr: Column, tileWidth: Int, tileHeight: Int): Column =
-        rst_maketiles(tileExpr, lit(tileWidth), lit(tileHeight))
+    def rst_maketiles(tileExpr: Column, sizeInMB: Int): Column =
+        rst_maketiles(tileExpr, lit(sizeInMB))
     def rst_retile(tileExpr: Column, tileWidth: Int, tileHeight: Int): Column =
         rst_retile(tileExpr, lit(tileWidth), lit(tileHeight))
     def rst_tooverlappingtiles(tileExpr: Column, tileWidth: Int, tileHeight: Int, overlap: Int): Column =

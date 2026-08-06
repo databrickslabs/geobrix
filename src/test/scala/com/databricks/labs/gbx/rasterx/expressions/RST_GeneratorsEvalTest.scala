@@ -29,7 +29,8 @@ class RST_GeneratorsEvalTest extends PlanTest with SilentSparkSession {
 
         noException should be thrownBy df.withColumn("rst_h3_tessellate", rst_h3_tessellate(col("raster"), lit(1))).collect()
 
-        noException should be thrownBy df.withColumn("rst_maketiles", rst_maketiles(col("raster"), lit(1000), lit(1000))).collect()
+        // maketiles takes an MB budget (not pixel dimensions); 4 MB subdivides the ~11.5 MB test raster.
+        noException should be thrownBy df.withColumn("rst_maketiles", rst_maketiles(col("raster"), lit(4))).collect()
 
         noException should be thrownBy df.withColumn("rst_retile", rst_retile(col("raster"), lit(1000), lit(1000))).collect()
 
@@ -43,7 +44,7 @@ class RST_GeneratorsEvalTest extends PlanTest with SilentSparkSession {
 
         noException should be thrownBy df2.withColumn("rst_h3_tessellate", rst_h3_tessellate(col("raster"), lit(1))).collect()
 
-        noException should be thrownBy df2.withColumn("rst_maketiles", rst_maketiles(col("raster"), lit(1000), lit(1000))).collect()
+        noException should be thrownBy df2.withColumn("rst_maketiles", rst_maketiles(col("raster"), lit(4))).collect()
 
         noException should be thrownBy df2.withColumn("rst_retile", rst_retile(col("raster"), lit(1000), lit(1000))).collect()
 

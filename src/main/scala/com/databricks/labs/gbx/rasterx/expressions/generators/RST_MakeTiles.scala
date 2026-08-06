@@ -24,6 +24,9 @@ import org.apache.spark.unsafe.types.UTF8String
   * @param exprConfExpr
   *   Additional arguments for the expression (expressionConfigs).
   * Used as the catalyst node when gbx_rst_maketiles(tile, sizeInMB) is invoked in SQL or DataFrame API.
+  * @note
+  *   The second argument is a size budget in MB, NOT pixel dimensions. For explicit
+  *   tile width/height, use `gbx_rst_retile` instead.
   */
 case class RST_MakeTiles(
     tileExpr: Expression,

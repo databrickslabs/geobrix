@@ -1087,7 +1087,7 @@ Natural fit for CV image-tiling workflows that require Ordnance Survey–scale c
 Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. It derives a square tile size from the MB budget and always partitions; it does not honor the heavyweight `size_in_mb = -1` (single tile) or `0` (64 MB) sentinels or the power-of-four split, so tile counts and dimensions differ.
 :::
 
-**Signature:** `rst_maketiles(tile: Column, tileWidth: Column, tileHeight: Column): Column` — Subdivide into smaller tiles.
+**Signature:** `rst_maketiles(tile: Column, sizeInMB: Column): Column` — Subdivide into smaller tiles by approximate size in MB.
 
 **SQL:**
 

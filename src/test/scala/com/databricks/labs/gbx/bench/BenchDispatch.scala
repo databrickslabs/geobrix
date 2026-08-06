@@ -1094,11 +1094,9 @@ object BenchDispatch {
       case "rst_combineavg" => rst_combineavg(tile)
       case "rst_merge"      => rst_merge(tile)
       // bucket C, group C4: tiling fns -> ARRAY column (spark-path is timing-only,
-      // not fingerprint-compared, so the args only need to be valid). The Scala
-      // rst_maketiles wrapper takes (tileWidth, tileHeight) rather than the SQL
-      // sizeInMB form, so the column path passes tile dimensions; the pure-core
-      // path (which IS compared) uses the sizeInMB BalancedSubdivision directly.
-      case "rst_maketiles"   => rst_maketiles(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128))
+      // not fingerprint-compared, so the args only need to be valid). maketiles takes
+      // an MB budget, matching the sizeInMB BalancedSubdivision the pure-core path uses.
+      case "rst_maketiles"   => rst_maketiles(tile, argI(a, "size_in_mb", 1))
       case "rst_retile"      => rst_retile(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128))
       case "rst_tooverlappingtiles" =>
         rst_tooverlappingtiles(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128), argI(a, "overlap", 25))

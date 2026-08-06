@@ -421,9 +421,7 @@ def test_st_transformcrs_clean_3d_preserves_z_binary():
     import shapely as _sh
 
     pt = _sh.set_srid(from_wkt("POINT Z (11 42 500)"), 4326)
-    out = _crs.st_transformcrs(
-        to_wkb(pt, include_srid=True, output_dimension=3), "EPSG:32633"
-    )
+    out = _crs.st_transformcrs(to_wkb(pt, include_srid=True, output_dimension=3), "EPSG:32633")
     g = from_wkb(out)
     assert g.has_z
     assert g.z == pytest.approx(500.0, abs=1e-9)
@@ -457,9 +455,7 @@ def test_st_transformcrs_partial_z_binary_is_2d_no_coord_corruption():
 
 def test_st_transformcrs_partial_z_text_is_2d_no_coord_corruption():
     """Partial-Z LINESTRING in text medium: no throw, no 'NaN NaN NaN' vertex."""
-    out = _crs.st_transformcrs(
-        "SRID=4326;LINESTRING Z (11 42 5, 12 43 NaN)", "EPSG:32633"
-    )
+    out = _crs.st_transformcrs("SRID=4326;LINESTRING Z (11 42 5, 12 43 NaN)", "EPSG:32633")
     assert isinstance(out, str)
     assert "NAN" not in out.upper(), f"X/Y corrupted by non-finite Z: {out}"
     g = from_wkt(out.split(";", 1)[1])
@@ -659,8 +655,7 @@ _SHAPES_BEYOND_FLAT = [
     ),
     (
         "nested-collection",
-        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), "
-        "GEOMETRYCOLLECTION (POINT (1 2)))",
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), " "GEOMETRYCOLLECTION (POINT (1 2)))",
         80,
     ),
 ]
@@ -683,9 +678,7 @@ def test_mixed_dim_wkt_shapes_never_return_none(wkt):
     ``st_crs`` returning None here is the sharpest symptom: the geometry HAS an SRID, so
     None is a WRONG answer, not merely a missing one.
     """
-    assert (
-        _crs.st_crs(wkt) == "EPSG:4326"
-    ), "st_crs must read the SRID it plainly carries"
+    assert _crs.st_crs(wkt) == "EPSG:4326", "st_crs must read the SRID it plainly carries"
     assert _crs._udf_st_setcrs(wkt, "EPSG:32633") is not None
     assert _crs._udf_st_transformcrs(wkt, "EPSG:32633") is not None
     # Core layer too, not just the UDFs.
@@ -743,8 +736,7 @@ def test_mixed_dim_wkt_empty_component_stays_empty():
 def test_mixed_dim_wkt_nested_collection_preserves_structure():
     """A nested collection keeps its nesting and gains the right dimensionality tag."""
     out = _crs._udf_st_setcrs(
-        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), "
-        "GEOMETRYCOLLECTION (POINT (1 2)))",
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), " "GEOMETRYCOLLECTION (POINT (1 2)))",
         "EPSG:32633",
     )
     g = from_wkb(bytes(out))
@@ -847,8 +839,7 @@ _UNIFORM_ZM_SHAPES = [
     ),
     (
         "geometrycollection",
-        "GEOMETRYCOLLECTION ZM (POINT ZM (11 42 5 99), "
-        "LINESTRING ZM (11 42 5 99, 12 43 6 98))",
+        "GEOMETRYCOLLECTION ZM (POINT ZM (11 42 5 99), " "LINESTRING ZM (11 42 5 99, 12 43 6 98))",
         [[11.0, 42.0, 5.0], [11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
     ),
 ]
@@ -1021,3 +1012,129 @@ def test_uniform_zm_degrade_returns_input_unchanged():
         out = _crs._udf_st_transformcrs(geom, "EPSG:32633")
         assert isinstance(out, (bytes, bytearray))
         assert get_srid(from_wkb(bytes(out))) == 0, "no SRID was stamped by a degrade"
+
+
+# ---------------------------------------------------------------------------
+# Non-finite (Infinity) reprojection results -> NULL
+# ---------------------------------------------------------------------------
+#
+# PROJ returns Infinity (not an error) for out-of-domain inputs.  Infinity
+# asserts a *location* — it poisons extents, indexes, and aggregations and is
+# indistinguishable from real data.  NULL is the correct answer.
+#
+# Trigger 1: mislabelled CRS.  UTM easting/northing (500000, 5600000) claimed
+#   as EPSG:4326 (WGS84 geographic), then reprojected to EPSG:32633 (UTM33N).
+#   PROJ cannot reconcile the coordinate magnitude with the geographic domain
+#   and returns Infinity.
+# Trigger 2: out-of-domain latitude.  lat=100 is outside [-90, 90], so PROJ
+#   cannot produce a valid UTM projection.
+#
+# Scope boundary (pinned): ``POINT (200 42)`` in EPSG:4326 reprojects to a
+#   finite — though meaningless — UTM coordinate.  It must NOT be nulled: only
+#   non-finite X/Y are caught here; broader domain validation is queued.
+
+
+def _ewkb_pt(x, y, srid):
+    """EWKB for POINT(x, y) at the given SRID."""
+    import shapely as _sh
+
+    return to_wkb(_sh.set_srid(Point(x, y), srid), include_srid=True)
+
+
+def _ewkt_pt(x, y, srid):
+    return f"SRID={srid};POINT ({x} {y})"
+
+
+@pytest.mark.parametrize(
+    "geom,target,label",
+    [
+        # Trigger 1: UTM coords mislabelled as EPSG:4326 -> Infinity after reproject
+        (_ewkb_pt(500000.0, 5600000.0, 4326), "EPSG:32633", "mislabelled-ewkb"),
+        (_ewkt_pt(500000.0, 5600000.0, 4326), "EPSG:32633", "mislabelled-ewkt"),
+        # Trigger 2: invalid latitude (100 > 90) in geographic CRS
+        (_ewkb_pt(10.0, 100.0, 4326), "EPSG:32633", "invalid-lat-ewkb"),
+        (_ewkt_pt(10.0, 100.0, 4326), "EPSG:32633", "invalid-lat-ewkt"),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_st_transformcrs_nonfinite_result_returns_none_core(geom, target, label):
+    """Core st_transformcrs returns None (not Infinity) when reprojection yields non-finite X/Y.
+
+    Both triggers, both media.  The core is medium-preserving so a None return (not a
+    string 'None', not bytes) is the unambiguous signal that no geometry was produced.
+    """
+    result = _crs.st_transformcrs(geom, target)
+    assert (
+        result is None
+    ), f"[{label}] expected None for non-finite reprojection result, got {result!r}"
+
+
+@pytest.mark.parametrize(
+    "geom,target,label",
+    [
+        (_ewkb_pt(500000.0, 5600000.0, 4326), "EPSG:32633", "mislabelled-ewkb"),
+        (_ewkt_pt(500000.0, 5600000.0, 4326), "EPSG:32633", "mislabelled-ewkt"),
+        (_ewkb_pt(10.0, 100.0, 4326), "EPSG:32633", "invalid-lat-ewkb"),
+        (_ewkt_pt(10.0, 100.0, 4326), "EPSG:32633", "invalid-lat-ewkt"),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_udf_st_transformcrs_nonfinite_result_returns_none(geom, target, label):
+    """Registered UDF returns NULL (None) for both triggers in both media.
+
+    The UDF wraps the core: if the core returns None, the UDF must also return None
+    (not attempt to encode None as BINARY, which would raise TypeError).
+    """
+    result = _crs._udf_st_transformcrs(geom, target)
+    assert (
+        result is None
+    ), f"[{label}] UDF expected None for non-finite reprojection result, got {result!r}"
+
+
+def test_st_transformcrs_finite_but_meaningless_not_nulled():
+    """SCOPE BOUNDARY: finite-but-meaningless coordinates must NOT be returned as None.
+
+    ``POINT (200 42)`` in EPSG:4326 (lon=200, outside [-180,180]) reprojects to a real,
+    finite UTM easting (~85856 m).  This is geometrically invalid but the reprojection
+    arithmetic produces a finite number, so this guard does NOT apply and the result must
+    be a real geometry.  Broader domain validation (catching lon>180 etc.) is a separate
+    queued workstream — this test pins the scope boundary so any future widening is
+    deliberate.
+    """
+    import math
+
+    geom = _ewkb_pt(200.0, 42.0, 4326)
+    result = _crs.st_transformcrs(geom, "EPSG:32633")
+    assert (
+        result is not None
+    ), "POINT(200 42) reprojects to finite coordinates and must NOT be nulled"
+    g = from_wkb(result)
+    assert math.isfinite(g.x) and math.isfinite(
+        g.y
+    ), f"expected finite coordinates for lon=200, got ({g.x}, {g.y})"
+
+
+def test_st_transformcrs_nonfinite_does_not_break_nan_z_handling():
+    """Non-finite guard only inspects X/Y; a legitimate NaN Z is unaffected.
+
+    A partial-Z geometry is dropped to 2D BEFORE the transform (by ``_drop_partial_z``),
+    so the guard never sees NaN in the Z column of the reprojected geometry.  A clean-2D
+    geometry reprojected with a valid input must return a real result — the guard must not
+    mistake a NaN-free 2D reprojection for a non-finite result.
+
+    This test also directly verifies the mixed-NaN-Z path is unbroken: a partial-Z
+    LINESTRING reprojects to 2D with correct X/Y, and the result is not None.
+    """
+    from shapely.geometry import LineString
+
+    import shapely as _sh
+
+    # Partial-Z geometry: one vertex has Z, one does not.
+    ls = LineString([(11.0, 42.0, 5.0), (12.0, 43.0, float("nan"))])
+    geom = to_wkb(_sh.set_srid(ls, 4326), include_srid=True, output_dimension=3)
+    result = _crs.st_transformcrs(geom, "EPSG:32633")
+    assert result is not None, "partial-Z reprojection must NOT be treated as non-finite"
+    g = from_wkb(result)
+    assert not g.has_z, "partial-Z input must still come back 2D"
+    for x, y in g.coords:
+        assert x == x and y == y, f"X/Y must not be NaN after partial-Z reproject: {list(g.coords)}"

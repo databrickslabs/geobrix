@@ -281,6 +281,33 @@ def _drop_partial_z(g):
     return _as_2d(g) if _has_partial_z(g) else g
 
 
+def _has_nonfinite_xy(g) -> bool:
+    """True when any X or Y coordinate in ``g`` is non-finite (Infinity or NaN).
+
+    Called AFTER a reprojection to detect an out-of-domain result (e.g. PROJ returning
+    ``Infinity`` for a mismatched CRS or an invalid latitude).  Only X/Y is inspected —
+    Z is excluded deliberately:
+
+    - ``_drop_partial_z`` strips any NaN Z *before* the transform, so a non-finite value
+      left in X or Y after the transform is unambiguously from the projection, not from a
+      legitimately absent Z ordinate.
+    - Clean-3D geometries (every Z finite) carry those Z values through unchanged; their
+      Z cannot become non-finite via a 2D CRS change.
+
+    Scope boundary: this guard catches only non-finite (Infinity / NaN) X/Y.  A reprojection
+    that yields finite-but-meaningless coordinates — e.g. ``SRID=4326;POINT (200 42)``
+    reprojects to a real UTM easting — is NOT caught here and must not be.  Broader domain
+    validation is a separate queued workstream.
+
+    Empty geometries carry no coordinates and are never "non-finite".
+    """
+    coords = get_coordinates(g)  # include_z=False (default) -> shape (n, 2), X/Y only
+    if coords.shape[0] == 0:
+        return False
+    xy = coords.ravel()
+    return bool((xy != xy).any() or (abs(xy) == float("inf")).any())
+
+
 def _parse_geom_safe(geom):
     """Parse a geometry input, retrying mixed-dimensionality WKT as uniform 3D.
 
@@ -473,6 +500,27 @@ def st_transformcrs(
     tgt = resolve_crs(target_crs)
     tr = get_transformer(src, tgt)
     g_proj = transform(tr.transform, g)
+
+    # Non-finite X/Y guard — return NULL rather than propagating Infinity/NaN coordinates.
+    #
+    # PROJ returns Infinity (not an error) for out-of-domain inputs: e.g. mislabelled CRS
+    # (UTM coordinates claimed as EPSG:4326 then reprojected into UTM again), or an invalid
+    # latitude (lat=100 is outside any geographic CRS domain).  Infinity asserts a *location*
+    # — it poisons extents, spatial indexes, and aggregations downstream and is
+    # indistinguishable from real data.  NULL is what the never-error invariant already
+    # implies here: the target CRS resolved fine; it is the input row that cannot be
+    # projected.  The heavy tier raises ("PROJ: utm: Invalid latitude") — this tier returns
+    # NULL, a deliberate and documented divergence tracked in test_crs_parity.py.
+    #
+    # This guard is scoped to NON-FINITE X/Y only.  A reprojection that yields finite-but-
+    # meaningless coordinates (e.g. lon=200 reprojects to a real UTM easting) is not caught
+    # and must not be — broader domain validation is a separate queued workstream.
+    #
+    # NaN Z is excluded from the check: ``_drop_partial_z`` above removes any non-finite Z
+    # before the transform, so any non-finite value now in X or Y is unambiguously from the
+    # projection math, not from a legitimately absent Z ordinate.
+    if _has_nonfinite_xy(g_proj):
+        return None
 
     # Determine output SRID from the target's integer authority code (None for a
     # raw WKT / PROJ4 target, or for a non-numeric code such as OGC:CRS84).

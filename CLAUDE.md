@@ -15,7 +15,8 @@ Current branch: `beta/0.4.0`. Repo: `databrickslabs/geobrix`.
 These are the geobrix-specific translations of user-global preferences (`~/.claude/CLAUDE.md`):
 
 - **`gbx:*` commands are authoritative.** They are the canonical entry points for tests, coverage, docs, lint, Docker, data, CI, and security in this repo. If a `gbx:*` command doesn't do what you need, **fix the command** — don't work around it with ad-hoc shell, and don't paper over it by augmenting with extra inline logic. The "Adding or fixing a `gbx:*` command" section below has the procedure. The whole point of the palette is that everyone (you, me, future contributors, CI) runs the same code path.
-- **Orchestrator-master + per-task subagents** — Never run a `gbx:*` command inline if it touches the docker container, Maven, or the doc-test suite. Dispatch a Task subagent with the full task text and let it handle the long-running work in isolation. Test suites often take minutes; running inline blocks the main session.
+- **Orchestrator-master + per-task subagents** — Never run a `gbx:*` command inline if it touches the docker container, Maven, or the doc-test suite. Dispatch a Task subagent with the full task text and let it handle the long-running work in isolation. Test suites often take minutes; running inline blocks the main session. **Orient every subagent with the "Subagent orientation" section below** — an un-oriented subagent burns a run rediscovering repo basics, or reports a repo invariant as if it were a finding.
+- **Check Databricks auth BEFORE dispatching, not after a browser tab appears.** The main agent owns auth readiness. Run `bash ~/.claude/hooks/databricks-auth-status.sh PreDispatch` (read-only, never opens a browser) before each dispatch block, and confirm the profiles the work needs are `VALID`. Most geobrix work is local (Docker/Maven/pytest/docs/git) and needs **no** profile — don't ask the user to re-auth a profile the work doesn't touch. Subagents must never fix auth; a `databricks auth login` is hook-blocked and only the user can run it.
 - **Skills first** — Useful for adjacent work: `databricks-query` for SQL against the workspace, `databricks-workspace-files` for browsing notebooks, `databricks-lakeview-dashboard` for visualization, `databricks-authentication` before any databricks operation. The Field Engineering skills (`fevm`, `sage-context-catalog`) are unrelated to geobrix and shouldn't be invoked here.
 - **Runtime judge** — Has already learned the common `gbx:*` scripts (`gbx-test-scala.sh`, `gbx-test-python.sh`, `gbx-docker-exec.sh`, etc.) from prior sessions. New patterns pay a 10-20s warmup; learned patterns are instant. Don't disable.
 - **QC judge** — Project config at `.claude/qc-judge/config.json`. Wave-number regex (`wave\s*\d+`) blocks any user-facing doc that leaks the internal planning vocabulary (see "User-facing docs voice" below). `release_notes_path` points at `docs/docs/beta-release-notes.mdx` for the release-notes-current check.
@@ -135,6 +136,132 @@ Single-source pattern: doc SQL examples in `docs/tests/python/api/{rasterx,gridx
 - Run regeneration via `gbx:docs:function-info` or `gbx:test:function-info` (which also runs pytest).
 - Tests assert every function in `registered_functions.txt` has a non-empty example in `function-info.json`. If coverage fails, fix upstream — never add placeholder/empty usage.
 
+#### Code examples are GENERATED — never hand-edit the JSON
+
+`function-info.json` is a **build artifact**. Hand-editing it works until the next
+`gbx:docs:function-info`, which silently overwrites your change. To fix what
+`DESCRIBE FUNCTION EXTENDED` prints, edit the **source**, then regenerate:
+
+| To change... | Edit this | Not this |
+|---|---|---|
+| the `Examples:` block | `docs/tests/python/api/*_functions_sql.py` → the function's `*_sql_example()` | ❌ `function-info.json` |
+| `Usage:` / `Extended Usage:` | see "signature metadata" below | ❌ `function-info.json` |
+
+How the example is extracted (`docs/scripts/generate-function-info.py`) — these
+mechanics surprise people, so check them before wondering why your text vanished:
+
+- Only the **first SQL statement** containing the package prefix is taken
+  (`first_statement_containing`). A second query in the same `*_sql_example()` is
+  ignored by `DESCRIBE FUNCTION` (it still renders in the docs page).
+- `--` comments are **stripped**. Explanatory comments in the example never reach
+  `DESCRIBE FUNCTION`; put that prose in the description metadata instead.
+- One example can fill **several** functions: every registered name appearing in the
+  statement inherits it, EXCEPT a name that has its own dedicated `*_sql_example()`
+  (so `gbx_st_asmvt` and `gbx_st_asmvt_pyramid` don't cross-contaminate).
+- Keys beginning `_` (e.g. `_package_rasterx`) are section markers, not functions.
+
+#### Canonical `usageArgs` style
+
+`DESCRIBE FUNCTION` prints `name(<usageArgs>) - <description>`, describing the **SQL** surface.
+
+- **Optional arguments use Style B: `[param]`** — brackets wrap only the parameter name, the
+  comma stays outside. `geom_wkb, attrs_struct, min_z, max_z, layer_name, [extent]`. Multiple
+  trailing optionals: `a, b, [c], [d]`. Do **not** use `geom, target_crs [, source_crs]`
+  (comma inside) — that form is being retired.
+- **Parameter names are snake_case**, matching SQL — `geom_wkb`, `cell_id`, `size_in_mb`. Not
+  the Scala camelCase (`geomWkb`, `cellId`) and not the internal `*Expr` field names.
+- An argument is optional exactly when `builder()` has a shorter `case N =>` branch that
+  injects a `Literal(...)` default. **34 functions** have optional args; rendering one as
+  required is a bug, not a style nit.
+- Don't parse the docs `**Signature:**` lines as truth — 63 of 173 use camelCase and at least
+  one function has two conflicting lines. Validate against `builder()` arity instead.
+
+#### Signature metadata derivation (automated from Scala)
+
+As of v0.5.0, `usageArgs` and `description` are **derived from Scala case-class fields and builder
+arity patterns**, not hand-maintained in `function-info.json`. This eliminates drift: parameter
+names stay in sync with the actual Scala source, and optional parameter detection is validated
+against real `builder()` branches.
+
+**How it works:**
+
+1. **`docs/scripts/extend-function-metadata.py`** (the parser):
+   - Reads all Scala expression files under `src/main/scala/com/databricks/labs/gbx/{rasterx,vectorx,gridx}`.
+   - For each function's case class, extracts field names and filters out internal state (e.g., `exprConfExpr`, aggregation buffer offsets).
+   - Strips the `Expr` suffix from each field and converts to snake_case.
+   - Inspects the `builder()` method: if `case N =>` and `case N+K =>` branches exist with `Literal(...)` defaults in the longer branch, marks args N+1…N+K as optional.
+   - Outputs parsed metadata as JSON.
+
+2. **`docs/scripts/generate-function-info.py`** (the generator):
+   - Calls the parser to fetch `usage_args` for each function.
+   - Merges parsed metadata into the JSON alongside examples (from `*_sql_example()` in docs).
+   - Writes `src/main/resources/com/databricks/labs/gbx/function-info.json`.
+
+3. **`WithExpressionInfo`** (the Scala consumer):
+   - `getUsageArgs()` and `getDescription()` prefer JSON values (via `FunctionInfoLoader.get(name)`).
+   - Fall back to Scala `usageArgs` / `description` overrides only if JSON is absent.
+   - This allows legacy Scala overrides to coexist with generated metadata during migration.
+
+**When adding or changing a function:**
+
+- Update the **Scala case class** field names and `builder()` arity — the parser feeds from there.
+- Run `gbx:docs:function-info` to regenerate the JSON (no manual edits needed).
+- No Scala `usageArgs` override is normally required (it is derived). `description` still is — see below.
+- If you must override (e.g., a builder arity is too irregular to parse), add `override def usageArgs` or `override def description` in the companion — the JSON loader respects it as a fallback, and the no-regression check will hold the derived value to it.
+
+**Guardrails (these exist and are mutation-verified):**
+
+- The parser **fails loudly** — it raises `SystemExit` rather than warning, and
+  `generate-function-info.py` treats a parser failure as fatal instead of writing `{}`. A silent
+  fallback is how an optional argument got published as required.
+- **No-regression check** — a derived `usage_args` is compared against every hand-written
+  `override def usageArgs`. Losing a bracket, or dropping a parameter the override listed, is a
+  hard failure. Verified by mutating the bracket logic: the check caught all 5 override-backed
+  functions and exited non-zero.
+- **Multi-companion files are reported, not guessed.** When several companions share one SQL name
+  (`ST_TransformCrs` + `ST_TransformCrs3` both register `gbx_st_transformcrs`), the parser
+  describes the WIDEST case class so trailing optionals stay visible, and prints a note.
+- Brace style must not matter: both `=> c.length match {` and `=> {` newline `c.length match {`
+  are in use and parse identically.
+
+Not yet wired: `gbx:test:function-info` does not assert usage coverage, and no lint checks bracket
+syntax. `check-binding-parity.py` still compares **names only** — it cannot see a parameter list.
+
+Currently **177 of 180** registered functions have derived `usage_args`. The 3 without
+(`gbx_rst_fromfile`, `gbx_st_legacyaswkb`, `gbx_pmtiles_agg`) have irregular shapes and are left
+absent so the Scala fallback applies. **`description` is still empty for all 180** — `DESCRIBE
+FUNCTION` currently renders `name(args) - ` with a trailing dash. Populating descriptions, and
+resolving whether derived parameter names should be published while R1/N9 naming debt is open
+(the parser faithfully emits `points_array` where the docs say `points_geom`), are deferred.
+
+#### Signature metadata (`usageArgs` / `description`) — a known drift area
+
+`Usage:` is assembled in `WithExpressionInfo` as `name(usageArgs) - description`.
+Historically each companion overrode these, but the convention was dropped along the
+way: for a long stretch only 8 of ~179 companions had them, so most functions printed
+`gbx_rst_foo() - ` — empty parens, no description. Treat blank metadata as a bug, not
+a default. See `prompts/refactoring/2026-08-06-describe-function-metadata-drift-inventory.md`.
+
+**A signature change must move every surface together.** Changing arity or a parameter's
+meaning touches up to seven places, and the ones that fail *silently* are the dangerous
+ones — SQL binds **positionally**, so a wrapper passing an arg the `builder()` doesn't
+accept is discarded with no error (this is exactly how `rst_maketiles` advertised
+`(tile, tileWidth, tileHeight)` while really taking `(tile, sizeInMB)` — callers set a
+megabyte budget believing they set pixel dimensions):
+
+1. the expression case-class fields + `builder()` arity
+2. the public Scala wrapper overloads in `<pkg>/functions.scala` — **arg count must match `builder()`**
+3. the heavy Python shim (`python/geobrix/src/databricks/labs/gbx/<pkg>/functions.py`)
+4. the light Python binding (`.../pyrx|pyvx|pygx/functions.py`) + its registered UDF arity
+5. the `**Signature:**` line in `docs/docs/api/*-functions.mdx`
+6. the doc-test `*_sql_example()` (the generated example) — and its expected-output constant
+7. signature metadata (`usageArgs`/`description`), then regenerate
+
+Cross-check before declaring done: wrapper arg count vs `builder()` accepted range, and
+whether each wrapper param name still denotes the quantity of the field it lands on
+positionally. `check-binding-parity.py` compares **names only** and cannot see parameter
+lists, so none of this is caught by CI today.
+
 ### Doc tests are the documentation source (single source of truth)
 
 Tests ARE the documentation source, not validators of it. Docs import code from tests via webpack raw-loader.
@@ -159,6 +286,51 @@ Anything under `docs/docs/` is read by end users — release notes, package page
 **Wave numbers** are legitimate only in: `prompts/features/*.md` (internal plans), dispatch prompts (internal), git commit messages (internal), `input/` scoping drafts (gitignored).
 
 Quick check before merging: `grep -rn -iE "wave [0-9]+|wave-[0-9]+" docs/docs/ 2>/dev/null` should print nothing. The QC judge enforces this automatically via the `internals-leak` check.
+
+## Subagent orientation (paste the relevant parts into every dispatch)
+
+A subagent starts with no repo knowledge. Left un-oriented it will rediscover basics on
+your budget, work around a `gbx:*` command instead of fixing it, or — worst — report a
+**repo invariant as a finding**. Include the applicable items below in the dispatch prompt
+itself; don't tell an agent to "go read CLAUDE.md" when you can hand it the slice.
+
+**Facts that are NOT findings.** Every one of these has been reported as a discovery by
+some agent. State the relevant ones up front so the agent doesn't burn a run on them:
+
+- **The heavy tier needs a built, staged JAR.** `mvn ... -DskipTests` leaves `target/classes/`
+  but **no `*.jar`** unless `package` ran. If no JAR is present, heavy SQL registration
+  cannot work and integration/parity tests fail with mass `UNRESOLVED_ROUTINE`. That is a
+  missing build artifact, **not** a code defect — build/stage first, then test.
+- **The light tier is pure Python and needs no JAR.** `pyrx`/`pyvx`/`pygx` never require the
+  JAR; the wheel is always JAR-less.
+- **Both tiers register the same `gbx_*` SQL names** and the last registration wins. Function
+  metadata + builder are written to the registry as one atomic triple, so implementation and
+  metadata cannot desync.
+- **SQL binds positionally.** Heavy expressions register as plain Catalyst expressions with no
+  named-argument support, so an extra wrapper argument is silently dropped rather than erroring.
+- **Doc tests only run in Docker** (they need the full env + sample data under `/Volumes`).
+  Corpus tests skip unless the container was started with the sample-data mounts.
+- **`/prompts/` is gitignored** scratch; `docs/superpowers/` is version-controlled.
+- Non-EPSG / authority-less CRS may render as different-but-equivalent strings across tiers.
+  Parity means CRS-equivalence, not string equality.
+
+**Standing instructions for any implementation subagent:**
+
+1. Use `gbx:*` commands, never ad-hoc `docker`/`mvn`/`pytest`. If a command is broken, **fix
+   the command** and say how it broke — never route around it.
+2. Run **only the affected suites**; a full run is the orchestrator's call.
+3. Never run `databricks auth login` (hook-blocked) and never try to fix auth.
+4. Don't commit unless explicitly told to.
+5. **Verify before reporting.** Read the source behind every claim. Regex sweeps over Scala
+   produce false positives (`case Seq(...)`, `c.head`, overload chains that delegate) — mark
+   findings CONFIRMED vs SUSPECTED and quote real source, never paraphrase a signature from
+   memory. A fabricated parameter list is worse than no report.
+6. If a precondition is missing (no JAR, no sample data, stale staged artifact), **say so
+   plainly and stop** — do not report the consequence as a defect, and do not silently
+   substitute a weaker test.
+7. Exclude build artifacts from every search: `docs/build-static-zip/`,
+   `docs/tests/coverage-report/`, `docs/tests/.pytest_cache/`, `target/`, `scripts/docker/m2/`,
+   `*.pyc`. A naive grep for a Scala symbol otherwise hits minified JS in the docs build.
 
 ## Adding or fixing a `gbx:*` command
 

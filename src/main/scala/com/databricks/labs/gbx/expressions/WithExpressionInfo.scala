@@ -77,13 +77,27 @@ trait WithExpressionInfo {
     /** Function group (e.g. "raster", "grid") for documentation. */
     def group: String = ""
 
+    /** Usage args, preferring JSON over Scala override. */
+    private def getUsageArgs: String =
+        FunctionInfoLoader
+            .get(name)
+            .flatMap(_.usageArgs)
+            .getOrElse(usageArgs)
+
+    /** Description, preferring JSON over Scala override. */
+    private def getDescription: String =
+        FunctionInfoLoader
+            .get(name)
+            .flatMap(_.description)
+            .getOrElse(description)
+
     /** One-line usage string for DESCRIBE FUNCTION. */
-    private def getUsage: String = s"${name}(${usageArgs}) - ${description}"
+    private def getUsage: String = s"${name}(${getUsageArgs}) - ${getDescription}"
 
     /** Extended usage args or usageArgs if not overridden. */
     private def getExtendedUsageArgs: String = {
         if (extendedUsageArgs.isEmpty) {
-            usageArgs
+            getUsageArgs
         } else {
             extendedUsageArgs
         }

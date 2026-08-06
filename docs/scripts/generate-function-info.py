@@ -18,7 +18,7 @@ Usage (from repo root):
 import json
 import os
 import sys
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 # Script lives in docs/scripts/; repo root is two levels up.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -44,6 +44,46 @@ PMTILES_MODULE = ("tests.python.api.pmtiles_functions_sql", "pmtiles_", "gbx_pmt
 REGISTERED_FUNCTIONS_TXT = os.path.join(
     REPO_ROOT, "docs", "tests-function-info", "registered_functions.txt"
 )
+
+
+# Load parsed builder metadata (usage_args from Scala case classes)
+def _load_parsed_builders() -> Dict[str, dict]:
+    """Load parsed builder metadata from extend_function_metadata.py."""
+    try:
+        # Execute the extend_function_metadata script as a subprocess
+        import subprocess
+        import json
+        script_path = os.path.join(os.path.dirname(__file__), "extend-function-metadata.py")
+        result = subprocess.run(
+            [sys.executable, script_path, REPO_ROOT],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        # Fail LOUDLY, never silently. Returning {} on error looks like "no functions have
+        # signatures" and would quietly wipe usage_args out of the JSON on the next run.
+        if result.returncode != 0:
+            raise SystemExit(
+                "generate-function-info: signature parser FAILED — refusing to write "
+                "metadata that would silently drop usage_args.\n"
+                f"{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+            )
+        # Find the first '{' and parse from there (skip diagnostic output)
+        output = result.stdout
+        json_start = output.find('{')
+        if json_start < 0:
+            raise SystemExit(
+                "generate-function-info: signature parser produced no JSON.\n"
+                f"{output[-2000:]}"
+            )
+        try:
+            return json.loads(output[json_start:])
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"generate-function-info: parser JSON is invalid: {e}")
+    except SystemExit:
+        raise
+    except Exception as e:
+        raise SystemExit(f"generate-function-info: could not run signature parser: {e}")
 
 
 def _split_sql_statements(sql: str) -> List[str]:
@@ -293,12 +333,18 @@ def _package_for(name: str) -> str:
     return "other"
 
 
-def build_functions_object(registered: list, doc_examples: dict) -> dict:
+def build_functions_object(
+    registered: list, doc_examples: dict, parsed_builders: Optional[Dict] = None
+) -> dict:
     """
     Build the "functions" object: only functions with non-empty examples from docs.
     Ordered by package, then sorted by function name. Section markers _package_<name>
-    separate packages. Empty usage is not allowed; only doc-derived entries are included.
+    separate packages. Optionally merge in parsed builder metadata (usage_args).
+    Empty usage is not allowed; only doc-derived entries are included.
     """
+    if parsed_builders is None:
+        parsed_builders = {}
+
     by_package = {}
     for name in registered:
         pkg = _package_for(name)
@@ -316,7 +362,13 @@ def build_functions_object(registered: list, doc_examples: dict) -> dict:
             entry = doc_examples.get(name) or {}
             examples = (entry.get("examples") or "").strip()
             if examples:
-                out[name] = {"examples": examples}
+                func_entry = {"examples": examples}
+                # Add parsed builder metadata if available
+                if name in parsed_builders:
+                    parsed = parsed_builders[name]
+                    if "usage_args" in parsed and parsed["usage_args"]:
+                        func_entry["usage_args"] = parsed["usage_args"]
+                out[name] = func_entry
     other_names = by_package.get("other", [])
     if other_names:
         out["_package_other"] = "--- other ---"
@@ -324,7 +376,13 @@ def build_functions_object(registered: list, doc_examples: dict) -> dict:
             entry = doc_examples.get(name) or {}
             examples = (entry.get("examples") or "").strip()
             if examples:
-                out[name] = {"examples": examples}
+                func_entry = {"examples": examples}
+                # Add parsed builder metadata if available
+                if name in parsed_builders:
+                    parsed = parsed_builders[name]
+                    if "usage_args" in parsed and parsed["usage_args"]:
+                        func_entry["usage_args"] = parsed["usage_args"]
+                out[name] = func_entry
     return out
 
 
@@ -338,10 +396,13 @@ def main():
     os.makedirs(RESOURCE_DIR, exist_ok=True)
     registered = load_registered_functions_txt()
     doc_examples = discover_and_collect(registered)
+    parsed_builders = _load_parsed_builders()
 
     if not registered:
         # No registered list: output only doc-derived (legacy)
-        functions = build_functions_object(sorted(doc_examples.keys()), doc_examples)
+        functions = build_functions_object(
+            sorted(doc_examples.keys()), doc_examples, parsed_builders
+        )
         with open(RESOURCE_FILE, "w") as f:
             json.dump({"functions": functions}, f, indent=2)
         count = len([k for k in functions if not k.startswith("_")])
@@ -349,7 +410,7 @@ def main():
         return
 
     # Full overwrite from registered; only include entries with non-empty examples.
-    functions = build_functions_object(registered, doc_examples)
+    functions = build_functions_object(registered, doc_examples, parsed_builders)
     included = {k for k in functions if not k.startswith("_")}
     missing_or_empty = [n for n in registered if n not in included]
     if missing_or_empty:

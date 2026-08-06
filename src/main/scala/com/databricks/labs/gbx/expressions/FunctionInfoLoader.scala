@@ -32,7 +32,11 @@ object FunctionInfoLoader {
             if (name.startsWith("_")) () else {
               val node = e.getValue
               val examples = if (node.has("examples")) Option(node.get("examples").asText()) else None
-              if (examples.nonEmpty) b += name -> FunctionInfo(examples = examples)
+              val usageArgs = if (node.has("usage_args")) Option(node.get("usage_args").asText()) else None
+              val description = if (node.has("description")) Option(node.get("description").asText()) else None
+              if (examples.nonEmpty || usageArgs.nonEmpty || description.nonEmpty) {
+                b += name -> FunctionInfo(examples = examples, usageArgs = usageArgs, description = description)
+              }
             }
           }
           b.result()
@@ -44,5 +48,9 @@ object FunctionInfoLoader {
   def get(name: String): Option[FunctionInfo] = map.get(name)
 }
 
-/** Case class holding optional examples string for a function. Used by FunctionInfoLoader for DESCRIBE FUNCTION EXTENDED. */
-case class FunctionInfo(examples: Option[String] = None)
+/** Case class holding optional metadata for a function. Used by FunctionInfoLoader for DESCRIBE FUNCTION EXTENDED. */
+case class FunctionInfo(
+    examples: Option[String] = None,
+    usageArgs: Option[String] = None,
+    description: Option[String] = None
+)

@@ -222,7 +222,7 @@ object ST_InterpolateElevationGeom extends WithExpressionInfo {
 
     override def usageArgs: String =
         "points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, " +
-        "grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, mode"
+        "grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode]"
 
     override def description: String =
         "Generator: emit one row per Z-interpolated grid cell center (WKB BINARY) " +

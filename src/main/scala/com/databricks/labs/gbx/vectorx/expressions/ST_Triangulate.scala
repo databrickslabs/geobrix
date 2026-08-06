@@ -160,7 +160,7 @@ object ST_Triangulate extends WithExpressionInfo {
     }
 
     override def usageArgs: String =
-        "points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, mode"
+        "points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, [mode]"
 
     override def description: String =
         "Generator: emit one row per TIN triangle polygon (WKB BINARY) from a constrained Delaunay triangulation."

@@ -211,7 +211,7 @@ object ST_InterpolateElevationBBox extends WithExpressionInfo {
 
     override def usageArgs: String =
         "points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, " +
-        "xmin, ymin, xmax, ymax, width_px, height_px, srid, mode"
+        "xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode]"
 
     override def description: String =
         "Generator: emit one row per Z-interpolated grid cell center (WKB BINARY) " +

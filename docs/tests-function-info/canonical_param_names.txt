@@ -18,8 +18,11 @@
 #               See N9 ruling. Do not drop the _array suffix.
 #   [c1]/[c2] in gbx_rst_evi — EVI formula atmospheric correction coefficients (C1≈6.0,
 #               C2≈7.5 MODIS-canonical), NOT cell IDs. Left as c1/c2 per domain semantics.
-#   cellid_expression in gbx_bng_cellarea — derived name from the Scala case class field;
-#               the function accepts any BNG cell expression.
+#   cellid — canonical single lowercase token for a bare BNG/quadbin cell id, on params AND
+#               struct fields (matches the v1/v2 tile struct field, Databricks product, Mosaic).
+#               cellid1/cellid2 for two-bare-id functions (bng_distance etc). The chip STRUCT
+#               keeps left_chip/right_chip/input_chip (struct != scalar). quadbin_cellunion_agg
+#               takes a scalar cell id (BIGINT, no chip struct) so it is cellid, not input_chip.
 gbx_rst_avg	tile
 gbx_rst_bandmetadata	tile, band
 gbx_rst_boundingbox	tile
@@ -151,13 +154,13 @@ gbx_rst_proximity	tile, [target_values], [dist_units], [max_distance]
 gbx_rst_viewshed	tile, observer_geom, observer_height, [target_height], [max_distance], [crs]
 gbx_bng_aswkb	cellid
 gbx_bng_aswkt	cellid
-gbx_bng_cellarea	cellid_expression
+gbx_bng_cellarea	cellid
 gbx_bng_cellintersection	left_chip, right_chip
 gbx_bng_cellunion	left_chip, right_chip
 gbx_bng_centroid	cellid
-gbx_bng_distance	cellid, cellid2
+gbx_bng_distance	cellid1, cellid2
 gbx_bng_eastnorthasbng	easting, northing, resolution
-gbx_bng_euclideandistance	cellid, cellid2
+gbx_bng_euclideandistance	cellid1, cellid2
 gbx_bng_geomkloop	geom, resolution, k
 gbx_bng_geomkring	geom, resolution, k
 gbx_bng_kloop	cellid, k
@@ -174,7 +177,7 @@ gbx_bng_kringexplode	cellid, k
 gbx_bng_tessellateexplode	geom, resolution, keep_core_geom
 gbx_h3_cell_bbox	cellid, [srid], [mode], [kring_pad], [out_crs]
 gbx_quadbin_aswkb	cell
-gbx_quadbin_cellunion_agg	input_chip
+gbx_quadbin_cellunion_agg	cellid
 gbx_quadbin_cellunion	cells
 gbx_quadbin_centroid	cell
 gbx_quadbin_distance	cellid1, cellid2

@@ -1,10 +1,23 @@
 #!/usr/bin/env python3
-"""Invariant A (cross-tier Python param-name equality) + Invariant B (arity parity).
+"""Invariant A (param-name correctness) + Invariant B (cross-tier arity parity).
 
-Compares live heavy-Python and light-Python signatures against the frozen
-canonical fixture (docs/tests-function-info/canonical_param_names.txt). Functions
-listed in param_name_waiver.txt are exempt while the rename migration is underway.
-Pure stdlib; runs on the host. Exit 0 on pass, 1 on any non-waived violation.
+Invariant A compares live Python signatures against the frozen canonical fixture
+(docs/tests-function-info/canonical_param_names.txt):
+  - Heavy tier: EXACT equality — the heavy param list must equal canonical exactly
+    (same names, same order).
+  - Light tier: PREFIX match — the canonical list must appear as an in-order prefix of
+    the light param list. Light MAY have extra trailing params (e.g. virtualize_dir,
+    xscale, yscale) that are not in the canonical surface; that is expected and allowed.
+    If any of the first len(canonical) names differ, or light is shorter than canonical,
+    that is a violation.
+
+Invariant B (arity parity): for functions present in BOTH tiers, require
+  len(light) >= len(heavy).
+Light dropping a param that heavy carries is a violation; light may add extra trailing
+params (allowed by the "light tier may exceed heavy" rule).
+
+Functions listed in param_name_waiver.txt are exempt while the rename migration is
+underway. Pure stdlib; runs on the host. Exit 0 on pass, 1 on any non-waived violation.
 """
 from __future__ import annotations
 import argparse, re, sys
@@ -78,27 +91,60 @@ def _first_existing(globs: list[str], gbx_name: str) -> list[str] | None:
     return None
 
 def check_invariant_a(report: bool = False) -> list[str]:
+    """Check param-name correctness vs canonical fixture.
+
+    Heavy tier: exact match (canonical == heavy).
+    Light tier: prefix match (canonical is an in-order prefix of light; light
+    may carry extra trailing params beyond the canonical length).
+    """
     fixture, waiver = load_fixture(), load_waiver()
     violations = []
     for gbx_name, canon in fixture.items():
         heavy = _first_existing(HEAVY_GLOBS, gbx_name)
         light = _first_existing(LIGHT_GLOBS, gbx_name)
-        # Only compare surfaces that exist (not every fn has both tiers).
-        for tier, params in (("heavy", heavy), ("light", light)):
-            if params is None:
-                continue
-            if params != canon:
-                msg = (f"[A] {gbx_name}: {tier} params {params} != canonical {canon}")
+        # Heavy: exact equality.
+        if heavy is not None and heavy != canon:
+            msg = f"[A] {gbx_name}: heavy params {heavy} != canonical {canon}"
+            if report or gbx_name not in waiver:
+                violations.append(msg)
+        # Light: canonical must be an in-order prefix of light.
+        if light is not None:
+            n = len(canon)
+            if len(light) < n or light[:n] != canon:
+                msg = (f"[A] {gbx_name}: light params {light} does not have "
+                       f"canonical {canon} as prefix")
                 if report or gbx_name not in waiver:
                     violations.append(msg)
     return violations
+
+
+def check_invariant_b(report: bool = False) -> list[str]:
+    """Check cross-tier arity parity: len(light) >= len(heavy) for both-tier functions.
+
+    Light dropping a param that heavy has is a violation. Light may have extra
+    trailing params beyond heavy's count (per "light tier may exceed heavy" rule).
+    """
+    fixture, waiver = load_fixture(), load_waiver()
+    violations = []
+    for gbx_name in fixture:
+        heavy = _first_existing(HEAVY_GLOBS, gbx_name)
+        light = _first_existing(LIGHT_GLOBS, gbx_name)
+        if heavy is None or light is None:
+            continue  # parity only meaningful when both tiers exist
+        if len(light) < len(heavy):
+            msg = (f"[B] {gbx_name}: light arity {len(light)} < heavy arity {len(heavy)}"
+                   f" (light dropped params: {heavy[len(light):]})")
+            if report or gbx_name not in waiver:
+                violations.append(msg)
+    return violations
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--report", action="store_true",
                     help="list ALL violations ignoring the waiver")
     args = ap.parse_args()
-    violations = check_invariant_a(report=args.report)
+    violations = check_invariant_a(args.report) + check_invariant_b(args.report)
     if violations:
         print("\n".join(sorted(violations)))
         print(f"\n{len(violations)} param-name violation(s).")

@@ -48,10 +48,11 @@
 # gbx_st_triangulate  # N9 DONE: points_geom/breaklines_geom renamed to *_array
 #
 # --- 7 PERMANENT [B] light-arity gaps (feature parity, not naming) ---
-gbx_bng_geomkloopexplode  # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
-gbx_bng_geomkringexplode  # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
-gbx_bng_kloopexplode      # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
-gbx_bng_kringexplode      # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
-gbx_bng_tessellateexplode # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
+# The 5 bng *explode fns below are PERMANENT [B] waivers — streaming UDTFs, not gaps. See spec 2026-08-07-arity-gap-wrapup.
+gbx_bng_geomkloopexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_geomkringexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_kloopexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_kringexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_tessellateexplode # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
 gbx_rst_xyzpyramid        # [B] light missing trailing param: rescale (light arity 6 vs heavy arity 7)
 gbx_bng_tessellate        # [B] light missing trailing param: keep_core_geom (light arity 2 vs heavy arity 3)

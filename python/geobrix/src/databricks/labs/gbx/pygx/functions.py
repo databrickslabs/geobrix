@@ -928,27 +928,29 @@ def bng_cellintersection_agg(input_chip: ColLike) -> Column:
 # pointing to the registered UDTF; invoke them via SQL LATERAL instead.
 
 _EXPLODE_HINT = (
-    "Light BNG {name} has no Python Column form; invoke the registered UDTF via "
-    "SQL LATERAL, e.g. SELECT t.* FROM <df>, LATERAL {udtf}(...) t"
+    "Light BNG {name} is a streaming table function (registered UDTF {udtf}): it "
+    "emits one row per cell with no array materialized, so it has no pyspark "
+    "Column form by design. Invoke via SQL LATERAL, e.g. "
+    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
 )
 
 
 def bng_kringexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT cellid FROM gbx_bng_kringexplode(cellid, k)."""
+    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kringexplode(cellid, k). No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(name="bng_kringexplode", udtf="gbx_bng_kringexplode")
     )
 
 
 def bng_kloopexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT cellid FROM gbx_bng_kloopexplode(cellid, k)."""
+    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kloopexplode(cellid, k). No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(name="bng_kloopexplode", udtf="gbx_bng_kloopexplode")
     )
 
 
 def bng_geomkringexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT t.* FROM <df>, LATERAL gbx_bng_geomkringexplode(geom, res, k) t."""
+    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkringexplode(geom, res, k) t. No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(
             name="bng_geomkringexplode", udtf="gbx_bng_geomkringexplode"
@@ -957,7 +959,7 @@ def bng_geomkringexplode(*args, **kwargs) -> Column:
 
 
 def bng_geomkloopexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT t.* FROM <df>, LATERAL gbx_bng_geomkloopexplode(geom, res, k) t."""
+    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkloopexplode(geom, res, k) t. No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(
             name="bng_geomkloopexplode", udtf="gbx_bng_geomkloopexplode"
@@ -966,7 +968,7 @@ def bng_geomkloopexplode(*args, **kwargs) -> Column:
 
 
 def bng_tessellateexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT t.* FROM <df>, LATERAL gbx_bng_tessellateexplode(geom, res) t."""
+    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_tessellateexplode(geom, res) t. No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(
             name="bng_tessellateexplode", udtf="gbx_bng_tessellateexplode"

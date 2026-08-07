@@ -3,15 +3,15 @@
 #          gbx_bng_euclideandistance, gbx_bng_kloop, gbx_bng_kring, gbx_bng_cellintersection,
 #          gbx_bng_cellunion, gbx_bng_cellintersection_agg, gbx_bng_cellunion_agg,
 #          gbx_quadbin_distance, gbx_quadbin_cellunion_agg
-gbx_bng_eastnorthasbng
+# gbx_bng_eastnorthasbng  # Task 3 DONE: east/north (heavy) and e/n (light) -> easting/northing
 gbx_bng_geomkloopexplode
 gbx_bng_geomkringexplode
 gbx_bng_kloopexplode
 gbx_bng_kringexplode
-gbx_bng_pointascell
+# gbx_bng_pointascell  # Task 3 DONE: point (heavy) -> geom
 gbx_bng_tessellate
 gbx_bng_tessellateexplode
-gbx_custom_grid
+# gbx_custom_grid  # Task 3 DONE: light x_min.../root_x -> bound_x_min.../root_cell_size_x
 # gbx_rst_bng_rasterize_agg  # R6 DONE: out_srid renamed
 gbx_rst_clip
 gbx_rst_combineavg

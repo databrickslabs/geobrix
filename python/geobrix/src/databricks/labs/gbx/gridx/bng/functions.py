@@ -135,12 +135,12 @@ def bng_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     return f.call_function("gbx_bng_distance", _col(cellid1), _col(cellid2))
 
 
-def bng_eastnorthasbng(east: ColLike, north: ColLike, resolution: ColLike) -> Column:
+def bng_eastnorthasbng(easting: ColLike, northing: ColLike, resolution: ColLike) -> Column:
     """Convert easting and northing to a BNG cell identifier.
 
     Args:
-        east: Easting column (metres).
-        north: Northing column (metres).
+        easting: Easting column (metres).
+        northing: Northing column (metres).
         resolution: BNG resolution — integer index ±1..±6 or string key from
             ``BNG.resolutionMap`` (e.g. ``"1km"``). NOT metres.
 
@@ -148,7 +148,7 @@ def bng_eastnorthasbng(east: ColLike, north: ColLike, resolution: ColLike) -> Co
         Column of BNG cell identifier.
     """
     return f.call_function(
-        "gbx_bng_eastnorthasbng", _col(east), _col(north), _col(resolution)
+        "gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution)
     )
 
 
@@ -219,7 +219,7 @@ def bng_kring(cellid: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_bng_kring", _col(cellid), _col(k))
 
 
-def bng_pointascell(point: ColLike, resolution: ColLike) -> Column:
+def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
     """Convert a point geometry to a BNG grid cell identifier.
 
     The point must be a Column of WKT (string) or WKB (binary) with BNG
@@ -228,7 +228,7 @@ def bng_pointascell(point: ColLike, resolution: ColLike) -> Column:
     geometry functions).
 
     Args:
-        point: Point geometry (WKT/WKB) in BNG coordinates.
+        geom: Point geometry (WKT/WKB) in BNG coordinates.
         resolution: BNG resolution — integer index ±1..±6 or string key.
 
     Returns:
@@ -237,7 +237,7 @@ def bng_pointascell(point: ColLike, resolution: ColLike) -> Column:
     Example:
         bx.bng_pointascell("POINT(400000 400000)", "1km")
     """
-    return f.call_function("gbx_bng_pointascell", _col(point), _col(resolution))
+    return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
 
 
 def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:

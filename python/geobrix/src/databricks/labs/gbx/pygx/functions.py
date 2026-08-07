@@ -831,9 +831,9 @@ def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
     return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
 
 
-def bng_eastnorthasbng(e: ColLike, n: ColLike, resolution: ColLike) -> Column:
+def bng_eastnorthasbng(easting: ColLike, northing: ColLike, resolution: ColLike) -> Column:
     """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `resolution`."""
-    return f.call_function("gbx_bng_eastnorthasbng", _col(e), _col(n), _col(resolution))
+    return f.call_function("gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution))
 
 
 def bng_cellarea(cellid: ColLike) -> Column:
@@ -980,25 +980,25 @@ def bng_tessellateexplode(*args, **kwargs) -> Column:
 
 
 def custom_grid(
-    x_min: ColLike,
-    x_max: ColLike,
-    y_min: ColLike,
-    y_max: ColLike,
+    bound_x_min: ColLike,
+    bound_x_max: ColLike,
+    bound_y_min: ColLike,
+    bound_y_max: ColLike,
     cell_splits: ColLike,
-    root_x: ColLike,
-    root_y: ColLike,
+    root_cell_size_x: ColLike,
+    root_cell_size_y: ColLike,
     srid: ColLike = -1,
 ) -> Column:
     """Build a custom-grid spec STRUCT (validated eagerly). srid=-1 means no CRS."""
     return f.call_function(
         "gbx_custom_grid",
-        _col(x_min),
-        _col(x_max),
-        _col(y_min),
-        _col(y_max),
+        _col(bound_x_min),
+        _col(bound_x_max),
+        _col(bound_y_min),
+        _col(bound_y_max),
         _col(cell_splits),
-        _col(root_x),
-        _col(root_y),
+        _col(root_cell_size_x),
+        _col(root_cell_size_y),
         _col(srid),
     )
 

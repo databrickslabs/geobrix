@@ -53,6 +53,11 @@ setup_log_file "$LOG_PATH"
 python3 "$PROJECT_ROOT/docs/scripts/check-binding-parity.py"
 EXIT_CODE=$?
 
+if [ $EXIT_CODE -eq 0 ]; then
+    python3 "$PROJECT_ROOT/docs/scripts/check-param-names.py"
+    EXIT_CODE=$?
+fi
+
 if [ -n "$LOG_PATH" ]; then
     echo -e "${CYAN}📝 Log saved to: ${YELLOW}$LOG_PATH${NC}"
 fi

@@ -61,7 +61,11 @@ def load_waiver() -> set[str]:
 def _find_def(text: str, pyname: str) -> str | None:
     # Match `def <pyname>(` and capture the full parenthesized arg list across newlines.
     m = re.search(rf"def\s+{re.escape(pyname)}\s*\((.*?)\)\s*(->|:)", text, re.S)
-    return m.group(1) if m else None
+    if m is None:
+        return None
+    # Strip inline `# ...` comments (e.g. `def f(  # noqa: E741`) that would otherwise
+    # be tokenized as a bogus first parameter and drop the real first arg.
+    return re.sub(r"#[^\n]*", "", m.group(1))
 
 _IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

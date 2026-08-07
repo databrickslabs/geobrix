@@ -19,7 +19,6 @@ gbx_rst_derivedband
 gbx_rst_derivedband_agg
 # gbx_rst_dtmfromgeoms  # N9 DONE: points/breaklines renamed to *_array
 # gbx_rst_dtmfromgeoms_agg  # R6 DONE: out_srid renamed
-gbx_rst_evi
 gbx_rst_getsubdataset
 # gbx_rst_gridfrompoints  # N9 DONE: points/values renamed to *_array
 # gbx_rst_gridfrompoints_agg  # R6 DONE: out_srid renamed

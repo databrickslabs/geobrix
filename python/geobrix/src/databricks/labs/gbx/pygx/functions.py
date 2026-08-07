@@ -783,9 +783,9 @@ def quadbin_kring(cell: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_quadbin_kring", _col(cell), _col(k))
 
 
-def quadbin_distance(cell_a: ColLike, cell_b: ColLike) -> Column:
+def quadbin_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Chebyshev grid distance (INT) between two same-resolution cells."""
-    return f.call_function("gbx_quadbin_distance", _col(cell_a), _col(cell_b))
+    return f.call_function("gbx_quadbin_distance", _col(cellid1), _col(cellid2))
 
 
 def quadbin_polyfill(geom: ColLike, resolution: ColLike) -> Column:
@@ -813,9 +813,9 @@ def quadbin_tessellate(geom: ColLike, resolution: ColLike) -> Column:
     return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(resolution))
 
 
-def quadbin_cellunion_agg(cell: ColLike) -> Column:
+def quadbin_cellunion_agg(cellid: ColLike) -> Column:
     """Aggregator: union a group's cell boundaries into one EWKB (SRID 4326) BINARY."""
-    return _cellunion_agg_udf(_col(cell))
+    return _cellunion_agg_udf(_col(cellid))
 
 
 # --- BNG Column wrappers (mirror heavy gridx.bng.functions) ----------------------------------
@@ -837,14 +837,14 @@ def bng_cellarea(cellid: ColLike) -> Column:
     return f.call_function("gbx_bng_cellarea", _col(cellid))
 
 
-def bng_distance(cell_a: ColLike, cell_b: ColLike) -> Column:
+def bng_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Manhattan grid distance (LONG) between two BNG cells (edge-size units)."""
-    return f.call_function("gbx_bng_distance", _col(cell_a), _col(cell_b))
+    return f.call_function("gbx_bng_distance", _col(cellid1), _col(cellid2))
 
 
-def bng_euclideandistance(cell_a: ColLike, cell_b: ColLike) -> Column:
+def bng_euclideandistance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Chebyshev grid distance (LONG) between two BNG cells (edge-size units)."""
-    return f.call_function("gbx_bng_euclideandistance", _col(cell_a), _col(cell_b))
+    return f.call_function("gbx_bng_euclideandistance", _col(cellid1), _col(cellid2))
 
 
 def bng_aswkb(cellid: ColLike) -> Column:
@@ -862,14 +862,14 @@ def bng_centroid(cellid: ColLike) -> Column:
     return f.call_function("gbx_bng_centroid", _col(cellid))
 
 
-def bng_cellintersection(left: ColLike, right: ColLike) -> Column:
+def bng_cellintersection(left_chip: ColLike, right_chip: ColLike) -> Column:
     """Per-cell chip intersection STRUCT<cellid, core, chip> (left-hand rule)."""
-    return f.call_function("gbx_bng_cellintersection", _col(left), _col(right))
+    return f.call_function("gbx_bng_cellintersection", _col(left_chip), _col(right_chip))
 
 
-def bng_cellunion(left: ColLike, right: ColLike) -> Column:
+def bng_cellunion(left_chip: ColLike, right_chip: ColLike) -> Column:
     """Per-cell chip union STRUCT<cellid, core, chip> (left-hand rule)."""
-    return f.call_function("gbx_bng_cellunion", _col(left), _col(right))
+    return f.call_function("gbx_bng_cellunion", _col(left_chip), _col(right_chip))
 
 
 def bng_kring(cellid: ColLike, k: ColLike) -> Column:
@@ -902,18 +902,18 @@ def bng_tessellate(geom: ColLike, resolution: ColLike) -> Column:
     return f.call_function("gbx_bng_tessellate", _col(geom), _col(resolution))
 
 
-def bng_cellunion_agg(chip: ColLike) -> Column:
+def bng_cellunion_agg(input_chip: ColLike) -> Column:
     """Aggregator: union a group's same-cell chips into one dissolved-chip WKB BINARY.
 
     (Light grouped-agg cannot return a STRUCT; emits the dissolved chip geometry,
     keyed by the group's cellid — see the registration note.)
     """
-    return f.call_function("gbx_bng_cellunion_agg", _col(chip))
+    return f.call_function("gbx_bng_cellunion_agg", _col(input_chip))
 
 
-def bng_cellintersection_agg(chip: ColLike) -> Column:
+def bng_cellintersection_agg(input_chip: ColLike) -> Column:
     """Aggregator: intersect a group's same-cell chips into one dissolved-chip WKB BINARY."""
-    return f.call_function("gbx_bng_cellintersection_agg", _col(chip))
+    return f.call_function("gbx_bng_cellintersection_agg", _col(input_chip))
 
 
 # The five *explode functions are SQL-LATERAL-only table functions in the light

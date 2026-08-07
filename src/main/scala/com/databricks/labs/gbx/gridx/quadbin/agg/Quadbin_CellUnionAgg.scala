@@ -16,14 +16,14 @@ import org.apache.spark.sql.types._
   * Parity with gbx_bng_cellunion_agg and Mosaic grid_cell_union_agg.
   */
 final case class Quadbin_CellUnionAgg(
-    inputChip: Expression,
+    cellid: Expression,
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0
 ) extends TypedImperativeAggregate[QuadbinUnionAcc]
       with UnaryLike[Expression] {
 
     override lazy val deterministic: Boolean = true
-    override val child: Expression = inputChip
+    override val child: Expression = cellid
     override val nullable: Boolean = true
     override val dataType: DataType = BinaryType
     override def prettyName: String = Quadbin_CellUnionAgg.name
@@ -33,7 +33,7 @@ final case class Quadbin_CellUnionAgg(
     override def withNewInputAggBufferOffset(n: Int): ImperativeAggregate =
         copy(inputAggBufferOffset = n)
     override protected def withNewChildInternal(newChild: Expression): Quadbin_CellUnionAgg =
-        copy(inputChip = newChild)
+        copy(cellid = newChild)
 
     override def createAggregationBuffer(): QuadbinUnionAcc = QuadbinUnionAcc.empty
 

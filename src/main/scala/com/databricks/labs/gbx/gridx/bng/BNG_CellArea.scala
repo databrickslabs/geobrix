@@ -7,12 +7,12 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types.{DataType, DoubleType}
 import org.apache.spark.unsafe.types.UTF8String
 
-/** Expression that returns the area of the BNG cell in square kilometres. Argument: cellId. */
+/** Expression that returns the area of the BNG cell in square kilometres. Argument: cellid. */
 case class BNG_CellArea(
-    cellIdExpression: Expression
+    cellid: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(cellIdExpression)
+    override def children: Seq[Expression] = Seq(cellid)
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = BNG_CellArea.name

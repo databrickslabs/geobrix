@@ -8,12 +8,12 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
-/** Expression that returns the BNG cell geometry as WKT (string). Argument: cellId. */
+/** Expression that returns the BNG cell geometry as WKT (string). Argument: cellid. */
 case class BNG_AsWKT(
-    cellID: Expression
+    cellid: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(cellID)
+    override def children: Seq[Expression] = Seq(cellid)
     override def dataType: DataType = StringType
     override def nullable: Boolean = true
     override def prettyName: String = BNG_AsWKT.name

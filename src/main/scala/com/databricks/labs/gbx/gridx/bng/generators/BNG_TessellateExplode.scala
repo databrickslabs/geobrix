@@ -23,7 +23,7 @@ case class BNG_TessellateExplode(
     override def position: Boolean = false
     override def inline: Boolean = false
     override def children: Seq[Expression] = Seq(geom, resolution, keepCoreGeom)
-    override def elementSchema: StructType = StructType(Seq(StructField("cellId", StringType)))
+    override def elementSchema: StructType = StructType(Seq(StructField("cellid", StringType)))
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
     /**

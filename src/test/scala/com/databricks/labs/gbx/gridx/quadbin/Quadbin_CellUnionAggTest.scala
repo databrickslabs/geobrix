@@ -31,7 +31,7 @@ class Quadbin_CellUnionAggTest extends AnyFunSuite {
         testCells.foreach { cell =>
             val row = InternalRow(cell)
             val child = Literal.create(cell, LongType)
-            val agg2 = agg.copy(inputChip = child)
+            val agg2 = agg.copy(cellid = child)
             buf = agg2.update(buf, row)
         }
 
@@ -62,14 +62,14 @@ class Quadbin_CellUnionAggTest extends AnyFunSuite {
         // Build bufA from the first half
         var bufA = agg.createAggregationBuffer()
         halfA.foreach { cell =>
-            val agg2 = agg.copy(inputChip = Literal.create(cell, LongType))
+            val agg2 = agg.copy(cellid = Literal.create(cell, LongType))
             bufA = agg2.update(bufA, InternalRow(cell))
         }
 
         // Build bufB from the second half
         var bufB = agg.createAggregationBuffer()
         halfB.foreach { cell =>
-            val agg2 = agg.copy(inputChip = Literal.create(cell, LongType))
+            val agg2 = agg.copy(cellid = Literal.create(cell, LongType))
             bufB = agg2.update(bufB, InternalRow(cell))
         }
 
@@ -99,7 +99,7 @@ class Quadbin_CellUnionAggTest extends AnyFunSuite {
 
         testCells.foreach { cell =>
             val row = InternalRow(cell)
-            val agg2 = agg.copy(inputChip = Literal.create(cell, LongType))
+            val agg2 = agg.copy(cellid = Literal.create(cell, LongType))
             buf = agg2.update(buf, row)
         }
 

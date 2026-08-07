@@ -145,20 +145,20 @@ def quadbin_cellunion(cells: ColLike) -> Column:
     return f.call_function("gbx_quadbin_cellunion", _col(cells))
 
 
-def quadbin_distance(cell_a: ColLike, cell_b: ColLike) -> Column:
+def quadbin_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Chebyshev distance (in tile-grid steps) between two cells at the same resolution.
 
     Args:
-        cell_a: First quadbin cell column.
-        cell_b: Second quadbin cell column.
+        cellid1: First quadbin cell column.
+        cellid2: Second quadbin cell column.
 
     Returns:
         Column of INT (cells must share resolution; otherwise the underlying eval throws).
     """
-    return f.call_function("gbx_quadbin_distance", _col(cell_a), _col(cell_b))
+    return f.call_function("gbx_quadbin_distance", _col(cellid1), _col(cellid2))
 
 
-def quadbin_cellunion_agg(cell: ColLike) -> Column:
+def quadbin_cellunion_agg(cellid: ColLike) -> Column:
     """Aggregate quadbin cell BIGINTs into their union geometry (use with groupBy).
 
     Streams one cell id per row and returns the unioned MultiPolygon as EWKB
@@ -166,9 +166,9 @@ def quadbin_cellunion_agg(cell: ColLike) -> Column:
     ``grid_cell_union_agg``.
 
     Args:
-        cell: BIGINT column of quadbin cell ids.
+        cellid: BIGINT column of quadbin cell ids.
 
     Returns:
         Column of BINARY (EWKB Polygon or MultiPolygon, SRID 4326).
     """
-    return f.call_function("gbx_quadbin_cellunion_agg", _col(cell))
+    return f.call_function("gbx_quadbin_cellunion_agg", _col(cellid))

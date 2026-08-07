@@ -7,13 +7,13 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
-/** Expression that returns the grid distance between two BNG cells. Arguments: cellId, cellId2. */
+/** Expression that returns the grid distance between two BNG cells. Arguments: cellid1, cellid2. */
 case class BNG_Distance(
-    cellId: Expression,
-    cellId2: Expression
+    cellid1: Expression,
+    cellid2: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(cellId, cellId2)
+    override def children: Seq[Expression] = Seq(cellid1, cellid2)
     override def dataType: DataType = LongType
     override def nullable: Boolean = true
     override def prettyName: String = BNG_Distance.name
@@ -25,15 +25,15 @@ case class BNG_Distance(
 /** Companion: SQL name gbx_bng_distance, builder, and eval. */
 object BNG_Distance extends WithExpressionInfo {
 
-    def eval(cellId: Long, cellId2: Long): Long = execute(cellId, cellId2)
-    def eval(cellId: UTF8String, cellId2: UTF8String): Long = execute(cellId.toString, cellId2.toString)
+    def eval(cellid1: Long, cellid2: Long): Long = execute(cellid1, cellid2)
+    def eval(cellid1: UTF8String, cellid2: UTF8String): Long = execute(cellid1.toString, cellid2.toString)
 
-    def execute(cellId: Long, cellId2: Long): Long = BNG.distance(cellId, cellId2)
+    def execute(cellid1: Long, cellid2: Long): Long = BNG.distance(cellid1, cellid2)
 
-    def execute(cellId: String, cellId2: String): Long = {
-        val cellIdLong = BNG.parse(cellId)
-        val cellId2Long = BNG.parse(cellId2)
-        BNG.distance(cellIdLong, cellId2Long)
+    def execute(cellid1: String, cellid2: String): Long = {
+        val cellid1Long = BNG.parse(cellid1)
+        val cellid2Long = BNG.parse(cellid2)
+        BNG.distance(cellid1Long, cellid2Long)
     }
 
     override def name: String = "gbx_bng_distance"

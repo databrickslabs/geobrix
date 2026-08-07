@@ -168,8 +168,13 @@ mechanics surprise people, so check them before wondering why your text vanished
   comma stays outside. `geom, attrs_struct, min_z, max_z, layer_name, [extent]`. Multiple
   trailing optionals: `a, b, [c], [d]`. Do **not** use `geom, target_crs [, source_crs]`
   (comma inside) — that form is being retired.
-- **Parameter names are snake_case**, matching SQL — `geom`, `cell_id`, `size_in_mb`. Not
+- **Parameter names are snake_case**, matching SQL — `geom`, `resolution`, `size_in_mb`. Not
   the Scala camelCase (`geomWkb`, `cellId`) and not the internal `*Expr` field names.
+  **Exception — `cellid`/`cellid1`/`cellid2`**: bare cell-id parameters use the single
+  lowercase token `cellid` (not `cell_id`). This matches the chip-struct internal field,
+  Databricks product naming, and Mosaic convention, and is intentional. Chip-struct
+  parameters remain `left_chip`/`right_chip`/`input_chip` (snake_case, not affected by
+  this exception).
 - An argument is optional exactly when `builder()` has a shorter `case N =>` branch that
   injects a `Literal(...)` default. **34 functions** have optional args; rendering one as
   required is a bug, not a style nit.

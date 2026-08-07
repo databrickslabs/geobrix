@@ -8,12 +8,12 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
-/** Expression that returns the centroid of the BNG cell as a WKT point. Case class holding cellID; used as the catalyst node when gbx_bng_centroid(cellId) is invoked in SQL or DataFrame API. */
+/** Expression that returns the centroid of the BNG cell as WKB. Case class holding cellid; used as the catalyst node when gbx_bng_centroid(cellid) is invoked in SQL or DataFrame API. */
 case class BNG_Centroid(
-    cellID: Expression
+    cellid: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(cellID)
+    override def children: Seq[Expression] = Seq(cellid)
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = BNG_Centroid.name

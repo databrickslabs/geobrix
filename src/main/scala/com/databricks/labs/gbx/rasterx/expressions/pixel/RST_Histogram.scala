@@ -16,10 +16,10 @@ import org.gdal.gdal.Dataset
   *
   * Returns `MAP<STRING, ARRAY<LONG>>` keyed by ``"band_<i>"`` (1-based) with a
   * length-`n_buckets` array of bucket counts per band. Pixels with values
-  * outside `[min, max]` are dropped (no out-of-range bucket).
+  * outside `[min_val, max_val]` are dropped (no out-of-range bucket).
   *
-  *   - `n_buckets` (default 256): number of equal-width buckets across `[min, max]`.
-  *   - `min` / `max` (defaults: derived from band statistics if null): explicit
+  *   - `n_buckets` (default 256): number of equal-width buckets across `[min_val, max_val]`.
+  *   - `min_val` / `max_val` (defaults: derived from band statistics if null): explicit
   *     histogram range. Passing both lets the caller align histograms across
   *     tiles for comparable distributions.
   *   - `include_nodata` (default false): currently ignored — GDAL excludes
@@ -29,13 +29,13 @@ import org.gdal.gdal.Dataset
 case class RST_Histogram(
     tile: Expression,
     nBucketsExpr: Expression,
-    minExpr: Expression,
-    maxExpr: Expression,
+    minValExpr: Expression,
+    maxValExpr: Expression,
     includeNodataExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tile, nBucketsExpr, minExpr, maxExpr, includeNodataExpr, ExpressionConfigExpr()
+        tile, nBucketsExpr, minValExpr, maxValExpr, includeNodataExpr, ExpressionConfigExpr()
     )
     // Pin n_buckets as IntegerType, min/max as DoubleType, include_nodata as BooleanType
     // so SQL literals (e.g. `null`, `5.0`, `false`) coerce cleanly.
@@ -95,7 +95,7 @@ object RST_Histogram extends WithExpressionInfo {
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
-      * `minOpt` / `maxOpt` default to the band's `[min, max]` via
+      * `minOpt` / `maxOpt` default to the band's `[min_val, max_val]` via
       * `band.GetMinimum / GetMaximum` (with a `ComputeStatistics` fallback).
       */
     def execute(
@@ -163,7 +163,7 @@ object RST_Histogram extends WithExpressionInfo {
         case 4 => RST_Histogram(c(0), c(1), c(2), c(3), Literal(false))
         case 5 => RST_Histogram(c(0), c(1), c(2), c(3), c(4))
         case n => throw new IllegalArgumentException(
-            s"gbx_rst_histogram takes 1 to 5 arguments (tile, [n_buckets, [min, [max, [include_nodata]]]]); got $n"
+            s"gbx_rst_histogram takes 1 to 5 arguments (tile, [n_buckets, [min_val, [max_val, [include_nodata]]]]); got $n"
         )
     }
 

@@ -218,7 +218,7 @@
     },
     "gbx_rst_histogram": {
       "examples": "Examples:\n      > SELECT gbx_rst_histogram(tile, 16, cast(0 as double), cast(1000 as double), false) AS hist FROM rasters;",
-      "usage_args": "tile, [n_buckets], [min], [max], [include_nodata]"
+      "usage_args": "tile, [n_buckets], [min_val], [max_val], [include_nodata]"
     },
     "gbx_rst_index": {
       "examples": "Examples:\n      > SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 2)) AS ndvi FROM rasters;",

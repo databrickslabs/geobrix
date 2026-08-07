@@ -165,7 +165,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         //                              width, height, mode, kringPad  (12 positional args)
         assertDataType8("RST_BNG_RasterizeAgg",
             RST_BNG_RasterizeAgg(
-                cellIdExpr    = Literal.create(null, StringType),
+                cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
                 outSridExpr   = Literal(27700),
                 pixelSizeExpr = Literal(1.0),
@@ -181,7 +181,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
 
         assertDataType8("RST_H3_RasterizeAgg",
             RST_H3_RasterizeAgg(
-                cellIdExpr    = Literal.create(null, StringType),
+                cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
                 outSridExpr   = Literal(4326),
                 pixelSizeExpr = Literal(1.0),
@@ -197,7 +197,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
 
         assertDataType8("RST_Quadbin_RasterizeAgg",
             RST_Quadbin_RasterizeAgg(
-                cellIdExpr    = Literal.create(null, StringType),
+                cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
                 outSridExpr   = Literal(4326),
                 pixelSizeExpr = Literal(1.0),

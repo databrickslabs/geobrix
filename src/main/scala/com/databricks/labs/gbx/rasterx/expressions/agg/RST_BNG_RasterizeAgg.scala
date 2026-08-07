@@ -110,7 +110,7 @@ object BNGRasterizeAcc {
  *  order (matches the lightweight tier).
  */
 case class RST_BNG_RasterizeAgg(
-    cellIdExpr:    Expression,
+    cellidExpr:    Expression,
     valueExpr:     Expression,
     outSridExpr:   Expression,
     pixelSizeExpr: Expression,
@@ -135,7 +135,7 @@ case class RST_BNG_RasterizeAgg(
     override def prettyName: String = RST_BNG_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        cellIdExpr, valueExpr, outSridExpr, pixelSizeExpr,
+        cellidExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
         exprConfExpr
@@ -158,7 +158,7 @@ case class RST_BNG_RasterizeAgg(
      *  [[BNG.parse]]; the accumulator stays Long-keyed so the serde is unchanged.
      */
     override def update(buffer: BNGRasterizeAcc, input: InternalRow): BNGRasterizeAcc = {
-        val raw = cellIdExpr.eval(input)
+        val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
         val cellId = raw match {
             case s: org.apache.spark.unsafe.types.UTF8String => BNG.parse(s.toString)

@@ -101,7 +101,7 @@ object H3RasterizeAcc {
  *  order (matches the lightweight tier).
  */
 case class RST_H3_RasterizeAgg(
-    cellIdExpr:    Expression,
+    cellidExpr:    Expression,
     valueExpr:     Expression,
     outSridExpr:   Expression,
     pixelSizeExpr: Expression,
@@ -126,7 +126,7 @@ case class RST_H3_RasterizeAgg(
     override def prettyName: String = RST_H3_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        cellIdExpr, valueExpr, outSridExpr, pixelSizeExpr,
+        cellidExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
         exprConfExpr
@@ -145,7 +145,7 @@ case class RST_H3_RasterizeAgg(
 
     /** Catalyst-facing update: extract cellid and value from the row, delegate to typed helper. */
     override def update(buffer: H3RasterizeAcc, input: InternalRow): H3RasterizeAcc = {
-        val raw = cellIdExpr.eval(input)
+        val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
         val cellId = raw match {
             case l: Long => l

@@ -53,7 +53,7 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
     /** Build an auto-grid RST_H3_RasterizeAgg (centroids mode, kring_pad=1, EPSG:4326). */
     private def makeAutoAgg(): RST_H3_RasterizeAgg =
         RST_H3_RasterizeAgg(
-            cellIdExpr    = Literal.create(null, LongType),
+            cellidExpr    = Literal.create(null, LongType),
             valueExpr     = Literal(0.0),
             outSridExpr   = Literal(4326),
             pixelSizeExpr = Literal.create(null, org.apache.spark.sql.types.DoubleType),

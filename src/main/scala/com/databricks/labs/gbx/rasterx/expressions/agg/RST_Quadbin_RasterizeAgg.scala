@@ -99,7 +99,7 @@ object QuadbinRasterizeAcc {
  *  order (matches the lightweight tier).
  */
 case class RST_Quadbin_RasterizeAgg(
-    cellIdExpr:    Expression,
+    cellidExpr:    Expression,
     valueExpr:     Expression,
     outSridExpr:   Expression,
     pixelSizeExpr: Expression,
@@ -124,7 +124,7 @@ case class RST_Quadbin_RasterizeAgg(
     override def prettyName: String = RST_Quadbin_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        cellIdExpr, valueExpr, outSridExpr, pixelSizeExpr,
+        cellidExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
         exprConfExpr
@@ -143,7 +143,7 @@ case class RST_Quadbin_RasterizeAgg(
 
     /** Catalyst-facing update: extract cellid and value from the row, delegate to typed helper. */
     override def update(buffer: QuadbinRasterizeAcc, input: InternalRow): QuadbinRasterizeAcc = {
-        val raw = cellIdExpr.eval(input)
+        val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
         val cellId = raw match {
             case l: Long => l

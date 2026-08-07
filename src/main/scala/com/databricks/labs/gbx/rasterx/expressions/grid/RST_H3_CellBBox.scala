@@ -28,7 +28,7 @@ import scala.collection.mutable.ArrayBuffer
  *  Matches the lightweight tier (`pyrx.functions._h3_cell_bbox_udf`).
  */
 case class RST_H3_CellBBox(
-    cellIdExpr:   Expression,
+    cellidExpr:   Expression,
     sridExpr:     Expression,
     modeExpr:     Expression,
     kringPadExpr: Expression,
@@ -36,14 +36,14 @@ case class RST_H3_CellBBox(
 ) extends Expression with CodegenFallback {
 
     override def children: Seq[Expression] =
-        Seq(cellIdExpr, sridExpr, modeExpr, kringPadExpr, outCrsExpr)
+        Seq(cellidExpr, sridExpr, modeExpr, kringPadExpr, outCrsExpr)
     override def nullable: Boolean = true
     override def foldable: Boolean = children.forall(_.foldable)
 
     override def dataType: DataType = RST_H3_CellBBox.BBoxType
 
     override def eval(input: InternalRow): Any = {
-        val raw = cellIdExpr.eval(input)
+        val raw = cellidExpr.eval(input)
         if (raw == null) return null
         val cellId = raw match {
             case l: Long => l

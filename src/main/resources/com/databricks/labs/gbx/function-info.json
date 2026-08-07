@@ -23,7 +23,7 @@
     },
     "gbx_rst_bng_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;",
-      "usage_args": "cell_id, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad"
+      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad"
     },
     "gbx_rst_bng_rastertogridavg": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_bng_rastertogridavg(tile, '1km') as bng_grid FROM rasters;",
@@ -170,7 +170,7 @@
     },
     "gbx_rst_h3_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_h3_rasterize_agg( cellid, burn_value, 4326, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(1 as int) ) AS tile FROM h3_cell_values GROUP BY region_id;",
-      "usage_args": "cell_id, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad"
+      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad"
     },
     "gbx_rst_h3_rastertogridavg": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_h3_rastertogridavg(tile, 6) as h3_grid FROM rasters;",
@@ -306,7 +306,7 @@
     },
     "gbx_rst_quadbin_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_quadbin_rasterize_agg( cellid, burn_value, 4326, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM quadbin_cell_values GROUP BY region_id;",
-      "usage_args": "cell_id, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad"
+      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad"
     },
     "gbx_rst_quadbin_rastertogridavg": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_quadbin_rastertogridavg(tile, 6) as quadbin_grid FROM rasters;",
@@ -519,7 +519,7 @@
     "_package_rasterx_h3": "--- rasterx_h3 ---",
     "gbx_h3_cell_bbox": {
       "examples": "Examples:\n      > SELECT cellid, gbx_h3_cell_bbox(cellid, 4326, 'centroids', 0) AS bbox FROM ( VALUES (617733151020810239), (617733151085035519), (617733151021334527) ) AS t(cellid);",
-      "usage_args": "cell_id, [srid], [mode], [kring_pad], [out_crs]"
+      "usage_args": "cellid, [srid], [mode], [kring_pad], [out_crs]"
     },
     "_package_gridx": "--- gridx ---",
     "gbx_bng_aswkb": {

@@ -21,13 +21,13 @@ import org.locationtech.jts.geom.Geometry
   * cutline is already in the raster CRS. */
 case class RST_Clip(
     tile: Expression,
-    geometryExpr: Expression,
+    geomExpr: Expression,
     cutlineAllTouchedExpr: Expression,
     clipCrsExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tile, geometryExpr, cutlineAllTouchedExpr, clipCrsExpr, ExpressionConfigExpr())
+        Seq(tile, geomExpr, cutlineAllTouchedExpr, clipCrsExpr, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Clip.name

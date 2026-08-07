@@ -19,11 +19,11 @@ import scala.util.Try
 /** The expression for computing NDVI index. */
 case class RST_NDVI(
     tile: Expression,
-    redIndex: Expression,
-    nirIndex: Expression
+    redIdx: Expression,
+    nirIdx: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tile, redIndex, nirIndex, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, redIdx, nirIdx, ExpressionConfigExpr())
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_NDVI.name
@@ -35,7 +35,7 @@ case class RST_NDVI(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_NDVI extends WithExpressionInfo {
 
-    def eval(row: InternalRow, redIndex: Int, nirIndex: Int, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, redIdx: Int, nirIdx: Int, conf: UTF8String): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -45,7 +45,7 @@ object RST_NDVI extends WithExpressionInfo {
               val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
               val cpyPath = s"${NodeFilePathUtil.rootPath}/ndvi_temp_$uuid.$extension"
               val (dsCpy, dsMtd) = GDALTranslate.executeTranslate(cpyPath, ds, "gdal_translate", mtd)
-              val (resultDs, resMtd) = execute(dsCpy, redIndex, nirIndex, dsMtd)
+              val (resultDs, resMtd) = execute(dsCpy, redIdx, nirIdx, dsMtd)
               if (resultDs == null) {
                   throw new Error(
                       s"""
@@ -67,8 +67,8 @@ object RST_NDVI extends WithExpressionInfo {
           BinaryType
         )
 
-    def execute(ds: Dataset, redIndex: Int, nirIndex: Int, options: Map[String, String]): (Dataset, Map[String, String]) = {
-        NDVI.compute(ds, options, redIndex, nirIndex)
+    def execute(ds: Dataset, redIdx: Int, nirIdx: Int, options: Map[String, String]): (Dataset, Map[String, String]) = {
+        NDVI.compute(ds, options, redIdx, nirIdx)
     }
 
     override def name: String = "gbx_rst_ndvi"

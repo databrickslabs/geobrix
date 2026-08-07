@@ -71,7 +71,7 @@
     },
     "gbx_rst_clip": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_clip( tile, 'POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))', true ) as clipped FROM rasters;",
-      "usage_args": "tile, geometry, cutline_all_touched, [clip_crs]"
+      "usage_args": "tile, geom, cutline_all_touched, [clip_crs]"
     },
     "gbx_rst_cog_convert": {
       "examples": "Examples:\n      > SELECT gbx_rst_cog_convert(tile, 'ZSTD', 512, 'AVERAGE') AS cog FROM rasters;",
@@ -83,7 +83,7 @@
     },
     "gbx_rst_combineavg": {
       "examples": "Examples:\n      > SELECT date_trunc('week', date) as week, gbx_rst_fromfile(path, 'GTiff') as tile FROM daily_rasters WHERE date >= '2024-01-01' ) SELECT week, gbx_rst_combineavg(collect_list(tile)) as weekly_composite FROM loaded_tiles GROUP BY week;",
-      "usage_args": "tile"
+      "usage_args": "tiles"
     },
     "gbx_rst_combineavg_agg": {
       "examples": "Examples:\n      > SELECT region, gbx_rst_combineavg_agg(tile) as regional_average FROM rasters GROUP BY region;",
@@ -238,7 +238,7 @@
     },
     "gbx_rst_mapalgebra": {
       "examples": "Examples:\n      > SELECT gbx_rst_mapalgebra( tiles, '{\"calc\": \"A-B\", \"A_index\": 0, \"B_index\": 1}' ) as difference FROM raster_arrays;",
-      "usage_args": "tile, json_spec"
+      "usage_args": "tiles, json_spec"
     },
     "gbx_rst_max": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_max(tile) as max_per_band, gbx_rst_max(tile)[0] as band1_max FROM rasters;",
@@ -254,7 +254,7 @@
     },
     "gbx_rst_merge": {
       "examples": "Examples:\n      > SELECT id, gbx_rst_fromfile(path, 'GTiff') as tile FROM raster_paths ) SELECT gbx_rst_merge(collect_list(tile)) as merged_mosaic FROM loaded_tiles;",
-      "usage_args": "tile"
+      "usage_args": "tiles"
     },
     "gbx_rst_merge_agg": {
       "examples": "Examples:\n      > SELECT scene_id, gbx_rst_merge_agg(tile) as merged_scene FROM satellite_tiles GROUP BY scene_id;",
@@ -274,7 +274,7 @@
     },
     "gbx_rst_ndvi": {
       "examples": "Examples:\n      > SELECT path, date, gbx_rst_ndvi(tile, 4, 8) as ndvi_tile, gbx_rst_avg(gbx_rst_ndvi(tile, 4, 8))[0] as mean_ndvi FROM sentinel2_images;",
-      "usage_args": "tile, red_index, nir_index"
+      "usage_args": "tile, red_idx, nir_idx"
     },
     "gbx_rst_ndwi": {
       "examples": "Examples:\n      > SELECT gbx_rst_ndwi(tile, 1, 2) AS ndwi FROM rasters;",

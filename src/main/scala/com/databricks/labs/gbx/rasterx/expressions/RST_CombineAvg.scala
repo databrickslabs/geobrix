@@ -12,19 +12,19 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Expression for combining rasters using average of pixels. Case class holding tile (array of tiles); used as the catalyst node when gbx_rst_combineavg(tiles) is invoked in SQL or DataFrame API. */
+/** Expression for combining rasters using average of pixels. Case class holding tiles (array of tiles); used as the catalyst node when gbx_rst_combineavg(tiles) is invoked in SQL or DataFrame API. */
 case class RST_CombineAvg(
-    tile: Expression
+    tiles: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile array element struct. */
+    /** Raster DataType from the tiles array element struct. */
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
-        RST_CombineAvg.name, tile, aggHint = Some("gbx_rst_combineavg_agg")
+        RST_CombineAvg.name, tiles, aggHint = Some("gbx_rst_combineavg_agg")
     )
     /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
     private lazy val elementFieldCountLit: Expression =
-        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tile), IntegerType)
-    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr(), elementFieldCountLit)
+        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tiles), IntegerType)
+    override def children: Seq[Expression] = Seq(tiles, ExpressionConfigExpr(), elementFieldCountLit)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_CombineAvg.name

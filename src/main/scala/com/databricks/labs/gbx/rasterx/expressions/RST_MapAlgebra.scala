@@ -19,17 +19,17 @@ import scala.util.Try
 
 /** The expression for map algebra. */
 case class RST_MapAlgebra(
-    tile: Expression,
+    tiles: Expression,
     jsonSpecExpr: Expression
 ) extends InvokedExpression {
 
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
-        RST_MapAlgebra.name, tile, aggHint = None
+        RST_MapAlgebra.name, tiles, aggHint = None
     )
     /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
     private lazy val elementFieldCountLit: Expression =
-        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tile), IntegerType)
-    override def children: Seq[Expression] = Seq(tile, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit)
+        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tiles), IntegerType)
+    override def children: Seq[Expression] = Seq(tiles, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_MapAlgebra.name

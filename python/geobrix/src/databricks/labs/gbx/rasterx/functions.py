@@ -429,19 +429,19 @@ def rst_combineavg_agg(tile: ColLike) -> Column:
     return f.call_function("gbx_rst_combineavg_agg", _col(tile))
 
 
-def rst_derivedband_agg(tile: ColLike, pyfunc: ColLike, func_name: ColLike) -> Column:
+def rst_derivedband_agg(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
     """Aggregate tiles and apply a Python UDF per band (use with groupBy).
 
     Args:
         tile: Raster tile column.
-        pyfunc: Python source code of the UDF (string).
-        func_name: Name of the callable in pyfunc.
+        python_func: Python source code of the UDF (string).
+        func_name: Name of the callable in python_func.
 
     Returns:
         Column of derived raster tile.
     """
     return f.call_function(
-        "gbx_rst_derivedband_agg", _col(tile), _col(pyfunc), _col(func_name)
+        "gbx_rst_derivedband_agg", _col(tile), _col(python_func), _col(func_name)
     )
 
 
@@ -1320,19 +1320,28 @@ def rst_asformat(tile: ColLike, new_format: ColLike) -> Column:
     return f.call_function("gbx_rst_asformat", _col(tile), _col(new_format))
 
 
-def rst_clip(tile: ColLike, clip: ColLike, cutline_all_touched: ColLike) -> Column:
+def rst_clip(
+    tile: ColLike, geom: ColLike, cutline_all_touched: ColLike, clip_crs: ColLike = None
+) -> Column:
     """Clip the raster to a geometry (or mask).
 
     Args:
         tile: Raster tile column.
-        clip: Clipping geometry column (WKT/WKB) or raster mask.
+        geom: Clipping geometry column (WKT/WKB/EWKT/EWKB).
         cutline_all_touched: If True, include pixels touched by the boundary.
+        clip_crs: Optional source CRS of a plain WKB/WKT cutline (int SRID or
+            CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
+            assumed already in the raster CRS.
 
     Returns:
         Column of clipped raster tile.
     """
+    if clip_crs is None:
+        return f.call_function(
+            "gbx_rst_clip", _col(tile), _col(geom), _col(cutline_all_touched)
+        )
     return f.call_function(
-        "gbx_rst_clip", _col(tile), _col(clip), _col(cutline_all_touched)
+        "gbx_rst_clip", _col(tile), _col(geom), _col(cutline_all_touched), _col(clip_crs)
     )
 
 
@@ -1361,19 +1370,19 @@ def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
     return f.call_function("gbx_rst_convolve", _col(tile), _col(kernel))
 
 
-def rst_derivedband(tile_expr: ColLike, pyfunc: ColLike, func_name: ColLike) -> Column:
+def rst_derivedband(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
     """Apply a Python UDF to each pixel (or band) to produce a derived band.
 
     Args:
-        tile_expr: Raster tile column (or expression).
-        pyfunc: Python source code of the UDF (string).
-        func_name: Name of the callable in pyfunc.
+        tile: Raster tile column.
+        python_func: Python source code of the UDF (string).
+        func_name: Name of the callable in python_func.
 
     Returns:
         Column of raster tile with derived band(s).
     """
     return f.call_function(
-        "gbx_rst_derivedband", _col(tile_expr), _col(pyfunc), _col(func_name)
+        "gbx_rst_derivedband", _col(tile), _col(python_func), _col(func_name)
     )
 
 
@@ -1417,17 +1426,17 @@ def rst_isempty(tile: ColLike) -> Column:
     return f.call_function("gbx_rst_isempty", _col(tile))
 
 
-def rst_mapalgebra(tiles: ColLike, expression: ColLike) -> Column:
+def rst_mapalgebra(tiles: ColLike, json_spec: ColLike) -> Column:
     """Apply a map algebra expression to one or more tiles.
 
     Args:
         tiles: Column of array of raster tiles (or single tile).
-        expression: Expression string (e.g. A + B, A * 2).
+        json_spec: Expression string (e.g. A + B, A * 2).
 
     Returns:
         Column of result raster tile.
     """
-    return f.call_function("gbx_rst_mapalgebra", _col(tiles), _col(expression))
+    return f.call_function("gbx_rst_mapalgebra", _col(tiles), _col(json_spec))
 
 
 def rst_merge(tiles: ColLike) -> Column:
@@ -1442,18 +1451,18 @@ def rst_merge(tiles: ColLike) -> Column:
     return f.call_function("gbx_rst_merge", _col(tiles))
 
 
-def rst_ndvi(tile: ColLike, red_band: ColLike, nir_band: ColLike) -> Column:
+def rst_ndvi(tile: ColLike, red_idx: ColLike, nir_idx: ColLike) -> Column:
     """Compute NDVI from red and NIR band indices.
 
     Args:
         tile: Raster tile column.
-        red_band: 1-based red band index.
-        nir_band: 1-based NIR band index.
+        red_idx: 1-based red band index.
+        nir_idx: 1-based NIR band index.
 
     Returns:
         Column of raster tile (single-band NDVI).
     """
-    return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_band), _col(nir_band))
+    return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_idx), _col(nir_idx))
 
 
 def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
@@ -2507,7 +2516,7 @@ def rst_fillnodata(
     return f.call_function("gbx_rst_fillnodata", _col(tile), msd_col, si_col)
 
 
-def rst_sample(tile: ColLike, geom: ColLike) -> Column:
+def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
     """Sample raster pixel values at a POINT geometry — returns one Double per band.
 
     The point coordinates must be in the raster's CRS. Out-of-extent points
@@ -2516,11 +2525,16 @@ def rst_sample(tile: ColLike, geom: ColLike) -> Column:
     Args:
         tile: Raster tile column.
         geom: POINT geometry — WKB ``bytes`` or WKT ``string`` column.
+        crs: Optional source CRS of a plain WKB/WKT point (int SRID or CRS
+            string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
+            assumed already in the raster CRS.
 
     Returns:
         Column of ``ARRAY<DOUBLE>`` (one value per band) or ``null`` outside extent.
     """
-    return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
+    if crs is None:
+        return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
+    return f.call_function("gbx_rst_sample", _col(tile), _col(geom), _col(crs))
 
 
 def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
@@ -2767,6 +2781,7 @@ def rst_viewshed(
     observer_height: ColLike,
     target_height: ColLike = None,
     max_distance: ColLike = None,
+    crs: ColLike = None,
 ) -> Column:
     """Compute a binary viewshed raster from a DEM and an observer POINT.
 
@@ -2784,12 +2799,24 @@ def rst_viewshed(
             Default ``1.6`` (~average eye height).
         max_distance: Optional clipping distance in CRS units; ``None`` =
             unlimited (only bounded by raster extent).
+        crs: Optional source CRS of a plain WKB/WKT observer point (int SRID
+            or CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID
+            -> assumed already in the raster CRS.
 
     Returns:
         Byte raster tile column (0 / 255).
     """
     th_col = f.lit(1.6) if target_height is None else _col(target_height)
     md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
+    if crs is None:
+        return f.call_function(
+            "gbx_rst_viewshed",
+            _col(tile),
+            _col(observer_geom),
+            _col(observer_height),
+            th_col,
+            md_col,
+        )
     return f.call_function(
         "gbx_rst_viewshed",
         _col(tile),
@@ -2797,4 +2824,5 @@ def rst_viewshed(
         _col(observer_height),
         th_col,
         md_col,
+        _col(crs),
     )

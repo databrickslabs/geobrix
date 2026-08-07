@@ -13,10 +13,10 @@ gbx_bng_tessellate
 gbx_bng_tessellateexplode
 # gbx_custom_grid  # Task 3 DONE: light x_min.../root_x -> bound_x_min.../root_cell_size_x
 # gbx_rst_bng_rasterize_agg  # R6 DONE: out_srid renamed
-gbx_rst_clip
-gbx_rst_combineavg
-gbx_rst_derivedband
-gbx_rst_derivedband_agg
+# gbx_rst_clip  # Task 4 DONE: geometry -> geom, D3 clip_crs exposed
+# gbx_rst_combineavg  # Task 4 DONE: Scala field tile -> tiles
+# gbx_rst_derivedband  # Task 4 DONE: tile_expr/pyfunc -> tile/python_func
+# gbx_rst_derivedband_agg  # Task 4 DONE: pyfunc -> python_func
 # gbx_rst_dtmfromgeoms  # N9 DONE: points/breaklines renamed to *_array
 # gbx_rst_dtmfromgeoms_agg  # R6 DONE: out_srid renamed
 # gbx_rst_getsubdataset  # Task 2 DONE: light name -> subset_name
@@ -24,9 +24,9 @@ gbx_rst_derivedband_agg
 # gbx_rst_gridfrompoints_agg  # R6 DONE: out_srid renamed
 # gbx_rst_h3_rasterize_agg  # R6 DONE: out_srid renamed
 gbx_rst_histogram
-gbx_rst_mapalgebra
-gbx_rst_merge
-gbx_rst_ndvi
+# gbx_rst_mapalgebra  # Task 4 DONE: Scala field tile -> tiles, expression -> json_spec
+# gbx_rst_merge  # Task 4 DONE: Scala field tile -> tiles
+# gbx_rst_ndvi  # Task 4 DONE: red_index/nir_index -> red_idx/nir_idx
 # gbx_rst_proximity  # Task 2 DONE: distunits -> dist_units
 # gbx_rst_quadbin_rasterize_agg  # R6 DONE: out_srid renamed
 # gbx_rst_rasterize  # N1 DONE: geom_wkb renamed to geom
@@ -34,9 +34,9 @@ gbx_rst_ndvi
 # gbx_rst_rastertoworldcoord  # Task 2 DONE: pixel_x/pixel_y -> x/y
 # gbx_rst_rastertoworldcoordx  # Task 2 DONE: pixel_x/pixel_y -> x/y
 # gbx_rst_rastertoworldcoordy  # Task 2 DONE: pixel_x/pixel_y -> x/y
-gbx_rst_sample
+# gbx_rst_sample  # Task 4 DONE: D3 crs exposed
 # gbx_rst_transform  # Task 2 DONE: target_srid -> srid
-gbx_rst_viewshed
+# gbx_rst_viewshed  # Task 4 DONE: D3 crs exposed
 # gbx_rst_worldtorastercoord  # Task 2 DONE: world_x/world_y -> x/y
 # gbx_rst_worldtorastercoordx  # Task 2 DONE: world_x/world_y -> x/y
 # gbx_rst_worldtorastercoordy  # Task 2 DONE: world_x/world_y -> x/y

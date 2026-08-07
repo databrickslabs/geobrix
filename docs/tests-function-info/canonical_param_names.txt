@@ -95,16 +95,16 @@ gbx_rst_bng_tessellate	tile, resolution, [mode]
 gbx_rst_quadbin_rasterize_agg	cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad
 gbx_rst_quadbin_tessellate	tile, resolution, [mode]
 gbx_rst_asformat	tile, new_format
-gbx_rst_clip	tile, geometry, cutline_all_touched, [clip_crs]
-gbx_rst_combineavg	tile
+gbx_rst_clip	tile, geom, cutline_all_touched, [clip_crs]
+gbx_rst_combineavg	tiles
 gbx_rst_convolve	tile, kernel
 gbx_rst_derivedband	tile, python_func, func_name
 gbx_rst_filter	tile, kernel_size, operation
 gbx_rst_initnodata	tile
 gbx_rst_isempty	tile
-gbx_rst_mapalgebra	tile, json_spec
-gbx_rst_merge	tile
-gbx_rst_ndvi	tile, red_index, nir_index
+gbx_rst_mapalgebra	tiles, json_spec
+gbx_rst_merge	tiles
+gbx_rst_ndvi	tile, red_idx, nir_idx
 gbx_rst_rastertoworldcoord	tile, x, y
 gbx_rst_rastertoworldcoordx	tile, x, y
 gbx_rst_rastertoworldcoordy	tile, x, y

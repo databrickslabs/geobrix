@@ -1275,7 +1275,7 @@ def _init_nodata_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
 
 def rst_clip(
     tile: ColLike,
-    clip: ColLike,
+    geom: ColLike,
     cutline_all_touched: ColLike,
     clip_crs: ColLike = None,
     virtualize_dir: Optional[str] = None,
@@ -1299,7 +1299,7 @@ def rst_clip(
         _validate_force_output(virtualize_dir, materialize)
         return _clip_v2_udf(
             _col(tile),
-            _col(clip),
+            _col(geom),
             _col(cutline_all_touched),
             crs_col,
             f.lit(virtualize_dir),
@@ -1307,8 +1307,8 @@ def rst_clip(
             f.lit(materialize),
         )
     if clip_crs is None:
-        return _clip_udf(_col(tile), _col(clip), _col(cutline_all_touched))
-    return _clip_udf(_col(tile), _col(clip), _col(cutline_all_touched), crs_col)
+        return _clip_udf(_col(tile), _col(geom), _col(cutline_all_touched))
+    return _clip_udf(_col(tile), _col(geom), _col(cutline_all_touched), crs_col)
 
 
 def rst_updatetype(
@@ -2495,7 +2495,7 @@ def _mapalgebra_v2_udf(
 
 def rst_mapalgebra(
     tiles: ColLike,
-    expression: ColLike,
+    json_spec: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
@@ -2507,8 +2507,8 @@ def rst_mapalgebra(
     Output is a single-band Float32 tile on the first input's georeference.
 
     Args:
-        tiles:      Column of ARRAY<tile struct> (e.g. ``f.array("ta", "tb")``).
-        expression: Math expression string, e.g. ``"(A - B) / (A + B)"``.
+        tiles:     Column of ARRAY<tile struct> (e.g. ``f.array("ta", "tb")``).
+        json_spec: Math expression string, e.g. ``"(A - B) / (A + B)"``.
         virtualize_dir:    Force-output (light-tier, Python API only): write the
             result to a durable path and return a light virtual tile.
         virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
@@ -2518,7 +2518,7 @@ def rst_mapalgebra(
     Returns:
         Single-band Float32 tile struct.
     """
-    expr_col = f.lit(expression) if isinstance(expression, str) else _col(expression)
+    expr_col = f.lit(json_spec) if isinstance(json_spec, str) else _col(json_spec)
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
         return _mapalgebra_v2_udf(
@@ -2778,8 +2778,8 @@ def _index_family_wrapper(
 
 def rst_ndvi(
     tile: ColLike,
-    red_band: ColLike,
-    nir_band: ColLike,
+    red_idx: ColLike,
+    nir_idx: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
@@ -2792,7 +2792,7 @@ def rst_ndvi(
         _ndvi_udf,
         _ndvi_v2_udf,
         tile,
-        (_col(red_band), _col(nir_band)),
+        (_col(red_idx), _col(nir_idx)),
         virtualize_dir,
         virtualize_prefix,
         materialize,
@@ -4406,8 +4406,8 @@ def _derivedband_v2_udf(
 
 
 def rst_derivedband(
-    tile_expr: ColLike,
-    pyfunc: ColLike,
+    tile: ColLike,
+    python_func: ColLike,
     func_name: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
@@ -4415,7 +4415,7 @@ def rst_derivedband(
 ) -> Column:
     """Apply a user-provided Python function to the raster's bands.
 
-    pyfunc follows GDAL's VRT pixel-function signature::
+    python_func follows GDAL's VRT pixel-function signature::
 
         func(in_ar, out_ar, xoff, yoff, xsize, ysize,
              raster_xsize, raster_ysize, buf_radius, gt, **kwargs)
@@ -4423,15 +4423,15 @@ def rst_derivedband(
     where ``in_ar`` is a list of 2-D NumPy arrays (one per input band) and
     ``out_ar`` is a preallocated 2-D output array the function fills in-place
     (``out_ar[:] = ...``). This matches GDAL's Python pixel-function contract,
-    so a pyfunc authored for the heavyweight ``rst_derivedband`` works here.
+    so a python_func authored for the heavyweight ``rst_derivedband`` works here.
 
-    SECURITY: pyfunc is executed in-process without sandboxing — pass only
+    SECURITY: python_func is executed in-process without sandboxing — pass only
     trusted (your own) code, the same trust model as any Spark UDF.
 
     Args:
-        tile_expr: Tile struct column.
-        pyfunc:    Python source code (string) defining the function.
-        func_name: Name of the callable within ``pyfunc``.
+        tile:        Tile struct column.
+        python_func: Python source code (string) defining the function.
+        func_name:   Name of the callable within ``python_func``.
         virtualize_dir:    Force-output (light-tier, Python API only): write the
             result to a durable path and return a light virtual tile.
         virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
@@ -4441,17 +4441,17 @@ def rst_derivedband(
     Returns:
         Single-band Float64 tile struct.
     """
-    pf = f.lit(pyfunc) if isinstance(pyfunc, str) else _col(pyfunc)
+    pf = f.lit(python_func) if isinstance(python_func, str) else _col(python_func)
     fn = f.lit(func_name) if isinstance(func_name, str) else _col(func_name)
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
         return _derivedband_v2_udf(
-            _col(tile_expr),
+            _col(tile),
             pf,
             fn,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _derivedband_udf(_col(tile_expr), pf, fn)
+    return _derivedband_udf(_col(tile), pf, fn)
 
 
 # --- Tier 1h: web-mercator XYZ tiling UDFs ---------------------------------

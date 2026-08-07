@@ -14,17 +14,17 @@ import org.gdal.gdal.Dataset
 
 /** Returns a raster that is a result of merging an array of rasters. */
 case class RST_Merge(
-    tile: Expression
+    tiles: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile array element struct. */
+    /** Raster DataType from the tiles array element struct. */
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
-        RST_Merge.name, tile, aggHint = Some("gbx_rst_merge_agg")
+        RST_Merge.name, tiles, aggHint = Some("gbx_rst_merge_agg")
     )
     /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
     private lazy val elementFieldCountLit: Expression =
-        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tile), IntegerType)
-    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr(), elementFieldCountLit)
+        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tiles), IntegerType)
+    override def children: Seq[Expression] = Seq(tiles, ExpressionConfigExpr(), elementFieldCountLit)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Merge.name

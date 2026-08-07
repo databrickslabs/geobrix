@@ -14,10 +14,10 @@ import org.gdal.gdal.Dataset
 
 /** Expression that evaluates to the raster geotransform as a map (upperLeftX/Y, scaleX/Y, skewX/Y). */
 case class RST_GeoReference(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = MapType(StringType, DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_GeoReference.name

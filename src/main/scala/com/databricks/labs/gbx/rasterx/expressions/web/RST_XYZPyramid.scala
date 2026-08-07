@@ -35,7 +35,7 @@ import scala.collection.mutable.ArrayBuffer
  *    `maxZ` and at upstream resampling (`rst_to_webmercator`) for the typical fix.
  */
 case class RST_XYZPyramid(
-    tileExpr: Expression,
+    tile: Expression,
     minZExpr: Expression,
     maxZExpr: Expression,
     formatExpr: Expression,
@@ -47,7 +47,7 @@ case class RST_XYZPyramid(
       with Serializable
       with CodegenFallback {
 
-    private def rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
+    private def rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     /** Element schema is a single column "tile" wrapping the (z, x, y, bytes) struct --
      *  mirrors `RST_MakeTiles` so callers `select(rst_xyzpyramid(...).alias("t"))` and
      *  unpack via `t.tile.z`, `t.tile.bytes`, etc. */
@@ -56,7 +56,7 @@ case class RST_XYZPyramid(
     override def inline: Boolean = false
     override def elementSchema: StructType = RST_XYZPyramid.elementSchemaStatic
     override def children: Seq[Expression] =
-        Seq(tileExpr, minZExpr, maxZExpr, formatExpr, sizeExpr, resamplingExpr, rescaleExpr, exprConfExpr)
+        Seq(tile, minZExpr, maxZExpr, formatExpr, sizeExpr, resamplingExpr, rescaleExpr, exprConfExpr)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7))
 
@@ -67,7 +67,7 @@ case class RST_XYZPyramid(
         val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
         RST_ExpressionUtil.init(exprConf)
 
-        val rawTile = tileExpr.eval(input).asInstanceOf[InternalRow]
+        val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         if (rawTile == null) return Iterator.empty
 
         val minZ = readInt(minZExpr.eval(input), "min_z")

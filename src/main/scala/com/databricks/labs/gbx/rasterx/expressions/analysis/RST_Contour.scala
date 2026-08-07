@@ -38,7 +38,7 @@ import scala.collection.mutable.ArrayBuffer
   * contour LineString. Geometry is WKB in the raster's CRS.
   */
 case class RST_Contour(
-    tileExpr: Expression,
+    tile: Expression,
     levelsExpr: Expression,
     intervalExpr: Expression,
     baseExpr: Expression,
@@ -46,10 +46,10 @@ case class RST_Contour(
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tileExpr, levelsExpr, intervalExpr, baseExpr, attrFieldExpr, ExpressionConfigExpr())
+        Seq(tile, levelsExpr, intervalExpr, baseExpr, attrFieldExpr, ExpressionConfigExpr())
     // Pin types — levels is ARRAY<DOUBLE>, interval/base Double, attr_field String.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, ArrayType(DoubleType), DoubleType, DoubleType, StringType, StringType
+        tile.dataType, ArrayType(DoubleType), DoubleType, DoubleType, StringType, StringType
     )
     override def dataType: DataType = ArrayType(
         StructType(Seq(

@@ -13,12 +13,12 @@ import org.gdal.gdal.Dataset
 
 /** Expression that re-encodes the raster to a new GDAL format (e.g. COG, Zarr). Arguments: tile, newFormat. */
 case class RST_AsFormat(
-    tileExpr: Expression,
+    tile: Expression,
     newFormat: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, newFormat, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, newFormat, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_AsFormat.name
     override def replacement: Expression = invoke(RST_AsFormat)

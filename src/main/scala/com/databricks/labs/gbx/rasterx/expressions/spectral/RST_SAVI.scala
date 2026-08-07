@@ -22,19 +22,19 @@ import org.gdal.gdal.Dataset
   * Output is a single-band Float32 GTiff matching the input raster's extent.
   */
 case class RST_SAVI(
-    tileExpr: Expression,
+    tile: Expression,
     redIdxExpr: Expression,
     nirIdxExpr: Expression,
     lExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, redIdxExpr, nirIdxExpr, lExpr, ExpressionConfigExpr()
+        tile, redIdxExpr, nirIdxExpr, lExpr, ExpressionConfigExpr()
     )
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, IntegerType, DoubleType, StringType
+        tile.dataType, IntegerType, IntegerType, DoubleType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_SAVI.name
     override def replacement: Expression = invoke(RST_SAVI)

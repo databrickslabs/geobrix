@@ -13,10 +13,10 @@ import scala.util.Try
 
 /** Expression that returns the tile unchanged if it opens successfully, or an error tile row on failure. */
 case class RST_TryOpen(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def nullable: Boolean = true
     override def prettyName: String = RST_TryOpen.name
     override def replacement: Expression = invoke(RST_TryOpen)

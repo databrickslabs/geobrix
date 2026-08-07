@@ -25,7 +25,7 @@ import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
   * bands wired to A/B/C and delegates to ``RST_MapAlgebra.execute``.
   */
 case class RST_EVI(
-    tileExpr: Expression,
+    tile: Expression,
     redIdxExpr: Expression,
     nirIdxExpr: Expression,
     blueIdxExpr: Expression,
@@ -36,15 +36,15 @@ case class RST_EVI(
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, redIdxExpr, nirIdxExpr, blueIdxExpr, lExpr, c1Expr, c2Expr, gExpr, ExpressionConfigExpr()
+        tile, redIdxExpr, nirIdxExpr, blueIdxExpr, lExpr, c1Expr, c2Expr, gExpr, ExpressionConfigExpr()
     )
     // Pin types so SQL decimal literals (e.g. ``1.0``) coerce to Double cleanly
     // and band-index literals coerce to Int.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, IntegerType, IntegerType,
+        tile.dataType, IntegerType, IntegerType, IntegerType,
         DoubleType, DoubleType, DoubleType, DoubleType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_EVI.name
     override def replacement: Expression = invoke(RST_EVI)

@@ -14,8 +14,8 @@ import org.gdal.gdal.Dataset
 import scala.collection.mutable.ArrayBuffer
 
 /** Returns the average raster value within each BNG grid cell. */
-case class RST_BNG_RasterToGridAvg(tileExpr: Expression, resolution: Expression) extends InvokedExpression {
-    override def children: Seq[Expression] = Seq(tileExpr, resolution, ExpressionConfigExpr())
+case class RST_BNG_RasterToGridAvg(tile: Expression, resolution: Expression) extends InvokedExpression {
+    override def children: Seq[Expression] = Seq(tile, resolution, ExpressionConfigExpr())
     override def dataType: DataType =
         ArrayType(ArrayType(StructType(Seq(StructField("cellID", StringType), StructField("measure", DoubleType)))))
     override def nullable: Boolean = true

@@ -10,12 +10,12 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Returns the pixel height of the raster. Case class holding tileExpr; used as the catalyst node when gbx_rst_pixelheight(tile) is invoked in SQL or DataFrame API. */
+/** Returns the pixel height of the raster. Case class holding tile; used as the catalyst node when gbx_rst_pixelheight(tile) is invoked in SQL or DataFrame API. */
 case class RST_PixelHeight(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_PixelHeight.name

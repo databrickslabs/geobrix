@@ -11,10 +11,10 @@ import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
 case class RST_Format(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = StringType
     override def nullable: Boolean = true
     override def prettyName: String = RST_Format.name

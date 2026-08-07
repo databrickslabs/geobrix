@@ -13,10 +13,10 @@ import org.gdal.gdal.Dataset
 
 /** Returns true if the raster is empty. */
 case class RST_IsEmpty(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = BooleanType
     override def nullable: Boolean = true
     override def prettyName: String = RST_IsEmpty.name

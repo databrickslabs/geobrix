@@ -14,10 +14,10 @@ import org.gdal.gdal.Dataset
 /** Expression that evaluates to the average pixel value per band (array of doubles);
  *  an all-nodata band (zero valid pixels) yields a NULL element. */
 case class RST_Avg(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Avg.name

@@ -20,14 +20,14 @@ import java.util.{Vector => JVector}
   * CRS, GeoTransform, and pixel values; only the band count is reduced to 1.
   */
 case class RST_Band(
-    tileExpr: Expression,
+    tile: Expression,
     bandIndexExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, bandIndexExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, bandIndexExpr, ExpressionConfigExpr())
     // Pin band_index as IntegerType so SQL integer literals coerce cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, IntegerType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, IntegerType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Band.name
     override def replacement: Expression = invoke(RST_Band)

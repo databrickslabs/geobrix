@@ -20,18 +20,18 @@ import org.gdal.gdal.Dataset
   * land. Output is a single-band Float32 GTiff matching the input extent.
   */
 case class RST_NDWI(
-    tileExpr: Expression,
+    tile: Expression,
     greenIdxExpr: Expression,
     nirIdxExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, greenIdxExpr, nirIdxExpr, ExpressionConfigExpr()
+        tile, greenIdxExpr, nirIdxExpr, ExpressionConfigExpr()
     )
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, IntegerType, StringType
+        tile.dataType, IntegerType, IntegerType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_NDWI.name
     override def replacement: Expression = invoke(RST_NDWI)

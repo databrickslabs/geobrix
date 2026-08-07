@@ -19,17 +19,17 @@ import scala.util.Try
 
 /** The expression for map algebra. */
 case class RST_MapAlgebra(
-    tileExpr: Expression,
+    tile: Expression,
     jsonSpecExpr: Expression
 ) extends InvokedExpression {
 
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
-        RST_MapAlgebra.name, tileExpr, aggHint = None
+        RST_MapAlgebra.name, tile, aggHint = None
     )
     /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
     private lazy val elementFieldCountLit: Expression =
-        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tileExpr), IntegerType)
-    override def children: Seq[Expression] = Seq(tileExpr, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit)
+        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tile), IntegerType)
+    override def children: Seq[Expression] = Seq(tile, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_MapAlgebra.name
@@ -42,11 +42,11 @@ case class RST_MapAlgebra(
 object RST_MapAlgebra extends WithExpressionInfo {
 
 
-    // Called by Spark reflection when children = [tileExpr, jsonSpecExpr, ExpressionConfigExpr()]  (v1 legacy path).
+    // Called by Spark reflection when children = [tile, jsonSpecExpr, ExpressionConfigExpr()]  (v1 legacy path).
     def eval(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
         eval(array, spec, conf, 3)
 
-    // Called by Spark reflection when children = [tileExpr, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit].
+    // Called by Spark reflection when children = [tile, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit].
     // elementFieldCount is derived from the declared input array element struct (3=v1, 8=v2).
     def eval(array: ArrayData, spec: UTF8String, conf: UTF8String, elementFieldCount: Int): InternalRow =
         RST_ErrorHandler.safeEval(

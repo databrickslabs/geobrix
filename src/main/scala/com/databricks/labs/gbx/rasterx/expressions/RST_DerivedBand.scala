@@ -13,13 +13,13 @@ import org.gdal.gdal.Dataset
 
 /** Expression that computes a new band by applying a Python UDF to existing band values (tile, pythonCode, funcName). */
 case class RST_DerivedBand(
-    tileExpr: Expression,
+    tile: Expression,
     pythonFuncExpr: Expression,
     funcNameExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, pythonFuncExpr, funcNameExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, pythonFuncExpr, funcNameExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_DerivedBand.name
     override def replacement: Expression = invoke(RST_DerivedBand)

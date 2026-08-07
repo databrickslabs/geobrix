@@ -21,7 +21,7 @@ import scala.collection.mutable.ArrayBuffer
   */
 //noinspection DuplicatedCode
 case class RST_DerivedBandAgg(
-    tileExpr: Expression,
+    tile: Expression,
     pythonFuncExpr: Expression,
     funcNameExpr: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr(),
@@ -32,14 +32,14 @@ case class RST_DerivedBandAgg(
 
     override lazy val deterministic: Boolean = true
     override val nullable: Boolean = false
-    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
+    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def prettyName: String = RST_DerivedBandAgg.name
 
     private lazy val projection = UnsafeProjection.create(Array[DataType](ArrayType(elementType = dataType, containsNull = false)))
     private lazy val row = new UnsafeRow(1)
 
-    override def first: Expression = tileExpr
+    override def first: Expression = tile
     override def second: Expression = pythonFuncExpr
     override def third: Expression = funcNameExpr
 
@@ -106,7 +106,7 @@ case class RST_DerivedBandAgg(
     }
 
     override protected def withNewChildrenInternal(newFirst: Expression, newSecond: Expression, newThird: Expression): RST_DerivedBandAgg =
-        copy(tileExpr = newFirst, pythonFuncExpr = newSecond, funcNameExpr = newThird)
+        copy(tile = newFirst, pythonFuncExpr = newSecond, funcNameExpr = newThird)
 
 }
 

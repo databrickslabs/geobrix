@@ -13,11 +13,11 @@ import org.gdal.gdal.Dataset
 
 /** The expression that initializes no data values of a raster. */
 case class RST_InitNoData(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_InitNoData.name
     override def replacement: Expression = invoke(RST_InitNoData)

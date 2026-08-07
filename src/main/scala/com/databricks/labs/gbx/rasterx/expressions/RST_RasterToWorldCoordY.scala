@@ -12,12 +12,12 @@ import org.gdal.gdal.Dataset
 
 /** Returns the world coordinates of the raster (x,y) pixel. */
 case class RST_RasterToWorldCoordY(
-    tileExpr: Expression,
+    tile: Expression,
     x: Expression,
     y: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, x, y, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, x, y, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_RasterToWorldCoordY.name

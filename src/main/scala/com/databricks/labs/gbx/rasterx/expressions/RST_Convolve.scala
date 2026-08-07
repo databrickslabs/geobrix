@@ -15,15 +15,15 @@ import org.gdal.gdal.Dataset
 
 /** The expression for applying kernel filter on a raster. */
 case class RST_Convolve(
-    tileExpr: Expression,
+    tile: Expression,
     kernelExpr: Expression
 ) extends InvokedExpression {
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
     /** Element type of the 2D kernel array. */
     private def kernelType = kernelExpr.dataType.asInstanceOf[ArrayType].elementType.asInstanceOf[ArrayType].elementType
-    override def children: Seq[Expression] = Seq(tileExpr, kernelExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, kernelExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Convolve.name
     override def replacement: Expression =

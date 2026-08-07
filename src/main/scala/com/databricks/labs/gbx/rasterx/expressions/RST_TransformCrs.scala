@@ -21,14 +21,14 @@ import org.gdal.gdal.Dataset
   * a non-EPSG target (ESRI/WKT) and does NOT require a positive EPSG code.
   */
 case class RST_TransformCrs(
-    tileExpr: Expression,
+    tile: Expression,
     crsExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, crsExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, crsExpr, ExpressionConfigExpr())
     // Pin crs as StringType so SQL string literals coerce cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, StringType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, StringType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_TransformCrs.name
     override def replacement: Expression = invoke(RST_TransformCrs)

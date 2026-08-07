@@ -15,10 +15,10 @@ import scala.util.Try
 
 /** Returns the SRID of the raster. */
 case class RST_SRID(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
     override def nullable: Boolean = true
     override def prettyName: String = RST_SRID.name

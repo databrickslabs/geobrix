@@ -16,10 +16,10 @@ import scala.jdk.CollectionConverters.DictionaryHasAsScala
 
 /** Returns the metadata of the raster. */
 case class RST_MetaData(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = MapType(StringType, StringType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_MetaData.name

@@ -27,20 +27,20 @@ import java.util.{Vector => JVector}
   * passes `null` as the mask, asking it to derive the mask from the band itself).
   */
 case class RST_FillNodata(
-    tileExpr: Expression,
+    tile: Expression,
     maxSearchDistExpr: Expression,
     smoothingIterExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, maxSearchDistExpr, smoothingIterExpr, ExpressionConfigExpr()
+        tile, maxSearchDistExpr, smoothingIterExpr, ExpressionConfigExpr()
     )
     // Pin max_search_dist as DoubleType (gdal.FillNodata takes a Double), and
     // smoothing_iter as IntegerType so SQL literals coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, DoubleType, IntegerType, StringType
+        tile.dataType, DoubleType, IntegerType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_FillNodata.name
     override def replacement: Expression = invoke(RST_FillNodata)

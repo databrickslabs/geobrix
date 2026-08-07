@@ -13,12 +13,12 @@ import org.gdal.gdalconst.gdalconstConstants.GA_ReadOnly
 
 /** Returns the subdatasets of the raster. */
 case class RST_GetSubdataset(
-    tileExpr: Expression,
+    tile: Expression,
     subsetName: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, subsetName, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, subsetName, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_GetSubdataset.name
     override def replacement: Expression = invoke(RST_GetSubdataset)

@@ -108,7 +108,7 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
 
     private def makeAggForTileType(tileType: org.apache.spark.sql.types.StructType): RST_FromBandsAgg =
         RST_FromBandsAgg(
-            tileExpr      = Literal.create(null, tileType),
+            tile      = Literal.create(null, tileType),
             bandIndexExpr = Literal(0),
             exprConfExpr  = Literal.create(encodedEmpty(), StringType)
         )
@@ -247,7 +247,7 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
                 org.apache.spark.sql.types.StringType, org.apache.spark.sql.types.StringType),      nullable = true)
         ))
         val aggLong = RST_FromBandsAgg(
-            tileExpr      = Literal.create(tileA, tileType),
+            tile      = Literal.create(tileA, tileType),
             bandIndexExpr = Literal(1L),    // Long literal — this is what PySpark sends
             exprConfExpr  = Literal.create(encodedEmpty(), StringType)
         )

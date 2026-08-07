@@ -13,13 +13,13 @@ import org.gdal.gdal.Dataset
 
 /** The expression for applying NxN filter on a raster. */
 case class RST_Filter(
-    tileExpr: Expression,
+    tile: Expression,
     kernelSizeExpr: Expression,
     operationExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, kernelSizeExpr, operationExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, kernelSizeExpr, operationExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Filter.name
     override def replacement: Expression = invoke(RST_Filter)

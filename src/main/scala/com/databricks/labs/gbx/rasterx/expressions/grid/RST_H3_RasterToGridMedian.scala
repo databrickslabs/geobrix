@@ -14,11 +14,11 @@ import scala.collection.mutable.ArrayBuffer
 
 /** Returns the median value of the raster. */
 case class RST_H3_RasterToGridMedian(
-    tileExpr: Expression,
+    tile: Expression,
     resolution: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, resolution, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, resolution, ExpressionConfigExpr())
     override def dataType: DataType =
         ArrayType(ArrayType(StructType(Seq(StructField("cellID", LongType), StructField("measure", DoubleType)))))
     override def nullable: Boolean = true

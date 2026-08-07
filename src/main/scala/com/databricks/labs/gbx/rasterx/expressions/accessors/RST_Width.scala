@@ -10,12 +10,12 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 
-/** Catalyst expression that evaluates to the raster width in pixels (GDAL GetRasterXSize). Case class holding tileExpr; used as the catalyst node when gbx_rst_width(tile) is invoked in SQL or DataFrame API. */
+/** Catalyst expression that evaluates to the raster width in pixels (GDAL GetRasterXSize). Case class holding tile; used as the catalyst node when gbx_rst_width(tile) is invoked in SQL or DataFrame API. */
 case class RST_Width(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
     override def nullable: Boolean = true
     override def prettyName: String = RST_Width.name

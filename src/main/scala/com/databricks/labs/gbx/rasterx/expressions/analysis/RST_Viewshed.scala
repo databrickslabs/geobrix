@@ -31,7 +31,7 @@ import org.gdal.gdal.{Dataset, ViewshedMode, ViewshedOutputType, gdal}
   *     by the raster extent).
   */
 case class RST_Viewshed(
-    tileExpr: Expression,
+    tile: Expression,
     observerGeomExpr: Expression,
     observerHeightExpr: Expression,
     targetHeightExpr: Expression,
@@ -40,16 +40,16 @@ case class RST_Viewshed(
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, observerGeomExpr, observerHeightExpr, targetHeightExpr, maxDistanceExpr,
+        tile, observerGeomExpr, observerHeightExpr, targetHeightExpr, maxDistanceExpr,
         crsExpr, ExpressionConfigExpr()
     )
     // observer_geom is BinaryType (WKB) or StringType (WKT) — accept the geom
     // expr's type; heights are Double, max_distance Double (nullable), crs String.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, observerGeomExpr.dataType, DoubleType, DoubleType, DoubleType,
+        tile.dataType, observerGeomExpr.dataType, DoubleType, DoubleType, DoubleType,
         StringType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Viewshed.name
     override def replacement: Expression = invoke(RST_Viewshed)

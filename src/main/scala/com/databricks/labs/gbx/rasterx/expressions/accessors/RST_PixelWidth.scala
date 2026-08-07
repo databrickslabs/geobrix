@@ -12,10 +12,10 @@ import org.gdal.gdal.Dataset
 
 /** Returns the pixel width of the raster. */
 case class RST_PixelWidth(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_PixelWidth.name

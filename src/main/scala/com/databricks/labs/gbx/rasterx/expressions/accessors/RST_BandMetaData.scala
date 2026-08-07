@@ -15,7 +15,7 @@ import org.gdal.gdal.Band
 
 /**
   * The expression for extracting metadata from a raster band.
-  * @param tileExpr
+  * @param tile
   *   The expression for the raster. If the raster is stored on disk, the path
   *   to the raster is provided. If the raster is stored in memory, the bytes of
   *   the raster are provided.
@@ -23,11 +23,11 @@ import org.gdal.gdal.Band
   *   The band index.
   */
 case class RST_BandMetaData(
-    tileExpr: Expression,
+    tile: Expression,
     band: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, band, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, band, ExpressionConfigExpr())
     override def dataType: DataType = MapType(StringType, StringType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_BandMetaData.name

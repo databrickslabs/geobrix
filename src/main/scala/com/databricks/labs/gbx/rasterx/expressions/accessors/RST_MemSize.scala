@@ -13,10 +13,10 @@ import org.gdal.gdal.Dataset
 
 /** Returns the memory size of the raster in bytes. */
 case class RST_MemSize(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = LongType
     override def nullable: Boolean = true
     override def prettyName: String = RST_MemSize.name

@@ -14,10 +14,10 @@ import org.gdal.gdal.Dataset
 
 /** Returns the data type of the raster. */
 case class RST_Type(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def nullable: Boolean = true
     override def prettyName: String = RST_Type.name
     override def replacement: Expression = invoke(RST_Type)

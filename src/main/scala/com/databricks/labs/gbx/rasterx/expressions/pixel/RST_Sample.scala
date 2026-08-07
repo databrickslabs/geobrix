@@ -28,12 +28,12 @@ import org.locationtech.jts.geom.Geometry
   * or a clip + reduction for polygon sampling.
   */
 case class RST_Sample(
-    tileExpr: Expression,
+    tile: Expression,
     geomExpr: Expression,
     crsExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, geomExpr, crsExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, geomExpr, crsExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Sample.name

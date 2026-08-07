@@ -19,18 +19,18 @@ import org.gdal.gdal.Dataset
   * `algorithm` defaults to `"bilinear"`; see [[RST_ResampleHelper.AllowedAlgorithms]].
   */
 case class RST_ResampleToRes(
-    tileExpr: Expression,
+    tile: Expression,
     xResExpr: Expression,
     yResExpr: Expression,
     algorithmExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tileExpr, xResExpr, yResExpr, algorithmExpr, ExpressionConfigExpr())
+        Seq(tile, xResExpr, yResExpr, algorithmExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals coerce to Double cleanly.
     override def inputTypes: Seq[DataType] =
-        Seq(tileExpr.dataType, DoubleType, DoubleType, StringType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+        Seq(tile.dataType, DoubleType, DoubleType, StringType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ResampleToRes.name
     override def replacement: Expression = invoke(RST_ResampleToRes)

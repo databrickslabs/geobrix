@@ -33,20 +33,20 @@ import java.util.{Vector => JVector}
   * pre-processing, watershed buffer maps.
   */
 case class RST_Proximity(
-    tileExpr: Expression,
+    tile: Expression,
     targetValuesExpr: Expression,
     distUnitsExpr: Expression,
     maxDistanceExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, targetValuesExpr, distUnitsExpr, maxDistanceExpr, ExpressionConfigExpr()
+        tile, targetValuesExpr, distUnitsExpr, maxDistanceExpr, ExpressionConfigExpr()
     )
     // Pin types: target_values String (nullable), distunits String, max_distance Double (nullable).
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, StringType, StringType, DoubleType, StringType
+        tile.dataType, StringType, StringType, DoubleType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Proximity.name
     override def replacement: Expression = invoke(RST_Proximity)

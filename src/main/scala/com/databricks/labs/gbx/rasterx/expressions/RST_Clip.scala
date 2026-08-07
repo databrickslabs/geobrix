@@ -20,15 +20,15 @@ import org.locationtech.jts.geom.Geometry
   * WKB/WKT cutline (an EWKB/EWKT embedded SRID still wins); absent -> assume the
   * cutline is already in the raster CRS. */
 case class RST_Clip(
-    tileExpr: Expression,
+    tile: Expression,
     geometryExpr: Expression,
     cutlineAllTouchedExpr: Expression,
     clipCrsExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tileExpr, geometryExpr, cutlineAllTouchedExpr, clipCrsExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+        Seq(tile, geometryExpr, cutlineAllTouchedExpr, clipCrsExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Clip.name
     override def replacement: Expression = invoke(RST_Clip)

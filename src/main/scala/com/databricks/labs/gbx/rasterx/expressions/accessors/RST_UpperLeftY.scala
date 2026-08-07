@@ -12,10 +12,10 @@ import org.gdal.gdal.Dataset
 
 /** Expression that evaluates to the Y coordinate of the upper-left corner of the raster (geotransform). */
 case class RST_UpperLeftY(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_UpperLeftY.name

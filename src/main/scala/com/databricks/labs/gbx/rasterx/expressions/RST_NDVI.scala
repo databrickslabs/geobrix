@@ -18,13 +18,13 @@ import scala.util.Try
 
 /** The expression for computing NDVI index. */
 case class RST_NDVI(
-    tileExpr: Expression,
+    tile: Expression,
     redIndex: Expression,
     nirIndex: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, redIndex, nirIndex, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, redIndex, nirIndex, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_NDVI.name
     override def replacement: Expression = invoke(RST_NDVI)

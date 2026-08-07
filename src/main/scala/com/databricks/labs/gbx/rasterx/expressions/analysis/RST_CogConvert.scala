@@ -35,20 +35,20 @@ import java.util.{Vector => JVector}
   * `metadata.driver = "GTiff"` with the COG layout markers in the header.
   */
 case class RST_CogConvert(
-    tileExpr: Expression,
+    tile: Expression,
     compressionExpr: Expression,
     blocksizeExpr: Expression,
     overviewResamplingExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, compressionExpr, blocksizeExpr, overviewResamplingExpr, ExpressionConfigExpr()
+        tile, compressionExpr, blocksizeExpr, overviewResamplingExpr, ExpressionConfigExpr()
     )
     // Pin types: compression String, blocksize Int, overview_resampling String.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, StringType, IntegerType, StringType, StringType
+        tile.dataType, StringType, IntegerType, StringType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_CogConvert.name
     override def replacement: Expression = invoke(RST_CogConvert)

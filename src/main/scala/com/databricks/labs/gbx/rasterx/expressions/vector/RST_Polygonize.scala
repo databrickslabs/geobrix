@@ -28,13 +28,13 @@ import scala.collection.mutable.ArrayBuffer
  *    - `connectedness` (default 4) - either 4 or 8; GDAL `8CONNECTED` option.
  */
 case class RST_Polygonize(
-    tileExpr: Expression,
+    tile: Expression,
     bandExpr: Expression,
     connectednessExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tileExpr, bandExpr, connectednessExpr, ExpressionConfigExpr())
+        Seq(tile, bandExpr, connectednessExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(
         StructType(Seq(
             StructField("geom_wkb", BinaryType),

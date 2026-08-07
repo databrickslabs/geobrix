@@ -28,17 +28,17 @@ import scala.collection.mutable.ArrayBuffer
  *  `[count:Int][ idx:Int, tileLen:Int, tileBytes:Bytes ]*N`
  */
 case class RST_FromBandsAgg(
-    tileExpr:             Expression,
+    tile:             Expression,
     bandIndexExpr:        Expression,
     exprConfExpr:         Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset:   Int = 0
 ) extends TypedImperativeAggregate[ArrayBuffer[Any]] {
 
-    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
+    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     /** Field count of the input tile struct (3 for v1, 8 for v2), from the declared element schema. */
-    private lazy val tileFieldCount: Int = tileExpr.dataType match {
+    private lazy val tileFieldCount: Int = tile.dataType match {
         case st: org.apache.spark.sql.types.StructType => st.fields.length
         case _                                         => 3
     }
@@ -46,10 +46,10 @@ case class RST_FromBandsAgg(
     override val nullable: Boolean = true
     override def prettyName: String = RST_FromBandsAgg.name
 
-    override def children: Seq[Expression] = Seq(tileExpr, bandIndexExpr, exprConfExpr)
+    override def children: Seq[Expression] = Seq(tile, bandIndexExpr, exprConfExpr)
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): RST_FromBandsAgg =
-        copy(tileExpr = nc(0), bandIndexExpr = nc(1), exprConfExpr = nc(2))
+        copy(tile = nc(0), bandIndexExpr = nc(1), exprConfExpr = nc(2))
 
     override def withNewMutableAggBufferOffset(n: Int): ImperativeAggregate =
         copy(mutableAggBufferOffset = n)
@@ -76,7 +76,7 @@ case class RST_FromBandsAgg(
             case other   => throw new IllegalArgumentException(
                 s"rst_frombands_agg: band_index must be INT or LONG; got ${other.getClass.getName}")
         }
-        val tileRaw = tileExpr.eval(input)
+        val tileRaw = tile.eval(input)
         if (tileRaw == null) return buffer
         val binaryTileRow = toBinaryTileRow(tileRaw.asInstanceOf[InternalRow])
         buffer += InternalRow(idx, binaryTileRow)

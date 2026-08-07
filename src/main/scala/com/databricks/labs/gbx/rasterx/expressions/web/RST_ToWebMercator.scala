@@ -24,12 +24,12 @@ import org.gdal.gdal.Dataset
  *  Use `"near"` for categorical rasters (land cover, classification masks).
  */
 case class RST_ToWebMercator(
-    tileExpr: Expression,
+    tile: Expression,
     resamplingExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, resamplingExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, resamplingExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ToWebMercator.name
     override def replacement: Expression = invoke(RST_ToWebMercator)

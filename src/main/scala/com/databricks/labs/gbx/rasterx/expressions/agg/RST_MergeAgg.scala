@@ -17,7 +17,7 @@ import scala.collection.mutable.ArrayBuffer
 /** Merges rasters into a single raster. */
 //noinspection DuplicatedCode
 case class RST_MergeAgg(
-    tileExpr: Expression,
+    tile: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0
@@ -25,9 +25,9 @@ case class RST_MergeAgg(
       with UnaryLike[Expression] {
 
     override lazy val deterministic: Boolean = true
-    override val child: Expression = tileExpr
+    override val child: Expression = tile
     override val nullable: Boolean = false
-    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
+    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def prettyName: String = RST_MergeAgg.name
 
@@ -104,7 +104,7 @@ case class RST_MergeAgg(
         buffer
     }
 
-    override protected def withNewChildInternal(newChild: Expression): RST_MergeAgg = copy(tileExpr = newChild)
+    override protected def withNewChildInternal(newChild: Expression): RST_MergeAgg = copy(tile = newChild)
 
 }
 

@@ -20,7 +20,7 @@ import scala.collection.mutable.ArrayBuffer
   */
 //noinspection DuplicatedCode
 case class RST_CombineAvgAgg(
-    tileExpr: Expression,
+    tile: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0
@@ -28,12 +28,12 @@ case class RST_CombineAvgAgg(
       with UnaryLike[Expression] {
 
     override lazy val deterministic: Boolean = true
-    override val child: Expression = tileExpr
+    override val child: Expression = tile
     override val nullable: Boolean = false
-    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
+    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def prettyName: String = RST_CombineAvgAgg.name
-    val cellIDType: DataType = tileExpr.dataType.asInstanceOf[StructType].fields.head.dataType
+    val cellIDType: DataType = tile.dataType.asInstanceOf[StructType].fields.head.dataType
 
     private lazy val projection = UnsafeProjection.create(Array[DataType](ArrayType(elementType = dataType, containsNull = false)))
     private lazy val row = new UnsafeRow(1)
@@ -95,7 +95,7 @@ case class RST_CombineAvgAgg(
         buffer
     }
 
-    override protected def withNewChildInternal(newChild: Expression): RST_CombineAvgAgg = copy(tileExpr = newChild)
+    override protected def withNewChildInternal(newChild: Expression): RST_CombineAvgAgg = copy(tile = newChild)
 
 }
 

@@ -23,14 +23,14 @@ import org.gdal.gdal.Dataset
   * Output is a single-band Float32 GTiff with aspect per pixel.
   */
 case class RST_Aspect(
-    tileExpr: Expression,
+    tile: Expression,
     trigonometricExpr: Expression,
     zeroForFlatExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, trigonometricExpr, zeroForFlatExpr, ExpressionConfigExpr())
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, BooleanType, BooleanType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, trigonometricExpr, zeroForFlatExpr, ExpressionConfigExpr())
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, BooleanType, BooleanType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Aspect.name
     override def replacement: Expression = invoke(RST_Aspect)

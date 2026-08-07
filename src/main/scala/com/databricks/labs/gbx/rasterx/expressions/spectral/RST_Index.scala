@@ -33,18 +33,18 @@ import org.gdal.gdal.Dataset
   * delegate to ``RST_MapAlgebra`` for per-pixel evaluation.
   */
 case class RST_Index(
-    tileExpr: Expression,
+    tile: Expression,
     formulaNameExpr: Expression,
     bandMapExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, formulaNameExpr, bandMapExpr, ExpressionConfigExpr()
+        tile, formulaNameExpr, bandMapExpr, ExpressionConfigExpr()
     )
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, StringType, MapType(StringType, IntegerType), StringType
+        tile.dataType, StringType, MapType(StringType, IntegerType), StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Index.name
     override def replacement: Expression = invoke(RST_Index)

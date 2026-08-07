@@ -22,15 +22,15 @@ import org.gdal.gdal.Dataset
   * Output is a single-band Float32 GTiff with slope per pixel.
   */
 case class RST_Slope(
-    tileExpr: Expression,
+    tile: Expression,
     unitExpr: Expression,
     scaleExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, unitExpr, scaleExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, unitExpr, scaleExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals (e.g. ``1.0``) coerce to Double cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, StringType, DoubleType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, StringType, DoubleType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Slope.name
     override def replacement: Expression = invoke(RST_Slope)

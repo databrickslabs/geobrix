@@ -27,19 +27,19 @@ import org.gdal.gdal.Dataset
   * pre-compute the zoom pyramid.
   */
 case class RST_BuildOverviews(
-    tileExpr: Expression,
+    tile: Expression,
     levelsExpr: Expression,
     resamplingExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, levelsExpr, resamplingExpr, ExpressionConfigExpr()
+        tile, levelsExpr, resamplingExpr, ExpressionConfigExpr()
     )
     // Pin levels as ARRAY<INT> and resampling as String so SQL literals coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, ArrayType(IntegerType), StringType, StringType
+        tile.dataType, ArrayType(IntegerType), StringType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_BuildOverviews.name
     override def replacement: Expression = invoke(RST_BuildOverviews)

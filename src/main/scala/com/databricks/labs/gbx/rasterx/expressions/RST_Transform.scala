@@ -14,12 +14,12 @@ import org.gdal.osr.SpatialReference
 
 /** Returns the upper left x of the raster. */
 case class RST_Transform(
-    tileExpr: Expression,
+    tile: Expression,
     srid: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, srid, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, srid, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Transform.name
     override def replacement: Expression = invoke(RST_Transform)

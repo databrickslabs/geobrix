@@ -28,14 +28,14 @@ import org.gdal.gdal.Dataset
   * are unchanged.
   */
 case class RST_SetSrid(
-    tileExpr: Expression,
+    tile: Expression,
     sridExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, sridExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, sridExpr, ExpressionConfigExpr())
     // Pin srid as IntegerType so SQL integer literals coerce cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, IntegerType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, IntegerType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_SetSrid.name
     override def replacement: Expression = invoke(RST_SetSrid)

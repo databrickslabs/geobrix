@@ -15,10 +15,10 @@ import org.locationtech.jts.geom.Geometry
 
 /** The expression for extracting the bounding box of a raster. */
 case class RST_BoundingBox(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = RST_BoundingBox.name

@@ -22,17 +22,17 @@ import org.gdal.gdal.Dataset
   * Output is a single-band Byte (uint8) GTiff with values 0..255.
   */
 case class RST_Hillshade(
-    tileExpr: Expression,
+    tile: Expression,
     azimuthExpr: Expression,
     altitudeExpr: Expression,
     zFactorExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tileExpr, azimuthExpr, altitudeExpr, zFactorExpr, ExpressionConfigExpr())
+        Seq(tile, azimuthExpr, altitudeExpr, zFactorExpr, ExpressionConfigExpr())
     override def inputTypes: Seq[DataType] =
-        Seq(tileExpr.dataType, DoubleType, DoubleType, DoubleType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+        Seq(tile.dataType, DoubleType, DoubleType, DoubleType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Hillshade.name
     override def replacement: Expression = invoke(RST_Hillshade)

@@ -13,10 +13,10 @@ import org.gdal.gdal.Dataset
 
 /** Returns an array containing valid pixel count values for each band. */
 case class RST_PixelCount(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(LongType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_PixelCount.name

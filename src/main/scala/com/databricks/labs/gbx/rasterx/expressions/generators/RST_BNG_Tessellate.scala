@@ -17,7 +17,7 @@ import org.apache.spark.unsafe.types.UTF8String
   * input raster.
   */
 case class RST_BNG_Tessellate(
-    tileExpr: Expression,
+    tile: Expression,
     resolutionExpr: Expression,
     modeExpr: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr()
@@ -26,12 +26,12 @@ case class RST_BNG_Tessellate(
       with CodegenFallback {
 
     /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    private def rasterType = RST_ExpressionUtil.rasterType(tile)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def position: Boolean = false
     override def inline: Boolean = false
     override def elementSchema: StructType = StructType(Array(StructField("tile", dataType)))
-    override def children: Seq[Expression] = Seq(tileExpr, resolutionExpr, modeExpr, exprConfExpr)
+    override def children: Seq[Expression] = Seq(tile, resolutionExpr, modeExpr, exprConfExpr)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -41,7 +41,7 @@ case class RST_BNG_Tessellate(
               val conf = exprConfExpr.eval(input).asInstanceOf[UTF8String]
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val rawTile = tileExpr.eval(input).asInstanceOf[InternalRow]
+              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               // BNG resolution accepts Int index (±1..±6) or String key ("1km", "100m", etc.)
               // BNG.getResolution handles both Int and UTF8String/String via pattern matching.
               val resRaw = resolutionExpr.eval(input)

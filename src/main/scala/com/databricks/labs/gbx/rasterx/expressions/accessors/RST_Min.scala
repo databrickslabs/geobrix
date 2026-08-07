@@ -14,10 +14,10 @@ import org.gdal.gdal.Dataset
 
 /** Returns the min value per band of the raster. Returns null for bands with zero valid pixels. */
 case class RST_Min(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Min.name

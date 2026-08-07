@@ -14,17 +14,17 @@ import org.gdal.gdal.Dataset
 
 /** Returns a raster that is a result of merging an array of rasters. */
 case class RST_Merge(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
     /** Raster DataType from the tile array element struct. */
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
-        RST_Merge.name, tileExpr, aggHint = Some("gbx_rst_merge_agg")
+        RST_Merge.name, tile, aggHint = Some("gbx_rst_merge_agg")
     )
     /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
     private lazy val elementFieldCountLit: Expression =
-        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tileExpr), IntegerType)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr(), elementFieldCountLit)
+        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tile), IntegerType)
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr(), elementFieldCountLit)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Merge.name
@@ -36,10 +36,10 @@ case class RST_Merge(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Merge extends WithExpressionInfo {
 
-    // Called by Spark reflection when children = [tileExpr, ExpressionConfigExpr()]  (v1 legacy path).
+    // Called by Spark reflection when children = [tile, ExpressionConfigExpr()]  (v1 legacy path).
     def eval(array: ArrayData, conf: UTF8String): InternalRow = eval(array, conf, 3)
 
-    // Called by Spark reflection when children = [tileExpr, ExpressionConfigExpr(), elementFieldCountLit].
+    // Called by Spark reflection when children = [tile, ExpressionConfigExpr(), elementFieldCountLit].
     // elementFieldCount is derived from the declared input array element struct (3=v1, 8=v2).
     def eval(array: ArrayData, conf: UTF8String, elementFieldCount: Int): InternalRow =
         RST_ErrorHandler.safeEval(

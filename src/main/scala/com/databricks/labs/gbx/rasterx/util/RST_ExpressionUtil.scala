@@ -21,8 +21,8 @@ object RST_ExpressionUtil {
       * Throws [[IllegalArgumentException]] if the raster field is StringType (v1 path-tile), which
       * is not supported by the heavyweight tier.
       */
-    def rasterType(tileExpr: Expression): DataType = {
-        val rdt = tileExpr.dataType.asInstanceOf[StructType].fields(1).dataType
+    def rasterType(tile: Expression): DataType = {
+        val rdt = tile.dataType.asInstanceOf[StructType].fields(1).dataType
         rdt match {
             case StringType => throw new IllegalArgumentException(
                 "Raster path-tiles (raster field as a String path) are not supported by the " +
@@ -58,9 +58,9 @@ object RST_ExpressionUtil {
       */
     def arrayOfTileRasterType(
         funcName: String,
-        tileExpr: Expression,
+        tile: Expression,
         aggHint: Option[String] = None
-    ): DataType = tileExpr.dataType match {
+    ): DataType = tile.dataType match {
         case ArrayType(StructType(fields), _) if fields.length >= 2 =>
             fields(1).dataType match {
                 case StringType => throw new IllegalArgumentException(
@@ -86,7 +86,7 @@ object RST_ExpressionUtil {
       * declared schema so it is automatically correct for whatever the input is.
       * Defaults to 3 (v1) if the expression type does not match ArrayType(StructType, _).
       */
-    def arrayOfTileElementFieldCount(tileExpr: Expression): Int = tileExpr.dataType match {
+    def arrayOfTileElementFieldCount(tile: Expression): Int = tile.dataType match {
         case ArrayType(st: StructType, _) => st.fields.length
         case _                            => 3
     }
@@ -110,7 +110,7 @@ object RST_ExpressionUtil {
         StructField("metadata", MapType(StringType, StringType), nullable = true)))
 
     /** StructType for a tile with the given tile expression's raster type (v2 8-field schema). */
-    def tileDataType(tileExpr: Expression): DataType = v2TileType
+    def tileDataType(tile: Expression): DataType = v2TileType
 
     /** StructType for a tile with the given raster DataType (v2 8-field schema). */
     def tileDataType(rdt: DataType): DataType = v2TileType

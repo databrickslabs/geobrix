@@ -11,10 +11,10 @@ import org.apache.spark.unsafe.types.UTF8String
 
 /** Returns the number of bands in the raster. */
 case class RST_NumBands(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
     override def nullable: Boolean = true
     override def prettyName: String = RST_NumBands.name

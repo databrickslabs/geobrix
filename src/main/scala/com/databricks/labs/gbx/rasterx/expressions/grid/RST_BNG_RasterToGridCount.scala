@@ -14,8 +14,8 @@ import org.gdal.gdal.Dataset
 import scala.collection.mutable.ArrayBuffer
 
 /** Returns the number of valid pixels in each BNG grid cell. */
-case class RST_BNG_RasterToGridCount(tileExpr: Expression, resolution: Expression) extends InvokedExpression {
-    override def children: Seq[Expression] = Seq(tileExpr, resolution, ExpressionConfigExpr())
+case class RST_BNG_RasterToGridCount(tile: Expression, resolution: Expression) extends InvokedExpression {
+    override def children: Seq[Expression] = Seq(tile, resolution, ExpressionConfigExpr())
     override def dataType: DataType =
         ArrayType(ArrayType(StructType(Seq(StructField("cellID", StringType), StructField("measure", IntegerType)))))
     override def nullable: Boolean = true

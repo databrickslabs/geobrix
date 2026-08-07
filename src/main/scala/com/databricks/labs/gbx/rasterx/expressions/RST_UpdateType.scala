@@ -13,12 +13,12 @@ import org.gdal.gdal.Dataset
 
 /** Expression that changes the raster pixel data type (e.g. Byte, Int16, Float32). Arguments: tile, newType. */
 case class RST_UpdateType(
-    tileExpr: Expression,
+    tile: Expression,
     newType: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, newType, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, newType, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_UpdateType.name
     override def replacement: Expression = invoke(RST_UpdateType)

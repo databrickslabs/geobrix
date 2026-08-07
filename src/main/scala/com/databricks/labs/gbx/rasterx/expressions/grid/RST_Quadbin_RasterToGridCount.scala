@@ -14,11 +14,11 @@ import scala.collection.mutable.ArrayBuffer
 
 /** Returns the number of valid pixels in each quadbin grid cell. */
 case class RST_Quadbin_RasterToGridCount(
-    tileExpr: Expression,
+    tile: Expression,
     resolution: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, resolution, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, resolution, ExpressionConfigExpr())
     override def dataType: DataType =
         ArrayType(ArrayType(StructType(Seq(StructField("cellID", LongType), StructField("measure", LongType)))))
     override def nullable: Boolean = true

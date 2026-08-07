@@ -14,10 +14,10 @@ import org.gdal.gdal.{Dataset, gdal}
 
 /** Returns the median value per band of the raster, or null for a band with zero valid pixels. */
 case class RST_Median(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Median.name

@@ -44,7 +44,7 @@ import scala.util.Try
  *  convergence). The alpha band is never rescaled.
  */
 case class RST_TileXYZ(
-    tileExpr: Expression,
+    tile: Expression,
     zExpr: Expression,
     xExpr: Expression,
     yExpr: Expression,
@@ -55,7 +55,7 @@ case class RST_TileXYZ(
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tileExpr, zExpr, xExpr, yExpr, formatExpr, sizeExpr, resamplingExpr, rescaleExpr, ExpressionConfigExpr())
+        Seq(tile, zExpr, xExpr, yExpr, formatExpr, sizeExpr, resamplingExpr, rescaleExpr, ExpressionConfigExpr())
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = RST_TileXYZ.name

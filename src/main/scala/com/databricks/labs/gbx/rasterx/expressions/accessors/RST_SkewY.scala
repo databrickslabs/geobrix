@@ -12,10 +12,10 @@ import org.gdal.gdal.Dataset
 
 /** Returns the skew y of the raster. */
 case class RST_SkewY(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_SkewY.name

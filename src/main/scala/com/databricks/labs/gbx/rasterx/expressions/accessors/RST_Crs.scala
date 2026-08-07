@@ -21,10 +21,10 @@ import org.gdal.osr.SpatialReference
   * non-EPSG CRS that `rst_srid` cannot represent.
   */
 case class RST_Crs(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = StringType
     override def nullable: Boolean = true
     override def prettyName: String = RST_Crs.name

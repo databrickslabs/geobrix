@@ -13,7 +13,7 @@ import org.apache.spark.unsafe.types.UTF8String
 
 /**
   * Creates raster tiles from the input column.
-  * @param tileExpr
+  * @param tile
   *   The expression for the raster (BinaryType tile); bytes of the raster are provided.
   * @param sizeInMBExpr
   *   The size of the tiles in MB. If set to -1, the file is loaded and returned
@@ -29,7 +29,7 @@ import org.apache.spark.unsafe.types.UTF8String
   *   tile width/height, use `gbx_rst_retile` instead.
   */
 case class RST_MakeTiles(
-    tileExpr: Expression,
+    tile: Expression,
     sizeInMBExpr: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr()
 ) extends CollectionGenerator
@@ -37,13 +37,13 @@ case class RST_MakeTiles(
       with CodegenFallback {
 
     /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    private def rasterType = RST_ExpressionUtil.rasterType(tile)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def position: Boolean = false
     override def inline: Boolean = false
     override def elementSchema: StructType = StructType(Array(StructField("tile", dataType)))
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
-    override def children: scala.Seq[Expression] = Seq(tileExpr, sizeInMBExpr, exprConfExpr)
+    override def children: scala.Seq[Expression] = Seq(tile, sizeInMBExpr, exprConfExpr)
 
     /** Overrides generator eval: subdivides tile into (Dataset, metadata) rows by sizeInMB via BalancedSubdivision; caller must release. */
     override def eval(input: InternalRow): IterableOnce[InternalRow] =
@@ -53,7 +53,7 @@ case class RST_MakeTiles(
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
 
-              val rawTile = tileExpr.eval(input).asInstanceOf[InternalRow]
+              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
 
               val targetSize = sizeInMBExpr.eval(input).asInstanceOf[Int]

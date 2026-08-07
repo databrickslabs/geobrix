@@ -12,10 +12,10 @@ import org.gdal.gdal.Dataset
 
 /** Expression that evaluates to the raster height in pixels (GDAL GetRasterYSize). */
 case class RST_Height(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
     override def nullable: Boolean = true
     override def prettyName: String = RST_Height.name

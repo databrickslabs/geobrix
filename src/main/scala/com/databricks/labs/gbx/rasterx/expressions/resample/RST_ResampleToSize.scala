@@ -17,17 +17,17 @@ import org.gdal.gdal.Dataset
   * `algorithm` defaults to `"bilinear"`; see [[RST_ResampleHelper.AllowedAlgorithms]].
   */
 case class RST_ResampleToSize(
-    tileExpr: Expression,
+    tile: Expression,
     widthPxExpr: Expression,
     heightPxExpr: Expression,
     algorithmExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] =
-        Seq(tileExpr, widthPxExpr, heightPxExpr, algorithmExpr, ExpressionConfigExpr())
+        Seq(tile, widthPxExpr, heightPxExpr, algorithmExpr, ExpressionConfigExpr())
     override def inputTypes: Seq[DataType] =
-        Seq(tileExpr.dataType, IntegerType, IntegerType, StringType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+        Seq(tile.dataType, IntegerType, IntegerType, StringType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ResampleToSize.name
     override def replacement: Expression = invoke(RST_ResampleToSize)

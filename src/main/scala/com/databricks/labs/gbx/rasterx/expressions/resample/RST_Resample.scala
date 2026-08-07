@@ -24,15 +24,15 @@ import org.gdal.gdal.Dataset
   * source CRS and extent are preserved; only pixel density changes.
   */
 case class RST_Resample(
-    tileExpr: Expression,
+    tile: Expression,
     factorExpr: Expression,
     algorithmExpr: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, factorExpr, algorithmExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, factorExpr, algorithmExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals (e.g. ``2.0``) coerce to Double cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, DoubleType, StringType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, DoubleType, StringType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Resample.name
     override def replacement: Expression = invoke(RST_Resample)

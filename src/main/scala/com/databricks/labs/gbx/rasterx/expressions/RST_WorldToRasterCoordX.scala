@@ -12,12 +12,12 @@ import org.gdal.gdal.Dataset
 
 /** Expression that converts world (geo) X to raster X coordinate for the given tile. */
 case class RST_WorldToRasterCoordX(
-    tileExpr: Expression,
+    tile: Expression,
     x: Expression,
     y: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, x, y, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, x, y, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
     override def nullable: Boolean = true
     override def prettyName: String = RST_WorldToRasterCoordX.name

@@ -21,18 +21,18 @@ import org.gdal.gdal.Dataset
   * the canonical burn-severity index. Output is single-band Float32 GTiff.
   */
 case class RST_NBR(
-    tileExpr: Expression,
+    tile: Expression,
     nirIdxExpr: Expression,
     swirIdxExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, nirIdxExpr, swirIdxExpr, ExpressionConfigExpr()
+        tile, nirIdxExpr, swirIdxExpr, ExpressionConfigExpr()
     )
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, IntegerType, StringType
+        tile.dataType, IntegerType, IntegerType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_NBR.name
     override def replacement: Expression = invoke(RST_NBR)

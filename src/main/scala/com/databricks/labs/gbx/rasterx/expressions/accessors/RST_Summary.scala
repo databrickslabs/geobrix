@@ -15,10 +15,10 @@ import java.util.{Vector => JVector}
 
 /** Returns the summary info the raster. */
 case class RST_Summary(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def nullable: Boolean = true
     override def prettyName: String = RST_Summary.name
     override def replacement: Expression = invoke(RST_Summary)

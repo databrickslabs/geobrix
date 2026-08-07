@@ -27,7 +27,7 @@ import org.gdal.gdal.Dataset
   *     symmetry with `gdal_histogram`'s `--no_data` flag.
   */
 case class RST_Histogram(
-    tileExpr: Expression,
+    tile: Expression,
     nBucketsExpr: Expression,
     minExpr: Expression,
     maxExpr: Expression,
@@ -35,12 +35,12 @@ case class RST_Histogram(
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        tileExpr, nBucketsExpr, minExpr, maxExpr, includeNodataExpr, ExpressionConfigExpr()
+        tile, nBucketsExpr, minExpr, maxExpr, includeNodataExpr, ExpressionConfigExpr()
     )
     // Pin n_buckets as IntegerType, min/max as DoubleType, include_nodata as BooleanType
     // so SQL literals (e.g. `null`, `5.0`, `false`) coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, DoubleType, DoubleType, BooleanType, StringType
+        tile.dataType, IntegerType, DoubleType, DoubleType, BooleanType, StringType
     )
     override def dataType: DataType = MapType(StringType, ArrayType(LongType))
     override def nullable: Boolean = true

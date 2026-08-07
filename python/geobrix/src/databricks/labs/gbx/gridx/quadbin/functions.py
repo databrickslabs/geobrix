@@ -42,7 +42,9 @@ def register(_spark: SparkSession) -> None:
     ).load().collect()
 
 
-def quadbin_pointascell(longitude: ColLike, latitude: ColLike, resolution: ColLike) -> Column:
+def quadbin_pointascell(
+    longitude: ColLike, latitude: ColLike, resolution: ColLike
+) -> Column:
     """Encode (longitude, latitude) at a given zoom as a CARTO quadbin v0 cell (BIGINT).
 
     Args:

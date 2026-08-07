@@ -768,9 +768,13 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------
 
 
-def quadbin_pointascell(longitude: ColLike, latitude: ColLike, resolution: ColLike) -> Column:
-    """Quadbin cell (LONG) containing the WGS84 longitude/latitude point at `resolution`."""
-    return f.call_function("gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution))
+def quadbin_pointascell(
+    longitude: ColLike, latitude: ColLike, resolution: ColLike
+) -> Column:
+    """Quadbin cell (LONG) for the WGS84 longitude/latitude point at `resolution`."""
+    return f.call_function(
+        "gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution)
+    )
 
 
 def quadbin_resolution(cell: ColLike) -> Column:
@@ -864,7 +868,9 @@ def bng_centroid(cellid: ColLike) -> Column:
 
 def bng_cellintersection(left_chip: ColLike, right_chip: ColLike) -> Column:
     """Per-cell chip intersection STRUCT<cellid, core, chip> (left-hand rule)."""
-    return f.call_function("gbx_bng_cellintersection", _col(left_chip), _col(right_chip))
+    return f.call_function(
+        "gbx_bng_cellintersection", _col(left_chip), _col(right_chip)
+    )
 
 
 def bng_cellunion(left_chip: ColLike, right_chip: ColLike) -> Column:
@@ -999,7 +1005,9 @@ def custom_grid(
 
 def custom_pointascell(point: ColLike, grid: ColLike, resolution: ColLike) -> Column:
     """Custom-grid cell ID (BIGINT) for the first coordinate of a geometry at `resolution`."""
-    return f.call_function("gbx_custom_pointascell", _col(point), _col(grid), _col(resolution))
+    return f.call_function(
+        "gbx_custom_pointascell", _col(point), _col(grid), _col(resolution)
+    )
 
 
 def custom_cellaswkb(cell: ColLike, grid: ColLike) -> Column:
@@ -1019,7 +1027,9 @@ def custom_centroid(cell: ColLike, grid: ColLike) -> Column:
 
 def custom_polyfill(geom: ColLike, grid: ColLike, resolution: ColLike) -> Column:
     """ARRAY<BIGINT> of cells whose center is contained by the geometry."""
-    return f.call_function("gbx_custom_polyfill", _col(geom), _col(grid), _col(resolution))
+    return f.call_function(
+        "gbx_custom_polyfill", _col(geom), _col(grid), _col(resolution)
+    )
 
 
 def custom_kring(cell: ColLike, grid: ColLike, k: ColLike) -> Column:

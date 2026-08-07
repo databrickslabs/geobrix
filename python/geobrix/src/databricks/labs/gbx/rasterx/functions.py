@@ -1456,69 +1456,69 @@ def rst_ndvi(tile: ColLike, red_band: ColLike, nir_band: ColLike) -> Column:
     return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_band), _col(nir_band))
 
 
-def rst_rastertoworldcoord(tile: ColLike, pixel_x: ColLike, pixel_y: ColLike) -> Column:
+def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert pixel (x, y) to world (x, y) in the CRS of the raster.
 
     Args:
         tile: Raster tile column.
-        pixel_x: Pixel column index.
-        pixel_y: Pixel row index.
+        x: Pixel column index.
+        y: Pixel row index.
 
     Returns:
         Column of struct (x, y as double) in world coordinates.
     """
     return f.call_function(
-        "gbx_rst_rastertoworldcoord", _col(tile), _col(pixel_x), _col(pixel_y)
+        "gbx_rst_rastertoworldcoord", _col(tile), _col(x), _col(y)
     )
 
 
 def rst_rastertoworldcoordx(
-    tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
     """Convert pixel (x, y) to world X coordinate.
 
     Args:
         tile: Raster tile column.
-        pixel_x: Pixel column index.
-        pixel_y: Pixel row index.
+        x: Pixel column index.
+        y: Pixel row index.
 
     Returns:
         Column of double.
     """
     return f.call_function(
-        "gbx_rst_rastertoworldcoordx", _col(tile), _col(pixel_x), _col(pixel_y)
+        "gbx_rst_rastertoworldcoordx", _col(tile), _col(x), _col(y)
     )
 
 
 def rst_rastertoworldcoordy(
-    tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
     """Convert pixel (x, y) to world Y coordinate.
 
     Args:
         tile: Raster tile column.
-        pixel_x: Pixel column index.
-        pixel_y: Pixel row index.
+        x: Pixel column index.
+        y: Pixel row index.
 
     Returns:
         Column of double.
     """
     return f.call_function(
-        "gbx_rst_rastertoworldcoordy", _col(tile), _col(pixel_x), _col(pixel_y)
+        "gbx_rst_rastertoworldcoordy", _col(tile), _col(x), _col(y)
     )
 
 
-def rst_transform(tile: ColLike, target_srid: ColLike) -> Column:
+def rst_transform(tile: ColLike, srid: ColLike) -> Column:
     """Reproject the raster to the target SRID (EPSG code).
 
     Args:
         tile: Raster tile column.
-        target_srid: Target spatial reference ID (e.g. 4326 for WGS84).
+        srid: Target spatial reference ID (e.g. 4326 for WGS84).
 
     Returns:
         Column of reprojected raster tile.
     """
-    return f.call_function("gbx_rst_transform", _col(tile), _col(target_srid))
+    return f.call_function("gbx_rst_transform", _col(tile), _col(srid))
 
 
 def rst_tryopen(tile: ColLike) -> Column:
@@ -1546,55 +1546,55 @@ def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
     return f.call_function("gbx_rst_updatetype", _col(tile), _col(new_type))
 
 
-def rst_worldtorastercoord(tile: ColLike, world_x: ColLike, world_y: ColLike) -> Column:
+def rst_worldtorastercoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert world (x, y) to pixel (x, y) in the raster.
 
     Args:
         tile: Raster tile column.
-        world_x: World X coordinate.
-        world_y: World Y coordinate.
+        x: World X coordinate.
+        y: World Y coordinate.
 
     Returns:
         Column of struct (x, y as integer) in pixel coordinates.
     """
     return f.call_function(
-        "gbx_rst_worldtorastercoord", _col(tile), _col(world_x), _col(world_y)
+        "gbx_rst_worldtorastercoord", _col(tile), _col(x), _col(y)
     )
 
 
 def rst_worldtorastercoordx(
-    tile: ColLike, world_x: ColLike, world_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
     """Convert world (x, y) to pixel column index.
 
     Args:
         tile: Raster tile column.
-        world_x: World X coordinate.
-        world_y: World Y coordinate.
+        x: World X coordinate.
+        y: World Y coordinate.
 
     Returns:
         Column of integer (pixel column index).
     """
     return f.call_function(
-        "gbx_rst_worldtorastercoordx", _col(tile), _col(world_x), _col(world_y)
+        "gbx_rst_worldtorastercoordx", _col(tile), _col(x), _col(y)
     )
 
 
 def rst_worldtorastercoordy(
-    tile: ColLike, world_x: ColLike, world_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
     """Convert world (x, y) to pixel row index.
 
     Args:
         tile: Raster tile column.
-        world_x: World X coordinate.
-        world_y: World Y coordinate.
+        x: World X coordinate.
+        y: World Y coordinate.
 
     Returns:
         Column of integer (pixel row index).
     """
     return f.call_function(
-        "gbx_rst_worldtorastercoordy", _col(tile), _col(world_x), _col(world_y)
+        "gbx_rst_worldtorastercoordy", _col(tile), _col(x), _col(y)
     )
 
 
@@ -2684,7 +2684,7 @@ def rst_cog_convert(
 def rst_proximity(
     tile: ColLike,
     target_values: Union[ColLike, None] = None,
-    distunits: Union[ColLike, None] = None,
+    dist_units: Union[ColLike, None] = None,
     max_distance: ColLike = None,
 ) -> Column:
     """Compute a proximity raster: each pixel = distance to nearest source pixel.
@@ -2698,9 +2698,9 @@ def rst_proximity(
         target_values: Optional comma-separated list of source-pixel values to
             measure distance to (e.g. ``"1,2,3"``). ``None`` = any non-NoData
             pixel is a target.
-        distunits: ``"GEO"`` (CRS ground units, default) or ``"PIXEL"``.
+        dist_units: ``"GEO"`` (CRS ground units, default) or ``"PIXEL"``.
         max_distance: Optional cap on output distance (in the same units as
-            ``distunits``). ``None`` = unlimited.
+            ``dist_units``). ``None`` = unlimited.
 
     Returns:
         Float32 proximity raster tile column.
@@ -2716,8 +2716,8 @@ def rst_proximity(
     )
     du_col = (
         f.lit("GEO")
-        if distunits is None
-        else (f.lit(distunits) if isinstance(distunits, str) else _col(distunits))
+        if dist_units is None
+        else (f.lit(dist_units) if isinstance(dist_units, str) else _col(dist_units))
     )
     md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
     return f.call_function("gbx_rst_proximity", _col(tile), tv_col, du_col, md_col)

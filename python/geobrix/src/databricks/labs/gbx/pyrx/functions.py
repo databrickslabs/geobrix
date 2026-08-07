@@ -930,14 +930,14 @@ def _to_webmercator_v2_udf(
 
 def rst_transform(
     tile: ColLike,
-    target_srid: ColLike,
+    srid: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
 ) -> Column:
     """Reproject the raster to the target SRID (EPSG code).
 
-    Identity (``target_srid`` == the source CRS's EPSG code) is a passthrough:
+    Identity (``srid`` == the source CRS's EPSG code) is a passthrough:
     no resample, no re-encode; the tile stays a reference/passthrough (so
     ``virtualize_dir`` is a no-op on an already-virtual input). A non-identity
     reproject PRODUCES new pixels and materializes; pass ``virtualize_dir`` to
@@ -951,10 +951,10 @@ def rst_transform(
         _validate_force_output(virtualize_dir, materialize)
         return _transform_v2_udf(
             _col(tile),
-            _col(target_srid),
+            _col(srid),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _transform_udf(_col(tile), _col(target_srid))
+    return _transform_udf(_col(tile), _col(srid))
 
 
 def rst_to_webmercator(
@@ -1993,7 +1993,7 @@ def rst_buildoverviews(
 def rst_proximity(
     tile: ColLike,
     target_values: ColLike = None,
-    distunits: ColLike = "GEO",
+    dist_units: ColLike = "GEO",
     max_distance: ColLike = None,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
@@ -2012,7 +2012,7 @@ def rst_proximity(
                        source pixels are those whose rounded value is in the set.
                        When None, the GDAL default applies: source = pixels whose
                        rounded value is != 0.
-        distunits:     ``"GEO"`` (default; CRS ground units, scaled by pixel
+        dist_units:    ``"GEO"`` (default; CRS ground units, scaled by pixel
                        size) or ``"PIXEL"`` (pixel counts).
         max_distance:  Optional positive distance cap; pixels beyond it become
                        NoData.
@@ -2031,8 +2031,8 @@ def rst_proximity(
     )
     units_col = (
         f.lit("GEO")
-        if distunits is None
-        else (f.lit(distunits) if isinstance(distunits, str) else _col(distunits))
+        if dist_units is None
+        else (f.lit(dist_units) if isinstance(dist_units, str) else _col(dist_units))
     )
     md_col = (
         f.lit(None).cast(DoubleType())
@@ -4208,27 +4208,27 @@ def rst_getnodata(tile: ColLike) -> Column:
 # HEADER-ONLY accessors: pass the FULL tile struct (not the raster subfield) so
 # a virtual tile's ``path`` is reachable; the UDF resolves via open_header.
 def rst_rastertoworldcoordx(
-    tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
-    return _u_r2w_x(_col(tile), _col(pixel_x), _col(pixel_y))
+    return _u_r2w_x(_col(tile), _col(x), _col(y))
 
 
 def rst_rastertoworldcoordy(
-    tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
-    return _u_r2w_y(_col(tile), _col(pixel_x), _col(pixel_y))
+    return _u_r2w_y(_col(tile), _col(x), _col(y))
 
 
 def rst_worldtorastercoordx(
-    tile: ColLike, world_x: ColLike, world_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
-    return _u_w2r_x(_col(tile), _col(world_x), _col(world_y))
+    return _u_w2r_x(_col(tile), _col(x), _col(y))
 
 
 def rst_worldtorastercoordy(
-    tile: ColLike, world_x: ColLike, world_y: ColLike
+    tile: ColLike, x: ColLike, y: ColLike
 ) -> Column:
-    return _u_w2r_y(_col(tile), _col(world_x), _col(world_y))
+    return _u_w2r_y(_col(tile), _col(x), _col(y))
 
 
 def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
@@ -4329,12 +4329,12 @@ def rst_subdatasets(tile: ColLike) -> Column:
     return _subdatasets_udf(_col(tile))
 
 
-def rst_getsubdataset(tile: ColLike, name: ColLike) -> Column:
+def rst_getsubdataset(tile: ColLike, subset_name: ColLike) -> Column:
     """Extract the named subdataset as a new raster tile struct.
 
-    Raises if no subdataset matches ``name`` (mirrors heavyweight).
+    Raises if no subdataset matches ``subset_name`` (mirrors heavyweight).
     """
-    nm = f.lit(name) if isinstance(name, str) else _col(name)
+    nm = f.lit(subset_name) if isinstance(subset_name, str) else _col(subset_name)
     return _getsubdataset_udf(_col(tile), nm)
 
 

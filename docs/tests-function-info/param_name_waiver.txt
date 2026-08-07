@@ -19,7 +19,7 @@ gbx_rst_derivedband
 gbx_rst_derivedband_agg
 # gbx_rst_dtmfromgeoms  # N9 DONE: points/breaklines renamed to *_array
 # gbx_rst_dtmfromgeoms_agg  # R6 DONE: out_srid renamed
-gbx_rst_getsubdataset
+# gbx_rst_getsubdataset  # Task 2 DONE: light name -> subset_name
 # gbx_rst_gridfrompoints  # N9 DONE: points/values renamed to *_array
 # gbx_rst_gridfrompoints_agg  # R6 DONE: out_srid renamed
 # gbx_rst_h3_rasterize_agg  # R6 DONE: out_srid renamed
@@ -27,19 +27,19 @@ gbx_rst_histogram
 gbx_rst_mapalgebra
 gbx_rst_merge
 gbx_rst_ndvi
-gbx_rst_proximity
+# gbx_rst_proximity  # Task 2 DONE: distunits -> dist_units
 # gbx_rst_quadbin_rasterize_agg  # R6 DONE: out_srid renamed
 # gbx_rst_rasterize  # N1 DONE: geom_wkb renamed to geom
 # gbx_rst_rasterize_agg  # N1 DONE: geom_wkb renamed to geom
-gbx_rst_rastertoworldcoord
-gbx_rst_rastertoworldcoordx
-gbx_rst_rastertoworldcoordy
+# gbx_rst_rastertoworldcoord  # Task 2 DONE: pixel_x/pixel_y -> x/y
+# gbx_rst_rastertoworldcoordx  # Task 2 DONE: pixel_x/pixel_y -> x/y
+# gbx_rst_rastertoworldcoordy  # Task 2 DONE: pixel_x/pixel_y -> x/y
 gbx_rst_sample
-gbx_rst_transform
+# gbx_rst_transform  # Task 2 DONE: target_srid -> srid
 gbx_rst_viewshed
-gbx_rst_worldtorastercoord
-gbx_rst_worldtorastercoordx
-gbx_rst_worldtorastercoordy
+# gbx_rst_worldtorastercoord  # Task 2 DONE: world_x/world_y -> x/y
+# gbx_rst_worldtorastercoordx  # Task 2 DONE: world_x/world_y -> x/y
+# gbx_rst_worldtorastercoordy  # Task 2 DONE: world_x/world_y -> x/y
 gbx_rst_xyzpyramid
 # gbx_st_asmvt  # N1 DONE: geom_wkb renamed to geom
 # gbx_st_asmvt_pyramid  # N1 DONE: geom_wkb renamed to geom

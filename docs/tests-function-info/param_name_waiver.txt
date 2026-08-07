@@ -1,9 +1,11 @@
 # Functions pending canonical param-name migration; shrinks to empty. See spec 2026-08-06-canonical-param-names-design.md
 #
-# Remaining 7 are PERMANENT light-arity [B] gaps (feature parity, not naming).
-# See spec 2026-08-07-orphan-tail. These stay waived indefinitely — the fix is
-# implementing the missing light-tier params, which is a separate feature-parity
-# workstream, not a naming rename.
+# Remaining 5 are the bng *explode fns — PERMANENT [B] waivers by design (see spec
+# 2026-08-07-arity-gap-wrapup). They are registered row-streaming UDTFs (one row per
+# cell, array-free); a pyspark Column form is intentionally absent because it would
+# force large-array materialization. Invoke via SQL LATERAL. NOT gaps to close.
+# (The other 2 arity gaps — rst_xyzpyramid rescale, bng_tessellate keep_core_geom —
+# were closed by the arity-gap-wrapup work; they are no longer waived.)
 #
 # Resolved by Tasks 1-4 (orphan-tail branch, beta/0.5.0):
 # R4 DONE: gbx_bng_aswkb, gbx_bng_aswkt, gbx_bng_cellarea, gbx_bng_centroid, gbx_bng_distance,
@@ -47,7 +49,7 @@
 # gbx_st_interpolateelevationgeom  # N9 DONE: points_geom/breaklines_geom renamed to *_array
 # gbx_st_triangulate  # N9 DONE: points_geom/breaklines_geom renamed to *_array
 #
-# --- 7 PERMANENT [B] light-arity gaps (feature parity, not naming) ---
+# --- 5 PERMANENT [B] waivers: bng *explode streaming UDTFs (by design, not gaps) ---
 # The 5 bng *explode fns below are PERMANENT [B] waivers — streaming UDTFs, not gaps. See spec 2026-08-07-arity-gap-wrapup.
 gbx_bng_geomkloopexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
 gbx_bng_geomkringexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.

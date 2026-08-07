@@ -1861,8 +1861,12 @@ def rst_slope(
     if xscale is None and yscale is None:
         return f.call_function("gbx_rst_slope", _col(tile), unit_col)
     if xscale is None or yscale is None:
-        raise ValueError("rst_slope: xscale and yscale must be supplied together (both or neither)")
-    return f.call_function("gbx_rst_slope", _col(tile), unit_col, _col(xscale), _col(yscale))
+        raise ValueError(
+            "rst_slope: xscale and yscale must be supplied together (both or neither)"
+        )
+    return f.call_function(
+        "gbx_rst_slope", _col(tile), unit_col, _col(xscale), _col(yscale)
+    )
 
 
 def rst_aspect(

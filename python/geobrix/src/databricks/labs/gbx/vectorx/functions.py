@@ -78,9 +78,7 @@ def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     """
     if isinstance(layer_name, str):
         layer_name = f.lit(layer_name)
-    return f.call_function(
-        "gbx_st_asmvt", _col(geom), _col(attrs), _col(layer_name)
-    )
+    return f.call_function("gbx_st_asmvt", _col(geom), _col(attrs), _col(layer_name))
 
 
 def st_asmvt_pyramid(

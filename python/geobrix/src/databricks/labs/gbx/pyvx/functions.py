@@ -68,9 +68,7 @@ def _mvt_tile_return():
 
 @udtf(returnType=_mvt_tile_return())
 class _AsMvtPyramidUDTF:
-    def eval(
-        self, geom, attrs, min_z: int, max_z: int, layer_name=None, extent=None
-    ):
+    def eval(self, geom, attrs, min_z: int, max_z: int, layer_name=None, extent=None):
         ln = "layer" if layer_name is None else str(layer_name)
         ex = _mvt.DEFAULT_EXTENT if extent is None else int(extent)
         # Yield incrementally — never build the full list (fan-out OOM guard).

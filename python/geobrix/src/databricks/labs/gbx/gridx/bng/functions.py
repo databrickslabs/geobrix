@@ -92,7 +92,9 @@ def bng_cellintersection(left_chip: ColLike, right_chip: ColLike) -> Column:
     Returns:
         Column of chip struct (cellid, core, chip).
     """
-    return f.call_function("gbx_bng_cellintersection", _col(left_chip), _col(right_chip))
+    return f.call_function(
+        "gbx_bng_cellintersection", _col(left_chip), _col(right_chip)
+    )
 
 
 def bng_cellunion(left_chip: ColLike, right_chip: ColLike) -> Column:

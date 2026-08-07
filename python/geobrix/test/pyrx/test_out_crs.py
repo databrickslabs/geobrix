@@ -23,7 +23,14 @@ def test_rasterize_out_crs_string_stamps_output():
     """out_crs='EPSG:32633' -> output SR is EPSG:32633 (via canonical string)."""
     geom = box(499000.0, 4649000.0, 501000.0, 4651000.0)  # UTM-ish metres
     b = features.rasterize_geom(
-        shapely.to_wkb(geom), 1.0, 499000, 4649000, 501000, 4651000, 16, 16,
+        shapely.to_wkb(geom),
+        1.0,
+        499000,
+        4649000,
+        501000,
+        4651000,
+        16,
+        16,
         out_crs="EPSG:32633",
     )
     crs, _ = _bounds_of(b)
@@ -45,8 +52,16 @@ def test_rasterize_both_out_params_raises():
     geom = box(0.0, 0.0, 1.0, 1.0)
     with pytest.raises(ValueError, match="out_srid OR out_crs"):
         features.rasterize_geom(
-            shapely.to_wkb(geom), 1.0, 0, 0, 1, 1, 4, 4,
-            out_srid=4326, out_crs="EPSG:3857",
+            shapely.to_wkb(geom),
+            1.0,
+            0,
+            0,
+            1,
+            1,
+            4,
+            4,
+            out_srid=4326,
+            out_crs="EPSG:3857",
         )
 
 
@@ -120,5 +135,7 @@ def test_h3_cell_bbox_out_crs(spark):
     ).first()
     assert abs(row["b"]["xmax"]) > 1000.0  # metres, not ~11 degrees
     # ESRI out_srid resolves (no raise).
-    row2 = df.select(prx.gbx_h3_cell_bbox("cellid", out_srid=F.lit(54008)).alias("b")).first()
+    row2 = df.select(
+        prx.gbx_h3_cell_bbox("cellid", out_srid=F.lit(54008)).alias("b")
+    ).first()
     assert row2["b"] is not None

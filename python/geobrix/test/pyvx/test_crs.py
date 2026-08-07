@@ -421,7 +421,9 @@ def test_st_transformcrs_clean_3d_preserves_z_binary():
     import shapely as _sh
 
     pt = _sh.set_srid(from_wkt("POINT Z (11 42 500)"), 4326)
-    out = _crs.st_transformcrs(to_wkb(pt, include_srid=True, output_dimension=3), "EPSG:32633")
+    out = _crs.st_transformcrs(
+        to_wkb(pt, include_srid=True, output_dimension=3), "EPSG:32633"
+    )
     g = from_wkb(out)
     assert g.has_z
     assert g.z == pytest.approx(500.0, abs=1e-9)
@@ -455,7 +457,9 @@ def test_st_transformcrs_partial_z_binary_is_2d_no_coord_corruption():
 
 def test_st_transformcrs_partial_z_text_is_2d_no_coord_corruption():
     """Partial-Z LINESTRING in text medium: no throw, no 'NaN NaN NaN' vertex."""
-    out = _crs.st_transformcrs("SRID=4326;LINESTRING Z (11 42 5, 12 43 NaN)", "EPSG:32633")
+    out = _crs.st_transformcrs(
+        "SRID=4326;LINESTRING Z (11 42 5, 12 43 NaN)", "EPSG:32633"
+    )
     assert isinstance(out, str)
     assert "NAN" not in out.upper(), f"X/Y corrupted by non-finite Z: {out}"
     g = from_wkt(out.split(";", 1)[1])
@@ -655,7 +659,8 @@ _SHAPES_BEYOND_FLAT = [
     ),
     (
         "nested-collection",
-        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), " "GEOMETRYCOLLECTION (POINT (1 2)))",
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), "
+        "GEOMETRYCOLLECTION (POINT (1 2)))",
         80,
     ),
 ]
@@ -678,7 +683,9 @@ def test_mixed_dim_wkt_shapes_never_return_none(wkt):
     ``st_crs`` returning None here is the sharpest symptom: the geometry HAS an SRID, so
     None is a WRONG answer, not merely a missing one.
     """
-    assert _crs.st_crs(wkt) == "EPSG:4326", "st_crs must read the SRID it plainly carries"
+    assert (
+        _crs.st_crs(wkt) == "EPSG:4326"
+    ), "st_crs must read the SRID it plainly carries"
     assert _crs._udf_st_setcrs(wkt, "EPSG:32633") is not None
     assert _crs._udf_st_transformcrs(wkt, "EPSG:32633") is not None
     # Core layer too, not just the UDFs.
@@ -736,7 +743,8 @@ def test_mixed_dim_wkt_empty_component_stays_empty():
 def test_mixed_dim_wkt_nested_collection_preserves_structure():
     """A nested collection keeps its nesting and gains the right dimensionality tag."""
     out = _crs._udf_st_setcrs(
-        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), " "GEOMETRYCOLLECTION (POINT (1 2)))",
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), "
+        "GEOMETRYCOLLECTION (POINT (1 2)))",
         "EPSG:32633",
     )
     g = from_wkb(bytes(out))
@@ -839,7 +847,8 @@ _UNIFORM_ZM_SHAPES = [
     ),
     (
         "geometrycollection",
-        "GEOMETRYCOLLECTION ZM (POINT ZM (11 42 5 99), " "LINESTRING ZM (11 42 5 99, 12 43 6 98))",
+        "GEOMETRYCOLLECTION ZM (POINT ZM (11 42 5 99), "
+        "LINESTRING ZM (11 42 5 99, 12 43 6 98))",
         [[11.0, 42.0, 5.0], [11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
     ),
 ]
@@ -1125,16 +1134,19 @@ def test_st_transformcrs_nonfinite_does_not_break_nan_z_handling():
     This test also directly verifies the mixed-NaN-Z path is unbroken: a partial-Z
     LINESTRING reprojects to 2D with correct X/Y, and the result is not None.
     """
-    from shapely.geometry import LineString
-
     import shapely as _sh
+    from shapely.geometry import LineString
 
     # Partial-Z geometry: one vertex has Z, one does not.
     ls = LineString([(11.0, 42.0, 5.0), (12.0, 43.0, float("nan"))])
     geom = to_wkb(_sh.set_srid(ls, 4326), include_srid=True, output_dimension=3)
     result = _crs.st_transformcrs(geom, "EPSG:32633")
-    assert result is not None, "partial-Z reprojection must NOT be treated as non-finite"
+    assert (
+        result is not None
+    ), "partial-Z reprojection must NOT be treated as non-finite"
     g = from_wkb(result)
     assert not g.has_z, "partial-Z input must still come back 2D"
     for x, y in g.coords:
-        assert x == x and y == y, f"X/Y must not be NaN after partial-Z reproject: {list(g.coords)}"
+        assert (
+            x == x and y == y
+        ), f"X/Y must not be NaN after partial-Z reproject: {list(g.coords)}"

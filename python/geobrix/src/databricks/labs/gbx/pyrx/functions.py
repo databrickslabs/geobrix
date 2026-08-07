@@ -1192,7 +1192,13 @@ def _clip_udf(tile, geom_wkb, all_touched, clip_crs=None):
 
 @f.udf(V2_TILE_SCHEMA)
 def _clip_v2_udf(
-    tile, geom_wkb, all_touched, clip_crs, virtualize_dir, virtualize_prefix, materialize
+    tile,
+    geom_wkb,
+    all_touched,
+    clip_crs,
+    virtualize_dir,
+    virtualize_prefix,
+    materialize,
 ):
     # Force-output variant (Python API only): same clip math, but the produced
     # bytes are shaped via shape_output. Returns the 8-field v2 tile envelope.
@@ -1677,7 +1683,10 @@ def _viewshed_bytes(
         # observer over a UTM DEM lands correctly. Transform failure -> use as-is.
         import shapely as _shapely
 
-        from databricks.labs.gbx.pyrx.core.crs import get_transformer, resolve_source_crs
+        from databricks.labs.gbx.pyrx.core.crs import (
+            get_transformer,
+            resolve_source_crs,
+        )
 
         ox, oy = geom.x, geom.y
         src_crs = resolve_source_crs(_shapely.get_srid(geom), crs=crs)
@@ -2905,8 +2914,16 @@ def _rasterize_udf(
 
     _env.configure_gdal_env()
     new_bytes = features.rasterize_geom(
-        geom_to_wkb(geom_wkb), value, xmin, ymin, xmax, ymax, width_px, height_px,
-        out_srid=out_srid, out_crs=out_crs,
+        geom_to_wkb(geom_wkb),
+        value,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid=out_srid,
+        out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)
 

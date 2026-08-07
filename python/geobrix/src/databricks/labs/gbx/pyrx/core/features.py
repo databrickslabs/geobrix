@@ -14,8 +14,16 @@ _NODATA = -9999.0
 
 
 def rasterize_geom(
-    geom_wkb: bytes, value, xmin, ymin, xmax, ymax, width_px, height_px,
-    out_srid=None, out_crs=None
+    geom_wkb: bytes,
+    value,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    out_srid=None,
+    out_crs=None,
 ) -> bytes:
     """Burn a geometry (WKB/EWKB) into a new raster at the given extent/size.
 

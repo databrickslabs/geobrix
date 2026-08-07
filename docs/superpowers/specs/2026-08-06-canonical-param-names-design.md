@@ -57,6 +57,7 @@ Per-tier casing is unchanged — camelCase in Scala, snake_case in SQL/Python �
 | **R6** | output CRS | **`out_srid` / `out_crs`** | 7 output-producing functions | heavy (`srid`→`out_srid`); light already correct | Names the OUTPUT CRS; bare `srid` is ambiguous vs the input geom's embedded SRID. Direction distinction preserved. |
 | **N1** | geometry arg | **`geom`** | `gbx_st_*` geom-accepting functions (`geomWkb`/`geom_wkb`) | Scala, heavy+light Python, docs; **update CLAUDE.md canonical example** | The param accepts WKB/EWKB/WKT/EWKT (`geom-input-consistency-across-st`), so `_wkb` is a misnomer. Bare `geom` is honest. |
 | **N9** | point arrays | **`points_array` / `breaklines_array`** | `st_triangulate`, `st_interpolateelevation*` | fix heavy-Python `*_geom`→`*_array`; docs | Input is genuinely `ArrayType` — `ST_Triangulate.scala:57` does `pointsArray.dataType.asInstanceOf[ArrayType].elementType`, `:90` builds a MultiPoint from the array. `*_geom` (single geom) is the misleading surface. |
+| **R7** | lon/lat | **`longitude` / `latitude`** | `gbx_quadbin_pointascell` (only public fn with `lon`/`lat` params) | Scala `Quadbin_PointAsCell` fields + 2 `functions.scala` overloads; heavy `gridx/quadbin/functions.py`; light `pygx`; docs; fixture | Same abbreviation class as `res`→`resolution`; user ruling. **PUBLIC PARAMS ONLY** — private helpers (`_lonlat_to_tile`, `_lat_to_y`, `pixel_key`, `_h3_cells`) keep `lon`/`lat`. Function names untouched. |
 
 ### On `cellid` (the single-token exception)
 

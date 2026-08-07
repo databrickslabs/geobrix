@@ -158,7 +158,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
                 ymaxExpr     = Literal(100.0),
                 widthPxExpr  = Literal(100),
                 heightPxExpr = Literal(100),
-                sridExpr     = Literal(32633)
+                outSridExpr  = Literal(32633)
             ).dataType)
 
         // Grid aggregator signature: cellId, value, srid, pixelSize, xmin, ymin, xmax, ymax,
@@ -167,7 +167,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
             RST_BNG_RasterizeAgg(
                 cellIdExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
-                sridExpr      = Literal(27700),
+                outSridExpr   = Literal(27700),
                 pixelSizeExpr = Literal(1.0),
                 xminExpr      = Literal(0.0),
                 yminExpr      = Literal(0.0),
@@ -183,7 +183,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
             RST_H3_RasterizeAgg(
                 cellIdExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
-                sridExpr      = Literal(4326),
+                outSridExpr   = Literal(4326),
                 pixelSizeExpr = Literal(1.0),
                 xminExpr      = Literal(0.0),
                 yminExpr      = Literal(0.0),
@@ -199,7 +199,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
             RST_Quadbin_RasterizeAgg(
                 cellIdExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
-                sridExpr      = Literal(4326),
+                outSridExpr   = Literal(4326),
                 pixelSizeExpr = Literal(1.0),
                 xminExpr      = Literal(0.0),
                 yminExpr      = Literal(0.0),

@@ -466,7 +466,7 @@ def rst_rasterize_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
 ) -> Column:
     """Rasterize streaming (geom_wkb, value) rows into a single raster tile (use with groupBy).
 
@@ -482,7 +482,7 @@ def rst_rasterize_agg(
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID of the geometry / output raster.
+        out_srid: EPSG SRID of the output raster.
 
     Returns:
         Column of raster tile.
@@ -497,7 +497,7 @@ def rst_rasterize_agg(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
     )
 
 
@@ -530,7 +530,7 @@ def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
 def rst_h3_rasterize_agg(
     cellid: ColLike,
     value: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     pixel_size: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -553,7 +553,7 @@ def rst_h3_rasterize_agg(
         cellid:     LONG column of H3 cell ids.
         value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
                     for a presence mask.
-        srid:       EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
+        out_srid:   EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (CRS units).
         ymin:       Minimum Y of the output canvas (CRS units).
@@ -573,7 +573,7 @@ def rst_h3_rasterize_agg(
         "gbx_rst_h3_rasterize_agg",
         _col(cellid),
         _col(value),
-        _col(srid),
+        _col(out_srid),
         _col(pixel_size),
         _col(xmin),
         _col(ymin),
@@ -1182,7 +1182,7 @@ def rst_bng_tessellate(
 def rst_quadbin_rasterize_agg(
     cellid: ColLike,
     value: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     pixel_size: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -1205,7 +1205,7 @@ def rst_quadbin_rasterize_agg(
         cellid:     BIGINT column of quadbin cell ids.
         value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
                     for a presence mask.
-        srid:       EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
+        out_srid:   EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (CRS units).
         ymin:       Minimum Y of the output canvas (CRS units).
@@ -1225,7 +1225,7 @@ def rst_quadbin_rasterize_agg(
         "gbx_rst_quadbin_rasterize_agg",
         _col(cellid),
         _col(value),
-        _col(srid),
+        _col(out_srid),
         _col(pixel_size),
         _col(xmin),
         _col(ymin),
@@ -1241,7 +1241,7 @@ def rst_quadbin_rasterize_agg(
 def rst_bng_rasterize_agg(
     cellid: ColLike,
     value: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     pixel_size: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -1261,8 +1261,8 @@ def rst_bng_rasterize_agg(
     aligned multi-band stacking; otherwise the grid is auto-derived from the
     cell set.
 
-    Note on ``srid``: BNG always operates in EPSG:27700 (British National Grid).
-    The ``srid`` argument is accepted for API consistency with the H3 and
+    Note on ``out_srid``: BNG always operates in EPSG:27700 (British National Grid).
+    The ``out_srid`` argument is accepted for API consistency with the H3 and
     quadbin variants but is a no-op — the function forces EPSG:27700 regardless
     of the value passed.
 
@@ -1270,7 +1270,7 @@ def rst_bng_rasterize_agg(
         cellid:     STRING column of BNG cell ids (e.g. ``"TQ3080"``).
         value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
                     for a presence mask.
-        srid:       Ignored — BNG forces EPSG:27700. Pass ``f.lit(27700)`` for
+        out_srid:   Ignored — BNG forces EPSG:27700. Pass ``f.lit(27700)`` for
                     clarity or any integer; the value has no effect.
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (BNG eastings).
@@ -1291,7 +1291,7 @@ def rst_bng_rasterize_agg(
         "gbx_rst_bng_rasterize_agg",
         _col(cellid),
         _col(value),
-        _col(srid),
+        _col(out_srid),
         _col(pixel_size),
         _col(xmin),
         _col(ymin),
@@ -1763,7 +1763,7 @@ def rst_rasterize(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
 ) -> Column:
     """Burn a vector geometry into a raster tile at the given extent and resolution.
 
@@ -1781,7 +1781,7 @@ def rst_rasterize(
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID of the extent / geometry.
+        out_srid: EPSG SRID of the output raster.
 
     Returns:
         Raster tile column.
@@ -1796,7 +1796,7 @@ def rst_rasterize(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
     )
 
 
@@ -2224,7 +2224,7 @@ def rst_gridfrompoints(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     power: ColLike = None,
     max_pts: ColLike = None,
 ) -> Column:
@@ -2244,7 +2244,7 @@ def rst_gridfrompoints(
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID of the extent / point geometries.
+        out_srid: EPSG SRID of the output raster.
         power: IDW exponent (default 2.0).
         max_pts: Maximum neighbour points per cell (default 12).
 
@@ -2263,7 +2263,7 @@ def rst_gridfrompoints(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         power_col,
         max_pts_col,
     )
@@ -2278,7 +2278,7 @@ def rst_gridfrompoints_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     power: ColLike = None,
     max_pts: ColLike = None,
 ) -> Column:
@@ -2297,7 +2297,7 @@ def rst_gridfrompoints_agg(
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID.
+        out_srid: EPSG SRID of the output raster.
         power: IDW exponent (default 2.0).
         max_pts: Maximum neighbour points per cell (default 12).
 
@@ -2316,7 +2316,7 @@ def rst_gridfrompoints_agg(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         power_col,
         max_pts_col,
     )
@@ -2342,7 +2342,7 @@ def rst_dtmfromgeoms(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     no_data: ColLike = None,
 ) -> Column:
     """DTM from Z-valued points + optional breaklines via Delaunay-TIN interpolation.
@@ -2358,7 +2358,7 @@ def rst_dtmfromgeoms(
         snap_tolerance: Vertex-to-breakline snap tolerance.
         xmin, ymin, xmax, ymax: Output raster extent.
         width_px, height_px: Output raster size in pixels.
-        srid: EPSG SRID.
+        out_srid: EPSG SRID of the output raster.
         no_data: No-data sentinel (default -9999.0).
 
     Returns:
@@ -2377,7 +2377,7 @@ def rst_dtmfromgeoms(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         nd,
     )
 
@@ -2393,7 +2393,7 @@ def rst_dtmfromgeoms_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     no_data: ColLike = None,
 ) -> Column:
     """DTM aggregator - one Z-valued ``point`` per row, grouped by extent key.
@@ -2418,7 +2418,7 @@ def rst_dtmfromgeoms_agg(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         nd,
     )
 

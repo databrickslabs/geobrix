@@ -55,7 +55,7 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         RST_H3_RasterizeAgg(
             cellIdExpr    = Literal.create(null, LongType),
             valueExpr     = Literal(0.0),
-            sridExpr      = Literal(4326),
+            outSridExpr   = Literal(4326),
             pixelSizeExpr = Literal.create(null, org.apache.spark.sql.types.DoubleType),
             xminExpr      = Literal.create(null, org.apache.spark.sql.types.DoubleType),
             yminExpr      = Literal.create(null, org.apache.spark.sql.types.DoubleType),

@@ -5721,11 +5721,11 @@ def rst_rasterize_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
 ) -> Column:
     """Burn a group's ``(geom_wkb, value)`` features into ONE tile.
 
-    The extent/size/srid args are per-group constants. Overlap is last-wins.
+    The extent/size/out_srid args are per-group constants. Overlap is last-wins.
     Use inside ``.agg()``::
 
         df.groupBy(k).agg(
@@ -5744,7 +5744,7 @@ def rst_rasterize_agg(
             _col(ymax),
             _col(width_px),
             _col(height_px),
-            _col(srid),
+            _col(out_srid),
         )
     )
 

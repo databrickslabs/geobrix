@@ -84,7 +84,7 @@ class RST_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
             ymaxExpr     = Literal(100.0),
             widthPxExpr  = Literal(100),
             heightPxExpr = Literal(100),
-            sridExpr     = Literal(32633),
+            outSridExpr  = Literal(32633),
             exprConfExpr = Literal.create(encodedEmpty(), StringType)
         )
 

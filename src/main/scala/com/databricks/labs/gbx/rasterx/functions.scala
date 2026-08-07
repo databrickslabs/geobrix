@@ -256,12 +256,12 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             lit("centroids"), lit(1)
         ))
     def rst_h3_rasterize_agg(
-        cellid: Column, value: Column, srid: Column, pixelSize: Column,
+        cellid: Column, value: Column, out_srid: Column, pixelSize: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
         width: Column, height: Column, mode: Column, kringPad: Column
     ): Column =
         ColumnAdapter(RST_H3_RasterizeAgg.name, Seq(
-            cellid, value, srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
+            cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
     /** UDAF: rasterize a group's quadbin cells into one tile (pixel-centroid burn).
@@ -283,12 +283,12 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             lit("centroids"), lit(1)
         ))
     def rst_quadbin_rasterize_agg(
-        cellid: Column, value: Column, srid: Column, pixelSize: Column,
+        cellid: Column, value: Column, out_srid: Column, pixelSize: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
         width: Column, height: Column, mode: Column, kringPad: Column
     ): Column =
         ColumnAdapter(RST_Quadbin_RasterizeAgg.name, Seq(
-            cellid, value, srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
+            cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
     /** UDAF: rasterize a group's BNG cells (STRING ids) into one 27700-native tile.
@@ -311,12 +311,12 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             lit("centroids"), lit(1)
         ))
     def rst_bng_rasterize_agg(
-        cellid: Column, value: Column, srid: Column, pixelSize: Column,
+        cellid: Column, value: Column, out_srid: Column, pixelSize: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
         width: Column, height: Column, mode: Column, kringPad: Column
     ): Column =
         ColumnAdapter(RST_BNG_RasterizeAgg.name, Seq(
-            cellid, value, srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
+            cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
     // Constructors
@@ -567,9 +567,9 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_rasterize(
         geomWkb: Column, value: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column
+        widthPx: Column, heightPx: Column, out_srid: Column
     ): Column =
-        ColumnAdapter(RST_Rasterize.name, Seq(geomWkb, value, xmin, ymin, xmax, ymax, widthPx, heightPx, srid))
+        ColumnAdapter(RST_Rasterize.name, Seq(geomWkb, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid))
 
     def rst_polygonize(tile: Column): Column =
         ColumnAdapter(RST_Polygonize.name, Seq(tile, lit(1), lit(4)))
@@ -693,42 +693,42 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_gridfrompoints(
         points: Column, values: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column
+        widthPx: Column, heightPx: Column, out_srid: Column
     ): Column =
         ColumnAdapter(RST_GridFromPoints.name, Seq(
-            points, values, xmin, ymin, xmax, ymax, widthPx, heightPx, srid,
+            points, values, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid,
             lit(RST_GridFromPoints.DefaultPower),
             lit(RST_GridFromPoints.DefaultMaxPoints)
         ))
     def rst_gridfrompoints(
         points: Column, values: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column,
+        widthPx: Column, heightPx: Column, out_srid: Column,
         power: Column, maxPts: Column
     ): Column =
         ColumnAdapter(RST_GridFromPoints.name, Seq(
-            points, values, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, power, maxPts
+            points, values, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
         ))
 
     // IDW interpolation - aggregator (one point/value per row)
     def rst_gridfrompoints_agg(
         point: Column, value: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column
+        widthPx: Column, heightPx: Column, out_srid: Column
     ): Column =
         ColumnAdapter(RST_GridFromPointsAgg.name, Seq(
-            point, value, xmin, ymin, xmax, ymax, widthPx, heightPx, srid,
+            point, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid,
             lit(RST_GridFromPoints.DefaultPower),
             lit(RST_GridFromPoints.DefaultMaxPoints)
         ))
     def rst_gridfrompoints_agg(
         point: Column, value: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column,
+        widthPx: Column, heightPx: Column, out_srid: Column,
         power: Column, maxPts: Column
     ): Column =
         ColumnAdapter(RST_GridFromPointsAgg.name, Seq(
-            point, value, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, power, maxPts
+            point, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
         ))
 
     // Pixel ops + extraction — Column form + scalar overloads

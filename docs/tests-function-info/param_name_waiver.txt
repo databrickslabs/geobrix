@@ -22,24 +22,24 @@ gbx_bng_tessellateexplode
 gbx_custom_grid
 gbx_quadbin_cellunion_agg
 gbx_quadbin_distance
-gbx_rst_bng_rasterize_agg
+# gbx_rst_bng_rasterize_agg  # R6 DONE: out_srid renamed
 gbx_rst_clip
 gbx_rst_combineavg
 gbx_rst_derivedband
 gbx_rst_derivedband_agg
 gbx_rst_dtmfromgeoms
-gbx_rst_dtmfromgeoms_agg
+# gbx_rst_dtmfromgeoms_agg  # R6 DONE: out_srid renamed
 gbx_rst_evi
 gbx_rst_getsubdataset
 gbx_rst_gridfrompoints
-gbx_rst_gridfrompoints_agg
-gbx_rst_h3_rasterize_agg
+# gbx_rst_gridfrompoints_agg  # R6 DONE: out_srid renamed
+# gbx_rst_h3_rasterize_agg  # R6 DONE: out_srid renamed
 gbx_rst_histogram
 gbx_rst_mapalgebra
 gbx_rst_merge
 gbx_rst_ndvi
 gbx_rst_proximity
-gbx_rst_quadbin_rasterize_agg
+# gbx_rst_quadbin_rasterize_agg  # R6 DONE: out_srid renamed
 gbx_rst_rasterize
 gbx_rst_rasterize_agg
 gbx_rst_rastertoworldcoord

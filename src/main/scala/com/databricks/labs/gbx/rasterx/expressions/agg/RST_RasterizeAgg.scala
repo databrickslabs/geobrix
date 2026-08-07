@@ -111,7 +111,7 @@ case class RST_RasterizeAgg(
     ymaxExpr:     Expression,
     widthPxExpr:  Expression,
     heightPxExpr: Expression,
-    sridExpr:     Expression,
+    outSridExpr:  Expression,
     exprConfExpr: Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset:   Int = 0
@@ -127,7 +127,7 @@ case class RST_RasterizeAgg(
     override def children: Seq[Expression] = Seq(
         geomWkbExpr, valueExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr,
+        widthPxExpr, heightPxExpr, outSridExpr,
         exprConfExpr
     )
 
@@ -173,7 +173,7 @@ case class RST_RasterizeAgg(
         val ymax     = evalDouble(ymaxExpr,     empty, "ymax")
         val widthPx  = evalInt(widthPxExpr,     empty, "width_px")
         val heightPx = evalInt(heightPxExpr,    empty, "height_px")
-        val srid     = evalInt(sridExpr,        empty, "srid")
+        val srid     = evalInt(outSridExpr,     empty, "out_srid")
 
         // Canonical fold order: sort by (geom_wkb lexicographic, value) so the
         // last-wins overlap winner is deterministic regardless of the order rows
@@ -220,7 +220,7 @@ object RST_RasterizeAgg extends WithExpressionInfo {
         case 9 => RST_RasterizeAgg(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8))
         case n => throw new IllegalArgumentException(
             s"$name expects 9 arguments " +
-            s"(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, srid); got $n")
+            s"(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid); got $n")
     }
 
     /** Unsigned lexicographic comparison of two byte arrays (stable canonical key). */

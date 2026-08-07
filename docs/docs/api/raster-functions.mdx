@@ -666,7 +666,7 @@ GROUP BY group_key
 
 Streaming aggregator that accepts one Z-valued point WKB per row and produces a TIN/Delaunay DTM raster tile per group; breaklines are supplied as a per-group constant array to enforce hard terrain edges.
 
-**Signature:** `rst_dtmfromgeoms_agg(point: Column, breaklines: Column, mergeTolerance: Column, snapTolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, srid: Column): Column`
+**Signature:** `rst_dtmfromgeoms_agg(point: Column, breaklines: Column, mergeTolerance: Column, snapTolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column): Column`
 
 **Parameters:** `point` — WKB point geometry with Z coordinate (one per row); `breaklines` — constant WKB array of breakline geometries per group (pass `null` or empty array if unused); remaining parameters match `rst_dtmfromgeoms`
 
@@ -758,7 +758,7 @@ GROUP BY group_key
 
 Streaming aggregator that burns geometry/value pairs (one row per feature) into a single rasterized tile per group; use when features arrive as individual rows rather than as a pre-built collection.
 
-**Signature:** `rst_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, srid: Column): Column`
+**Signature:** `rst_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column): Column`
 
 **Parameters:** `geom` — WKB geometry to burn; `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
 
@@ -792,7 +792,7 @@ GROUP BY group_key
 
 Streaming IDW-interpolation aggregator that accepts one point geometry and one scalar value per row and produces a Float64 GeoTIFF tile per group; use when observations arrive one per row rather than as pre-built arrays.
 
-**Signature:** `rst_gridfrompoints_agg(point: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, widthPx: Column, heightPx: Column, srid: Column, power: Column, maxPts: Column): Column`
+**Signature:** `rst_gridfrompoints_agg(point: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, widthPx: Column, heightPx: Column, out_srid: Column, power: Column, maxPts: Column): Column`
 
 **Parameters:** `point` — WKB point geometry (one per row); `value` — scalar observation for the point; `xmin/ymin/xmax/ymax` — output extent in CRS units (constant per group); `widthPx/heightPx` — output dimensions in pixels; `srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is standard); `maxPts` — maximum nearest neighbours considered per output pixel
 
@@ -830,7 +830,7 @@ Streaming aggregator that burns H3 cell centroid pixels (or spatial-envelope pix
 The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to end on a San Francisco Bay Area DEM: elevation isobands → H3 polyfill → a shared canvas from [`rst_h3_gridspec`](#h3-grid) → per-band `rst_h3_rasterize_agg` → multi-band stack via [`rst_frombands_agg`](#rst_frombands_agg), visualized with the [`gbx.vizx`](./vizx) helpers. The same pattern maps directly to a telco multi-threshold signal-coverage stack.
 :::
 
-**Signature:** `rst_h3_rasterize_agg(cellid: Column, value: Column, srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
+**Signature:** `rst_h3_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
 **Parameters:**
 - `cellid` — H3 cell ID (BIGINT or STRING) to burn (one per row)
@@ -862,7 +862,7 @@ Streaming aggregator that burns quadbin cell geometry/value pairs (one row per c
 
 `gbx_rst_quadbin_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
 
-**Signature:** `rst_quadbin_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, srid: Column): Column`
+**Signature:** `rst_quadbin_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
 **Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
 
@@ -886,7 +886,7 @@ Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell)
 
 `gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
 
-**Signature:** `rst_bng_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, srid: Column): Column`
+**Signature:** `rst_bng_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
 **Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS (typically `27700`)
 

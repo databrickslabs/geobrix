@@ -36,7 +36,7 @@ case class RST_GridFromPoints(
     ymaxExpr: Expression,
     widthPxExpr: Expression,
     heightPxExpr: Expression,
-    sridExpr: Expression,
+    outSridExpr: Expression,
     powerExpr: Expression,
     maxPtsExpr: Expression
 ) extends InvokedExpression {
@@ -44,7 +44,7 @@ case class RST_GridFromPoints(
     override def children: Seq[Expression] = Seq(
         pointsArrayExpr, valuesArrayExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr,
+        widthPxExpr, heightPxExpr, outSridExpr,
         powerExpr, maxPtsExpr,
         ExpressionConfigExpr()
     )
@@ -75,13 +75,13 @@ object RST_GridFromPoints extends WithExpressionInfo {
     def eval (
         pointsArray: ArrayData, valuesArray: ArrayData,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
+        widthPx: Int, heightPx: Int, out_srid: Int,
         power: Double, maxPts: Int,
         conf: UTF8String
     ): InternalRow = doInvoke(
         pointsArray, valuesArray,
         xmin, ymin, xmax, ymax,
-        widthPx, heightPx, srid,
+        widthPx, heightPx, out_srid,
         power, maxPts,
         conf
     )
@@ -90,13 +90,13 @@ object RST_GridFromPoints extends WithExpressionInfo {
     def eval (
         pointsArray: ArrayData, valuesArray: ArrayData,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Long, heightPx: Long, srid: Long,
+        widthPx: Long, heightPx: Long, out_srid: Long,
         power: Double, maxPts: Long,
         conf: UTF8String
     ): InternalRow = doInvoke(
         pointsArray, valuesArray,
         xmin, ymin, xmax, ymax,
-        widthPx.toInt, heightPx.toInt, srid.toInt,
+        widthPx.toInt, heightPx.toInt, out_srid.toInt,
         power, maxPts.toInt,
         conf
     )
@@ -104,7 +104,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
     private def doInvoke(
         pointsArray: ArrayData, valuesArray: ArrayData,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
+        widthPx: Int, heightPx: Int, out_srid: Int,
         power: Double, maxPts: Int,
         conf: UTF8String
     ): InternalRow =
@@ -117,7 +117,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
                     val geoms = geomsFromArrayData(pointsArray)
                     val values = valuesArray.toDoubleArray()
                     val features = featuresFromGeomsAndValues(geoms, values)
-                    execute(features, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, power, maxPts)
+                    execute(features, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts)
                 },
                 null,
                 BinaryType,
@@ -168,7 +168,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
     def execute(
         features: Seq[(Array[Byte], Double)],
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
+        widthPx: Int, heightPx: Int, out_srid: Int,
         power: Double, maxPts: Int
     ): InternalRow = {
         // Materialize rootPath defensively - same /vsimem prep pattern as RST_Rasterize.
@@ -185,7 +185,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
         if (features.isEmpty) {
             // No points -> return an empty NoData raster of the requested shape.
             val empty = VectorRasterBridge.buildEmptyRaster(
-                xmin, ymin, xmax, ymax, widthPx, heightPx, srid)
+                xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid)
             empty.FlushCache()
             val bytes = VectorRasterBridge.toGTiffBytes(empty)
             empty.delete()
@@ -200,7 +200,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
         // IDW is practical for (~thousands of points).
         val uid = java.util.UUID.randomUUID().toString.replace("-", "")
         val srcPath = s"/vsimem/gbx_idw_src_$uid.geojson"
-        writeGeoJson(srcPath, features, srid)
+        writeGeoJson(srcPath, features, out_srid)
         val outPath = s"/vsimem/gbx_idw_$uid.tif"
         try {
             // GDAL_OF_VECTOR = 0x04 in gdal.h; the Java binding exposes it via gdalconst.
@@ -306,7 +306,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
             c(9), c(10))
         case n => throw new IllegalArgumentException(
             s"gbx_rst_gridfrompoints takes 9 to 11 arguments " +
-            s"(points, values, xmin, ymin, xmax, ymax, width_px, height_px, srid, [power, [max_pts]]); got $n"
+            s"(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power, [max_pts]]); got $n"
         )
     }
 }

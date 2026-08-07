@@ -112,7 +112,7 @@ object BNGRasterizeAcc {
 case class RST_BNG_RasterizeAgg(
     cellIdExpr:    Expression,
     valueExpr:     Expression,
-    sridExpr:      Expression,
+    outSridExpr:   Expression,
     pixelSizeExpr: Expression,
     xminExpr:      Expression,
     yminExpr:      Expression,
@@ -135,7 +135,7 @@ case class RST_BNG_RasterizeAgg(
     override def prettyName: String = RST_BNG_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        cellIdExpr, valueExpr, sridExpr, pixelSizeExpr,
+        cellIdExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
         exprConfExpr
@@ -207,7 +207,7 @@ case class RST_BNG_RasterizeAgg(
 
         // BNG rasters are always EPSG:27700-native: cell centroids/boundaries and
         // pointToCellID all operate in 27700, so there is no reprojection hop. The
-        // sridExpr argument is retained for signature parity with the H3/quadbin UDAFs.
+        // outSridExpr argument is retained for signature parity with the H3/quadbin UDAFs.
         val srid = BNG.crsID
 
         // Resolution from the cells (derived from each cell's Long id); error on mixed.
@@ -289,7 +289,7 @@ object RST_BNG_RasterizeAgg extends WithExpressionInfo {
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
         case n => throw new IllegalArgumentException(
             s"$name expects 12 arguments " +
-            s"(cellid, value, srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
+            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
     }
 
     /** Resolution of a cell set (derived from each cell's Long id); throws on a mixed-resolution set. */

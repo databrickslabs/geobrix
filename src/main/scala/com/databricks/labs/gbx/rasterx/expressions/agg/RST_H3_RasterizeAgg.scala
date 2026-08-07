@@ -103,7 +103,7 @@ object H3RasterizeAcc {
 case class RST_H3_RasterizeAgg(
     cellIdExpr:    Expression,
     valueExpr:     Expression,
-    sridExpr:      Expression,
+    outSridExpr:   Expression,
     pixelSizeExpr: Expression,
     xminExpr:      Expression,
     yminExpr:      Expression,
@@ -126,7 +126,7 @@ case class RST_H3_RasterizeAgg(
     override def prettyName: String = RST_H3_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        cellIdExpr, valueExpr, sridExpr, pixelSizeExpr,
+        cellIdExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
         exprConfExpr
@@ -181,7 +181,7 @@ case class RST_H3_RasterizeAgg(
         if (buffer.cells.isEmpty) return null
 
         val empty = InternalRow.empty
-        val srid     = evalInt(sridExpr,      empty, "srid")
+        val srid     = evalInt(outSridExpr,   empty, "out_srid")
         val pixelOpt = evalDoubleOpt(pixelSizeExpr, empty)
         val xminOpt  = evalDoubleOpt(xminExpr,  empty)
         val yminOpt  = evalDoubleOpt(yminExpr,  empty)
@@ -284,7 +284,7 @@ object RST_H3_RasterizeAgg extends WithExpressionInfo {
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
         case n => throw new IllegalArgumentException(
             s"$name expects 12 arguments " +
-            s"(cellid, value, srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
+            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
     }
 
     /** Resolution of a cell set; throws on a mixed-resolution set. */

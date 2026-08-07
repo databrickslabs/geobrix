@@ -4573,6 +4573,7 @@ def rst_xyzpyramid(
     format: ColLike = "PNG",
     size: ColLike = 256,
     resampling: ColLike = "bilinear",
+    rescale: ColLike = "auto",
 ) -> None:
     """Render every web-mercator XYZ tile intersecting the raster across a zoom range.
 
@@ -4583,7 +4584,7 @@ def rst_xyzpyramid(
     Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
 
         SELECT t.z, t.x, t.y, t.bytes
-        FROM <df>, LATERAL gbx_rst_xyzpyramid(tile, min_z, max_z, format, size, resampling) t
+        FROM <df>, LATERAL gbx_rst_xyzpyramid(tile, min_z, max_z, format, size, resampling, rescale) t
 
     Each output row is ``struct(z INT, x INT, y INT, bytes BINARY)``, one per
     intersecting tile. Raises if the candidate tile-count across the range
@@ -4602,7 +4603,7 @@ def rst_xyzpyramid(
     raise NotImplementedError(
         "Invoke the registered UDTF as a SQL LATERAL table function: "
         "SELECT t.* FROM <df>, "
-        "LATERAL gbx_rst_xyzpyramid(tile, min_z, max_z, format, size, resampling) t"
+        "LATERAL gbx_rst_xyzpyramid(tile, min_z, max_z, format, size, resampling, rescale) t"
     )
 
 

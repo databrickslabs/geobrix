@@ -49,6 +49,11 @@ _RESAMPLING_MAP = {
 
 _TMS = morecantile.tms.get("WebMercatorQuad")
 
+# Sentinel: iter_pyramid uses this to distinguish "no rescale by design (mode=none)"
+# from "in_range not yet computed (None)". render_tile maps it back to None so that
+# no in_range parameter is passed to img.post_process.
+_NO_RESCALE = object()
+
 
 def transparent_png(size: int) -> bytes:
     """Return a fully transparent RGBA PNG of ``size`` x ``size`` (alpha=0)."""
@@ -170,6 +175,10 @@ def render_tile(
     fmt_u, s, resamp_name = _validate(fmt, size, resampling)
     if in_range is None:
         in_range = _resolve_in_range(ds, rescale)  # may raise ValueError on bad rescale
+    # _NO_RESCALE sentinel: iter_pyramid passes this to signal "rescale=none, no scaling".
+    # Map it back to None here so img.post_process is never called.
+    if in_range is _NO_RESCALE:
+        in_range = None
     try:
         with Reader(None, dataset=ds) as cog:
             img = cog.tile(
@@ -235,6 +244,11 @@ def iter_pyramid(
     # Validate render args up front (so bad format/size fails fast, not per-tile).
     _validate(fmt, size, resampling)
     in_range = _resolve_in_range(ds, rescale)  # once; also validates rescale
+    # _resolve_in_range returns None for both "none" (no scaling) and uint8-auto
+    # (pass-through). To distinguish "no scaling by design" from "not yet computed",
+    # replace None with _NO_RESCALE sentinel so render_tile won't re-resolve rescale.
+    if in_range is None:
+        in_range = _NO_RESCALE
     west, south, east, north = _wgs84_bounds(ds)
 
     # Count guard first — never materialize a giant list to count.

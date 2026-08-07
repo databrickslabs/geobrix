@@ -425,8 +425,8 @@
       "usage_args": "tile"
     },
     "gbx_rst_slope": {
-      "examples": "Examples:\n      > SELECT gbx_rst_slope(tile, 'degrees', 1.0) AS slope FROM rasters;",
-      "usage_args": "tile, [unit], [scale]"
+      "examples": "Examples:\n      > SELECT gbx_rst_slope(tile, 'degrees', 1.0, 1.0) AS slope FROM rasters;",
+      "usage_args": "tile, [unit], [xscale], [yscale]"
     },
     "gbx_rst_srid": {
       "examples": "Examples:\n      > SELECT gbx_rst_srid(tile) as srid FROM rasters;",

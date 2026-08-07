@@ -1834,18 +1834,21 @@ def rst_polygonize(
 def rst_slope(
     tile: ColLike,
     unit: ColLike = None,
-    scale: ColLike = None,
+    xscale: ColLike = None,
+    yscale: ColLike = None,
 ) -> Column:
     """Compute slope from a DEM tile via ``gdal.DEMProcessing("slope")``.
 
     Args:
         tile: Single-band DEM tile column.
         unit: ``"degrees"`` (default) or ``"percent"``.
-        scale: Horizontal scale (ratio of vertical units to horizontal units).
+        xscale: Explicit horizontal scale override (vertical/horizontal ratio)
+            along the x axis. Must be supplied together with ``yscale``.
             By default the scale is auto-derived from the raster CRS (GDAL 3.11
             behavior), so projected CRS in metres and geographic CRS in degrees
-            both work without an explicit value. Pass an explicit ``scale``
-            (e.g. 111120 for degree grids) to override.
+            both work without an explicit value.
+        yscale: Explicit horizontal scale override along the y axis. Must be
+            supplied together with ``xscale``.
 
     Returns:
         Single-band Float32 GTiff tile column.
@@ -1855,8 +1858,11 @@ def rst_slope(
         if unit is None
         else (f.lit(unit) if isinstance(unit, str) else _col(unit))
     )
-    scale_col = f.lit(float("nan")) if scale is None else _col(scale)
-    return f.call_function("gbx_rst_slope", _col(tile), unit_col, scale_col)
+    if xscale is None and yscale is None:
+        return f.call_function("gbx_rst_slope", _col(tile), unit_col)
+    if xscale is None or yscale is None:
+        raise ValueError("rst_slope: xscale and yscale must be supplied together (both or neither)")
+    return f.call_function("gbx_rst_slope", _col(tile), unit_col, _col(xscale), _col(yscale))
 
 
 def rst_aspect(

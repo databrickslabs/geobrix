@@ -580,14 +580,14 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     // Terrain analysis (DEM processing) - Column form
     def rst_slope(tile: Column): Column =
-        ColumnAdapter(RST_Slope.name, Seq(tile, lit("degrees"), lit(Double.NaN)))
+        ColumnAdapter(RST_Slope.name, Seq(tile, lit("degrees"), lit(Double.NaN), lit(Double.NaN)))
     def rst_slope(tile: Column, unit: Column): Column =
-        ColumnAdapter(RST_Slope.name, Seq(tile, unit, lit(Double.NaN)))
-    def rst_slope(tile: Column, unit: Column, scale: Column): Column =
-        ColumnAdapter(RST_Slope.name, Seq(tile, unit, scale))
+        ColumnAdapter(RST_Slope.name, Seq(tile, unit, lit(Double.NaN), lit(Double.NaN)))
+    def rst_slope(tile: Column, unit: Column, xscale: Column, yscale: Column): Column =
+        ColumnAdapter(RST_Slope.name, Seq(tile, unit, xscale, yscale))
     def rst_slope(tile: Column, unit: String): Column = rst_slope(tile, lit(unit))
-    def rst_slope(tile: Column, unit: String, scale: Double): Column =
-        rst_slope(tile, lit(unit), lit(scale))
+    def rst_slope(tile: Column, unit: String, xscale: Double, yscale: Double): Column =
+        rst_slope(tile, lit(unit), lit(xscale), lit(yscale))
 
     def rst_aspect(tile: Column): Column =
         ColumnAdapter(RST_Aspect.name, Seq(tile, lit(false), lit(false)))

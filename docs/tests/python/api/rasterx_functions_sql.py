@@ -2057,9 +2057,9 @@ rst_polygonize_sql_example_output = """
 def rst_slope_sql_example():
     """Compute slope (degrees) from a DEM tile."""
     return """
--- Slope in degrees per pixel. Use unit='percent' for rise/run, or pass scale
--- 111120 for unprojected geographic CRS (lon/lat in degrees).
-SELECT gbx_rst_slope(tile, 'degrees', 1.0) AS slope FROM rasters;
+-- Slope in degrees per pixel (auto-scale from CRS). Use unit='percent' for rise/run.
+-- Pass xscale and yscale together to override the horizontal scale per axis.
+SELECT gbx_rst_slope(tile, 'degrees', 1.0, 1.0) AS slope FROM rasters;
 """
 
 

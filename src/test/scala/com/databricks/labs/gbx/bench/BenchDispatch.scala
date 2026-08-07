@@ -399,7 +399,7 @@ object BenchDispatch {
     case "rst_max"        => BenchFingerprint.ofArray(RST_Max.execute(ds))
     case "rst_median"     => BenchFingerprint.ofArray(RST_Median.execute(ds, Map.empty))
     case "rst_pixelcount" => BenchFingerprint.ofArray(RST_PixelCount.execute(ds).map(_.toDouble))
-    case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "scale", Double.NaN)))
+    case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "xscale", Double.NaN), argD(a, "yscale", Double.NaN)))
     case "rst_aspect"     => fpDerived(RST_Aspect.execute(ds, argB(a, "trigonometric", false), argB(a, "zero_for_flat", false)))
     case "rst_hillshade"  => fpDerived(RST_Hillshade.execute(ds, argD(a, "azimuth", 315.0), argD(a, "altitude", 45.0), argD(a, "z_factor", 1.0)))
     case "rst_tri"        => fpDerived(RST_TRI.execute(ds))

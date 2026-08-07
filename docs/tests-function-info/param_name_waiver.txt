@@ -36,7 +36,6 @@ gbx_rst_rastertoworldcoord
 gbx_rst_rastertoworldcoordx
 gbx_rst_rastertoworldcoordy
 gbx_rst_sample
-gbx_rst_slope
 gbx_rst_transform
 gbx_rst_viewshed
 gbx_rst_worldtorastercoord

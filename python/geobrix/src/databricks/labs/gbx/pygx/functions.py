@@ -768,9 +768,9 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------
 
 
-def quadbin_pointascell(lon: ColLike, lat: ColLike, resolution: ColLike) -> Column:
-    """Quadbin cell (LONG) containing the WGS84 lon/lat point at `resolution`."""
-    return f.call_function("gbx_quadbin_pointascell", _col(lon), _col(lat), _col(resolution))
+def quadbin_pointascell(longitude: ColLike, latitude: ColLike, resolution: ColLike) -> Column:
+    """Quadbin cell (LONG) containing the WGS84 longitude/latitude point at `resolution`."""
+    return f.call_function("gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution))
 
 
 def quadbin_resolution(cell: ColLike) -> Column:

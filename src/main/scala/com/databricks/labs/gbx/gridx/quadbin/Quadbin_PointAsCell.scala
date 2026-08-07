@@ -6,15 +6,15 @@ import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._
 
-/** Expression that returns the quadbin cell (BIGINT) containing the (lon, lat) at the given resolution.
-  * Arguments: lon (double), lat (double), resolution (int). Resolution range: 0..26. */
+/** Expression that returns the quadbin cell (BIGINT) containing the (longitude, latitude) at the given resolution.
+  * Arguments: longitude (double), latitude (double), resolution (int). Resolution range: 0..26. */
 case class Quadbin_PointAsCell(
-    lon: Expression,
-    lat: Expression,
+    longitude: Expression,
+    latitude: Expression,
     resolution: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(lon, lat, resolution)
+    override def children: Seq[Expression] = Seq(longitude, latitude, resolution)
     override def dataType: DataType = LongType
     override def nullable: Boolean = true
     override def prettyName: String = Quadbin_PointAsCell.name
@@ -26,10 +26,10 @@ case class Quadbin_PointAsCell(
 /** Companion: SQL name gbx_quadbin_pointascell, builder, and eval entry. */
 object Quadbin_PointAsCell extends WithExpressionInfo {
 
-    def execute(lon: Double, lat: Double, resolution: Int): Long = Quadbin.pointToCell(lon, lat, resolution)
+    def execute(longitude: Double, latitude: Double, resolution: Int): Long = Quadbin.pointToCell(longitude, latitude, resolution)
 
-    def eval(lon: Double, lat: Double, resolution: Int): Long = execute(lon, lat, resolution)
-    def eval(lon: Double, lat: Double, resolution: Long): Long = execute(lon, lat, resolution.toInt)
+    def eval(longitude: Double, latitude: Double, resolution: Int): Long = execute(longitude, latitude, resolution)
+    def eval(longitude: Double, latitude: Double, resolution: Long): Long = execute(longitude, latitude, resolution.toInt)
 
     override def name: String = "gbx_quadbin_pointascell"
 

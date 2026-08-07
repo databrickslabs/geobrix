@@ -40,8 +40,8 @@ object functions extends Serializable {
 
     // ---------- Column API ----------
 
-    def quadbin_pointascell(lon: Column, lat: Column, resolution: Column): Column =
-        ColumnAdapter(Quadbin_PointAsCell.name, Seq(lon, lat, resolution))
+    def quadbin_pointascell(longitude: Column, latitude: Column, resolution: Column): Column =
+        ColumnAdapter(Quadbin_PointAsCell.name, Seq(longitude, latitude, resolution))
 
     def quadbin_aswkb(cell: Column): Column = ColumnAdapter(Quadbin_AsWKB.name, Seq(cell))
 
@@ -66,8 +66,8 @@ object functions extends Serializable {
 
     // ---------- Scalar-literal overloads ----------
 
-    def quadbin_pointascell(lon: Column, lat: Column, resolution: Int): Column =
-        quadbin_pointascell(lon, lat, lit(resolution))
+    def quadbin_pointascell(longitude: Column, latitude: Column, resolution: Int): Column =
+        quadbin_pointascell(longitude, latitude, lit(resolution))
 
     def quadbin_polyfill(geom: Column, resolution: Int): Column =
         quadbin_polyfill(geom, lit(resolution))

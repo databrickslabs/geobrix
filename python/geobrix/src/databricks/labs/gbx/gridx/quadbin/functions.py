@@ -42,19 +42,19 @@ def register(_spark: SparkSession) -> None:
     ).load().collect()
 
 
-def quadbin_pointascell(lon: ColLike, lat: ColLike, resolution: ColLike) -> Column:
-    """Encode (lon, lat) at a given zoom as a CARTO quadbin v0 cell (BIGINT).
+def quadbin_pointascell(longitude: ColLike, latitude: ColLike, resolution: ColLike) -> Column:
+    """Encode (longitude, latitude) at a given zoom as a CARTO quadbin v0 cell (BIGINT).
 
     Args:
-        lon: Longitude in EPSG:4326 (degrees).
-        lat: Latitude in EPSG:4326 (degrees).
+        longitude: Longitude in EPSG:4326 (degrees).
+        latitude: Latitude in EPSG:4326 (degrees).
         resolution: Quadbin zoom level, integer in ``[0, 26]``.
 
     Returns:
         Column of BIGINT quadbin cell ids.
     """
     return f.call_function(
-        "gbx_quadbin_pointascell", _col(lon), _col(lat), _col(resolution)
+        "gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution)
     )
 
 

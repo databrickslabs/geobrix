@@ -119,7 +119,7 @@ Convert a lon/lat coordinate (EPSG:4326) to the quadbin cell containing it at th
 Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon/lat to a quadbin cell at the given zoom; bit-identical to the heavyweight `Quadbin.scala` (incl. the antimeridian/pole tile clamp).
 :::
 
-**Signature:** `quadbin_pointascell(lon: Column, lat: Column, zoom: Column): Column`
+**Signature:** `quadbin_pointascell(longitude: Column, latitude: Column, zoom: Column): Column`
 
 **Returns:**
 - `BIGINT` quadbin cell ID

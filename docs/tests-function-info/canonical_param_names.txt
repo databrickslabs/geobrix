@@ -182,7 +182,7 @@ gbx_quadbin_cellunion	cells
 gbx_quadbin_centroid	cell
 gbx_quadbin_distance	cellid1, cellid2
 gbx_quadbin_kring	cell, k
-gbx_quadbin_pointascell	lon, lat, resolution
+gbx_quadbin_pointascell	longitude, latitude, resolution
 gbx_quadbin_polyfill	geom, resolution
 gbx_quadbin_resolution	cell
 gbx_quadbin_tessellate	geom, resolution

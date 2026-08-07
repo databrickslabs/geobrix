@@ -710,7 +710,7 @@
     },
     "gbx_quadbin_pointascell": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_pointascell(-122.4194, 37.7749, 10) as sf_cell;",
-      "usage_args": "lon, lat, resolution"
+      "usage_args": "longitude, latitude, resolution"
     },
     "gbx_quadbin_polyfill": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_polyfill( st_geomfromtext('POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))'), 5 ) as cells;",

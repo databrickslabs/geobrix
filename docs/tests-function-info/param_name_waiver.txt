@@ -1,16 +1,17 @@
 # Functions pending canonical param-name migration; shrinks to empty. See spec 2026-08-06-canonical-param-names-design.md
+#
+# Remaining 7 are PERMANENT light-arity [B] gaps (feature parity, not naming).
+# See spec 2026-08-07-orphan-tail. These stay waived indefinitely — the fix is
+# implementing the missing light-tier params, which is a separate feature-parity
+# workstream, not a naming rename.
+#
+# Resolved by Tasks 1-4 (orphan-tail branch, beta/0.5.0):
 # R4 DONE: gbx_bng_aswkb, gbx_bng_aswkt, gbx_bng_cellarea, gbx_bng_centroid, gbx_bng_distance,
 #          gbx_bng_euclideandistance, gbx_bng_kloop, gbx_bng_kring, gbx_bng_cellintersection,
 #          gbx_bng_cellunion, gbx_bng_cellintersection_agg, gbx_bng_cellunion_agg,
 #          gbx_quadbin_distance, gbx_quadbin_cellunion_agg
 # gbx_bng_eastnorthasbng  # Task 3 DONE: east/north (heavy) and e/n (light) -> easting/northing
-gbx_bng_geomkloopexplode
-gbx_bng_geomkringexplode
-gbx_bng_kloopexplode
-gbx_bng_kringexplode
 # gbx_bng_pointascell  # Task 3 DONE: point (heavy) -> geom
-gbx_bng_tessellate
-gbx_bng_tessellateexplode
 # gbx_custom_grid  # Task 3 DONE: light x_min.../root_x -> bound_x_min.../root_cell_size_x
 # gbx_rst_bng_rasterize_agg  # R6 DONE: out_srid renamed
 # gbx_rst_clip  # Task 4 DONE: geometry -> geom, D3 clip_crs exposed
@@ -23,7 +24,7 @@ gbx_bng_tessellateexplode
 # gbx_rst_gridfrompoints  # N9 DONE: points/values renamed to *_array
 # gbx_rst_gridfrompoints_agg  # R6 DONE: out_srid renamed
 # gbx_rst_h3_rasterize_agg  # R6 DONE: out_srid renamed
-gbx_rst_histogram
+# gbx_rst_histogram  # Task 5 DONE: light min/max -> min_val/max_val (matches heavy)
 # gbx_rst_mapalgebra  # Task 4 DONE: Scala field tile -> tiles, expression -> json_spec
 # gbx_rst_merge  # Task 4 DONE: Scala field tile -> tiles
 # gbx_rst_ndvi  # Task 4 DONE: red_index/nir_index -> red_idx/nir_idx
@@ -40,9 +41,17 @@ gbx_rst_histogram
 # gbx_rst_worldtorastercoord  # Task 2 DONE: world_x/world_y -> x/y
 # gbx_rst_worldtorastercoordx  # Task 2 DONE: world_x/world_y -> x/y
 # gbx_rst_worldtorastercoordy  # Task 2 DONE: world_x/world_y -> x/y
-gbx_rst_xyzpyramid
 # gbx_st_asmvt  # N1 DONE: geom_wkb renamed to geom
 # gbx_st_asmvt_pyramid  # N1 DONE: geom_wkb renamed to geom
 # gbx_st_interpolateelevationbbox  # N9 DONE: points_geom/breaklines_geom renamed to *_array
 # gbx_st_interpolateelevationgeom  # N9 DONE: points_geom/breaklines_geom renamed to *_array
 # gbx_st_triangulate  # N9 DONE: points_geom/breaklines_geom renamed to *_array
+#
+# --- 7 PERMANENT [B] light-arity gaps (feature parity, not naming) ---
+gbx_bng_geomkloopexplode  # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
+gbx_bng_geomkringexplode  # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
+gbx_bng_kloopexplode      # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
+gbx_bng_kringexplode      # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
+gbx_bng_tessellateexplode # [B] LATERAL-only light stub (raises NotImplementedError); missing explode impl, not a naming issue
+gbx_rst_xyzpyramid        # [B] light missing trailing param: rescale (light arity 6 vs heavy arity 7)
+gbx_bng_tessellate        # [B] light missing trailing param: keep_core_geom (light arity 2 vs heavy arity 3)

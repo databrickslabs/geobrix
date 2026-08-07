@@ -4350,24 +4350,24 @@ def rst_summary(tile: ColLike) -> Column:
 def rst_histogram(
     tile: ColLike,
     n_buckets: ColLike = 256,
-    min: ColLike = None,  # noqa: A002 - mirrors heavyweight arg name
-    max: ColLike = None,  # noqa: A002
+    min_val: ColLike = None,
+    max_val: ColLike = None,
     include_nodata: ColLike = False,
 ) -> Column:
     """Per-band histogram as MAP<STRING, ARRAY<LONG>> keyed by ``band_<i>``.
 
     Args:
         tile:           Tile struct column.
-        n_buckets:      Number of equal-width buckets across [min, max] (default 256).
-        min:            Lower bound; defaults to the band's valid-pixel minimum.
-        max:            Upper bound; defaults to the band's valid-pixel maximum.
+        n_buckets:      Number of equal-width buckets across [min_val, max_val] (default 256).
+        min_val:        Lower bound; defaults to the band's valid-pixel minimum.
+        max_val:        Upper bound; defaults to the band's valid-pixel maximum.
         include_nodata: Include masked pixels in the binning (default False).
 
-    Values outside [min, max] are dropped (no out-of-range bucket).
+    Values outside [min_val, max_val] are dropped (no out-of-range bucket).
     """
     nb = f.lit(n_buckets) if isinstance(n_buckets, int) else _col(n_buckets)
-    lo = f.lit(None) if min is None else _col(min)
-    hi = f.lit(None) if max is None else _col(max)
+    lo = f.lit(None) if min_val is None else _col(min_val)
+    hi = f.lit(None) if max_val is None else _col(max_val)
     inc = (
         f.lit(include_nodata)
         if isinstance(include_nodata, bool)

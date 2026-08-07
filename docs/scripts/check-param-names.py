@@ -55,8 +55,16 @@ def load_fixture() -> dict[str, list[str]]:
 def load_waiver() -> set[str]:
     if not WAIVER.exists():
         return set()
-    return {l.strip() for l in WAIVER.read_text().splitlines()
-            if l.strip() and not l.startswith("#")}
+    entries = set()
+    for l in WAIVER.read_text().splitlines():
+        stripped = l.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Strip inline comment (e.g. "gbx_foo  # reason")
+        name = stripped.split("#")[0].strip()
+        if name:
+            entries.add(name)
+    return entries
 
 def _find_def(text: str, pyname: str) -> str | None:
     # Match `def <pyname>(` and capture the full parenthesized arg list across newlines.
@@ -94,14 +102,21 @@ def _first_existing(globs: list[str], gbx_name: str) -> list[str] | None:
             return params
     return None
 
-def check_invariant_a(report: bool = False) -> list[str]:
+def check_invariant_a(report: bool = False,
+                      b_names: set[str] | None = None) -> list[str]:
     """Check param-name correctness vs canonical fixture.
 
     Heavy tier: exact match (canonical == heavy).
     Light tier: prefix match (canonical is an in-order prefix of light; light
     may carry extra trailing params beyond the canonical length).
+
+    If ``b_names`` is provided (functions that already have a [B] arity-gap
+    violation), light-tier [A] checks are suppressed for those functions — the
+    naming issue is masked by the missing params and cannot be fixed without
+    first closing the arity gap.
     """
     fixture, waiver = load_fixture(), load_waiver()
+    b_names = b_names or set()
     violations = []
     for gbx_name, canon in fixture.items():
         heavy = _first_existing(HEAVY_GLOBS, gbx_name)
@@ -112,7 +127,9 @@ def check_invariant_a(report: bool = False) -> list[str]:
             if report or gbx_name not in waiver:
                 violations.append(msg)
         # Light: canonical must be an in-order prefix of light.
-        if light is not None:
+        # Skip when a [B] arity gap already covers this function — the naming
+        # mismatch is a symptom of missing params, not an independent naming bug.
+        if light is not None and gbx_name not in b_names:
             n = len(canon)
             if len(light) < n or light[:n] != canon:
                 msg = (f"[A] {gbx_name}: light params {light} does not have "
@@ -148,7 +165,11 @@ def main() -> int:
     ap.add_argument("--report", action="store_true",
                     help="list ALL violations ignoring the waiver")
     args = ap.parse_args()
-    violations = check_invariant_a(args.report) + check_invariant_b(args.report)
+    # Compute [B] first so [A] can suppress light-tier checks that are masked
+    # by an arity gap (the naming issue cannot be fixed without closing the gap).
+    b_violations = check_invariant_b(args.report)
+    b_names = {v.split(":")[0].replace("[B] ", "") for v in b_violations}
+    violations = check_invariant_a(args.report, b_names=b_names) + b_violations
     if violations:
         print("\n".join(sorted(violations)))
         print(f"\n{len(violations)} param-name violation(s).")

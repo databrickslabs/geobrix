@@ -143,7 +143,7 @@ gbx_rst_resample_to_size	tile, width_px, height_px, [algorithm]
 gbx_rst_band	tile, band_index
 gbx_rst_buildoverviews	tile, levels, [resampling]
 gbx_rst_fillnodata	tile, [max_search_dist], [smoothing_iter]
-gbx_rst_histogram	tile, [n_buckets], [min], [max], [include_nodata]
+gbx_rst_histogram	tile, [n_buckets], [min_val], [max_val], [include_nodata]
 gbx_rst_sample	tile, geom, [crs]
 gbx_rst_setsrid	tile, srid
 gbx_rst_setcrs	tile, crs

@@ -428,6 +428,41 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         }
     }
 
+    test("null tiles from rst_clip are skipped by all three buffering aggregators (no NPE)") {
+        // Regression: child.eval(input) returns null when rst_clip sees a
+        // non-intersecting geometry.  Before the fix, the null InternalRow was
+        // passed straight to normalizeToV2Row which called row.numFields() on
+        // it -> NullPointerException.  After the fix, null tiles are skipped in
+        // update(); a group whose tiles all clip to null yields an empty buffer,
+        // and eval() returns null for an empty buffer -- no crash.
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+
+        // One MODIS tile clipped with a geometry shrunk by 500 km -- far
+        // outside the raster extent, so rst_clip returns a null tile.
+        val df = Seq(
+          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
+        ).toDF("path")
+            .withColumn("raster", udfs.rasterFromPath(col("path")))
+            .withColumn("bbox", rst_boundingbox(col("raster")))
+            .withColumn("clipper", st_buffer(col("bbox"), lit(-500000.0)))
+            .withColumn("raster", rst_clip(col("raster"), col("clipper"), lit(true)))
+
+        noException should be thrownBy {
+            df.groupBy(lit(1))
+                .agg(
+                  rst_combineavg_agg(col("raster")),
+                  rst_merge_agg(col("raster")),
+                  rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc")
+                )
+                .collect()
+        }
+    }
+
     test("normalizeToV2Row: v1 3-field row becomes 8-field, v2 8-field row is unchanged") {
         val emptyMap = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
         val v1 = new GenericInternalRow(Array[Any](42L, Array[Byte](1, 2, 3), emptyMap))

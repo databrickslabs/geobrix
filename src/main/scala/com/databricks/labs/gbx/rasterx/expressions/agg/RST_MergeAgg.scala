@@ -26,7 +26,7 @@ case class RST_MergeAgg(
 
     override lazy val deterministic: Boolean = true
     override val child: Expression = tile
-    override val nullable: Boolean = false
+    override val nullable: Boolean = true
     lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def prettyName: String = RST_MergeAgg.name
@@ -36,7 +36,11 @@ case class RST_MergeAgg(
 
     def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {
         val value = child.eval(input)
-        buffer += InternalRow.copyValue(RasterSerializationUtil.normalizeToV2Row(value.asInstanceOf[InternalRow]))
+        if (value != null) {
+            buffer += InternalRow.copyValue(
+                RasterSerializationUtil.normalizeToV2Row(value.asInstanceOf[InternalRow])
+            )
+        }
         buffer
     }
 

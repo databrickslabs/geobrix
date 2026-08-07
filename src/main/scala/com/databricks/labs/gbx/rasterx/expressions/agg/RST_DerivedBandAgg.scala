@@ -31,7 +31,7 @@ case class RST_DerivedBandAgg(
       with TernaryLike[Expression] {
 
     override lazy val deterministic: Boolean = true
-    override val nullable: Boolean = false
+    override val nullable: Boolean = true
     lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def prettyName: String = RST_DerivedBandAgg.name
@@ -45,7 +45,11 @@ case class RST_DerivedBandAgg(
 
     def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {
         val value = first.eval(input)
-        buffer += InternalRow.copyValue(RasterSerializationUtil.normalizeToV2Row(value.asInstanceOf[InternalRow]))
+        if (value != null) {
+            buffer += InternalRow.copyValue(
+                RasterSerializationUtil.normalizeToV2Row(value.asInstanceOf[InternalRow])
+            )
+        }
         buffer
     }
 

@@ -351,14 +351,14 @@ In the **lightweight** tier these TIN generators are PySpark UDTFs with **no Pyt
 
 Builds a Delaunay TIN from mass-point geometries (with Z values) and optional breakline geometries, emitting one triangle polygon per row. Use this when you need the raw triangulation — e.g., to inspect mesh quality, clip triangles to an area of interest, or feed a custom sampler.
 
-**Signature:** `gbx_st_triangulate(points, breaklines, mergeTolerance, snapTolerance, splitPointFinder, mode)`
+**Signature:** `gbx_st_triangulate(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode])`
 
 **Parameters:**
-- `points` — Array column of point geometries with Z values (the mass points that define the surface). Accepts WKB/EWKB/WKT/EWKT.
-- `breaklines` — Array column of linestring geometries that the mesh must honor as edges (e.g., ridge lines, drainage channels). Pass an empty array if no breaklines are needed.
-- `mergeTolerance` (`DOUBLE`) — Distance below which coincident points are merged before triangulation.
-- `snapTolerance` (`DOUBLE`) — Distance within which points are snapped to breakline vertices.
-- `splitPointFinder` (`STRING`) — Conforming-mesh refinement strategy. Use `'NONENCROACHING'` for a mesh that avoids encroaching on breakline segments; `'MIDPOINT'` is also valid (heavyweight `conforming` mode).
+- `points_array` — Array column of point geometries with Z values (the mass points that define the surface). Accepts WKB/EWKB/WKT/EWKT.
+- `breaklines_array` — Array column of linestring geometries that the mesh must honor as edges (e.g., ridge lines, drainage channels). Pass an empty array if no breaklines are needed.
+- `merge_tolerance` (`DOUBLE`) — Distance below which coincident points are merged before triangulation.
+- `snap_tolerance` (`DOUBLE`) — Distance within which points are snapped to breakline vertices.
+- `split_point_finder` (`STRING`) — Conforming-mesh refinement strategy. Use `'NONENCROACHING'` for a mesh that avoids encroaching on breakline segments; `'MIDPOINT'` is also valid (heavyweight `conforming` mode).
 - `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only). See [Triangulation modes](#triangulation-modes-constrained-vs-conforming) above.
 
 **Generator:** Emits one row per output triangle. Use with SQL `LATERAL` to materialize the triangles; the output schema column is `triangle` (`BINARY` WKB polygon).
@@ -390,16 +390,16 @@ In the lightweight tier, call the registered UDTF via SQL `LATERAL` (shown above
 
 Builds a TIN from mass points and breaklines, then samples elevation on a regular pixel grid covering an **explicit bounding box**. Use this when you already know the output extent in absolute coordinates — for example, when snapping to a fixed tile extent or aligning with a raster grid.
 
-**Signature:** `gbx_st_interpolateelevationbbox(points, breaklines, mergeTolerance, snapTolerance, splitPointFinder, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, mode)`
+**Signature:** `gbx_st_interpolateelevationbbox(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode])`
 
 **Parameters:**
-- `points` — Mass-point geometries with Z values. Accepts WKB/EWKB/WKT/EWKT.
-- `breaklines` — Breakline geometries (or an empty array).
-- `mergeTolerance` (`DOUBLE`) — Merge distance for coincident points.
-- `snapTolerance` (`DOUBLE`) — Snap distance to breakline vertices.
-- `splitPointFinder` (`STRING`) — Conforming-mesh strategy (e.g. `'NONENCROACHING'`).
+- `points_array` — Mass-point geometries with Z values. Accepts WKB/EWKB/WKT/EWKT.
+- `breaklines_array` — Breakline geometries (or an empty array).
+- `merge_tolerance` (`DOUBLE`) — Merge distance for coincident points.
+- `snap_tolerance` (`DOUBLE`) — Snap distance to breakline vertices.
+- `split_point_finder` (`STRING`) — Conforming-mesh strategy (e.g. `'NONENCROACHING'`).
 - `xmin`, `ymin`, `xmax`, `ymax` (`DOUBLE`) — Bounding box corners in the coordinate reference system given by `srid`.
-- `widthPx`, `heightPx` (`INT`) — Number of grid columns and rows. Together with the bbox dimensions these determine the cell size.
+- `width_px`, `height_px` (`INT`) — Number of grid columns and rows. Together with the bbox dimensions these determine the cell size.
 - `srid` (`INT`) — EPSG code of the bounding box coordinates (e.g. `27700` for British National Grid).
 - `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only).
 
@@ -417,18 +417,18 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 
 Builds a TIN from mass points and breaklines, then samples elevation on a regular grid **anchored to a geometry origin** with explicit cell sizes. Use this when the grid must be defined relative to a known point — for example, when the grid origin comes from data (a survey control point) or when different rows need different grid placements.
 
-**Signature:** `gbx_st_interpolateelevationgeom(points, breaklines, mergeTolerance, snapTolerance, splitPointFinder, gridOrigin, gridCols, gridRows, cellSizeX, cellSizeY, mode)`
+**Signature:** `gbx_st_interpolateelevationgeom(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode])`
 
 **Parameters:**
-- `points` — Mass-point geometries with Z values. Accepts WKB/EWKB/WKT/EWKT.
-- `breaklines` — Breakline geometries (or an empty array).
-- `mergeTolerance` (`DOUBLE`) — Merge distance for coincident points.
-- `snapTolerance` (`DOUBLE`) — Snap distance to breakline vertices.
-- `splitPointFinder` (`STRING`) — Conforming-mesh strategy (e.g. `'NONENCROACHING'`).
-- `gridOrigin` — POINT geometry anchoring the top-left corner of the output grid. The output SRID is inherited from this geometry (encode as EWKB/EWKT to carry a non-zero SRID) — no separate `srid` argument.
-- `gridCols`, `gridRows` (`INT`) — Number of grid columns and rows.
-- `cellSizeX` (`DOUBLE`) — Horizontal cell size in the geometry's units (positive steps right).
-- `cellSizeY` (`DOUBLE`) — Vertical cell size in the geometry's units. Pass a **negative** value to step downward (standard raster convention, e.g. `-10.0` for 10-unit cells stepping south).
+- `points_array` — Mass-point geometries with Z values. Accepts WKB/EWKB/WKT/EWKT.
+- `breaklines_array` — Breakline geometries (or an empty array).
+- `merge_tolerance` (`DOUBLE`) — Merge distance for coincident points.
+- `snap_tolerance` (`DOUBLE`) — Snap distance to breakline vertices.
+- `split_point_finder` (`STRING`) — Conforming-mesh strategy (e.g. `'NONENCROACHING'`).
+- `grid_origin` — POINT geometry anchoring the top-left corner of the output grid. The output SRID is inherited from this geometry (encode as EWKB/EWKT to carry a non-zero SRID) — no separate `srid` argument.
+- `grid_cols`, `grid_rows` (`INT`) — Number of grid columns and rows.
+- `cell_size_x` (`DOUBLE`) — Horizontal cell size in the geometry's units (positive steps right).
+- `cell_size_y` (`DOUBLE`) — Vertical cell size in the geometry's units. Pass a **negative** value to step downward (standard raster convention, e.g. `-10.0` for 10-unit cells stepping south).
 - `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only).
 
 **Generator:** Emits one row per in-hull grid cell. The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.

@@ -2216,8 +2216,8 @@ def rst_resample_to_res(
 
 
 def rst_gridfrompoints(
-    points: ColLike,
-    values: ColLike,
+    points_array: ColLike,
+    values_array: ColLike,
     xmin: ColLike,
     ymin: ColLike,
     xmax: ColLike,
@@ -2230,14 +2230,14 @@ def rst_gridfrompoints(
 ) -> Column:
     """Inverse-Distance-Weighted (IDW) interpolation - non-aggregator form.
 
-    Points (``ARRAY<BINARY>`` WKB or ``ARRAY<STRING>`` WKT) and ``values``
+    Points (``ARRAY<BINARY>`` WKB or ``ARRAY<STRING>`` WKT) and ``values_array``
     (``ARRAY<DOUBLE>``) are passed in a single row. The output is a Float64
     GTiff tile of shape ``width_px x height_px`` covering
     ``(xmin, ymin) -> (xmax, ymax)`` in the given SRID.
 
     Args:
-        points: Column of array of point geometries (WKB or WKT).
-        values: Column of array of double values (same length as ``points``).
+        points_array: Column of array of point geometries (WKB or WKT).
+        values_array: Column of array of double values (same length as ``points_array``).
         xmin: Minimum X of the output raster extent.
         ymin: Minimum Y of the output raster extent.
         xmax: Maximum X of the output raster extent.
@@ -2255,8 +2255,8 @@ def rst_gridfrompoints(
     max_pts_col = f.lit(12) if max_pts is None else _col(max_pts)
     return f.call_function(
         "gbx_rst_gridfrompoints",
-        _col(points),
-        _col(values),
+        _col(points_array),
+        _col(values_array),
         _col(xmin),
         _col(ymin),
         _col(xmax),
@@ -2332,8 +2332,8 @@ def rst_gridfrompoints_agg(
 
 
 def rst_dtmfromgeoms(
-    points: ColLike,
-    breaklines: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     xmin: ColLike,
@@ -2352,8 +2352,8 @@ def rst_dtmfromgeoms(
     ``height_px = round((ymax-ymin)/N)`` (e.g. a 1000 m extent at 10 m cells -> 100 px).
 
     Args:
-        points: Array column of Z-valued point geometries (WKB binary or WKT string).
-        breaklines: Array column of breakline LineString geometries; pass an empty array for none.
+        points_array: Array column of Z-valued point geometries (WKB binary or WKT string).
+        breaklines_array: Array column of breakline LineString geometries; pass an empty array for none.
         merge_tolerance: Delaunay segment-merge tolerance.
         snap_tolerance: Vertex-to-breakline snap tolerance.
         xmin, ymin, xmax, ymax: Output raster extent.
@@ -2367,8 +2367,8 @@ def rst_dtmfromgeoms(
     nd = f.lit(-9999.0) if no_data is None else _col(no_data)
     return f.call_function(
         "gbx_rst_dtmfromgeoms",
-        _col(points),
-        _col(breaklines),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(xmin),

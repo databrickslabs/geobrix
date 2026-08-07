@@ -3056,8 +3056,8 @@ def _gridfrompoints_udf(
 
 
 def rst_gridfrompoints(
-    points: ColLike,
-    values: ColLike,
+    points_array: ColLike,
+    values_array: ColLike,
     xmin: ColLike,
     ymin: ColLike,
     xmax: ColLike,
@@ -3071,7 +3071,7 @@ def rst_gridfrompoints(
 ) -> Column:
     """Inverse-distance-weighted (IDW) grid from an ARRAY of POINT WKB + values.
 
-    ``points`` is ARRAY<BINARY> (WKB points), ``values`` is the parallel
+    ``points_array`` is ARRAY<BINARY> (WKB points), ``values_array`` is the parallel
     ARRAY<DOUBLE>. For each output cell center the value is the inverse-distance
     weighted mean of the nearest ``max_pts`` points (weight = 1/distance**power);
     a point coincident with a cell center returns that value. Output is a
@@ -3083,8 +3083,8 @@ def rst_gridfrompoints(
     CRS (this is a label, not a reprojection).
 
     Args:
-        points:    ARRAY<BINARY> of WKB POINT geometries.
-        values:    ARRAY<DOUBLE> parallel to ``points``.
+        points_array:    ARRAY<BINARY> of WKB POINT geometries.
+        values_array:    ARRAY<DOUBLE> parallel to ``points_array``.
         xmin..ymax: Output extent in CRS units.
         width_px, height_px: Output raster size in pixels.
         out_srid:  EPSG or ESRI code for the output CRS.
@@ -3098,8 +3098,8 @@ def rst_gridfrompoints(
     p = f.lit(power) if isinstance(power, (int, float)) else _col(power)
     m = f.lit(max_pts) if isinstance(max_pts, (int, float)) else _col(max_pts)
     return _gridfrompoints_udf(
-        _col(points),
-        _col(values),
+        _col(points_array),
+        _col(values_array),
         _col(xmin),
         _col(ymin),
         _col(xmax),
@@ -3155,8 +3155,8 @@ def _dtmfromgeoms_udf(
 
 
 def rst_dtmfromgeoms(
-    points: ColLike,
-    breaklines: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     xmin: ColLike,
@@ -3171,7 +3171,7 @@ def rst_dtmfromgeoms(
 ) -> Column:
     """Delaunay-TIN DTM from Z-valued POINT WKB (+ optional breaklines).
 
-    ``points`` is ARRAY<BINARY> of WKB POINTs WITH Z; ``breaklines`` is
+    ``points_array`` is ARRAY<BINARY> of WKB POINTs WITH Z; ``breaklines_array`` is
     ARRAY<BINARY> of WKB linestrings (may be null/empty). A Delaunay
     triangulation of the points' (x, y) is built and Z is barycentrically
     interpolated at each output cell center. Cells outside the convex hull
@@ -3183,14 +3183,14 @@ def rst_dtmfromgeoms(
     CRS (label, not a reprojection).
 
     PARITY DIVERGENCE: the lightweight tier performs an UNCONSTRAINED Delaunay
-    interpolation. ``breaklines`` are accepted but NOT enforced as hard edges
+    interpolation. ``breaklines_array`` are accepted but NOT enforced as hard edges
     (their vertices are folded in as extra triangulation points only), and
     ``merge_tolerance`` / ``snap_tolerance`` are accepted for signature parity
     but have no effect.
 
     Args:
-        points:          ARRAY<BINARY> of WKB POINT-with-Z geometries.
-        breaklines:      ARRAY<BINARY> of WKB linestrings (accepted, not enforced).
+        points_array:    ARRAY<BINARY> of WKB POINT-with-Z geometries.
+        breaklines_array: ARRAY<BINARY> of WKB linestrings (accepted, not enforced).
         merge_tolerance: Accepted for parity; not applied.
         snap_tolerance:  Accepted for parity; not applied.
         xmin..ymax:      Output extent in CRS units.
@@ -3204,8 +3204,8 @@ def rst_dtmfromgeoms(
     """
     nd = f.lit(no_data) if isinstance(no_data, (int, float)) else _col(no_data)
     return _dtmfromgeoms_udf(
-        _col(points),
-        _col(breaklines),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(xmin),

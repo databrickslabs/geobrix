@@ -28,8 +28,8 @@ import java.util.{Vector => JVector}
   * [[RST_GridFromPointsAgg]].
   */
 case class RST_GridFromPoints(
-    pointsArrayExpr: Expression,
-    valuesArrayExpr: Expression,
+    pointsArray: Expression,
+    valuesArray: Expression,
     xminExpr: Expression,
     yminExpr: Expression,
     xmaxExpr: Expression,
@@ -42,14 +42,14 @@ case class RST_GridFromPoints(
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        pointsArrayExpr, valuesArrayExpr,
+        pointsArray, valuesArray,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthPxExpr, heightPxExpr, outSridExpr,
         powerExpr, maxPtsExpr,
         ExpressionConfigExpr()
     )
     override def inputTypes: Seq[DataType] = Seq(
-        pointsArrayExpr.dataType, ArrayType(DoubleType, containsNull = false),
+        pointsArray.dataType, ArrayType(DoubleType, containsNull = false),
         DoubleType, DoubleType, DoubleType, DoubleType,
         IntegerType, IntegerType, IntegerType,
         DoubleType, IntegerType,

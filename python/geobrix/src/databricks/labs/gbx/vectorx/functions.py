@@ -132,8 +132,8 @@ def st_asmvt_pyramid(
 
 
 def st_triangulate(
-    points_geom: ColLike,
-    breaklines_geom: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     split_point_finder: ColLike,
@@ -149,9 +149,9 @@ def st_triangulate(
     N points produces at least ``N - 2`` triangle rows (Delaunay property).
 
     Args:
-        points_geom:        Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
+        points_array:       Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
                             Each element is a WKB byte array or a WKT/EWKT string.
-        breaklines_geom:    Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
+        breaklines_array:   Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
                             Pass an empty array (``array().cast(ArrayType(StringType()))``) when
                             no breaklines are needed.
         merge_tolerance:    Distance tolerance for merging nearby vertices (``DOUBLE``).
@@ -168,8 +168,8 @@ def st_triangulate(
     """
     return f.call_function(
         "gbx_st_triangulate",
-        _col(points_geom),
-        _col(breaklines_geom),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(split_point_finder),
@@ -178,8 +178,8 @@ def st_triangulate(
 
 
 def st_interpolateelevationbbox(
-    points_geom: ColLike,
-    breaklines_geom: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     split_point_finder: ColLike,
@@ -201,8 +201,8 @@ def st_interpolateelevationbbox(
     a WKB-encoded 3D Point. Invoke directly in ``select(...)`` as a top-level generator.
 
     Args:
-        points_geom:        Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
-        breaklines_geom:    Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
+        points_array:       Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
+        breaklines_array:   Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
         merge_tolerance:    Vertex merge tolerance (``DOUBLE``).
         snap_tolerance:     Triangulator snap tolerance (``DOUBLE``).
         split_point_finder: Edge-split strategy — ``"NONENCROACHING"`` or ``"MIDPOINT"``.
@@ -224,8 +224,8 @@ def st_interpolateelevationbbox(
     """
     return f.call_function(
         "gbx_st_interpolateelevationbbox",
-        _col(points_geom),
-        _col(breaklines_geom),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(split_point_finder),
@@ -241,8 +241,8 @@ def st_interpolateelevationbbox(
 
 
 def st_interpolateelevationgeom(
-    points_geom: ColLike,
-    breaklines_geom: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     split_point_finder: ColLike,
@@ -266,8 +266,8 @@ def st_interpolateelevationgeom(
     to the output points. Plain WKB and plain WKT carry no SRID; in that case output SRID is 0.
 
     Args:
-        points_geom:        Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
-        breaklines_geom:    Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
+        points_array:       Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
+        breaklines_array:   Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
         merge_tolerance:    Vertex merge tolerance (``DOUBLE``).
         snap_tolerance:     Triangulator snap tolerance (``DOUBLE``).
         split_point_finder: Edge-split strategy — ``"NONENCROACHING"`` or ``"MIDPOINT"``.
@@ -287,8 +287,8 @@ def st_interpolateelevationgeom(
     """
     return f.call_function(
         "gbx_st_interpolateelevationgeom",
-        _col(points_geom),
-        _col(breaklines_geom),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(split_point_finder),

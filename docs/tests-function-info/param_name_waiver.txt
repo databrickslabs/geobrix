@@ -27,11 +27,11 @@ gbx_rst_clip
 gbx_rst_combineavg
 gbx_rst_derivedband
 gbx_rst_derivedband_agg
-gbx_rst_dtmfromgeoms
+# gbx_rst_dtmfromgeoms  # N9 DONE: points/breaklines renamed to *_array
 # gbx_rst_dtmfromgeoms_agg  # R6 DONE: out_srid renamed
 gbx_rst_evi
 gbx_rst_getsubdataset
-gbx_rst_gridfrompoints
+# gbx_rst_gridfrompoints  # N9 DONE: points/values renamed to *_array
 # gbx_rst_gridfrompoints_agg  # R6 DONE: out_srid renamed
 # gbx_rst_h3_rasterize_agg  # R6 DONE: out_srid renamed
 gbx_rst_histogram
@@ -55,6 +55,6 @@ gbx_rst_worldtorastercoordy
 gbx_rst_xyzpyramid
 # gbx_st_asmvt  # N1 DONE: geom_wkb renamed to geom
 # gbx_st_asmvt_pyramid  # N1 DONE: geom_wkb renamed to geom
-gbx_st_interpolateelevationbbox
-gbx_st_interpolateelevationgeom
-gbx_st_triangulate
+# gbx_st_interpolateelevationbbox  # N9 DONE: points_geom/breaklines_geom renamed to *_array
+# gbx_st_interpolateelevationgeom  # N9 DONE: points_geom/breaklines_geom renamed to *_array
+# gbx_st_triangulate  # N9 DONE: points_geom/breaklines_geom renamed to *_array

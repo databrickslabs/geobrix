@@ -10,8 +10,8 @@ package com.databricks.labs.gbx.vectorx.expressions
  *  Registered SQL name: `gbx_st_triangulate`.
  *
  *  Signature:
- *    gbx_st_triangulate(points_geom    ARRAY<BINARY|STRING>,
- *                       breaklines_geom ARRAY<BINARY|STRING>,
+ *    gbx_st_triangulate(points_array    ARRAY<BINARY|STRING>,
+ *                       breaklines_array ARRAY<BINARY|STRING>,
  *                       merge_tolerance DOUBLE,
  *                       snap_tolerance  DOUBLE,
  *                       split_point_finder STRING)
@@ -155,12 +155,12 @@ object ST_Triangulate extends WithExpressionInfo {
         case 6 => ST_Triangulate(c(0), c(1), c(2), c(3), c(4), c(5))
         case n => throw new IllegalArgumentException(
             s"gbx_st_triangulate takes 5 or 6 arguments " +
-            s"(points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, [mode]); got $n"
+            s"(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode]); got $n"
         )
     }
 
     override def usageArgs: String =
-        "points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, [mode]"
+        "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode]"
 
     override def description: String =
         "Generator: emit one row per TIN triangle polygon (WKB BINARY) from a constrained Delaunay triangulation."

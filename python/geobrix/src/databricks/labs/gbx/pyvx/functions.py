@@ -371,15 +371,15 @@ def st_asmvt_pyramid(
 
 
 def st_triangulate(
-    points_geom,
-    breaklines_geom,
+    points_array,
+    breaklines_array,
     merge_tolerance,
     snap_tolerance,
     split_point_finder,
     mode: ColLike = "constrained",
 ):
     """Constrained Delaunay triangulation. Invoke via SQL LATERAL:
-    SELECT t.* FROM <df>, LATERAL gbx_st_triangulate(points, breaklines, mt, st, spf, mode) t
+    SELECT t.* FROM <df>, LATERAL gbx_st_triangulate(points_array, breaklines_array, mt, st, spf, mode) t
     mode='conforming' is heavy-only."""
     raise NotImplementedError(
         "Light st_triangulate has no Python Column form; invoke the registered UDTF via SQL LATERAL."
@@ -387,8 +387,8 @@ def st_triangulate(
 
 
 def st_interpolateelevationbbox(
-    points_geom,
-    breaklines_geom,
+    points_array,
+    breaklines_array,
     merge_tolerance,
     snap_tolerance,
     split_point_finder,
@@ -403,7 +403,7 @@ def st_interpolateelevationbbox(
 ):
     """Interpolate barycentric Z over the constrained TIN at bbox grid centers. Invoke via SQL LATERAL:
     SELECT t.* FROM <df>, LATERAL gbx_st_interpolateelevationbbox(
-        points, breaklines, mt, st, spf, xmin, ymin, xmax, ymax, width_px, height_px, srid, mode) t
+        points_array, breaklines_array, mt, st, spf, xmin, ymin, xmax, ymax, width_px, height_px, srid, mode) t
     One POINT Z WKB per in-hull cell (outside-hull dropped). mode='conforming' is heavy-only.
     """
     raise NotImplementedError(
@@ -413,8 +413,8 @@ def st_interpolateelevationbbox(
 
 
 def st_interpolateelevationgeom(
-    points_geom,
-    breaklines_geom,
+    points_array,
+    breaklines_array,
     merge_tolerance,
     snap_tolerance,
     split_point_finder,
@@ -427,7 +427,7 @@ def st_interpolateelevationgeom(
 ):
     """Interpolate barycentric Z over the constrained TIN at origin-grid centers. Invoke via SQL LATERAL:
     SELECT t.* FROM <df>, LATERAL gbx_st_interpolateelevationgeom(
-        points, breaklines, mt, st, spf, origin, cols, rows, cell_x, cell_y, mode) t
+        points_array, breaklines_array, mt, st, spf, origin, cols, rows, cell_x, cell_y, mode) t
     SRID is taken from the origin EWKB. One POINT Z WKB per in-hull cell (outside-hull dropped).
     mode='conforming' is heavy-only."""
     raise NotImplementedError(

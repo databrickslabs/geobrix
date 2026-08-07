@@ -16,8 +16,8 @@ package com.databricks.labs.gbx.vectorx.expressions
  *
  *  Signature:
  *    gbx_st_interpolateelevationbbox(
- *        points_geom      ARRAY<BINARY|STRING>,
- *        breaklines_geom  ARRAY<BINARY|STRING>,
+ *        points_array     ARRAY<BINARY|STRING>,
+ *        breaklines_array ARRAY<BINARY|STRING>,
  *        merge_tolerance  DOUBLE,
  *        snap_tolerance   DOUBLE,
  *        split_point_finder STRING,
@@ -204,13 +204,13 @@ object ST_InterpolateElevationBBox extends WithExpressionInfo {
             c(9), c(10), c(11), c(12))
         case n => throw new IllegalArgumentException(
             s"gbx_st_interpolateelevationbbox takes 12 or 13 arguments " +
-            s"(points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, " +
+            s"(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, " +
             s"xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode]); got $n"
         )
     }
 
     override def usageArgs: String =
-        "points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, " +
+        "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, " +
         "xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode]"
 
     override def description: String =

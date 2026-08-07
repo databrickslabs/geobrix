@@ -977,9 +977,9 @@ Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric inte
 
 Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries, with an optional array of breakline WKB geometries to preserve sharp terrain transitions.
 
-**Signature:** `rst_dtmfromgeoms(points: Column, breaklines: Column, mergeTolerance: Column, snapTolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column, [no_data: Column, out_crs: Column = null]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+**Signature:** `rst_dtmfromgeoms(points_array: Column, breaklines_array: Column, merge_tolerance: Column, snap_tolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width_px: Column, height_px: Column, out_srid: Column, [no_data: Column, out_crs: Column = null]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
-**Parameters:** `points` — Array of WKB point geometries with Z coordinates; `breaklines` — Array of WKB line/polygon geometries enforcing hard edges (pass `null` or empty array if unused); `mergeTolerance/snapTolerance` — Delaunay triangulation tolerances (vertex-merge distance and snapping distance; small values such as `0.0` and `0.01` are typical); `xmin/ymin/xmax/ymax` — output extent in CRS units; `width/height` — output raster dimensions in pixels (for N-metre cells set `width = round((xmax-xmin)/N)`); `srid` — EPSG code for the output CRS. An optional trailing `noData` argument overrides the default fill for cells outside the triangulated hull.
+**Parameters:** `points_array` — Array of WKB point geometries with Z coordinates; `breaklines_array` — Array of WKB line/polygon geometries enforcing hard edges (pass `null` or empty array if unused); `merge_tolerance`/`snap_tolerance` — Delaunay triangulation tolerances (vertex-merge distance and snapping distance; small values such as `0.0` and `0.01` are typical); `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output raster dimensions in pixels (for N-metre cells set `width_px = round((xmax-xmin)/N)`); `out_srid` — EPSG code for the output CRS. An optional trailing `no_data` argument overrides the default fill for cells outside the triangulated hull.
 
 **SQL:**
 
@@ -1015,9 +1015,9 @@ Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Inverse-distance interpolat
 
 IDW-interpolate an array of Z-valued point geometries to a Float64 GeoTIFF tile covering an explicit bounding box and pixel grid. Supply the points and their scalar values as arrays in a single row; use `rst_gridfrompoints_agg` when points arrive one per row.
 
-**Signature:** `rst_gridfrompoints(points: Column, values: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, widthPx: Column, heightPx: Column, out_srid: Column, power: Column, maxPts: Column, [out_crs: Column = null]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+**Signature:** `rst_gridfrompoints(points_array: Column, values_array: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width_px: Column, height_px: Column, out_srid: Column, [power: Column, [max_pts: Column, [out_crs: Column = null]]]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
-**Parameters:** `points` — `ARRAY<BINARY>` of WKB point geometries; `values` — `ARRAY<DOUBLE>` of scalar observations, one per point; `xmin/ymin/xmax/ymax` — output extent in CRS units; `widthPx/heightPx` — output dimensions in pixels; `srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is the standard); `maxPts` — maximum nearest neighbours considered per output pixel
+**Parameters:** `points_array` — `ARRAY<BINARY>` of WKB point geometries; `values_array` — `ARRAY<DOUBLE>` of scalar observations, one per point; `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output dimensions in pixels; `out_srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is the standard); `max_pts` — maximum nearest neighbours considered per output pixel
 
 **SQL:**
 

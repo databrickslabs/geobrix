@@ -55,4 +55,4 @@ gbx_bng_kloopexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/
 gbx_bng_kringexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
 gbx_bng_tessellateexplode # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
 # Task 2 DONE: gbx_rst_xyzpyramid light rescale added (arity now 7, matches heavy)
-gbx_bng_tessellate        # [B] light missing trailing param: keep_core_geom (light arity 2 vs heavy arity 3)
+# Task 3 DONE: gbx_bng_tessellate light keep_core_geom added (arity now 3, matches heavy)

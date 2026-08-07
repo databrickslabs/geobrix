@@ -114,3 +114,26 @@ def test_tessellate_core_set_subset_of_polyfill():
     fill = set(_bng.polyfill_str(geom, res))
     cores = {c for (c, core, chip) in _bng.tessellate_str(geom, res) if core}
     assert cores <= fill
+
+
+def test_bng_tessellate_udf_keep_core_geom_toggles_interior_chip():
+    from databricks.labs.gbx.pygx.functions import _bng_tessellate
+    # 4.5km box on the 1km grid -> has interior (core) cells and border cells.
+    geom = to_wkb(box(530000.0, 180000.0, 534500.0, 184500.0))
+    res = _bng.get_resolution("1km")
+
+    keep = _bng_tessellate(geom, res, keep_core_geom=True)
+    interior_keep = [c for c in keep if c["core"]]
+    assert interior_keep, "expected at least one interior (core) cell"
+    assert any(c["chip"] is not None for c in interior_keep), \
+        "keep_core_geom=True must populate interior-cell chip WKB"
+
+    drop = _bng_tessellate(geom, res, keep_core_geom=False)
+    interior_drop = [c for c in drop if c["core"]]
+    assert all(c["chip"] is None for c in interior_drop), \
+        "keep_core_geom=False must leave interior-cell chip null"
+
+    # default matches heavy (True): interior chips populated
+    default = _bng_tessellate(geom, res)
+    assert any(c["chip"] is not None for c in default if c["core"]), \
+        "light bng_tessellate default must be keep_core_geom=True (heavy parity)"

@@ -354,12 +354,13 @@ def _bng_geomkloop(geom, res, k):
     return sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k)))
 
 
-def _bng_tessellate(geom, res):
+def _bng_tessellate(geom, res, keep_core_geom=True):
     if geom is None or res is None:
         return None
+    keep = True if keep_core_geom is None else bool(keep_core_geom)
     return [
         {"cellid": c, "core": bool(core), "chip": chip}
-        for (c, core, chip) in _bng.tessellate_str(geom, _norm_res(res))
+        for (c, core, chip) in _bng.tessellate_str(geom, _norm_res(res), keep_core_geom=keep)
     ]
 
 
@@ -903,9 +904,17 @@ def bng_geomkloop(geom: ColLike, resolution: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_bng_geomkloop", _col(geom), _col(resolution), _col(k))
 
 
-def bng_tessellate(geom: ColLike, resolution: ColLike) -> Column:
-    """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell."""
-    return f.call_function("gbx_bng_tessellate", _col(geom), _col(resolution))
+def bng_tessellate(
+    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = True
+) -> Column:
+    """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell.
+
+    keep_core_geom (default True, matches heavy): when True, a fully-interior
+    cell's chip holds its core-geometry WKB; when False the chip is null.
+    """
+    return f.call_function(
+        "gbx_bng_tessellate", _col(geom), _col(resolution), _col(keep_core_geom)
+    )
 
 
 def bng_cellunion_agg(input_chip: ColLike) -> Column:

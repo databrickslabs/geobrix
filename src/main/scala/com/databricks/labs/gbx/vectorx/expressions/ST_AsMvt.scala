@@ -15,7 +15,7 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, Da
   * Mapbox Vector Tile (MVT) protobuf blob via `MvtWriter` (GDAL OGR MVT driver).
   *
   * Inputs:
-  *   - `geomWkb`   : per-row geometry in WKB, in tile-local coordinates
+  *   - `geom`      : per-row geometry in WKB, in tile-local coordinates
   *   - `attrs`     : per-row attribute struct (fields carry native int/long/double/bool/string types)
   *   - `layerName` : constant string column holding the MVT layer name
   *
@@ -30,14 +30,14 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, Da
   * `com.databricks.labs.gbx.vectorx.functions.register`.
   */
 final case class ST_AsMvt(
-    geomWkb: Expression,
+    geom: Expression,
     attrs: Expression,
     layerName: Expression,
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0
 ) extends TypedImperativeAggregate[MvtAcc] {
 
-    override def children: Seq[Expression] = Seq(geomWkb, attrs, layerName)
+    override def children: Seq[Expression] = Seq(geom, attrs, layerName)
     override def nullable: Boolean = false
     override def dataType: DataType = BinaryType
     override def prettyName: String = ST_AsMvt.name
@@ -52,7 +52,7 @@ final case class ST_AsMvt(
     override protected def withNewChildrenInternal(
         newChildren: IndexedSeq[Expression]
     ): ST_AsMvt = copy(
-      geomWkb = newChildren(0),
+      geom = newChildren(0),
       attrs = newChildren(1),
       layerName = newChildren(2)
     )
@@ -74,7 +74,7 @@ final case class ST_AsMvt(
     override def createAggregationBuffer(): MvtAcc = MvtAcc.empty(evalLayerName())
 
     override def update(buf: MvtAcc, input: InternalRow): MvtAcc = {
-        val wkb = geomWkb.eval(input).asInstanceOf[Array[Byte]]
+        val wkb = geom.eval(input).asInstanceOf[Array[Byte]]
         if (wkb != null && wkb.length > 0) {
             val attrsRow = attrs.eval(input).asInstanceOf[InternalRow]
             val encoded = encodeAttrs(attrsRow)
@@ -192,11 +192,11 @@ object ST_AsMvt extends WithExpressionInfo {
     override def builder(): FunctionBuilder = {
         case Seq(g, a, l) => ST_AsMvt(g, a, l)
         case other => throw new IllegalArgumentException(
-              s"gbx_st_asmvt: expected (geom_wkb, attrs_struct, layer_name) — got ${other.length} args"
+              s"gbx_st_asmvt: expected (geom, attrs_struct, layer_name) — got ${other.length} args"
             )
     }
 
-    override def usageArgs: String = "geom_wkb, attrs_struct, layer_name"
+    override def usageArgs: String = "geom, attrs_struct, layer_name"
 
     override def description: String =
         "Aggregator: encodes features into a Mapbox Vector Tile (MVT) protobuf blob."

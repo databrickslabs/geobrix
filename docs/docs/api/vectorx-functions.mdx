@@ -105,11 +105,11 @@ Aggregator that encodes a group of features into a single MVT protobuf blob for 
 `(z, x, y)` tile. Each call to `groupBy(z, x, y).agg(vx.st_asmvt(...))` produces the
 MVT bytes for exactly one tile.
 
-**Signature:** `st_asmvt(geom_wkb, attrs, layer_name) → BINARY`
+**Signature:** `st_asmvt(geom, attrs, layer_name) → BINARY`
 
 **Parameters:**
 
-- `geom_wkb` (`BINARY`) — Feature geometry as WKB in **tile-local coordinates** (pixel
+- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **tile-local coordinates** (pixel
   space, 0..extent). Clip and project each feature to the tile coordinate system upstream
   before calling this aggregator.
 - `attrs` (`STRUCT<...>`) — Per-feature attribute struct. Integer, float, boolean, and
@@ -159,10 +159,10 @@ GROUP BY z, x, y
 
 Aggregator that encodes a group of features into a single MVT protobuf blob for one `(z, x, y)` tile.
 
-**Signature:** `st_asmvt(geomWkb: Column, attrs: Column, layerName: Column): Column`
+**Signature:** `st_asmvt(geom: Column, attrs: Column, layerName: Column): Column`
 
 **Parameters:**
-- `geomWkb` (`BINARY`) — Feature geometry in **tile-local coordinates** as WKB. Compose any `ST_Intersection` against the tile envelope and coordinate translation upstream.
+- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **tile-local coordinates**. Compose any `ST_Intersection` against the tile envelope and coordinate translation upstream.
 - `attrs` (`STRUCT<...>`) — Per-feature attributes. Integer, long, double, and boolean fields are encoded as native MVT value types; other types are encoded as strings.
 - `layerName` (`STRING`) — MVT layer name.
 
@@ -213,11 +213,11 @@ so SQL pipelines built against either tier are interchangeable. In the lightweig
 tier this generator is invoked only via SQL `LATERAL`; it has no Python DataFrame
 Column form (that form is heavy-only).
 
-**Signature (SQL):** `gbx_st_asmvt_pyramid(geom_wkb, attrs, min_z, max_z, layer_name, extent)`
+**Signature (SQL):** `gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, layer_name, extent)`
 
 **Parameters:**
 
-- `geom_wkb` (`BINARY`) — Feature geometry as WKB in **EPSG:4326 lon/lat**. The UDTF
+- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **EPSG:4326 lon/lat**. The UDTF
   clips each feature to every intersecting tile and transforms to tile-local coordinates
   internally.
 - `attrs` (`STRUCT<...>`) — Per-feature attributes. Same native-typed encoding as `st_asmvt`.
@@ -286,10 +286,10 @@ For larger pyramids that exceed the Spark cell limit, use the [PMTiles Writer](.
 
 Generator that explodes one feature into one row per intersecting `(z, x, y)` tile across a zoom range, with the MVT bytes already encoded per tile. Pairs with `gbx_rst_xyzpyramid` (the raster sibling) and feeds directly into `gbx_pmtiles_agg`.
 
-**Signature:** `st_asmvt_pyramid(geomWkb: Column, attrs: Column, minZoom: Column, maxZoom: Column, layerName: Column): Column`
+**Signature:** `st_asmvt_pyramid(geom: Column, attrs: Column, minZoom: Column, maxZoom: Column, layerName: Column): Column`
 
 **Parameters:**
-- `geomWkb` (`BINARY`) — Feature geometry in **EPSG:4326 lon/lat** as WKB. The function performs the per-tile clip and tile-local coordinate transform; no upstream `ST_Intersection` required.
+- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **EPSG:4326 lon/lat**. The function performs the per-tile clip and tile-local coordinate transform; no upstream `ST_Intersection` required.
 - `attrs` (`STRUCT<...>`) — Per-feature attributes. Integer, long, double, and boolean fields are encoded as native MVT value types; other types are encoded as strings.
 - `minZoom`, `maxZoom` (`INT`) — Inclusive zoom-level range (`0..20`).
 - `layerName` (`STRING`) — MVT layer name (constant per call).

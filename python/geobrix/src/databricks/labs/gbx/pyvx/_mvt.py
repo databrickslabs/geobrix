@@ -111,7 +111,7 @@ def _to_tile_local(geom, z: int, x: int, y: int, extent: int):
 
 
 def pyramid_tiles(
-    geom_wkb: Any,
+    geom: Any,
     attrs: Any,
     min_z: int,
     max_z: int,
@@ -126,7 +126,7 @@ def pyramid_tiles(
     - Total intersecting tiles <= MAX_TILES (1,000,000); raises ValueError if exceeded.
 
     Args:
-        geom_wkb: WKB/EWKB bytes, WKT/EWKT str, or Shapely geometry in EPSG:4326
+        geom: WKB/EWKB bytes, WKT/EWKT str, or Shapely geometry in EPSG:4326
             (decoded via the shared ``_geom.parse_geom`` contract).
         attrs: Mapping or PySpark Row of feature attributes.
         min_z: Minimum zoom level (inclusive).
@@ -143,10 +143,10 @@ def pyramid_tiles(
         raise ValueError(f"max_z ({max_z}) must be >= min_z ({min_z})")
     if max_z > MAX_ZOOM:
         raise ValueError(f"max_z {max_z} exceeds MAX_ZOOM {MAX_ZOOM}")
-    if isinstance(geom_wkb, BaseGeometry):
-        shp = geom_wkb
+    if isinstance(geom, BaseGeometry):
+        shp = geom
     else:
-        shp = parse_geom(geom_wkb)
+        shp = parse_geom(geom)
     if shp is None or shp.is_empty:
         return
     props = to_native_props(attrs)

@@ -69,13 +69,13 @@ def _mvt_tile_return():
 @udtf(returnType=_mvt_tile_return())
 class _AsMvtPyramidUDTF:
     def eval(
-        self, geom_wkb, attrs, min_z: int, max_z: int, layer_name=None, extent=None
+        self, geom, attrs, min_z: int, max_z: int, layer_name=None, extent=None
     ):
         ln = "layer" if layer_name is None else str(layer_name)
         ex = _mvt.DEFAULT_EXTENT if extent is None else int(extent)
         # Yield incrementally — never build the full list (fan-out OOM guard).
         for z, x, y, blob in _mvt.pyramid_tiles(
-            geom_wkb, attrs, int(min_z), int(max_z), ln, ex
+            geom, attrs, int(min_z), int(max_z), ln, ex
         ):
             yield (z, x, y, blob)
 
@@ -344,7 +344,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
 
 
 def st_asmvt_pyramid(
-    geom_wkb: ColLike,
+    geom: ColLike,
     attrs: ColLike,
     min_z: ColLike,
     max_z: ColLike,
@@ -436,16 +436,16 @@ def st_interpolateelevationgeom(
     )
 
 
-def st_asmvt(geom_wkb: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
+def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     """Aggregator: encode a group of features into an MVT protobuf blob (BINARY).
 
-    geom_wkb: per-row WKB geometry in tile-local coordinates.
+    geom: per-row geometry (WKB, EWKB, WKT, or EWKT) in tile-local coordinates.
     attrs:    per-row attribute struct (native-typed in the output tile).
     layer_name: constant MVT layer name (plain str -> literal).
     """
     if isinstance(layer_name, str):
         layer_name = f.lit(layer_name)
-    return _asmvt_udf(_col(geom_wkb), _col(attrs), _col(layer_name))
+    return _asmvt_udf(_col(geom), _col(attrs), _col(layer_name))
 
 
 def st_legacyaswkb(geom: ColLike) -> Column:

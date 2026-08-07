@@ -2222,7 +2222,7 @@ def rst_viewshed(
     return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md, crs_col)
 
 
-def rst_sample(tile: ColLike, geom_wkb: ColLike, crs: ColLike = None) -> Column:
+def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
     """Sample per-band raster values at a POINT geometry (WKB, EWKB, WKT, or EWKT).
 
     Mirrors the heavyweight ``gbx_rst_sample``: requires a POINT geometry
@@ -2231,18 +2231,18 @@ def rst_sample(tile: ColLike, geom_wkb: ColLike, crs: ColLike = None) -> Column:
     raster extent return null.
 
     Args:
-        tile:     Tile struct column.
-        geom_wkb: POINT geometry as WKB, EWKB, WKT, or EWKT.
-        crs:      Optional source-CRS for a plain WKB/WKT point (int SRID or CRS
-                  string — ``EPSG:x`` / ``ESRI:x`` / WKT). An EWKB/EWKT embedded
-                  SRID wins; absent + no SRID -> assumed already in the raster CRS.
+        tile: Tile struct column.
+        geom: POINT geometry as WKB, EWKB, WKT, or EWKT.
+        crs:  Optional source-CRS for a plain WKB/WKT point (int SRID or CRS
+              string — ``EPSG:x`` / ``ESRI:x`` / WKT). An EWKB/EWKT embedded
+              SRID wins; absent + no SRID -> assumed already in the raster CRS.
 
     Returns:
         ARRAY<DOUBLE>: one value per band, or null if the point is out of extent.
     """
     if crs is None:
-        return _sample_udf(_col(tile), _col(geom_wkb))
-    return _sample_udf(_col(tile), _col(geom_wkb), f.lit(crs))
+        return _sample_udf(_col(tile), _col(geom))
+    return _sample_udf(_col(tile), _col(geom), f.lit(crs))
 
 
 # --- Tier 1d3: band-math / focal UDFs --------------------------------------
@@ -2912,7 +2912,7 @@ def _rasterize_udf(
 
 
 def rst_rasterize(
-    geom_wkb: ColLike,
+    geom: ColLike,
     value: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -2932,7 +2932,7 @@ def rst_rasterize(
     """
     out_crs_col = f.lit(out_crs) if out_crs is not None else f.lit(None)
     return _rasterize_udf(
-        _col(geom_wkb),
+        _col(geom),
         _col(value),
         _col(xmin),
         _col(ymin),
@@ -5713,7 +5713,7 @@ def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
 
 
 def rst_rasterize_agg(
-    geom_wkb: ColLike,
+    geom: ColLike,
     value: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -5723,7 +5723,7 @@ def rst_rasterize_agg(
     height_px: ColLike,
     out_srid: ColLike,
 ) -> Column:
-    """Burn a group's ``(geom_wkb, value)`` features into ONE tile.
+    """Burn a group's ``(geom, value)`` features into ONE tile.
 
     The extent/size/out_srid args are per-group constants. Overlap is last-wins.
     Use inside ``.agg()``::
@@ -5736,7 +5736,7 @@ def rst_rasterize_agg(
     """
     return _as_tile_udf(
         _rasterize_agg_udf(
-            _col(geom_wkb),
+            _col(geom),
             _col(value),
             _col(xmin),
             _col(ymin),

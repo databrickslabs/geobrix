@@ -87,9 +87,9 @@ object RasterizeAcc {
     }
 }
 
-/** UDAF: `gbx_rst_rasterize_agg(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, srid)`.
+/** UDAF: `gbx_rst_rasterize_agg(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, srid)`.
  *
- *  Streams `(geom_wkb BINARY, value DOUBLE)` per row; the remaining seven
+ *  Streams `(geom BINARY, value DOUBLE)` per row; the remaining seven
  *  arguments are per-group constants (Literal or constant expressions).  On
  *  `eval` all accumulated features are burned into one raster via
  *  [[VectorRasterBridge]] -- identical to [[RST_Rasterize.execute]] except
@@ -103,7 +103,7 @@ object RasterizeAcc {
  *  which sorts on the same key).
  */
 case class RST_RasterizeAgg(
-    geomWkbExpr:  Expression,
+    geomExpr:     Expression,
     valueExpr:    Expression,
     xminExpr:     Expression,
     yminExpr:     Expression,
@@ -125,7 +125,7 @@ case class RST_RasterizeAgg(
     override def prettyName: String = RST_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        geomWkbExpr, valueExpr,
+        geomExpr, valueExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthPxExpr, heightPxExpr, outSridExpr,
         exprConfExpr
@@ -142,9 +142,9 @@ case class RST_RasterizeAgg(
 
     override def createAggregationBuffer(): RasterizeAcc = RasterizeAcc.empty
 
-    /** Catalyst-facing update: extract geom_wkb and value from the row, delegate to typed helper. */
+    /** Catalyst-facing update: extract geom and value from the row, delegate to typed helper. */
     override def update(buffer: RasterizeAcc, input: InternalRow): RasterizeAcc = {
-        val raw = geomWkbExpr.eval(input)
+        val raw = geomExpr.eval(input)
         if (raw == null) return buffer
         val wkb = raw.asInstanceOf[Array[Byte]]
         val vRaw = valueExpr.eval(input)
@@ -220,7 +220,7 @@ object RST_RasterizeAgg extends WithExpressionInfo {
         case 9 => RST_RasterizeAgg(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8))
         case n => throw new IllegalArgumentException(
             s"$name expects 9 arguments " +
-            s"(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid); got $n")
+            s"(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid); got $n")
     }
 
     /** Unsigned lexicographic comparison of two byte arrays (stable canonical key). */

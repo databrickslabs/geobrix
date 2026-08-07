@@ -165,10 +165,10 @@ mechanics surprise people, so check them before wondering why your text vanished
 `DESCRIBE FUNCTION` prints `name(<usageArgs>) - <description>`, describing the **SQL** surface.
 
 - **Optional arguments use Style B: `[param]`** — brackets wrap only the parameter name, the
-  comma stays outside. `geom_wkb, attrs_struct, min_z, max_z, layer_name, [extent]`. Multiple
+  comma stays outside. `geom, attrs_struct, min_z, max_z, layer_name, [extent]`. Multiple
   trailing optionals: `a, b, [c], [d]`. Do **not** use `geom, target_crs [, source_crs]`
   (comma inside) — that form is being retired.
-- **Parameter names are snake_case**, matching SQL — `geom_wkb`, `cell_id`, `size_in_mb`. Not
+- **Parameter names are snake_case**, matching SQL — `geom`, `cell_id`, `size_in_mb`. Not
   the Scala camelCase (`geomWkb`, `cellId`) and not the internal `*Expr` field names.
 - An argument is optional exactly when `builder()` has a shorter `case N =>` branch that
   injects a `Literal(...)` default. **34 functions** have optional args; rendering one as

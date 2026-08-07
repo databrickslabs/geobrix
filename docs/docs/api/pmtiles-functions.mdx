@@ -191,7 +191,7 @@ Tile type is detected automatically from the content of the first non-null paylo
 ### Typical pipelines
 
 - **Raster pyramid:** `gbx_rst_xyzpyramid(tile, minZoom, maxZoom)` produces per-tile rows of PNG bytes — pipe straight into `gbx_pmtiles_agg`.
-- **Vector pyramid:** `gbx_st_asmvt_pyramid(geom_wkb, attrs, minZoom, maxZoom, layer)` produces per-tile MVT bytes — pipe straight into `gbx_pmtiles_agg`. Because `gbx_st_asmvt_pyramid` emits one row per feature, the aggregate merges all features that share a tile coordinate into a single multi-feature tile.
+- **Vector pyramid:** `gbx_st_asmvt_pyramid(geom, attrs, minZoom, maxZoom, layer)` produces per-tile MVT bytes — pipe straight into `gbx_pmtiles_agg`. Because `gbx_st_asmvt_pyramid` emits one row per feature, the aggregate merges all features that share a tile coordinate into a single multi-feature tile.
 
 For pyramids that exceed the Spark cell ceiling, use the [PMTiles Writer](../writers/pmtiles) instead.
 

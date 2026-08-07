@@ -63,11 +63,11 @@ def register(spark: SparkSession) -> None:
     spark._jvm.com.databricks.labs.gbx.vectorx.functions.register(spark._jsparkSession)
 
 
-def st_asmvt(geom_wkb: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
+def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     """Aggregator: encode a group of features into a Mapbox Vector Tile (MVT) protobuf blob.
 
     Args:
-        geom_wkb: Per-row geometry in WKB (BINARY) column, in tile-local coordinates.
+        geom: Per-row geometry (WKB, EWKB, WKT, or EWKT) column, in tile-local coordinates.
         attrs:    Per-row attribute struct column (encoded with native MVT value types).
         layer_name: Constant MVT layer name. Pass a plain ``str`` for a literal layer
                     name (auto-wrapped with ``f.lit``), or a ``Column`` to reference
@@ -79,12 +79,12 @@ def st_asmvt(geom_wkb: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     if isinstance(layer_name, str):
         layer_name = f.lit(layer_name)
     return f.call_function(
-        "gbx_st_asmvt", _col(geom_wkb), _col(attrs), _col(layer_name)
+        "gbx_st_asmvt", _col(geom), _col(attrs), _col(layer_name)
     )
 
 
 def st_asmvt_pyramid(
-    geom_wkb: ColLike,
+    geom: ColLike,
     attrs: ColLike,
     min_z: ColLike,
     max_z: ColLike,
@@ -103,7 +103,7 @@ def st_asmvt_pyramid(
     across the requested zoom range capped at 10^6.
 
     Args:
-        geom_wkb:   Per-feature geometry in WKB (BINARY) column.
+        geom:       Per-feature geometry (WKB, EWKB, WKT, or EWKT) column.
         attrs:      Per-feature attribute struct column (encoded with native MVT value types).
         min_z:      Inclusive minimum zoom level.
         max_z:      Inclusive maximum zoom level (<= 20).
@@ -122,7 +122,7 @@ def st_asmvt_pyramid(
     extent_col = f.lit(4096) if extent is None else _col(extent)
     return f.call_function(
         "gbx_st_asmvt_pyramid",
-        _col(geom_wkb),
+        _col(geom),
         _col(attrs),
         _col(min_z),
         _col(max_z),

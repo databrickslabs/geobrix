@@ -53,23 +53,23 @@ object functions extends Serializable {
     /**
       * Aggregator: encode a group of features into a Mapbox Vector Tile (MVT) protobuf blob.
       *
-      * @param geomWkb   per-row geometry in WKB (BINARY) in tile-local coordinates
+      * @param geom      per-row geometry in WKB (BINARY) in tile-local coordinates
       * @param attrs     per-row attribute struct (all fields stringified in v0.4.0)
       * @param layerName constant Column holding the MVT layer name
       */
-    def st_asmvt(geomWkb: Column, attrs: Column, layerName: Column): Column =
-        ColumnAdapter(ST_AsMvt.name, Seq(geomWkb, attrs, layerName))
+    def st_asmvt(geom: Column, attrs: Column, layerName: Column): Column =
+        ColumnAdapter(ST_AsMvt.name, Seq(geom, attrs, layerName))
 
     /** Convenience overload - pass a plain string as the layer name. */
-    def st_asmvt(geomWkb: Column, attrs: Column, layerName: String): Column =
-        st_asmvt(geomWkb, attrs, lit(layerName))
+    def st_asmvt(geom: Column, attrs: Column, layerName: String): Column =
+        st_asmvt(geom, attrs, lit(layerName))
 
     /**
-      * Generator: explode one `(geom_wkb, attrs)` row into one row per intersecting
+      * Generator: explode one `(geom, attrs)` row into one row per intersecting
       * `(z, x, y)` tile in `[min_z, max_z]`, encoded as MVT bytes. Geometry assumed
       * EPSG:4326. Output column is a single struct `tile: STRUCT<z, x, y, mvt_bytes>`.
       *
-      * @param geomWkb   per-feature geometry in WKB (BINARY); EPSG:4326 lon/lat
+      * @param geom      per-feature geometry in WKB (BINARY); EPSG:4326 lon/lat
       * @param attrs     per-feature attribute struct (all fields stringified in v0.4.0)
       * @param minZ      inclusive minimum zoom level
       * @param maxZ      inclusive maximum zoom level (<= 20)
@@ -77,31 +77,31 @@ object functions extends Serializable {
       * @param extent    MVT tile extent in pixels (default 4096)
       */
     def st_asmvt_pyramid(
-        geomWkb: Column, attrs: Column, minZ: Column, maxZ: Column,
+        geom: Column, attrs: Column, minZ: Column, maxZ: Column,
         layerName: Column, extent: Column
     ): Column =
-        ColumnAdapter(ST_AsMvtPyramid.name, Seq(geomWkb, attrs, minZ, maxZ, layerName, extent))
+        ColumnAdapter(ST_AsMvtPyramid.name, Seq(geom, attrs, minZ, maxZ, layerName, extent))
 
     /** Convenience overload - extent defaults to the MVT v2 standard (4096). */
     def st_asmvt_pyramid(
-        geomWkb: Column, attrs: Column, minZ: Column, maxZ: Column, layerName: Column
+        geom: Column, attrs: Column, minZ: Column, maxZ: Column, layerName: Column
     ): Column =
         ColumnAdapter(
             ST_AsMvtPyramid.name,
-            Seq(geomWkb, attrs, minZ, maxZ, layerName, lit(MvtWriter.DefaultExtent))
+            Seq(geom, attrs, minZ, maxZ, layerName, lit(MvtWriter.DefaultExtent))
         )
 
     /** Convenience overload - Int zooms, String layer name (auto-lit-wrapped). */
     def st_asmvt_pyramid(
-        geomWkb: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String
+        geom: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String
     ): Column =
-        st_asmvt_pyramid(geomWkb, attrs, lit(minZ), lit(maxZ), lit(layerName))
+        st_asmvt_pyramid(geom, attrs, lit(minZ), lit(maxZ), lit(layerName))
 
     /** Convenience overload - Int zooms + extent, String layer name (auto-lit-wrapped). */
     def st_asmvt_pyramid(
-        geomWkb: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String, extent: Int
+        geom: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String, extent: Int
     ): Column =
-        st_asmvt_pyramid(geomWkb, attrs, lit(minZ), lit(maxZ), lit(layerName), lit(extent))
+        st_asmvt_pyramid(geom, attrs, lit(minZ), lit(maxZ), lit(layerName), lit(extent))
 
     /**
       * Returns the canonical CRS string (e.g. `"EPSG:4326"`, `"ESRI:54008"`) for a geometry's

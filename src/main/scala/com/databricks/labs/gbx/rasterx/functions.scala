@@ -565,11 +565,11 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     // Vector<->raster bridge (Column form)
     def rst_rasterize(
-        geomWkb: Column, value: Column,
+        geom: Column, value: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
         widthPx: Column, heightPx: Column, out_srid: Column
     ): Column =
-        ColumnAdapter(RST_Rasterize.name, Seq(geomWkb, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid))
+        ColumnAdapter(RST_Rasterize.name, Seq(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid))
 
     def rst_polygonize(tile: Column): Column =
         ColumnAdapter(RST_Polygonize.name, Seq(tile, lit(1), lit(4)))

@@ -458,7 +458,7 @@ def rst_merge_agg(tile: ColLike) -> Column:
 
 
 def rst_rasterize_agg(
-    geom_wkb: ColLike,
+    geom: ColLike,
     value: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -468,13 +468,13 @@ def rst_rasterize_agg(
     height_px: ColLike,
     out_srid: ColLike,
 ) -> Column:
-    """Rasterize streaming (geom_wkb, value) rows into a single raster tile (use with groupBy).
+    """Rasterize streaming (geom, value) rows into a single raster tile (use with groupBy).
 
     Streams one geometry/value pair per row; the extent and pixel-size arguments
     are per-group constants.  Overlap is last-wins (nondeterministic across the group).
 
     Args:
-        geom_wkb: BINARY column of geometry WKB (Polygon, MultiPolygon, etc.).
+        geom: Geometry (WKB, EWKB, WKT, or EWKT) column (Polygon, MultiPolygon, etc.).
         value: DOUBLE burn value column.
         xmin: Minimum X of the output raster extent.
         ymin: Minimum Y of the output raster extent.
@@ -489,7 +489,7 @@ def rst_rasterize_agg(
     """
     return f.call_function(
         "gbx_rst_rasterize_agg",
-        _col(geom_wkb),
+        _col(geom),
         _col(value),
         _col(xmin),
         _col(ymin),
@@ -1755,7 +1755,7 @@ def rst_xyzpyramid(
 
 
 def rst_rasterize(
-    geom_wkb: ColLike,
+    geom: ColLike,
     value: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -1773,7 +1773,7 @@ def rst_rasterize(
     (-9999.0, Float64).
 
     Args:
-        geom_wkb: Geometry as WKB ``bytes`` column.
+        geom: Geometry (WKB, EWKB, WKT, or EWKT) column.
         value: Burn value (``float``).
         xmin: Minimum X of the output raster extent.
         ymin: Minimum Y of the output raster extent.
@@ -1788,7 +1788,7 @@ def rst_rasterize(
     """
     return f.call_function(
         "gbx_rst_rasterize",
-        _col(geom_wkb),
+        _col(geom),
         _col(value),
         _col(xmin),
         _col(ymin),

@@ -150,7 +150,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
 
         assertDataType8("RST_RasterizeAgg",
             RST_RasterizeAgg(
-                geomWkbExpr  = Literal.create(null, BinaryType),
+                geomExpr     = Literal.create(null, BinaryType),
                 valueExpr    = Literal(0.0),
                 xminExpr     = Literal(0.0),
                 yminExpr     = Literal(0.0),

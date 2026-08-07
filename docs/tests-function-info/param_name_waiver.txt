@@ -40,8 +40,8 @@ gbx_rst_merge
 gbx_rst_ndvi
 gbx_rst_proximity
 # gbx_rst_quadbin_rasterize_agg  # R6 DONE: out_srid renamed
-gbx_rst_rasterize
-gbx_rst_rasterize_agg
+# gbx_rst_rasterize  # N1 DONE: geom_wkb renamed to geom
+# gbx_rst_rasterize_agg  # N1 DONE: geom_wkb renamed to geom
 gbx_rst_rastertoworldcoord
 gbx_rst_rastertoworldcoordx
 gbx_rst_rastertoworldcoordy
@@ -53,8 +53,8 @@ gbx_rst_worldtorastercoord
 gbx_rst_worldtorastercoordx
 gbx_rst_worldtorastercoordy
 gbx_rst_xyzpyramid
-gbx_st_asmvt
-gbx_st_asmvt_pyramid
+# gbx_st_asmvt  # N1 DONE: geom_wkb renamed to geom
+# gbx_st_asmvt_pyramid  # N1 DONE: geom_wkb renamed to geom
 gbx_st_interpolateelevationbbox
 gbx_st_interpolateelevationgeom
 gbx_st_triangulate

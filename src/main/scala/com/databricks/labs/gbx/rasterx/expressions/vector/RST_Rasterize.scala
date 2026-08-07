@@ -20,7 +20,7 @@ import java.util.{Vector => JVector}
  *  (-9999.0, Float64).
  */
 case class RST_Rasterize(
-    geomWkbExpr: Expression,
+    geomExpr: Expression,
     valueExpr: Expression,
     xminExpr: Expression,
     yminExpr: Expression,
@@ -32,7 +32,7 @@ case class RST_Rasterize(
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        geomWkbExpr, valueExpr,
+        geomExpr, valueExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthPxExpr, heightPxExpr, outSridExpr,
         ExpressionConfigExpr()
@@ -65,30 +65,30 @@ case class RST_Rasterize(
 object RST_Rasterize extends WithExpressionInfo {
 
     def eval(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
         widthPx: Int, heightPx: Int, out_srid: Int,
         conf: UTF8String
-    ): InternalRow = doInvoke(geomWkb, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, conf)
+    ): InternalRow = doInvoke(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, conf)
 
     /** Long-overload for PySpark callers - promotes Int args sent as Long. */
     def eval(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
         widthPx: Long, heightPx: Long, out_srid: Long,
         conf: UTF8String
-    ): InternalRow = doInvoke(geomWkb, value, xmin, ymin, xmax, ymax,
+    ): InternalRow = doInvoke(geom, value, xmin, ymin, xmax, ymax,
         widthPx.toInt, heightPx.toInt, out_srid.toInt, conf)
 
     private def doInvoke(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
         widthPx: Int, heightPx: Int, out_srid: Int,
         conf: UTF8String
     ): InternalRow =
         Option(
           RST_ErrorHandler.safeEval(
-            () => execute(geomWkb, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, conf),
+            () => execute(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, conf),
             null,
             BinaryType,
             conf
@@ -97,15 +97,15 @@ object RST_Rasterize extends WithExpressionInfo {
 
     /** Pure compute path - extracted for direct unit-testing without Spark. */
     def execute(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
         widthPx: Int, heightPx: Int, out_srid: Int,
         conf: UTF8String
     ): InternalRow = {
         val exprConf = ExpressionConfig.fromB64(conf.toString)
         RST_ExpressionUtil.init(exprConf)
-        if (geomWkb == null) return null
-        val (ogrDs, layer) = VectorRasterBridge.buildOgrLayer(Seq((geomWkb, value)), out_srid)
+        if (geom == null) return null
+        val (ogrDs, layer) = VectorRasterBridge.buildOgrLayer(Seq((geom, value)), out_srid)
         val rasterDs: Dataset = VectorRasterBridge.buildEmptyRaster(
             xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid)
         try {
@@ -138,7 +138,7 @@ object RST_Rasterize extends WithExpressionInfo {
         case 9 => RST_Rasterize(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8))
         case n => throw new IllegalArgumentException(
             s"gbx_rst_rasterize expects 9 arguments " +
-            s"(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid); got $n"
+            s"(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid); got $n"
         )
     }
 

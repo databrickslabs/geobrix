@@ -14,17 +14,17 @@ import org.apache.spark.sql.types.{ArrayType, DataType, LongType}
   * its center point falls strictly inside (or on the boundary of) the input geometry,
   * as determined by JTS `Geometry.contains(centroid)`.
   *
-  * Arguments: geomExpr (BINARY WKB or STRING WKT), gridExpr (grid-spec STRUCT), resExpr (INT or LONG).
+  * Arguments: geomExpr (BINARY WKB or STRING WKT), gridExpr (grid-spec STRUCT), resolutionExpr (INT or LONG).
   *
   * Returns: ARRAY<BIGINT> of cell IDs.
   */
 case class Custom_Polyfill(
-    geomExpr: Expression,
-    gridExpr: Expression,
-    resExpr:  Expression
+    geomExpr:       Expression,
+    gridExpr:       Expression,
+    resolutionExpr: Expression
 ) extends Expression with CodegenFallback {
 
-    override def children: Seq[Expression] = Seq(geomExpr, gridExpr, resExpr)
+    override def children: Seq[Expression] = Seq(geomExpr, gridExpr, resolutionExpr)
     override def dataType: DataType        = ArrayType(LongType, containsNull = false)
     override def nullable: Boolean         = true
     override def foldable: Boolean         = children.forall(_.foldable)
@@ -38,7 +38,7 @@ case class Custom_Polyfill(
 
         val geom = Custom_PointAsCell.decodeGeom(geomVal)
         val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
-        val res  = Custom_GridSpec.asInt(resExpr.eval(input), "resolution")
+        val res  = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")
 
         val cells: Seq[Long] = sys.polyfill(geom, res)
         ArrayData.toArrayData(cells.toArray)

@@ -768,9 +768,9 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------
 
 
-def quadbin_pointascell(lon: ColLike, lat: ColLike, res: ColLike) -> Column:
-    """Quadbin cell (LONG) containing the WGS84 lon/lat point at `res`."""
-    return f.call_function("gbx_quadbin_pointascell", _col(lon), _col(lat), _col(res))
+def quadbin_pointascell(lon: ColLike, lat: ColLike, resolution: ColLike) -> Column:
+    """Quadbin cell (LONG) containing the WGS84 lon/lat point at `resolution`."""
+    return f.call_function("gbx_quadbin_pointascell", _col(lon), _col(lat), _col(resolution))
 
 
 def quadbin_resolution(cell: ColLike) -> Column:
@@ -788,9 +788,9 @@ def quadbin_distance(cell_a: ColLike, cell_b: ColLike) -> Column:
     return f.call_function("gbx_quadbin_distance", _col(cell_a), _col(cell_b))
 
 
-def quadbin_polyfill(geom: ColLike, res: ColLike) -> Column:
-    """ARRAY<LONG> of cells covering the geometry's envelope at `res`."""
-    return f.call_function("gbx_quadbin_polyfill", _col(geom), _col(res))
+def quadbin_polyfill(geom: ColLike, resolution: ColLike) -> Column:
+    """ARRAY<LONG> of cells covering the geometry's envelope at `resolution`."""
+    return f.call_function("gbx_quadbin_polyfill", _col(geom), _col(resolution))
 
 
 def quadbin_aswkb(cell: ColLike) -> Column:
@@ -808,9 +808,9 @@ def quadbin_cellunion(cells: ColLike) -> Column:
     return f.call_function("gbx_quadbin_cellunion", _col(cells))
 
 
-def quadbin_tessellate(geom: ColLike, res: ColLike) -> Column:
+def quadbin_tessellate(geom: ColLike, resolution: ColLike) -> Column:
     """ARRAY<STRUCT<cell:LONG, geom:BINARY>> chips clipping the geometry per cell."""
-    return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(res))
+    return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(resolution))
 
 
 def quadbin_cellunion_agg(cell: ColLike) -> Column:
@@ -822,14 +822,14 @@ def quadbin_cellunion_agg(cell: ColLike) -> Column:
 # Cell ids are STRING; geometry outputs are plain WKB (EPSG:27700, no SRID).
 
 
-def bng_pointascell(geom: ColLike, res: ColLike) -> Column:
+def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
     """BNG cell id (STRING) for the centroid of a geometry (EPSG:27700)."""
-    return f.call_function("gbx_bng_pointascell", _col(geom), _col(res))
+    return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
 
 
-def bng_eastnorthasbng(e: ColLike, n: ColLike, res: ColLike) -> Column:
-    """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `res`."""
-    return f.call_function("gbx_bng_eastnorthasbng", _col(e), _col(n), _col(res))
+def bng_eastnorthasbng(e: ColLike, n: ColLike, resolution: ColLike) -> Column:
+    """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `resolution`."""
+    return f.call_function("gbx_bng_eastnorthasbng", _col(e), _col(n), _col(resolution))
 
 
 def bng_cellarea(cellid: ColLike) -> Column:
@@ -882,24 +882,24 @@ def bng_kloop(cellid: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_bng_kloop", _col(cellid), _col(k))
 
 
-def bng_polyfill(geom: ColLike, res: ColLike) -> Column:
+def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:
     """ARRAY<STRING> of cells whose centroid is contained by the geometry."""
-    return f.call_function("gbx_bng_polyfill", _col(geom), _col(res))
+    return f.call_function("gbx_bng_polyfill", _col(geom), _col(resolution))
 
 
-def bng_geomkring(geom: ColLike, res: ColLike, k: ColLike) -> Column:
+def bng_geomkring(geom: ColLike, resolution: ColLike, k: ColLike) -> Column:
     """ARRAY<STRING> k-ring around a geometry's covering chips."""
-    return f.call_function("gbx_bng_geomkring", _col(geom), _col(res), _col(k))
+    return f.call_function("gbx_bng_geomkring", _col(geom), _col(resolution), _col(k))
 
 
-def bng_geomkloop(geom: ColLike, res: ColLike, k: ColLike) -> Column:
+def bng_geomkloop(geom: ColLike, resolution: ColLike, k: ColLike) -> Column:
     """ARRAY<STRING> k-loop around a geometry's covering chips."""
-    return f.call_function("gbx_bng_geomkloop", _col(geom), _col(res), _col(k))
+    return f.call_function("gbx_bng_geomkloop", _col(geom), _col(resolution), _col(k))
 
 
-def bng_tessellate(geom: ColLike, res: ColLike) -> Column:
+def bng_tessellate(geom: ColLike, resolution: ColLike) -> Column:
     """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell."""
-    return f.call_function("gbx_bng_tessellate", _col(geom), _col(res))
+    return f.call_function("gbx_bng_tessellate", _col(geom), _col(resolution))
 
 
 def bng_cellunion_agg(chip: ColLike) -> Column:
@@ -997,9 +997,9 @@ def custom_grid(
     )
 
 
-def custom_pointascell(point: ColLike, grid: ColLike, res: ColLike) -> Column:
-    """Custom-grid cell ID (BIGINT) for the first coordinate of a geometry at `res`."""
-    return f.call_function("gbx_custom_pointascell", _col(point), _col(grid), _col(res))
+def custom_pointascell(point: ColLike, grid: ColLike, resolution: ColLike) -> Column:
+    """Custom-grid cell ID (BIGINT) for the first coordinate of a geometry at `resolution`."""
+    return f.call_function("gbx_custom_pointascell", _col(point), _col(grid), _col(resolution))
 
 
 def custom_cellaswkb(cell: ColLike, grid: ColLike) -> Column:
@@ -1017,9 +1017,9 @@ def custom_centroid(cell: ColLike, grid: ColLike) -> Column:
     return f.call_function("gbx_custom_centroid", _col(cell), _col(grid))
 
 
-def custom_polyfill(geom: ColLike, grid: ColLike, res: ColLike) -> Column:
+def custom_polyfill(geom: ColLike, grid: ColLike, resolution: ColLike) -> Column:
     """ARRAY<BIGINT> of cells whose center is contained by the geometry."""
-    return f.call_function("gbx_custom_polyfill", _col(geom), _col(grid), _col(res))
+    return f.call_function("gbx_custom_polyfill", _col(geom), _col(grid), _col(resolution))
 
 
 def custom_kring(cell: ColLike, grid: ColLike, k: ColLike) -> Column:

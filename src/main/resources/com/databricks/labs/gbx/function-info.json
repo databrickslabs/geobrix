@@ -637,11 +637,11 @@
     },
     "gbx_custom_pointascell": {
       "examples": "Examples:\n      > SELECT gbx_custom_pointascell(geom, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 5) AS cell FROM points;",
-      "usage_args": "point, grid, res"
+      "usage_args": "point, grid, resolution"
     },
     "gbx_custom_polyfill": {
       "examples": "Examples:\n      > SELECT region_id, gbx_custom_polyfill(geom, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 5) AS cells FROM regions;",
-      "usage_args": "geom, grid, res"
+      "usage_args": "geom, grid, resolution"
     },
     "_package_vectorx": "--- vectorx ---",
     "gbx_st_asmvt": {

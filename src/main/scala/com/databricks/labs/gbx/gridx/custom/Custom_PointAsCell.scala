@@ -13,15 +13,15 @@ import org.locationtech.jts.geom.Geometry
 /** Catalyst expression: given a geometry (WKB or WKT), a grid-spec struct, and a resolution,
   * returns the Long cell ID in the custom grid that contains the point.
   *
-  * Arguments: pointExpr (BINARY or STRING), gridExpr (STRUCT), resExpr (INT or LONG).
+  * Arguments: pointExpr (BINARY or STRING), gridExpr (STRUCT), resolutionExpr (INT or LONG).
   */
 case class Custom_PointAsCell(
-    pointExpr: Expression,
-    gridExpr:  Expression,
-    resExpr:   Expression
+    pointExpr:      Expression,
+    gridExpr:       Expression,
+    resolutionExpr: Expression
 ) extends Expression with CodegenFallback {
 
-    override def children: Seq[Expression] = Seq(pointExpr, gridExpr, resExpr)
+    override def children: Seq[Expression] = Seq(pointExpr, gridExpr, resolutionExpr)
     override def dataType: DataType  = LongType
     override def nullable: Boolean   = true
     override def foldable: Boolean   = children.forall(_.foldable)
@@ -35,7 +35,7 @@ case class Custom_PointAsCell(
 
         val geom: Geometry = Custom_PointAsCell.decodeGeom(pointVal)
         val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
-        val res  = Custom_GridSpec.asInt(resExpr.eval(input), "resolution")
+        val res  = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")
         val c    = geom.getCoordinate
 
         sys.pointToCellID(c.x, c.y, res)

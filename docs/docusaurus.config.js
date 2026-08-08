@@ -66,6 +66,14 @@ const config = {
     },
     // Convert absolute paths to relative in HTML/CSS so static zip works when opening index.html from any folder (file://)
     ...(process.env.DOCS_STATIC_ZIP === '1' ? ['@someok/docusaurus-plugin-relative-paths'] : []),
+    [
+      '@docusaurus/plugin-client-redirects',
+      {
+        redirects: [
+          { from: '/docs/beta-release-notes', to: '/docs/release-notes' },
+        ],
+      },
+    ],
   ],
 
   presets: [

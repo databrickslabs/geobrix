@@ -1,5 +1,5 @@
 {
-  "release_notes_path": "docs/docs/beta-release-notes.mdx",
+  "release_notes_path": "docs/docs/release-notes.mdx",
   "internals_extra_patterns": [
     "wave\\s*\\d+",
     "@databricks\\.com",

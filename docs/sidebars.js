@@ -19,7 +19,7 @@ const sidebars = {
     'installation',
     'quick-start',
     'databricks-spatial',
-    'beta-release-notes',
+    'release-notes',
     {
       type: 'category',
       label: 'Examples',

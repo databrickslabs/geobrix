@@ -11,7 +11,7 @@ Algorithm:
      Collect lines matching ``^+gbx_[a-z0-9_]+`` (added registered functions;
      the ``+++`` file-header line is excluded by the regex).
   2. For each added name, check whether it appears (substring) anywhere in
-     ``docs/docs/beta-release-notes.mdx``.  Also accept the bare name (strip
+     ``docs/docs/release-notes.mdx``.  Also accept the bare name (strip
      leading ``gbx_``) as a match -- some bullets reference the bare form.
      A match on either counts.
   3. Exit 1 listing every added function NOT mentioned in the release notes.
@@ -32,7 +32,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
-RELEASE_NOTES = REPO_ROOT / "docs/docs/beta-release-notes.mdx"
+RELEASE_NOTES = REPO_ROOT / "docs/docs/release-notes.mdx"
 
 # Matches a newly added registered-function line: ``+gbx_foo_bar``
 # The ``+++`` diff file-header lines are excluded because they contain a path,

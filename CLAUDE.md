@@ -4,7 +4,7 @@ This file is the entry point for any Claude (or Cursor) session in this repo. Us
 
 ## Project
 
-**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3 LTS or 18 LTS). Current version **0.5.0** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/beta-release-notes.mdx` for breaking changes.
+**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3 LTS or 18 LTS). Current version **0.5.0** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
 
 Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
 
@@ -19,7 +19,7 @@ These are the geobrix-specific translations of user-global preferences (`~/.clau
 - **Check Databricks auth BEFORE dispatching, not after a browser tab appears.** The main agent owns auth readiness. Run `bash ~/.claude/hooks/databricks-auth-status.sh PreDispatch` (read-only, never opens a browser) before each dispatch block, and confirm the profiles the work needs are `VALID`. Most geobrix work is local (Docker/Maven/pytest/docs/git) and needs **no** profile — don't ask the user to re-auth a profile the work doesn't touch. Subagents must never fix auth; a `databricks auth login` is hook-blocked and only the user can run it.
 - **Skills first** — Useful for adjacent work: `databricks-query` for SQL against the workspace, `databricks-workspace-files` for browsing notebooks, `databricks-lakeview-dashboard` for visualization, `databricks-authentication` before any databricks operation. The Field Engineering skills (`fevm`, `sage-context-catalog`) are unrelated to geobrix and shouldn't be invoked here.
 - **Runtime judge** — Has already learned the common `gbx:*` scripts (`gbx-test-scala.sh`, `gbx-test-python.sh`, `gbx-docker-exec.sh`, etc.) from prior sessions. New patterns pay a 10-20s warmup; learned patterns are instant. Don't disable.
-- **QC judge** — Project config at `.claude/qc-judge/config.json`. Wave-number regex (`wave\s*\d+`) blocks any user-facing doc that leaks the internal planning vocabulary (see "User-facing docs voice" below). `release_notes_path` points at `docs/docs/beta-release-notes.mdx` for the release-notes-current check.
+- **QC judge** — Project config at `.claude/qc-judge/config.json`. Wave-number regex (`wave\s*\d+`) blocks any user-facing doc that leaks the internal planning vocabulary (see "User-facing docs voice" below). `release_notes_path` points at `docs/docs/release-notes.mdx` for the release-notes-current check.
 - **gh account switch** — `gh auth switch --user mjohns-databricks` before **any** push, PR creation, PR comment, or `gh api` write to `databrickslabs/geobrix`. The default `mjohns_data` returns 403 for write operations on this repo.
 - **Progress feedback on long-running ops** — Scala test suites, Maven builds, full doc tests, and coverage runs routinely take 1-10+ minutes. When you dispatch one of these, give the user a one-line progress update roughly every 30 seconds (tail the log, report the suite/file currently running). Don't go silent for minutes.
 

@@ -330,6 +330,7 @@ def test_light_accessor_corrupt_tile_returns_none(spark):
     df = spark.range(1).select(
         pf.rst_width(corrupt_tile).alias("width"),
         pf.rst_srid(corrupt_tile).alias("srid"),
+        pf.rst_scalex(corrupt_tile).alias("scalex"),
     )
 
     result = df.collect()
@@ -339,4 +340,8 @@ def test_light_accessor_corrupt_tile_returns_none(spark):
     )
     assert result[0]["srid"] is None, (
         f"rst_srid on corrupt tile should be None, got {result[0]['srid']!r}"
+    )
+    # Parity: light scalex must degrade to None (not NaN) matching heavy NULL-on-corrupt
+    assert result[0]["scalex"] is None, (
+        f"rst_scalex on corrupt tile should be None (not NaN), got {result[0]['scalex']!r}"
     )

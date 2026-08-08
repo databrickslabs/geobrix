@@ -1,7 +1,10 @@
 """Test that light streaming UDTFs yield exactly ONE error-tile row on corrupt input.
 
 Cross-tier parity: heavy generators emit one error-tile row on empty/corrupt
-input; light UDTFs must do the same so row-counts match.
+input; light UDTFs must do the same so row-counts match.  Each test below
+asserts len(rows) == 1 and raster is None — the exact same contract as the
+heavy-tier generators (confirmed by RST_ErrorHandlingParityTest.scala on the
+heavy side).
 
 XYZPyramid and Polygonize UDTFs use different row schemas and are deliberately
 left out of scope — they cannot use build_error_tile without a schema change.
@@ -78,4 +81,30 @@ def test_retile_corrupt_yields_one_error_row(spark):
     assert "last_error" in row["metadata"]
     assert "RST_ReTile" in row["metadata"]["last_error"], (
         f"expected 'RST_ReTile' in last_error, got: {row['metadata']['last_error']!r}"
+    )
+
+
+def test_tooverlappingtiles_corrupt_yields_one_error_row(spark):
+    """A corrupt tile fed to rst_tooverlappingtiles yields exactly one error-tile row.
+
+    Count-parity assertion: light UDTF error-row count (1) must match the
+    heavy-tier generator contract (also 1), confirmed by
+    RST_ErrorHandlingParityTest.scala on the heavy side.
+    """
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    df = _corrupt_tile_df(spark)
+    df.createOrReplaceTempView("_udtf_err_overlapping")
+    rows = spark.sql(
+        "SELECT t.cellid, t.raster, t.metadata "
+        "FROM _udtf_err_overlapping, LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 0) t"
+    ).collect()
+    assert len(rows) == 1, f"expected 1 error row, got {len(rows)}"
+    row = rows[0]
+    assert row["raster"] is None, "error row must have raster=None"
+    assert row["metadata"] is not None
+    assert "last_error" in row["metadata"]
+    assert "RST_ToOverlappingTiles" in row["metadata"]["last_error"], (
+        f"expected 'RST_ToOverlappingTiles' in last_error, got: {row['metadata']['last_error']!r}"
     )

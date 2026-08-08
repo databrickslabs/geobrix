@@ -27,9 +27,9 @@ case class RST_Height(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Height extends WithExpressionInfo {
 
-    def eval(row: InternalRow, conf: UTF8String): Int = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Integer = eval(row, conf, BinaryType)
 
-    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): Int =
+    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): java.lang.Integer =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -44,7 +44,7 @@ object RST_Height extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Int]).getOrElse(-1)
+        ).map(v => java.lang.Integer.valueOf(v.asInstanceOf[Int])).orNull
 
     def execute(ds: Dataset): Int = ds.GetRasterYSize()
 

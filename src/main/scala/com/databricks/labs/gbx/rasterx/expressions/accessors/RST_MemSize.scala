@@ -28,9 +28,9 @@ case class RST_MemSize(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MemSize extends WithExpressionInfo {
 
-    def eval(row: InternalRow, conf: UTF8String): Long = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Long = eval(row, conf, BinaryType)
 
-    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): Long =
+    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): java.lang.Long =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -45,7 +45,7 @@ object RST_MemSize extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Long]).getOrElse(-1L)
+        ).map(v => java.lang.Long.valueOf(v.asInstanceOf[Long])).orNull
 
     def execute(ds: Dataset): Long = RasterAccessors.memSize(ds)
 

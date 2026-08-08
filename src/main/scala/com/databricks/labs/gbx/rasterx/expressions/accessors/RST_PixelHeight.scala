@@ -27,10 +27,10 @@ case class RST_PixelHeight(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_PixelHeight extends WithExpressionInfo {
 
-    def eval(row: InternalRow, conf: UTF8String): Double = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Double = eval(row, conf, BinaryType)
 
     /** Reads tile, returns pixel height from geotransform; uses safeEval. */
-    private def eval(row: InternalRow, conf: UTF8String, dt: DataType): Double =
+    private def eval(row: InternalRow, conf: UTF8String, dt: DataType): java.lang.Double =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -45,7 +45,7 @@ object RST_PixelHeight extends WithExpressionInfo {
             dt,
             conf
           )
-        ).map(_.asInstanceOf[Double]).getOrElse(Double.NaN)
+        ).map(v => java.lang.Double.valueOf(v.asInstanceOf[Double])).orNull
 
     def execute(dataset: Dataset): Double = {
         val gt = dataset.GetGeoTransform

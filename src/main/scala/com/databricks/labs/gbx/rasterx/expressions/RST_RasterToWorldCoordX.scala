@@ -29,9 +29,9 @@ case class RST_RasterToWorldCoordX(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_RasterToWorldCoordX extends WithExpressionInfo {
 
-    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String): Double = eval(row, x, y, conf, BinaryType)
+    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String): java.lang.Double = eval(row, x, y, conf, BinaryType)
 
-    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String, rdt: DataType): Double =
+    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String, rdt: DataType): java.lang.Double =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -46,7 +46,7 @@ object RST_RasterToWorldCoordX extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Double]).getOrElse(Double.NaN)
+        ).map(v => java.lang.Double.valueOf(v.asInstanceOf[Double])).orNull
 
     def execute(ds: Dataset, x: Int, y: Int): (Double, Double) = GDAL.toWorldCoord(ds.GetGeoTransform, x, y)
 

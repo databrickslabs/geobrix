@@ -27,9 +27,9 @@ case class RST_Rotation(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Rotation extends WithExpressionInfo {
 
-    def eval(row: InternalRow, conf: UTF8String): Double = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Double = eval(row, conf, BinaryType)
 
-    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): Double =
+    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): java.lang.Double =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -44,7 +44,7 @@ object RST_Rotation extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Double]).getOrElse(Double.NaN)
+        ).map(v => java.lang.Double.valueOf(v.asInstanceOf[Double])).orNull
 
     def execute(ds: Dataset): Double = {
         val gt = ds.GetGeoTransform

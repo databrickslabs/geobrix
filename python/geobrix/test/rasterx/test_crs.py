@@ -104,3 +104,86 @@ def test_rst_transformcrs_reprojects(spark):
     assert tile_value is not None, "rst_transformcrs should return a non-null tile"
     assert crs_value is not None, "CRS of transformed tile should be non-null"
     assert "3857" in str(crs_value), f"Expected 3857 in transformed CRS, got {crs_value}"
+
+
+def test_rst_clip_bare_string_crs(spark):
+    """rst_clip with bare string CRS arg should not resolve as UNRESOLVED_COLUMN."""
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    if not Path(SRTM_PATH).exists():
+        pytest.skip(f"Sample data not found: {SRTM_PATH}")
+
+    df = spark.read.format("binaryFile").load(SRTM_PATH).limit(1)
+    tile_df = df.select(rx.rst_fromcontent(col("content"), lit("GTiff")).alias("tile"))
+
+    # Create a clipping polygon inside the SRTM extent
+    # SRTM n51w001 covers lon ~ [-1, 0], lat ~ [51, 52]
+    cutline_wkt = "POLYGON((-0.8 51.2, -0.2 51.2, -0.2 51.8, -0.8 51.8, -0.8 51.2))"
+
+    # Test with bare string "EPSG:4326" as clip_crs arg — must not resolve as column
+    result = tile_df.select(
+        rx.rst_clip(
+            col("tile"), lit(cutline_wkt), lit(False), clip_crs="EPSG:4326"
+        ).alias("clipped_tile")
+    ).collect()
+
+    assert len(result) == 1
+    clipped = result[0]["clipped_tile"]
+    assert (
+        clipped is not None
+    ), "rst_clip with bare string CRS should return a non-null tile"
+
+
+def test_rst_sample_bare_string_crs(spark):
+    """rst_sample with bare string CRS arg should not resolve as UNRESOLVED_COLUMN."""
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    if not Path(SRTM_PATH).exists():
+        pytest.skip(f"Sample data not found: {SRTM_PATH}")
+
+    df = spark.read.format("binaryFile").load(SRTM_PATH).limit(1)
+    tile_df = df.select(rx.rst_fromcontent(col("content"), lit("GTiff")).alias("tile"))
+
+    # Sample point inside SRTM extent (London approx: -0.13, 51.5)
+    point_wkt = "POINT(-0.13 51.5)"
+
+    # Test with bare string "EPSG:4326" as crs arg — must not resolve as column
+    result = tile_df.select(
+        rx.rst_sample(col("tile"), lit(point_wkt), crs="EPSG:4326").alias("samples")
+    ).collect()
+
+    assert len(result) == 1
+    # Sample may be null if point is out of extent; the assertion is that NO
+    # UNRESOLVED_COLUMN error occurs during planning/execution
+
+
+def test_rst_viewshed_bare_string_crs(spark):
+    """rst_viewshed with bare string CRS arg should not resolve as UNRESOLVED_COLUMN."""
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    if not Path(SRTM_PATH).exists():
+        pytest.skip(f"Sample data not found: {SRTM_PATH}")
+
+    df = spark.read.format("binaryFile").load(SRTM_PATH).limit(1)
+    tile_df = df.select(rx.rst_fromcontent(col("content"), lit("GTiff")).alias("tile"))
+
+    # Observer point inside SRTM extent (tile centre: -0.5, 51.5)
+    observer_wkt = "POINT(-0.5 51.5)"
+
+    # Test with bare string "EPSG:4326" as crs arg — must not resolve as column
+    result = tile_df.select(
+        rx.rst_viewshed(
+            col("tile"),
+            lit(observer_wkt),
+            lit(100.0),
+            target_height=lit(1.6),
+            max_distance=lit(0.5),
+            crs="EPSG:4326",
+        ).alias("viewshed_tile")
+    ).collect()
+
+    assert len(result) == 1
+    viewshed = result[0]["viewshed_tile"]
+    assert (
+        viewshed is not None
+    ), "rst_viewshed with bare string CRS should return a non-null tile"

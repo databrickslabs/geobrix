@@ -1352,7 +1352,11 @@ def rst_clip(
             "gbx_rst_clip", _col(tile), _col(geom), _col(cutline_all_touched)
         )
     return f.call_function(
-        "gbx_rst_clip", _col(tile), _col(geom), _col(cutline_all_touched), _col(clip_crs)
+        "gbx_rst_clip",
+        _col(tile),
+        _col(geom),
+        _col(cutline_all_touched),
+        _crs_col(clip_crs),
     )
 
 
@@ -2585,7 +2589,7 @@ def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
     """
     if crs is None:
         return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
-    return f.call_function("gbx_rst_sample", _col(tile), _col(geom), _col(crs))
+    return f.call_function("gbx_rst_sample", _col(tile), _col(geom), _crs_col(crs))
 
 
 def rst_setcrs(tile: ColLike, crs: ColLike) -> Column:
@@ -2894,5 +2898,5 @@ def rst_viewshed(
         _col(observer_height),
         th_col,
         md_col,
-        _col(crs),
+        _crs_col(crs),
     )

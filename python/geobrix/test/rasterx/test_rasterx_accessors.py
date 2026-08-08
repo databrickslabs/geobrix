@@ -300,3 +300,43 @@ def test_all_accessors_together(spark):
         key in row_dict
         for key in ["avg", "min", "max", "width", "height", "bands", "format", "srid"]
     )
+
+
+def test_light_accessor_corrupt_tile_returns_none(spark):
+    """Light accessors must return None (not raise) on a corrupt (non-empty) raster.
+
+    A tile whose ``raster`` field is non-null but contains garbage bytes is not
+    empty — ``_tile_is_empty`` lets it through — but rasterio cannot open it.
+    The UDF factories must degrade to None (matching heavy NULL-on-corrupt)
+    rather than surfacing the exception to the caller.
+    """
+    from databricks.labs.gbx.pyrx import functions as pf
+
+    # Build a minimal tile struct with garbage raster bytes (non-null, non-empty
+    # so _tile_is_empty returns False, but rasterio cannot open it).
+    corrupt_tile = f.struct(
+        f.lit(None).cast("long").alias("cellid"),
+        f.lit(b"THIS_IS_NOT_A_RASTER").alias("raster"),
+        f.lit(None).cast("string").alias("path"),
+        f.lit(None).cast(
+            "struct<col_off:int,row_off:int,width:int,height:int>"
+        ).alias("window"),
+        f.lit(None).cast("binary").alias("clip_polygon"),
+        f.lit(None).cast("string").alias("clip_crs"),
+        f.lit(None).cast("string").alias("crs"),
+        f.lit(None).cast("map<string,string>").alias("metadata"),
+    )
+
+    df = spark.range(1).select(
+        pf.rst_width(corrupt_tile).alias("width"),
+        pf.rst_srid(corrupt_tile).alias("srid"),
+    )
+
+    result = df.collect()
+    assert len(result) == 1, "expected exactly one row"
+    assert result[0]["width"] is None, (
+        f"rst_width on corrupt tile should be None, got {result[0]['width']!r}"
+    )
+    assert result[0]["srid"] is None, (
+        f"rst_srid on corrupt tile should be None, got {result[0]['srid']!r}"
+    )

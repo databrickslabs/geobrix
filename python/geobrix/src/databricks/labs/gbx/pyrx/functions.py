@@ -243,11 +243,14 @@ def _header_accessor_udf(core_fn, return_type):
     def _udf(tile):
         if _tile_is_empty(tile):
             return None
-        from databricks.labs.gbx.pyrx import _env
+        try:  # noqa: BLE001
+            from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
-        with ot.open_header(tile) as ds:
-            return core_fn(ds)
+            _env.configure_gdal_env()
+            with ot.open_header(tile) as ds:
+                return core_fn(ds)
+        except Exception:  # noqa: BLE001
+            return None
 
     return _udf
 
@@ -259,11 +262,14 @@ def _pixel_accessor_udf(core_fn, return_type):
     def _udf(tile):
         if _tile_is_empty(tile):
             return None
-        from databricks.labs.gbx.pyrx import _env
+        try:  # noqa: BLE001
+            from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            return core_fn(ds)
+            _env.configure_gdal_env()
+            with ot._open(tile) as ds:
+                return core_fn(ds)
+        except Exception:  # noqa: BLE001
+            return None
 
     return _udf
 
@@ -295,11 +301,14 @@ _u_isempty = _pixel_accessor_udf(accessors.isempty, BooleanType())
 def _metadata_udf(tile):
     if _tile_is_empty(tile):
         return None
-    from databricks.labs.gbx.pyrx import _env
+    try:  # noqa: BLE001
+        from databricks.labs.gbx.pyrx import _env
 
-    _env.configure_gdal_env()
-    with ot.open_header(tile) as ds:
-        return accessors.metadata(ds)
+        _env.configure_gdal_env()
+        with ot.open_header(tile) as ds:
+            return accessors.metadata(ds)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # Coordinate transforms are HEADER-ONLY (ds.xy / ds.index — no pixel read), so
@@ -313,11 +322,14 @@ def _header_accessor_udf2(core_fn, return_type):
     def _udf(tile, a, b):
         if _tile_is_empty(tile):
             return None
-        from databricks.labs.gbx.pyrx import _env
+        try:  # noqa: BLE001
+            from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
-        with ot.open_header(tile) as ds:
-            return core_fn(ds, a, b)
+            _env.configure_gdal_env()
+            with ot.open_header(tile) as ds:
+                return core_fn(ds, a, b)
+        except Exception:  # noqa: BLE001
+            return None
 
     return _udf
 

@@ -243,7 +243,7 @@ def _header_accessor_udf(core_fn, return_type):
     def _udf(tile):
         if _tile_is_empty(tile):
             return None
-        try:  # noqa: BLE001
+        try:
             from databricks.labs.gbx.pyrx import _env
 
             _env.configure_gdal_env()
@@ -262,7 +262,7 @@ def _pixel_accessor_udf(core_fn, return_type):
     def _udf(tile):
         if _tile_is_empty(tile):
             return None
-        try:  # noqa: BLE001
+        try:
             from databricks.labs.gbx.pyrx import _env
 
             _env.configure_gdal_env()
@@ -301,7 +301,7 @@ _u_isempty = _pixel_accessor_udf(accessors.isempty, BooleanType())
 def _metadata_udf(tile):
     if _tile_is_empty(tile):
         return None
-    try:  # noqa: BLE001
+    try:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
@@ -322,7 +322,7 @@ def _header_accessor_udf2(core_fn, return_type):
     def _udf(tile, a, b):
         if _tile_is_empty(tile):
             return None
-        try:  # noqa: BLE001
+        try:
             from databricks.labs.gbx.pyrx import _env
 
             _env.configure_gdal_env()
@@ -621,7 +621,7 @@ def _merge_bytes(tiles):
     rasters = []
     dropped = 0
     for t in elems:
-        try:  # noqa: BLE001
+        try:
             vt = ot._to_virtual_tile(t)
             if vt.is_virtual():
                 # Only virtual tiles (path+window, no bytes) need materializing.
@@ -654,9 +654,9 @@ def _merge_udf(tiles):
     new_bytes, dropped = result
     tile = _serde.build_tile(new_bytes, "GTiff", 0)
     if dropped:
-        tile["metadata"]["last_error"] = (
-            f"RST_Merge: skipped {dropped} corrupt input tile(s)"
-        )
+        tile["metadata"][
+            "last_error"
+        ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -673,9 +673,9 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
         new_bytes, 0, virtualize_dir, virtualize_prefix, materialize
     )
     if row is not None and dropped:
-        row["metadata"]["last_error"] = (
-            f"RST_Merge: skipped {dropped} corrupt input tile(s)"
-        )
+        row["metadata"][
+            "last_error"
+        ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
     return row
 
 
@@ -737,7 +737,7 @@ def _combineavg_bytes(tiles):
     good_elems = []
     dropped = 0
     for t in elems:
-        try:  # noqa: BLE001
+        try:
             vt = ot._to_virtual_tile(t)
             if vt.is_virtual():
                 candidate = ot.materialize_to_bytes(vt).raster
@@ -769,9 +769,9 @@ def _combineavg_udf(tiles):
     new_bytes, cellid, dropped = result
     tile = _serde.build_tile(new_bytes, "GTiff", cellid)
     if dropped:
-        tile["metadata"]["last_error"] = (
-            f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
-        )
+        tile["metadata"][
+            "last_error"
+        ] = f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -787,9 +787,9 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
         new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
     )
     if row is not None and dropped:
-        row["metadata"]["last_error"] = (
-            f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
-        )
+        row["metadata"][
+            "last_error"
+        ] = f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
     return row
 
 
@@ -851,7 +851,7 @@ def _frombands_bytes(bands):
     for i, t in enumerate(bands):
         if t is None or _tile_is_empty(t):
             continue
-        try:  # noqa: BLE001
+        try:
             vt = ot._to_virtual_tile(t)
             candidate = (
                 ot.materialize_to_bytes(vt).raster
@@ -884,9 +884,9 @@ def _frombands_udf(bands):
     new_bytes, cellid, dropped = result
     tile = _serde.build_tile(new_bytes, "GTiff", cellid)
     if dropped:
-        tile["metadata"]["last_error"] = (
-            f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
-        )
+        tile["metadata"][
+            "last_error"
+        ] = f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -902,9 +902,9 @@ def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
         new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
     )
     if row is not None and dropped:
-        row["metadata"]["last_error"] = (
-            f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
-        )
+        row["metadata"][
+            "last_error"
+        ] = f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
     return row
 
 
@@ -3392,6 +3392,8 @@ class _RstSeparateBandsUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
+        # NOTE: a mid-iteration failure yields already-emitted good rows + one error row
+        # (not exactly 1); accepted because fully-corrupt open-failure is the primary case.
         try:
             with ot._open(tile) as ds:
                 for i, b in enumerate(tiling.iter_separate_bands(ds)):
@@ -3412,6 +3414,7 @@ class _RstRetileUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
+        # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile) as ds:
                 for i, b in enumerate(
@@ -3429,11 +3432,14 @@ class _RstToOverlappingTilesUDTF:
 
     def eval(self, tile, tile_width, tile_height, overlap):
         if _tile_is_empty(tile):
-            yield _serde.build_error_tile("RST_ToOverlappingTiles: empty or unreadable tile")
+            yield _serde.build_error_tile(
+                "RST_ToOverlappingTiles: empty or unreadable tile"
+            )
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
+        # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile) as ds:
                 for i, b in enumerate(
@@ -3458,19 +3464,24 @@ class _RstMakeTilesUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
+        # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             # iter_make_tiles keys the power-of-4 split count on the encoded byte
             # length, so obtain the materialized bytes (verbatim for a materialized
             # tile; front-door materialize for a virtual tile) and open those.
             vt = ot._to_virtual_tile(tile)
             raster = (
-                ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
+                ot.materialize_to_bytes(vt).raster
+                if vt.is_virtual()
+                else bytes(vt.raster)
             )
             with _serde.open_tile(raster) as ds:
                 # Pass the encoded byte length so the power-of-4 split count matches
                 # heavy BalancedSubdivision (which keys on GDAL's in-memory file size).
                 for i, b in enumerate(
-                    tiling.iter_make_tiles(ds, float(size_in_mb), size_bytes=len(raster))
+                    tiling.iter_make_tiles(
+                        ds, float(size_in_mb), size_bytes=len(raster)
+                    )
                 ):
                     yield _serde.build_tile(b, "GTiff", i)
         except Exception as e:  # noqa: BLE001
@@ -3495,6 +3506,7 @@ class _RstH3TessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
+        # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile) as ds:
                 for cellid, raster in tessellate_core.iter_tessellate_h3(
@@ -3610,7 +3622,9 @@ class _RstQuadbinTessellateUDTF:
 
     def eval(self, tile, resolution, mode=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield _serde.build_error_tile("RST_Quadbin_Tessellate: empty or unreadable tile")
+            yield _serde.build_error_tile(
+                "RST_Quadbin_Tessellate: empty or unreadable tile"
+            )
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -3621,6 +3635,7 @@ class _RstQuadbinTessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
+        # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile) as ds:
                 for cellid, raster in tessellate_core.iter_tessellate_quadbin(
@@ -3648,7 +3663,9 @@ class _RstBngTessellateUDTF:
 
     def eval(self, tile, resolution, mode=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield _serde.build_error_tile("RST_BNG_Tessellate: empty or unreadable tile")
+            yield _serde.build_error_tile(
+                "RST_BNG_Tessellate: empty or unreadable tile"
+            )
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -3660,6 +3677,7 @@ class _RstBngTessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
+        # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile) as ds:
                 for cellid_str, raster in tessellate_core.iter_tessellate_bng(
@@ -4333,27 +4351,19 @@ def rst_getnodata(tile: ColLike) -> Column:
 # --- Tier 1: coordinate transforms -----------------------------------------
 # HEADER-ONLY accessors: pass the FULL tile struct (not the raster subfield) so
 # a virtual tile's ``path`` is reachable; the UDF resolves via open_header.
-def rst_rastertoworldcoordx(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     return _u_r2w_x(_col(tile), _col(x), _col(y))
 
 
-def rst_rastertoworldcoordy(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_rastertoworldcoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     return _u_r2w_y(_col(tile), _col(x), _col(y))
 
 
-def rst_worldtorastercoordx(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_worldtorastercoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     return _u_w2r_x(_col(tile), _col(x), _col(y))
 
 
-def rst_worldtorastercoordy(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_worldtorastercoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     return _u_w2r_y(_col(tile), _col(x), _col(y))
 
 
@@ -5353,7 +5363,7 @@ def _merge_agg_udf(tile: pd.Series) -> bytes:
         candidate = _tile_raster_bytes(r)
         if candidate is None:
             continue
-        try:  # noqa: BLE001
+        try:
             with _serde.open_tile(candidate):
                 pass
             rasters.append(candidate)
@@ -5380,7 +5390,7 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
         candidate = _tile_raster_bytes(r)
         if candidate is None:
             continue
-        try:  # noqa: BLE001
+        try:
             with _serde.open_tile(candidate):
                 pass
             if first:
@@ -5417,7 +5427,7 @@ def _combineavg_agg_sql_udf(tile: pd.Series) -> bytes:
         candidate = _tile_raster_bytes(r)
         if candidate is None:
             continue
-        try:  # noqa: BLE001
+        try:
             with _serde.open_tile(candidate):
                 pass
             rasters.append(candidate)
@@ -5444,7 +5454,7 @@ def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
         candidate = _tile_raster_bytes(r)
         if candidate is None:
             continue
-        try:  # noqa: BLE001
+        try:
             with _serde.open_tile(candidate):
                 pass
             indexed.append((int(idx), candidate))
@@ -5506,7 +5516,7 @@ def _derivedband_agg_udf(
         candidate = _tile_raster_bytes(r)
         if candidate is None:
             continue
-        try:  # noqa: BLE001
+        try:
             with _serde.open_tile(candidate):
                 pass
             rasters.append(candidate)

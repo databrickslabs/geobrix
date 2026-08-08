@@ -10,13 +10,14 @@ from shapely.geometry import box
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import agg
 from databricks.labs.gbx.pyrx.functions import (
-    _combineavg_bytes,
-    _frombands_bytes,
-    _merge_bytes,
+    _combineavg_agg_sql_udf,
     _combineavg_agg_udf,
+    _combineavg_bytes,
     _derivedband_agg_udf,
     _frombands_agg_udf,
+    _frombands_bytes,
     _merge_agg_udf,
+    _merge_bytes,
 )
 
 
@@ -419,6 +420,7 @@ def _spark_tile_df_raw(spark, raster_bytes_seq):
     rst_fromcontent raises on corrupt bytes before the agg_udf is ever called.
     """
     from pyspark.sql import functions as sf
+
     from databricks.labs.gbx.pyrx import _serde
 
     schema = _serde.TILE_SCHEMA
@@ -434,10 +436,7 @@ class TestGroupedAggUdfSkipsCorrupt:
         from pyspark.sql import functions as sf
 
         df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
-        result = (
-            df.groupBy("g")
-            .agg(_merge_agg_udf(sf.col("tile")).alias("agg_bytes"))
-        )
+        result = df.groupBy("g").agg(_merge_agg_udf(sf.col("tile")).alias("agg_bytes"))
         # Must not raise and must produce a non-null aggregate.
         rows = result.collect()
         assert rows, "no rows returned"
@@ -447,9 +446,8 @@ class TestGroupedAggUdfSkipsCorrupt:
         from pyspark.sql import functions as sf
 
         df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
-        result = (
-            df.groupBy("g")
-            .agg(_combineavg_agg_udf(sf.col("tile")).alias("agg_bytes"))
+        result = df.groupBy("g").agg(
+            _combineavg_agg_udf(sf.col("tile")).alias("agg_bytes")
         )
         rows = result.collect()
         assert rows, "no rows returned"
@@ -461,15 +459,12 @@ class TestGroupedAggUdfSkipsCorrupt:
         from pyspark.sql import functions as sf
 
         df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
-        result = (
-            df.groupBy("g")
-            .agg(
-                _derivedband_agg_udf(
-                    sf.col("tile"),
-                    sf.lit(_PYFUNC_IDENTITY),
-                    sf.lit("identity"),
-                ).alias("agg_bytes")
-            )
+        result = df.groupBy("g").agg(
+            _derivedband_agg_udf(
+                sf.col("tile"),
+                sf.lit(_PYFUNC_IDENTITY),
+                sf.lit("identity"),
+            ).alias("agg_bytes")
         )
         rows = result.collect()
         assert rows, "no rows returned"
@@ -477,12 +472,14 @@ class TestGroupedAggUdfSkipsCorrupt:
 
     def test_frombands_agg_udf_no_raise(self, spark):
         from pyspark.sql import functions as sf
-        from databricks.labs.gbx.pyrx import _serde
         from pyspark.sql.types import IntegerType, StructField, StructType
+
+        from databricks.labs.gbx.pyrx import _serde
 
         # Build a two-row group: valid tile → band 1, corrupt bytes → band 2.
         schema_with_band = StructType(
-            list(_serde.TILE_SCHEMA.fields) + [StructField("band_idx", IntegerType(), True)]
+            list(_serde.TILE_SCHEMA.fields)
+            + [StructField("band_idx", IntegerType(), True)]
         )
         rows_data = [
             {"cellid": 0, "raster": _valid_raster(), "metadata": {}, "band_idx": 1},
@@ -494,10 +491,31 @@ class TestGroupedAggUdfSkipsCorrupt:
             sf.struct("cellid", "raster", "metadata").alias("tile"),
             sf.col("band_idx"),
         )
-        result = (
-            df.groupBy("g")
-            .agg(_frombands_agg_udf(sf.col("tile"), sf.col("band_idx")).alias("agg_bytes"))
+        result = df.groupBy("g").agg(
+            _frombands_agg_udf(sf.col("tile"), sf.col("band_idx")).alias("agg_bytes")
         )
         out_rows = result.collect()
         assert out_rows, "no rows returned"
         assert out_rows[0]["agg_bytes"] is not None, "aggregate bytes must be non-null"
+
+    def test_combineavg_agg_sql_udf_no_raise(self, spark):
+        """_combineavg_agg_sql_udf (backs gbx_rst_combineavg_agg) skips corrupt members.
+
+        SQL registration variant: returns raw GTiff bytes (no cellid envelope),
+        so we assert bytes are non-null and openable (not just non-empty).
+        """
+        from pyspark.sql import functions as sf
+
+        df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
+        result = df.groupBy("g").agg(
+            _combineavg_agg_sql_udf(sf.col("tile")).alias("agg_bytes")
+        )
+        rows = result.collect()
+        assert rows, "no rows returned"
+        agg_b = rows[0]["agg_bytes"]
+        assert agg_b is not None, "aggregate bytes must be non-null"
+        # Confirm the output is a valid (openable) GTiff, not a corrupt passthrough.
+        from databricks.labs.gbx.pyrx import _serde
+
+        with _serde.open_tile(bytes(agg_b)):
+            pass  # raises if bytes are not a valid raster

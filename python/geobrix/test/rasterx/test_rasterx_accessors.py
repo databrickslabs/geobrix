@@ -310,6 +310,10 @@ def test_light_accessor_corrupt_tile_returns_none(spark):
     The UDF factories must degrade to None (matching heavy NULL-on-corrupt)
     rather than surfacing the exception to the caller.
     """
+    # Light-tier path (pyrx pandas_udf): skip in the heavy CI phase, which has
+    # no pandas/rasterio (requirements-ci.txt). Runs in the light job + Docker.
+    pytest.importorskip("pandas")
+    pytest.importorskip("rasterio")
     from databricks.labs.gbx.pyrx import functions as pf
 
     # Build a minimal tile struct with garbage raster bytes (non-null, non-empty
@@ -354,6 +358,10 @@ def test_light_pixel_accessor_corrupt_tile_returns_none(spark):
     (_open, which materialises the pixel window). A corrupt raster must degrade to
     None rather than surfacing the rasterio exception to the caller.
     """
+    # Light-tier path (pyrx pandas_udf): skip in the heavy CI phase, which has
+    # no pandas/rasterio (requirements-ci.txt). Runs in the light job + Docker.
+    pytest.importorskip("pandas")
+    pytest.importorskip("rasterio")
     from databricks.labs.gbx.pyrx import functions as pf
 
     # Same corrupt-tile construction as the header-accessor test above.

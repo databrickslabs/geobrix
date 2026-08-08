@@ -16,6 +16,12 @@ import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as f
 
+# All tests here exercise the light pyrx UDTF path (pandas_udf → pandas/rasterio),
+# which the heavy CI phase does not install (requirements-ci.txt). Skip the whole
+# module there; it runs in the light job + Docker where the deps are present.
+pytest.importorskip("pandas")
+pytest.importorskip("rasterio")
+
 
 @pytest.fixture(scope="module")
 def spark():

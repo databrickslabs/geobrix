@@ -25,7 +25,7 @@ straight into a write with no reshaping.
 :::note Lightweight-only read path
 `pmtiles_gbx` is a pure-Python DataSource V2 reader: **no JAR, no init script**,
 and it runs on Serverless, standard (shared), and ARM clusters. The
-`beta-release-notes` note that PMTiles "read is not yet supported" refers to the
+the Release Notes' note that heavyweight PMTiles read "is not yet supported" refers to the
 **heavyweight** `spark.read.format("pmtiles")` path — the lightweight
 `pmtiles_gbx` reader documented here **is** a supported read path.
 :::

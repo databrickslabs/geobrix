@@ -9,7 +9,7 @@ title: Release Notes
 The changes on this page are relative to 0.1.0 (and earlier).
 :::
 
-This page tracks **API and naming changes** since the GeoBrix project started. After the project is approved, formal release notes will take over; until then, use this as the single place to look up what changed and why.
+This page tracks **API and naming changes** across GeoBrix releases — the single place to look up what changed and why.
 
 ---
 
@@ -239,7 +239,7 @@ All specific function renames from that standardization are listed in the compon
 | (none) | `gtiff_gdal` | **New** reader: named GDAL reader for GeoTIFF; use instead of `gdal` with `option("driver", "GTiff")`. |
 
 :::info
-Reader renames above are planned for 0.2.0. Beta (0.1.x) may still expose the baseline names in some contexts.
+Reader renames above landed in 0.2.0; earlier 0.1.x releases may still expose the baseline names in some contexts.
 :::
 
 ---
@@ -292,7 +292,7 @@ SELECT gbx_bng_pointascell(pt, '1km') FROM ...;
 
 - **Migrating code:** Search for the **baseline** name in your code or config; replace with **Current** and apply any behavior notes.
 - **Docs or tests:** After a change, add one row here so future readers know what changed and why.
-- **After approval:** Move content into formal release notes (e.g. per-version sections) and keep this page for historical beta-only changes, or retire it.
+- **Housekeeping:** Keep per-version sections here as the canonical change log; prune superseded interim notes as versions settle.
 
 ---
 

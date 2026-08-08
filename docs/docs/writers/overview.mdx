@@ -252,7 +252,7 @@ Heavyweight writers are implemented as Spark DataSource V2 connectors backed by 
 **PMTiles writer:**
 - **Input schema:** exactly `(z: int, x: int, y: int, bytes: binary)`.
 - **Mode:** `.mode("overwrite")` is required; default `ErrorIfExists` is rejected upstream by Spark.
-- **Output path:** the final `.pmtiles` file, not a directory. Read support is not implemented in 0.4.0.
+- **Output path:** the final `.pmtiles` file, not a directory. The heavyweight DataSource is write-only; read PMTiles via the lightweight `pmtiles_gbx` reader.
 
 :::note Heavyweight vector writing
 The heavyweight tier writes raster (GDAL), PMTiles, and — its first vector writer — the

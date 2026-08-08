@@ -263,7 +263,7 @@ Override via `.option("tileType", "<byte>")` when auto-detection isn't appropria
 
 ## Reading PMTiles
 
-Reading PMTiles is not supported in GeoBrix 0.4.0 — `spark.read.format("pmtiles")` raises a friendly "Reading PMTiles archives is not supported in GeoBrix 0.4.0" error. Use one of the client libraries instead:
+Reading PMTiles through the **heavyweight** DataSource is not supported — `spark.read.format("pmtiles")` raises a friendly error. To read PMTiles **within GeoBrix**, use the lightweight [`pmtiles_gbx` reader](../readers/pmtiles), which reads tiles from an existing archive or builds a mosaic pyramid from rasters. For browser/inspection use, the client libraries also work:
 
 - [pmtiles JS library](https://github.com/protomaps/PMTiles) for MapLibre / browser rendering.
 - The Python [`pmtiles`](https://pypi.org/project/pmtiles/) package for tile inspection and extraction.

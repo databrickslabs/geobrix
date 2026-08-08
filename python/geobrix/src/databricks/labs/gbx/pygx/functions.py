@@ -360,7 +360,9 @@ def _bng_tessellate(geom, res, keep_core_geom=True):
     keep = True if keep_core_geom is None else bool(keep_core_geom)
     return [
         {"cellid": c, "core": bool(core), "chip": chip}
-        for (c, core, chip) in _bng.tessellate_str(geom, _norm_res(res), keep_core_geom=keep)
+        for (c, core, chip) in _bng.tessellate_str(
+            geom, _norm_res(res), keep_core_geom=keep
+        )
     ]
 
 
@@ -832,9 +834,13 @@ def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
     return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
 
 
-def bng_eastnorthasbng(easting: ColLike, northing: ColLike, resolution: ColLike) -> Column:
+def bng_eastnorthasbng(
+    easting: ColLike, northing: ColLike, resolution: ColLike
+) -> Column:
     """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `resolution`."""
-    return f.call_function("gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution))
+    return f.call_function(
+        "gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution)
+    )
 
 
 def bng_cellarea(cellid: ColLike) -> Column:

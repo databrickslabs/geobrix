@@ -58,9 +58,9 @@ def test_separatebands_corrupt_yields_one_error_row(spark):
     assert row["raster"] is None, "error row must have raster=None"
     assert row["metadata"] is not None
     assert "last_error" in row["metadata"]
-    assert "RST_SeparateBands" in row["metadata"]["last_error"], (
-        f"expected 'RST_SeparateBands' in last_error, got: {row['metadata']['last_error']!r}"
-    )
+    assert (
+        "RST_SeparateBands" in row["metadata"]["last_error"]
+    ), f"expected 'RST_SeparateBands' in last_error, got: {row['metadata']['last_error']!r}"
 
 
 def test_retile_corrupt_yields_one_error_row(spark):
@@ -79,9 +79,9 @@ def test_retile_corrupt_yields_one_error_row(spark):
     assert row["raster"] is None, "error row must have raster=None"
     assert row["metadata"] is not None
     assert "last_error" in row["metadata"]
-    assert "RST_ReTile" in row["metadata"]["last_error"], (
-        f"expected 'RST_ReTile' in last_error, got: {row['metadata']['last_error']!r}"
-    )
+    assert (
+        "RST_ReTile" in row["metadata"]["last_error"]
+    ), f"expected 'RST_ReTile' in last_error, got: {row['metadata']['last_error']!r}"
 
 
 def test_tooverlappingtiles_corrupt_yields_one_error_row(spark):
@@ -105,6 +105,6 @@ def test_tooverlappingtiles_corrupt_yields_one_error_row(spark):
     assert row["raster"] is None, "error row must have raster=None"
     assert row["metadata"] is not None
     assert "last_error" in row["metadata"]
-    assert "RST_ToOverlappingTiles" in row["metadata"]["last_error"], (
-        f"expected 'RST_ToOverlappingTiles' in last_error, got: {row['metadata']['last_error']!r}"
-    )
+    assert (
+        "RST_ToOverlappingTiles" in row["metadata"]["last_error"]
+    ), f"expected 'RST_ToOverlappingTiles' in last_error, got: {row['metadata']['last_error']!r}"

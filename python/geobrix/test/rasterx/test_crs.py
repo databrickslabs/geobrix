@@ -103,7 +103,9 @@ def test_rst_transformcrs_reprojects(spark):
     crs_value = result[0]["crs_out"]
     assert tile_value is not None, "rst_transformcrs should return a non-null tile"
     assert crs_value is not None, "CRS of transformed tile should be non-null"
-    assert "3857" in str(crs_value), f"Expected 3857 in transformed CRS, got {crs_value}"
+    assert "3857" in str(
+        crs_value
+    ), f"Expected 3857 in transformed CRS, got {crs_value}"
 
 
 def test_rst_clip_bare_string_crs(spark):

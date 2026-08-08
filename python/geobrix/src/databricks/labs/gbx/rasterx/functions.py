@@ -440,7 +440,9 @@ def rst_combineavg_agg(tile: ColLike) -> Column:
     return f.call_function("gbx_rst_combineavg_agg", _col(tile))
 
 
-def rst_derivedband_agg(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
+def rst_derivedband_agg(
+    tile: ColLike, python_func: ColLike, func_name: ColLike
+) -> Column:
     """Aggregate tiles and apply a Python UDF per band (use with groupBy).
 
     Args:
@@ -1510,14 +1512,10 @@ def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     Returns:
         Column of struct (x, y as double) in world coordinates.
     """
-    return f.call_function(
-        "gbx_rst_rastertoworldcoord", _col(tile), _col(x), _col(y)
-    )
+    return f.call_function("gbx_rst_rastertoworldcoord", _col(tile), _col(x), _col(y))
 
 
-def rst_rastertoworldcoordx(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert pixel (x, y) to world X coordinate.
 
     Args:
@@ -1528,14 +1526,10 @@ def rst_rastertoworldcoordx(
     Returns:
         Column of double.
     """
-    return f.call_function(
-        "gbx_rst_rastertoworldcoordx", _col(tile), _col(x), _col(y)
-    )
+    return f.call_function("gbx_rst_rastertoworldcoordx", _col(tile), _col(x), _col(y))
 
 
-def rst_rastertoworldcoordy(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_rastertoworldcoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert pixel (x, y) to world Y coordinate.
 
     Args:
@@ -1546,9 +1540,7 @@ def rst_rastertoworldcoordy(
     Returns:
         Column of double.
     """
-    return f.call_function(
-        "gbx_rst_rastertoworldcoordy", _col(tile), _col(x), _col(y)
-    )
+    return f.call_function("gbx_rst_rastertoworldcoordy", _col(tile), _col(x), _col(y))
 
 
 def rst_transform(tile: ColLike, srid: ColLike) -> Column:
@@ -1621,14 +1613,10 @@ def rst_worldtorastercoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     Returns:
         Column of struct (x, y as integer) in pixel coordinates.
     """
-    return f.call_function(
-        "gbx_rst_worldtorastercoord", _col(tile), _col(x), _col(y)
-    )
+    return f.call_function("gbx_rst_worldtorastercoord", _col(tile), _col(x), _col(y))
 
 
-def rst_worldtorastercoordx(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_worldtorastercoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert world (x, y) to pixel column index.
 
     Args:
@@ -1639,14 +1627,10 @@ def rst_worldtorastercoordx(
     Returns:
         Column of integer (pixel column index).
     """
-    return f.call_function(
-        "gbx_rst_worldtorastercoordx", _col(tile), _col(x), _col(y)
-    )
+    return f.call_function("gbx_rst_worldtorastercoordx", _col(tile), _col(x), _col(y))
 
 
-def rst_worldtorastercoordy(
-    tile: ColLike, x: ColLike, y: ColLike
-) -> Column:
+def rst_worldtorastercoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert world (x, y) to pixel row index.
 
     Args:
@@ -1657,9 +1641,7 @@ def rst_worldtorastercoordy(
     Returns:
         Column of integer (pixel row index).
     """
-    return f.call_function(
-        "gbx_rst_worldtorastercoordy", _col(tile), _col(x), _col(y)
-    )
+    return f.call_function("gbx_rst_worldtorastercoordy", _col(tile), _col(x), _col(y))
 
 
 def rst_to_webmercator(

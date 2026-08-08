@@ -50,7 +50,11 @@ def build_error_tile(last_error: str, cellid: int = -1) -> Dict:
     Signals a swallowed failure that stays diagnosable. Mirrors heavy's
     RST_ErrorHandler error-tile row (raster NULL + errorMetadata).
     """
-    return {"cellid": int(cellid), "raster": None, "metadata": {"last_error": last_error}}
+    return {
+        "cellid": int(cellid),
+        "raster": None,
+        "metadata": {"last_error": last_error},
+    }
 
 
 def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:

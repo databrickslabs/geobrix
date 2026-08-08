@@ -135,7 +135,9 @@ def bng_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     return f.call_function("gbx_bng_distance", _col(cellid1), _col(cellid2))
 
 
-def bng_eastnorthasbng(easting: ColLike, northing: ColLike, resolution: ColLike) -> Column:
+def bng_eastnorthasbng(
+    easting: ColLike, northing: ColLike, resolution: ColLike
+) -> Column:
     """Convert easting and northing to a BNG cell identifier.
 
     Args:

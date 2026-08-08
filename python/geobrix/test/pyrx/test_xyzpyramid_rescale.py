@@ -18,7 +18,6 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import functions as prx
 
-
 pytest.importorskip(
     "rasterio",
     reason="rasterio not installed (geobrix[light] or [test] required)",

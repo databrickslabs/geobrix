@@ -43,7 +43,7 @@ def test_st_crs_returns_authority_string(spark):
     # Coords: x=0.5, y=0.5 (double, little-endian)
     ewkb_4326 = bytes.fromhex(
         "0101000020"  # POINT with SRID marker
-        "E6100000"    # SRID 4326 (little-endian)
+        "E6100000"  # SRID 4326 (little-endian)
         "000000000000E03F"  # x = 0.5
         "000000000000E03F"  # y = 0.5
     )
@@ -51,7 +51,9 @@ def test_st_crs_returns_authority_string(spark):
     result = df.select(vx.st_crs(col("geom")).alias("crs")).collect()
     assert len(result) == 1
     crs_value = result[0]["crs"]
-    assert crs_value is not None, "st_crs should return a non-null CRS for EWKB with SRID"
+    assert (
+        crs_value is not None
+    ), "st_crs should return a non-null CRS for EWKB with SRID"
     assert "4326" in str(crs_value), f"Expected 4326 in CRS string, got {crs_value}"
 
 
@@ -88,9 +90,9 @@ def test_st_transformcrs_2arg_form(spark):
     # Since the source WKB has no embedded SRID, we provide source_crs explicitly in 3-arg form.
     result = df.select(
         vx.st_transformcrs(col("geom"), "EPSG:3857", "EPSG:4326").alias("geom_out"),
-        vx.st_crs(
-            vx.st_transformcrs(col("geom"), "EPSG:3857", "EPSG:4326")
-        ).alias("crs_out"),
+        vx.st_crs(vx.st_transformcrs(col("geom"), "EPSG:3857", "EPSG:4326")).alias(
+            "crs_out"
+        ),
     ).collect()
 
     assert len(result) == 1
@@ -98,7 +100,9 @@ def test_st_transformcrs_2arg_form(spark):
     crs_value = result[0]["crs_out"]
     assert geom_value is not None, "st_transformcrs should return a non-null geometry"
     assert crs_value is not None, "CRS of transformed geom should be non-null"
-    assert "3857" in str(crs_value), f"Expected 3857 in transformed CRS, got {crs_value}"
+    assert "3857" in str(
+        crs_value
+    ), f"Expected 3857 in transformed CRS, got {crs_value}"
 
 
 def test_st_transformcrs_3arg_form(spark):
@@ -116,4 +120,6 @@ def test_st_transformcrs_3arg_form(spark):
 
     assert len(result) == 1
     geom_value = result[0]["geom_out"]
-    assert geom_value is not None, "st_transformcrs 3-arg should return a non-null geometry"
+    assert (
+        geom_value is not None
+    ), "st_transformcrs 3-arg should return a non-null geometry"

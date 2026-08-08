@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_MergeAgg}
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_MergeAgg}
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.util.RasterSerializationUtil
@@ -555,6 +555,58 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val errVal = mdMap.get("last_error").orNull
         assert(errVal != null, "metadata must contain last_error key")
         errVal should include ("RST_DerivedBandAgg")
+    }
+
+    test("RST_FromBandsAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid  = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        // No Scala wrapper for rst_frombands_agg exists in functions.scala (SQL-only).
+        // Drive the aggregator via a Spark SQL GROUP BY on a registered DataFrame so the
+        // SQL engine invokes the registered gbx_rst_frombands_agg expression end-to-end.
+        val df = Seq((valid, 1), (corrupt, 2)).toDF("content", "band_idx")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .createOrReplaceTempView("frombands_corrupt_test")
+
+        // Must not throw.  We expect null for the corrupt row since rst_fromcontent of
+        // corrupt bytes emits a null tile, and a group of [valid, null] collapses the null.
+        noException should be thrownBy {
+            spark.sql(
+                """SELECT gbx_rst_frombands_agg(tile, band_idx) AS out
+                  |FROM frombands_corrupt_test GROUP BY 1=1""".stripMargin
+            ).collect()
+        }
+
+        // Drive the aggregator directly to verify the corrupt-skip path with a non-null
+        // corrupt tile (corrupt bytes that survive as a tile struct via v1Row injection,
+        // bypassing rst_fromcontent's own open which would null-out the corrupt bytes).
+        val agg = RST_FromBandsAgg(v1TileRef, v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.updateWithIndex(buf, v1Row(1L, valid),  1)
+        agg.updateWithIndex(buf, v1Row(2L, corrupt), 2)
+
+        var out: Any = null
+        noException should be thrownBy { out = agg.eval(buf) }
+        assert(out != null, "eval must return non-null when at least one valid member exists")
+
+        // Decode metadata from the returned InternalRow to confirm last_error was stamped.
+        val outRow = out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow]
+        // v2 tile schema: cellid(0), raster(1), path(2), window(3), clip_polygon(4),
+        // clip_crs(5), crs(6), metadata(7).
+        val mdMap = outRow.getMap(7)
+        assert(mdMap != null, "metadata map must not be null")
+        import org.apache.spark.unsafe.types.UTF8String
+        val keys   = mdMap.keyArray().toArray[UTF8String](org.apache.spark.sql.types.StringType)
+        val values = mdMap.valueArray().toArray[UTF8String](org.apache.spark.sql.types.StringType)
+        val kvMap  = keys.zip(values).map { case (k, v) => k.toString -> v.toString }.toMap
+        val errVal = kvMap.getOrElse("last_error", null)
+        assert(errVal != null, s"metadata must contain last_error; got keys: ${kvMap.keys.mkString(", ")}")
+        errVal should include ("RST_FromBandsAgg")
     }
 
     test("normalizeToV2Row: v1 3-field row becomes 8-field, v2 8-field row is unchanged") {

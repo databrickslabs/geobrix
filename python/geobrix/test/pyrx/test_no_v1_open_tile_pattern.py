@@ -37,8 +37,10 @@ _ALLOWLIST = {
     # `candidate` holds front-door-obtained bytes (ot.materialize_to_bytes(vt).raster
     # for a virtual tile; bytes(vt.raster) otherwise) — NOT tile["raster"] directly
     # — so this does not reintroduce the virtual-tile-NULL bug the guard prevents.
-    # There are exactly 3 such validation opens (one per helper).
-    "_serde.open_tile(candidate)": 3,
+    # There are 3 such validation opens in the scalar *_bytes helpers + 5 in the
+    # grouped-agg pandas_udfs (_merge_agg_udf, _combineavg_agg_udf,
+    # _combineavg_agg_sql_udf, _frombands_agg_udf, _derivedband_agg_udf) = 8 total.
+    "_serde.open_tile(candidate)": 8,
 }
 
 # The v1 shared UDF builders in _udf.py. Every registered rst_* function was

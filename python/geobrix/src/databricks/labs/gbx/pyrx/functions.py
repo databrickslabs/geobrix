@@ -5347,7 +5347,23 @@ def _merge_agg_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    rasters = [b for b in (_tile_raster_bytes(r) for r in tile) if b is not None]
+    rasters = []
+    dropped = 0
+    for r in tile:
+        candidate = _tile_raster_bytes(r)
+        if candidate is None:
+            continue
+        try:  # noqa: BLE001
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not rasters:
+        return None
+    # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
+    # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     return agg_core.merge_tiles(rasters)
 
 
@@ -5359,18 +5375,29 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     rasters = []
     cellid = 0
     first = True
+    dropped = 0
     for r in tile:
-        rb = _tile_raster_bytes(r)
-        if rb is None:
+        candidate = _tile_raster_bytes(r)
+        if candidate is None:
             continue
-        if first:
-            cid = r["cellid"]
-            cellid = int(cid) if cid is not None else 0
-            first = False
-        rasters.append(rb)
+        try:  # noqa: BLE001
+            with _serde.open_tile(candidate):
+                pass
+            if first:
+                cid = r["cellid"]
+                cellid = int(cid) if cid is not None else 0
+                first = False
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not rasters:
+        return None
     out = agg_core.combineavg_tiles(rasters)
     if out is None:
         return None
+    # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
+    # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     # Prepend an 8-byte big-endian cellid envelope (stripped by the scalar UDF).
     return cellid.to_bytes(8, "big", signed=True) + bytes(out)
 
@@ -5384,7 +5411,23 @@ def _combineavg_agg_sql_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    rasters = [b for b in (_tile_raster_bytes(r) for r in tile) if b is not None]
+    rasters = []
+    dropped = 0
+    for r in tile:
+        candidate = _tile_raster_bytes(r)
+        if candidate is None:
+            continue
+        try:  # noqa: BLE001
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not rasters:
+        return None
+    # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
+    # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     return agg_core.combineavg_tiles(rasters)
 
 
@@ -5394,10 +5437,24 @@ def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
 
     _env.configure_gdal_env()
     indexed = []
+    dropped = 0
     for r, idx in zip(tile, band_index):
-        rb = _tile_raster_bytes(r)
-        if rb is not None and idx is not None:
-            indexed.append((int(idx), rb))
+        if idx is None:
+            continue
+        candidate = _tile_raster_bytes(r)
+        if candidate is None:
+            continue
+        try:  # noqa: BLE001
+            with _serde.open_tile(candidate):
+                pass
+            indexed.append((int(idx), candidate))
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not indexed:
+        return None
+    # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
+    # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     return agg_core.frombands_tiles(indexed)
 
 
@@ -5443,9 +5500,23 @@ def _derivedband_agg_udf(
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    rasters = [b for b in (_tile_raster_bytes(r) for r in tile) if b is not None]
+    rasters = []
+    dropped = 0
+    for r in tile:
+        candidate = _tile_raster_bytes(r)
+        if candidate is None:
+            continue
+        try:  # noqa: BLE001
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
     if not rasters:
         return None
+    # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
+    # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     # pyfunc/func_name are per-group constants; read them from the first row.
     return agg_core.derivedband_tiles(
         rasters, str(python_func.iloc[0]), str(func_name.iloc[0])

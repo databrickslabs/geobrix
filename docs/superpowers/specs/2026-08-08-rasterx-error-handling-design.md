@@ -52,7 +52,7 @@ error-handling spec, along with the domain/extent-check design.
 
 | Return shape | Functions | Degrade behavior |
 |---|---|---|
-| **Tile struct** | `rst_clip`, `rst_transform`, `rst_setcrs`, `rst_transformcrs`, and other single-tile ops | Empty tile (`raster=NULL`, `path=NULL`) + `metadata.last_error` = reason. Heavy already does this via `safeEval`; light already has the carrier. |
+| **Tile struct** | `rst_clip`, `rst_transform`, `rst_setcrs`, `rst_transformcrs`, and other single-tile ops | Empty tile (`raster=NULL`, `path=NULL`) + error metadata = reason. Heavy tile-ops/generators degrade via `safeEval`, which writes `error_message` (+ `error_detail`/`gdal_error`) into the tile metadata — **not** `last_error`. Light carries the reason in `metadata["last_error"]`. See the diagnostic-key asymmetry note below. |
 | **Scalar** (Int / Double / String / Map) | `rst_width`, `rst_height`, `rst_numbands`, `rst_memsize`, `rst_srid`, `rst_scalex`, `rst_scaley`, `rst_skewx`, `rst_skewy`, `rst_upperleftx`, `rst_upperlefty`, `rst_pixelwidth`, `rst_pixelheight`, `rst_rotation`, `rst_metadata`, `rst_rastertoworldcoordx`, `rst_rastertoworldcoordy` | **NULL** — replaces the `0` / `-1` / `-1L` / `Double.NaN` / `Map.empty` sentinels. Kills the `rst_srid=0` ambiguity. No reason is carried (a scalar cannot; the upstream tile-op that produced the corrupt tile already recorded it). |
 | **Aggregate tile** | `rst_combineavg_agg`, `rst_merge_agg`, `rst_derivedband_agg` | Skip the corrupt member (do **not** raise); record on the emitted aggregate tile's `metadata.last_error` that N inputs were dropped. |
 | **Multiple tile rows** (generators / UDTFs) | `rst_retile`, `rst_maketiles`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_xyzpyramid`, `rst_h3_tessellate`, `rst_bng_tessellate`, `rst_quadbin_tessellate` | **Exactly one error-tile row** (`raster=NULL`, `path=NULL`, `metadata.last_error`). Light stops yielding zero rows and mirrors heavy so row counts match. |
@@ -64,7 +64,20 @@ the empty discriminator — `raster=NULL` alone is the *virtual-tile* signal;
 
 **`last_error` message format:** a short, stable, greppable string prefixed with
 the function name: `"<RST_FnName>: <cause>"` (e.g.
-`"RST_Clip: unreadable raster"`). Same token both tiers. Not a full stack trace.
+`"RST_Clip: unreadable raster"`). Not a full stack trace.
+
+**Diagnostic-key asymmetry (known limitation):** The `last_error` key and the
+`<RST_FnName>:` token convention apply to **(a) the aggregator drop-count
+metadata (both tiers)** and **(b) light UDTF error rows**. They do NOT apply to
+heavy tile-op/generator error metadata, which is written by `RST_ErrorHandler.safeEval`
+and uses the keys `error_message`, `error_detail`, and `gdal_error` instead.
+The spec table row for "Tile struct" above was previously incorrect on this
+point. Unifying the diagnostic keys across heavy `safeEval` and the aggregator /
+UDTF paths would require changing `RST_ErrorHandler` — a cross-cutting heavy
+change deferred to a future workstream. Until then, callers diagnosing heavy
+tile-op errors should inspect `metadata["error_message"]`; callers diagnosing
+aggregator drop-counts or light UDTF errors should inspect
+`metadata["last_error"]`.
 
 ## Components
 
@@ -135,8 +148,9 @@ produce the same degrade signal*.
      members, `last_error` records N dropped, and it does **not** raise.
    - **UDTFs/generators:** corrupt input yields **exactly one** error-tile row;
      assert heavy row-count == light row-count (count parity).
-3. **`last_error` token check:** message contains the `<RST_FnName>:` prefix
-   (stable/greppable), both tiers.
+3. **`last_error` token check (aggregators + light UDTFs only):** message
+   contains the `<RST_FnName>:` prefix (stable/greppable). For heavy
+   tile-ops/generators, check `error_message` instead (see asymmetry note).
 4. **Negative guard:** `crashExpressions=true` still raises (the dev escape
    hatch is intact).
 5. **Where run:** heavy Scala suites + `gbx:test:python` (heavy shim) in the

@@ -12,6 +12,7 @@ import org.apache.spark.sql.types._
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Try
 
 /** Streaming aggregator: stacks single-band tiles into a multi-band tile.
  *
@@ -106,18 +107,28 @@ case class RST_FromBandsAgg(
             .map(_.asInstanceOf[InternalRow])
             .sortBy(_.getInt(0))
 
-        // Open each buffered tile. Buffer is uniformly BinaryType (normalized in update).
-        val tiles: Seq[(Long, org.gdal.gdal.Dataset, Map[String, String])] = sorted.map { row =>
+        // Open each buffered tile, skipping corrupt members.
+        // Buffer is uniformly BinaryType (normalized in update/updateWithIndex).
+        var dropped = 0
+        val tiles: Seq[(Long, org.gdal.gdal.Dataset, Map[String, String])] = sorted.flatMap { row =>
             val tileRow = row.getStruct(1, tileFieldCount)
-            RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)
+            Try(RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)).toOption match {
+                case Some(t) if t._2 != null => Some(t)
+                case _ => dropped += 1; None
+            }
         }.toSeq
+
+        if (tiles.isEmpty) return null
 
         var resultDs: org.gdal.gdal.Dataset = null
         try {
-            val (rds, resultMtd) = RST_FromBands.execute(tiles)
+            val (rds, resMtd) = RST_FromBands.execute(tiles)
             resultDs = rds
+            val finalMtd = if (dropped > 0)
+                resMtd + ("last_error" -> s"RST_FromBandsAgg: skipped $dropped corrupt input tile(s)")
+            else resMtd
             RasterSerializationUtil.tileToRow(
-                (tiles.head._1, resultDs, resultMtd),
+                (tiles.head._1, resultDs, finalMtd),
                 rasterType,
                 exprConf.hConf
             )

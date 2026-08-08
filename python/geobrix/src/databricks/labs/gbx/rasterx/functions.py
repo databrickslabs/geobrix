@@ -34,6 +34,17 @@ def _col(x: ColLike) -> Union[Column, str]:
     return f.lit(x)
 
 
+def _crs_col(x: ColLike) -> Column:
+    """Coerce a CRS argument to a literal Column.
+
+    A bare ``str`` (e.g. ``"EPSG:4326"``) is a CRS descriptor, not a column
+    name, so lift it via ``f.lit``. Columns pass through unchanged.
+    """
+    if isinstance(x, str):
+        return f.lit(x)
+    return _col(x)
+
+
 def register(_spark: SparkSession) -> None:
     """Register RasterX functions with the Spark session.
 
@@ -1370,6 +1381,25 @@ def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
     return f.call_function("gbx_rst_convolve", _col(tile), _col(kernel))
 
 
+def rst_crs(tile: ColLike) -> Column:
+    """Return the canonical CRS string for the raster tile.
+
+    Returns an authority string (``'EPSG:4326'``, ``'ESRI:54008'``) when the
+    CRS has a recognised authority code, or a WKT string for authority-less
+    projections. Returns NULL for a tile with no CRS.
+
+    Distinct from ``rst_srid`` (int / NULL): ``rst_crs`` preserves non-EPSG
+    authority codes (ESRI, IAU, etc.) and falls back to WKT rather than NULL.
+
+    Args:
+        tile: Tile struct column.
+
+    Returns:
+        STRING column — canonical CRS string, or NULL if CRS is absent.
+    """
+    return f.call_function("gbx_rst_crs", _col(tile))
+
+
 def rst_derivedband(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
     """Apply a Python UDF to each pixel (or band) to produce a derived band.
 
@@ -1528,6 +1558,27 @@ def rst_transform(tile: ColLike, srid: ColLike) -> Column:
         Column of reprojected raster tile.
     """
     return f.call_function("gbx_rst_transform", _col(tile), _col(srid))
+
+
+def rst_transformcrs(tile: ColLike, crs: ColLike) -> Column:
+    """Reproject the raster to a string-given target CRS.
+
+    Accepts any CRS descriptor accepted by rasterio's CRS parser: int EPSG,
+    int-castable string, authority string (``"EPSG:3857"``, ``"ESRI:54008"``),
+    WKT, or PROJ4. Unlike ``rst_transform`` (int EPSG only) this supports
+    non-EPSG targets such as ESRI codes or custom projections.
+
+    Pixel-producing: always materializes (a new reprojected tile is emitted).
+
+    Args:
+        tile: Tile struct column.
+        crs:  Target CRS descriptor — int EPSG, int-castable string, authority
+              string, WKT, or PROJ4.
+
+    Returns:
+        Tile reprojected to the target CRS.
+    """
+    return f.call_function("gbx_rst_transformcrs", _col(tile), _crs_col(crs))
 
 
 def rst_tryopen(tile: ColLike) -> Column:
@@ -2535,6 +2586,25 @@ def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
     if crs is None:
         return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
     return f.call_function("gbx_rst_sample", _col(tile), _col(geom), _col(crs))
+
+
+def rst_setcrs(tile: ColLike, crs: ColLike) -> Column:
+    """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
+
+    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
+    string accepted by rasterio's CRS parser such as ``"ESRI:54008"``, WKT, or
+    PROJ4 strings. Pixel values and the GeoTransform are unchanged; only the
+    CRS metadata is rewritten. Use ``rst_transformcrs`` for a reprojecting warp.
+
+    Args:
+        tile: Tile struct column.
+        crs:  CRS descriptor — int EPSG code, int-castable string, authority
+              string (``"EPSG:4326"``, ``"ESRI:54008"``), WKT, or PROJ4.
+
+    Returns:
+        Tile with the same pixels/transform but the new CRS.
+    """
+    return f.call_function("gbx_rst_setcrs", _col(tile), _crs_col(crs))
 
 
 def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:

@@ -47,6 +47,17 @@ def _mode_col(mode: ColLike) -> Column:
     return f.lit(mode) if isinstance(mode, str) else _col(mode)
 
 
+def _crs_col(x: ColLike) -> Column:
+    """Coerce a CRS argument to a literal Column.
+
+    A bare ``str`` (e.g. ``"EPSG:4326"``) is a CRS descriptor, not a column
+    name, so lift it via ``f.lit``. Columns pass through unchanged.
+    """
+    if isinstance(x, str):
+        return f.lit(x)
+    return _col(x)
+
+
 def register(spark: SparkSession) -> None:
     """Register VectorX expression-level SQL functions with the Spark session.
 
@@ -61,6 +72,79 @@ def register(spark: SparkSession) -> None:
     """
     spark = spark or SparkSession.builder.getOrCreate()
     spark._jvm.com.databricks.labs.gbx.vectorx.functions.register(spark._jsparkSession)
+
+
+def st_crs(geom: ColLike) -> Column:
+    """Return the canonical CRS string embedded in a geometry's SRID, or NULL.
+
+    Reads the integer SRID from EWKB / EWKT and classifies it via the
+    authoritative PROJ code sets (``EPSG:<n>`` or ``ESRI:<n>``). Returns NULL
+    for plain WKB / WKT geometries with no embedded SRID.
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+
+    Returns:
+        STRING column: canonical CRS string (e.g. ``'EPSG:4326'``,
+        ``'ESRI:54008'``), or NULL when no SRID is embedded.
+    """
+    return f.call_function("gbx_st_crs", _col(geom))
+
+
+def st_setcrs(geom: ColLike, crs: ColLike) -> Column:
+    """Stamp a CRS on a geometry without reprojecting (SQL surface, BINARY out).
+
+    Assigns the EPSG or ESRI SRID to the geometry. Authority-less CRS strings
+    (WKT / PROJ4 with no authority code) are rejected because a geometry SRID
+    must be an integer.
+
+    The SQL UDF always returns BINARY (EWKB), regardless of input encoding.
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        crs:  Column, CRS string literal (e.g. ``'EPSG:32633'``), or integer
+              SRID. A plain Python str is treated as a CRS literal, not a
+              column name. WKT / PROJ4 strings raise at execution time.
+
+    Returns:
+        BINARY column: EWKB geometry with the new SRID stamped.
+    """
+    return f.call_function("gbx_st_setcrs", _col(geom), _crs_col(crs))
+
+
+def st_transformcrs(
+    geom: ColLike,
+    target_crs: ColLike,
+    source_crs: ColLike = None,
+) -> Column:
+    """Reproject a geometry to the target CRS (SQL surface, BINARY output).
+
+    Source CRS resolution order:
+    1. Embedded SRID from the geometry (EWKB / EWKT).
+    2. Explicit ``source_crs`` column / literal (for plain WKB / WKT inputs).
+    3. No source CRS resolvable -> input returned UNCHANGED (never-error).
+
+    The SQL UDF always returns BINARY (WKB / EWKB), regardless of input
+    encoding.
+
+    Args:
+        geom:       BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        target_crs: Column, CRS string literal (e.g. ``'EPSG:32633'``), or
+                    integer SRID. A plain Python str is a CRS literal, not a
+                    column name.
+        source_crs: Optional Column, CRS string literal, or integer SRID —
+                    explicit source CRS for plain (SRID-less) geometries.
+
+    Returns:
+        BINARY column: reprojected geometry (EWKB when target has an authority
+        code, plain WKB when authority-less), or the original bytes when no
+        source CRS is resolvable.
+    """
+    if source_crs is None:
+        return f.call_function("gbx_st_transformcrs", _col(geom), _crs_col(target_crs))
+    return f.call_function(
+        "gbx_st_transformcrs", _col(geom), _crs_col(target_crs), _crs_col(source_crs)
+    )
 
 
 def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:

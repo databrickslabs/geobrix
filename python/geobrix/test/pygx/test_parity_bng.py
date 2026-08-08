@@ -216,13 +216,10 @@ def test_bng_full_parity(spark_with_jar):
         ).collect()[0]
 
     def tess_rows(mod, keep_core):
-        """Tessellate chips. Light is 2-arg (core chips -> None geom); heavy takes
-        keep_core_geom -> pass False to align (drop core-chip geometry)."""
+        """Tessellate chips. Both tiers called with keep_core_geom=False so core
+        chips have no geometry on either side (parity comparison is clean)."""
         mod.register(spark)
-        if keep_core is None:
-            tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"))
-        else:
-            tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
         exploded = df.select(f.explode(tess_col).alias("chip")).select(
             f.col("chip.cellid").alias("cell"),
             f.col("chip.core").alias("core"),
@@ -313,14 +310,14 @@ def test_bng_full_parity(spark_with_jar):
     # ---- LIGHT first (heavy register OVERWRITES the catalog names) ----
     light = scalar_row(gx, None)
     light_chip = chip_row(gx)
-    light_tess = tess_rows(gx, None)  # light: 2-arg, core chips -> None geom
+    light_tess = tess_rows(gx, False)  # light: keep_core_geom=False, matches heavy
     light_agg_u, light_agg_i = agg_chip_geom(gx)
     light_expl = explode_sets_light()
 
     # ---- HEAVY (overwrites the gbx_bng_* SQL names) ----
     heavy = scalar_row(hx, None)
     heavy_chip = chip_row(hx)
-    heavy_tess = tess_rows(hx, False)  # heavy: keep_core_geom=False to align
+    heavy_tess = tess_rows(hx, False)  # heavy: keep_core_geom=False
     heavy_agg_u, heavy_agg_i = agg_chip_geom(hx)
     heavy_expl = explode_sets_heavy()
 
@@ -487,17 +484,15 @@ def test_bng_mosaic_423_no_degenerate_chips(spark_with_jar):
     df = spark.createDataFrame([(_wkb(_ALIGNED_BOX), _RES)], "geom binary, res int")
 
     def tess(mod, keep_core):
+        """Both tiers called with explicit keep_core_geom for a clean parity comparison."""
         mod.register(spark)
-        if keep_core is None:
-            tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"))
-        else:
-            tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        tess_col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
         exploded = df.select(f.explode(tess_col).alias("chip")).select(
             f.col("chip.cellid").alias("cell"), f.col("chip.chip").alias("geom")
         )
         return {r["cell"]: r["geom"] for r in exploded.collect()}
 
-    light_tess = tess(gx, None)  # light: 2-arg
+    light_tess = tess(gx, False)  # light: keep_core_geom=False, matches heavy
     heavy_tess = tess(hx, False)  # heavy: keep_core_geom=False
 
     # No surviving chip decodes to a non-areal (POINT/LINESTRING) geometry.

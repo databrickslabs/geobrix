@@ -3387,13 +3387,18 @@ class _RstSeparateBandsUDTF:
 
     def eval(self, tile):
         if _tile_is_empty(tile):
+            yield _serde.build_error_tile("RST_SeparateBands: empty or unreadable tile")
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            for i, b in enumerate(tiling.iter_separate_bands(ds)):
-                yield _serde.build_tile(b, "GTiff", i)
+        try:
+            with ot._open(tile) as ds:
+                for i, b in enumerate(tiling.iter_separate_bands(ds)):
+                    yield _serde.build_tile(b, "GTiff", i)
+        except Exception as e:  # noqa: BLE001
+            yield _serde.build_error_tile(f"RST_SeparateBands: {e}")
+            return
 
 
 @udtf(returnType=_serde.TILE_SCHEMA)
@@ -3402,15 +3407,20 @@ class _RstRetileUDTF:
 
     def eval(self, tile, tile_width, tile_height):
         if _tile_is_empty(tile):
+            yield _serde.build_error_tile("RST_ReTile: empty or unreadable tile")
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            for i, b in enumerate(
-                tiling.iter_retile(ds, int(tile_width), int(tile_height))
-            ):
-                yield _serde.build_tile(b, "GTiff", i)
+        try:
+            with ot._open(tile) as ds:
+                for i, b in enumerate(
+                    tiling.iter_retile(ds, int(tile_width), int(tile_height))
+                ):
+                    yield _serde.build_tile(b, "GTiff", i)
+        except Exception as e:  # noqa: BLE001
+            yield _serde.build_error_tile(f"RST_ReTile: {e}")
+            return
 
 
 @udtf(returnType=_serde.TILE_SCHEMA)
@@ -3419,17 +3429,22 @@ class _RstToOverlappingTilesUDTF:
 
     def eval(self, tile, tile_width, tile_height, overlap):
         if _tile_is_empty(tile):
+            yield _serde.build_error_tile("RST_ToOverlappingTiles: empty or unreadable tile")
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            for i, b in enumerate(
-                tiling.iter_to_overlapping_tiles(
-                    ds, int(tile_width), int(tile_height), int(overlap)
-                )
-            ):
-                yield _serde.build_tile(b, "GTiff", i)
+        try:
+            with ot._open(tile) as ds:
+                for i, b in enumerate(
+                    tiling.iter_to_overlapping_tiles(
+                        ds, int(tile_width), int(tile_height), int(overlap)
+                    )
+                ):
+                    yield _serde.build_tile(b, "GTiff", i)
+        except Exception as e:  # noqa: BLE001
+            yield _serde.build_error_tile(f"RST_ToOverlappingTiles: {e}")
+            return
 
 
 @udtf(returnType=_serde.TILE_SCHEMA)
@@ -3438,24 +3453,29 @@ class _RstMakeTilesUDTF:
 
     def eval(self, tile, size_in_mb):
         if _tile_is_empty(tile):
+            yield _serde.build_error_tile("RST_MakeTiles: empty or unreadable tile")
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        # iter_make_tiles keys the power-of-4 split count on the encoded byte
-        # length, so obtain the materialized bytes (verbatim for a materialized
-        # tile; front-door materialize for a virtual tile) and open those.
-        vt = ot._to_virtual_tile(tile)
-        raster = (
-            ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
-        )
-        with _serde.open_tile(raster) as ds:
-            # Pass the encoded byte length so the power-of-4 split count matches
-            # heavy BalancedSubdivision (which keys on GDAL's in-memory file size).
-            for i, b in enumerate(
-                tiling.iter_make_tiles(ds, float(size_in_mb), size_bytes=len(raster))
-            ):
-                yield _serde.build_tile(b, "GTiff", i)
+        try:
+            # iter_make_tiles keys the power-of-4 split count on the encoded byte
+            # length, so obtain the materialized bytes (verbatim for a materialized
+            # tile; front-door materialize for a virtual tile) and open those.
+            vt = ot._to_virtual_tile(tile)
+            raster = (
+                ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
+            )
+            with _serde.open_tile(raster) as ds:
+                # Pass the encoded byte length so the power-of-4 split count matches
+                # heavy BalancedSubdivision (which keys on GDAL's in-memory file size).
+                for i, b in enumerate(
+                    tiling.iter_make_tiles(ds, float(size_in_mb), size_bytes=len(raster))
+                ):
+                    yield _serde.build_tile(b, "GTiff", i)
+        except Exception as e:  # noqa: BLE001
+            yield _serde.build_error_tile(f"RST_MakeTiles: {e}")
+            return
 
 
 @udtf(returnType=_serde.TILE_SCHEMA)
@@ -3464,6 +3484,7 @@ class _RstH3TessellateUDTF:
 
     def eval(self, tile, resolution, mode=None):
         if _tile_is_empty(tile) or resolution is None:
+            yield _serde.build_error_tile("RST_H3_Tessellate: empty or unreadable tile")
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -3474,13 +3495,17 @@ class _RstH3TessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            for cellid, raster in tessellate_core.iter_tessellate_h3(
-                ds, int(resolution), mode=effective_mode
-            ):
-                if raster is None:  # defensive: never emit a null-raster tile row
-                    continue
-                yield _serde.build_tile(raster, "GTiff", cellid)
+        try:
+            with ot._open(tile) as ds:
+                for cellid, raster in tessellate_core.iter_tessellate_h3(
+                    ds, int(resolution), mode=effective_mode
+                ):
+                    if raster is None:  # defensive: never emit a null-raster tile row
+                        continue
+                    yield _serde.build_tile(raster, "GTiff", cellid)
+        except Exception as e:  # noqa: BLE001
+            yield _serde.build_error_tile(f"RST_H3_Tessellate: {e}")
+            return
 
 
 def rst_separatebands(tile: ColLike) -> None:
@@ -3585,6 +3610,7 @@ class _RstQuadbinTessellateUDTF:
 
     def eval(self, tile, resolution, mode=None):
         if _tile_is_empty(tile) or resolution is None:
+            yield _serde.build_error_tile("RST_Quadbin_Tessellate: empty or unreadable tile")
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -3595,13 +3621,17 @@ class _RstQuadbinTessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            for cellid, raster in tessellate_core.iter_tessellate_quadbin(
-                ds, int(resolution), mode=effective_mode
-            ):
-                if raster is None:  # defensive: never emit a null-raster tile row
-                    continue
-                yield _serde.build_tile(raster, "GTiff", cellid)
+        try:
+            with ot._open(tile) as ds:
+                for cellid, raster in tessellate_core.iter_tessellate_quadbin(
+                    ds, int(resolution), mode=effective_mode
+                ):
+                    if raster is None:  # defensive: never emit a null-raster tile row
+                        continue
+                    yield _serde.build_tile(raster, "GTiff", cellid)
+        except Exception as e:  # noqa: BLE001
+            yield _serde.build_error_tile(f"RST_Quadbin_Tessellate: {e}")
+            return
 
 
 @udtf(returnType=_serde.TILE_SCHEMA)
@@ -3618,6 +3648,7 @@ class _RstBngTessellateUDTF:
 
     def eval(self, tile, resolution, mode=None):
         if _tile_is_empty(tile) or resolution is None:
+            yield _serde.build_error_tile("RST_BNG_Tessellate: empty or unreadable tile")
             return
         effective_mode = mode if mode is not None else "covering"
         if effective_mode not in {"covering", "centroid"}:
@@ -3629,14 +3660,18 @@ class _RstBngTessellateUDTF:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            for cellid_str, raster in tessellate_core.iter_tessellate_bng(
-                ds, resolution, mode=effective_mode
-            ):
-                if raster is None:  # defensive: never emit a null-raster tile row
-                    continue
-                out = _serde.build_tile(raster, "GTiff", _bng.parse(cellid_str))
-                yield out
+        try:
+            with ot._open(tile) as ds:
+                for cellid_str, raster in tessellate_core.iter_tessellate_bng(
+                    ds, resolution, mode=effective_mode
+                ):
+                    if raster is None:  # defensive: never emit a null-raster tile row
+                        continue
+                    out = _serde.build_tile(raster, "GTiff", _bng.parse(cellid_str))
+                    yield out
+        except Exception as e:  # noqa: BLE001
+            yield _serde.build_error_tile(f"RST_BNG_Tessellate: {e}")
+            return
 
 
 def rst_bng_tessellate(

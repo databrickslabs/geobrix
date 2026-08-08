@@ -426,7 +426,13 @@ object BNG extends Serializable {
       */
     def parse(cellID: String): Long = {
         val prefix = if (cellID.length >= 2) cellID.take(2) else s"${cellID}V"
-        val letterRow = letterMap.find(_.contains(prefix)).get
+        val letterRow = letterMap
+            .find(_.contains(prefix))
+            .getOrElse(
+                throw new IllegalArgumentException(
+                    s"Invalid BNG cell id '$cellID': prefix '$prefix' is not a recognised BNG 100km grid-square letter pair"
+                )
+            )
         val eLetter: Int = letterRow.indexOf(prefix)
         val nLetter: Int = letterMap.indexOf(letterRow)
 

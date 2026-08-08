@@ -602,7 +602,8 @@ def rst_fromfile(path: ColLike, driver: ColLike = "GTiff") -> Column:
 # heavyweight RST_MergeAgg uses). cellid = 0 (no aggregate group key here).
 def _merge_bytes(tiles):
     """Shared merge body: collect each input tile's GTiff bytes, mosaic by extent.
-    Returns the merged GTiff bytes (or None on an empty array).
+    Returns ``(merged_bytes, dropped)`` where ``dropped`` is the count of corrupt
+    members skipped, or ``None`` on an empty/all-corrupt array.
 
     CRITICAL — materialized inputs pass their ORIGINAL bytes verbatim.
     ``agg_core.merge_tiles`` sorts inputs on their RAW GTiff bytes to pick a
@@ -618,25 +619,45 @@ def _merge_bytes(tiles):
     if not elems:
         return None
     rasters = []
+    dropped = 0
     for t in elems:
-        vt = ot._to_virtual_tile(t)
-        if vt.is_virtual():
-            # Only virtual tiles (path+window, no bytes) need materializing.
-            rasters.append(ot.materialize_to_bytes(vt).raster)
-        else:
-            # Verbatim original bytes — preserves the sort key + heavy parity.
-            rasters.append(bytes(vt.raster))
-    return agg_core.merge_tiles(rasters)
+        try:  # noqa: BLE001
+            vt = ot._to_virtual_tile(t)
+            if vt.is_virtual():
+                # Only virtual tiles (path+window, no bytes) need materializing.
+                candidate = ot.materialize_to_bytes(vt).raster
+            else:
+                # Verbatim original bytes — preserves the sort key + heavy parity.
+                candidate = bytes(vt.raster)
+            # Validate the bytes are openable before collecting them; a corrupt
+            # member that passes the empty/None filter but cannot be opened by
+            # rasterio must be skipped here, not inside agg_core.merge_tiles
+            # (which opens all bytes at once and re-raises on the first failure).
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not rasters:
+        return None
+    return agg_core.merge_tiles(rasters), dropped
 
 
 @f.udf(_serde.TILE_SCHEMA)
 def _merge_udf(tiles):
     if not tiles:
         return None
-    new_bytes = _merge_bytes(tiles)
-    if new_bytes is None:
+    result = _merge_bytes(tiles)
+    if result is None:
         return None
-    return _serde.build_tile(new_bytes, "GTiff", 0)
+    new_bytes, dropped = result
+    tile = _serde.build_tile(new_bytes, "GTiff", 0)
+    if dropped:
+        tile["metadata"]["last_error"] = (
+            f"RST_Merge: skipped {dropped} corrupt input tile(s)"
+        )
+    return tile
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -644,10 +665,18 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     # Force-output variant (Python API only): same mosaic via shape_output.
     if not tiles:
         return None
-    new_bytes = _merge_bytes(tiles)
-    return _shaped_result_row(
+    result = _merge_bytes(tiles)
+    if result is None:
+        return None
+    new_bytes, dropped = result
+    row = _shaped_result_row(
         new_bytes, 0, virtualize_dir, virtualize_prefix, materialize
     )
+    if row is not None and dropped:
+        row["metadata"]["last_error"] = (
+            f"RST_Merge: skipped {dropped} corrupt input tile(s)"
+        )
+    return row
 
 
 def rst_merge(
@@ -696,7 +725,8 @@ def _combineavg_bytes(tiles):
 
     Materialized inputs pass their ORIGINAL bytes verbatim (no re-encode); only
     a VIRTUAL input (raster None) is materialized via the front-door. Returns
-    ``(new_bytes, cellid)`` or ``None`` on an empty array."""
+    ``(new_bytes, cellid, dropped)`` where ``dropped`` is the count of corrupt
+    members skipped, or ``None`` on an empty/all-corrupt array."""
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
@@ -704,15 +734,29 @@ def _combineavg_bytes(tiles):
     if not elems:
         return None
     rasters = []
+    good_elems = []
+    dropped = 0
     for t in elems:
-        vt = ot._to_virtual_tile(t)
-        if vt.is_virtual():
-            rasters.append(ot.materialize_to_bytes(vt).raster)
-        else:
-            rasters.append(bytes(vt.raster))
-    cellids = {_tile_cellid(t) for t in elems}
-    cellid = _tile_cellid(elems[0]) if len(cellids) == 1 else -1
-    return agg_core.combineavg_tiles(rasters), cellid
+        try:  # noqa: BLE001
+            vt = ot._to_virtual_tile(t)
+            if vt.is_virtual():
+                candidate = ot.materialize_to_bytes(vt).raster
+            else:
+                candidate = bytes(vt.raster)
+            # Validate openability before collecting — corrupt bytes must be
+            # dropped here, not inside agg_core which opens all at once.
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+            good_elems.append(t)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not rasters:
+        return None
+    cellids = {_tile_cellid(t) for t in good_elems}
+    cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
+    return agg_core.combineavg_tiles(rasters), cellid, dropped
 
 
 @f.udf(_serde.TILE_SCHEMA)
@@ -722,8 +766,13 @@ def _combineavg_udf(tiles):
     result = _combineavg_bytes(tiles)
     if result is None:
         return None
-    new_bytes, cellid = result
-    return _serde.build_tile(new_bytes, "GTiff", cellid)
+    new_bytes, cellid, dropped = result
+    tile = _serde.build_tile(new_bytes, "GTiff", cellid)
+    if dropped:
+        tile["metadata"]["last_error"] = (
+            f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
+        )
+    return tile
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -733,10 +782,15 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     result = _combineavg_bytes(tiles)
     if result is None:
         return None
-    new_bytes, cellid = result
-    return _shaped_result_row(
+    new_bytes, cellid, dropped = result
+    row = _shaped_result_row(
         new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
     )
+    if row is not None and dropped:
+        row["metadata"]["last_error"] = (
+            f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
+        )
+    return row
 
 
 def rst_combineavg(
@@ -786,23 +840,38 @@ def _frombands_bytes(bands):
 
     Materialized inputs pass their ORIGINAL bytes verbatim (no re-encode); only
     a VIRTUAL input (raster None) is materialized via the front-door. Returns
-    ``(new_bytes, cellid)`` or ``None`` on an empty array."""
+    ``(new_bytes, cellid, dropped)`` where ``dropped`` is the count of corrupt
+    members skipped, or ``None`` on an empty/all-corrupt array."""
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     indexed = []
+    dropped = 0
+    first_good = None
     for i, t in enumerate(bands):
         if t is None or _tile_is_empty(t):
             continue
-        vt = ot._to_virtual_tile(t)
-        raster = (
-            ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
-        )
-        indexed.append((i, raster))
+        try:  # noqa: BLE001
+            vt = ot._to_virtual_tile(t)
+            candidate = (
+                ot.materialize_to_bytes(vt).raster
+                if vt.is_virtual()
+                else bytes(vt.raster)
+            )
+            # Validate openability before collecting — corrupt bytes must be
+            # dropped here, not inside agg_core which opens all at once.
+            with _serde.open_tile(candidate):
+                pass
+            indexed.append((i, candidate))
+            if first_good is None:
+                first_good = t
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
     if not indexed:
         return None
-    cellid = _tile_cellid(bands[0]) if bands[0] is not None else 0
-    return agg_core.frombands_tiles(indexed), cellid
+    cellid = _tile_cellid(first_good) if first_good is not None else 0
+    return agg_core.frombands_tiles(indexed), cellid, dropped
 
 
 @f.udf(_serde.TILE_SCHEMA)
@@ -812,8 +881,13 @@ def _frombands_udf(bands):
     result = _frombands_bytes(bands)
     if result is None:
         return None
-    new_bytes, cellid = result
-    return _serde.build_tile(new_bytes, "GTiff", cellid)
+    new_bytes, cellid, dropped = result
+    tile = _serde.build_tile(new_bytes, "GTiff", cellid)
+    if dropped:
+        tile["metadata"]["last_error"] = (
+            f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
+        )
+    return tile
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -823,10 +897,15 @@ def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
     result = _frombands_bytes(bands)
     if result is None:
         return None
-    new_bytes, cellid = result
-    return _shaped_result_row(
+    new_bytes, cellid, dropped = result
+    row = _shaped_result_row(
         new_bytes, cellid, virtualize_dir, virtualize_prefix, materialize
     )
+    if row is not None and dropped:
+        row["metadata"]["last_error"] = (
+            f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
+        )
+    return row
 
 
 def rst_frombands(

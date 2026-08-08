@@ -9,6 +9,11 @@ from shapely.geometry import box
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import agg
+from databricks.labs.gbx.pyrx.functions import (
+    _combineavg_bytes,
+    _frombands_bytes,
+    _merge_bytes,
+)
 
 
 def _ras(data, ulx=0.0, uly=10.0, px=1.0, epsg=32633, nodata=-9999.0):
@@ -249,3 +254,122 @@ def test_derivedband_tiles_sum_across_group():
     with _serde.open_tile(out) as ds:
         assert ds.count == 1
         assert np.allclose(ds.read(1), 12.0)
+
+
+# --- corrupt-member skip in light-tier helpers --------------------------------
+# These tests exercise the skip-and-count behaviour added to _merge_bytes,
+# _combineavg_bytes, and _frombands_bytes (Task 5).  Each helper now wraps the
+# per-member open/materialize in try/except so a corrupt-but-non-empty member is
+# dropped instead of raising.
+
+
+def _tile_struct(raster_bytes, cellid=0):
+    """Minimal materialized tile dict matching TILE_SCHEMA."""
+    return {"cellid": cellid, "raster": raster_bytes, "metadata": {}}
+
+
+def _corrupt_tile():
+    """Non-empty tile whose raster bytes are invalid GTiff (causes open failure)."""
+    return _tile_struct(b"not a valid geotiff")
+
+
+def _valid_tile(data=None, cellid=0):
+    """Valid single-band 2x2 tile struct."""
+    if data is None:
+        data = np.array([[1.0, 2.0], [3.0, 4.0]])
+    raster_bytes = _ras(data)
+    return _tile_struct(raster_bytes, cellid=cellid)
+
+
+class TestMergeBytesSkipsCorrupt:
+    # _merge_bytes now returns (bytes, dropped: int) or None.
+    # dropped > 0 when at least one corrupt member was skipped.
+
+    def test_corrupt_member_does_not_raise(self):
+        # Before the fix _merge_bytes raised when it hit the corrupt tile.
+        good = _valid_tile()
+        corrupt = _corrupt_tile()
+        result = _merge_bytes([good, corrupt])  # must not raise
+        assert result is not None
+
+    def test_result_is_tuple_bytes_and_dropped(self):
+        good = _valid_tile(np.array([[7.0, 8.0], [9.0, 10.0]]))
+        corrupt = _corrupt_tile()
+        result = _merge_bytes([good, corrupt])
+        new_bytes, dropped = result
+        assert new_bytes is not None
+        assert dropped == 1
+        with _serde.open_tile(new_bytes) as ds:
+            assert ds.count >= 1
+
+    def test_all_corrupt_returns_none(self):
+        result = _merge_bytes([_corrupt_tile(), _corrupt_tile()])
+        assert result is None
+
+    def test_clean_group_zero_dropped(self):
+        # No corrupt members → dropped == 0.
+        a = _valid_tile(np.array([[1.0, 2.0], [3.0, 4.0]]))
+        b = _valid_tile(np.array([[5.0, 6.0], [7.0, 8.0]]))
+        new_bytes, dropped = _merge_bytes([a, b])
+        assert new_bytes is not None
+        assert dropped == 0
+
+
+class TestCombineavgBytesSkipsCorrupt:
+    # _combineavg_bytes now returns (bytes, cellid, dropped: int) or None.
+
+    def test_corrupt_member_does_not_raise(self):
+        good = _valid_tile()
+        corrupt = _corrupt_tile()
+        result = _combineavg_bytes([good, corrupt])  # must not raise
+        assert result is not None
+
+    def test_result_is_triple_with_dropped(self):
+        good = _valid_tile(np.array([[2.0, 4.0], [6.0, 8.0]]))
+        corrupt = _corrupt_tile()
+        result = _combineavg_bytes([good, corrupt])
+        new_bytes, cellid, dropped = result
+        assert new_bytes is not None
+        assert dropped == 1
+        with _serde.open_tile(new_bytes) as ds:
+            assert ds.count >= 1
+
+    def test_all_corrupt_returns_none(self):
+        result = _combineavg_bytes([_corrupt_tile(), _corrupt_tile()])
+        assert result is None
+
+    def test_clean_group_zero_dropped(self):
+        a = _valid_tile(np.array([[2.0, 4.0], [6.0, 8.0]]))
+        b = _valid_tile(np.array([[4.0, 8.0], [10.0, 12.0]]))
+        new_bytes, _cellid, dropped = _combineavg_bytes([a, b])
+        assert new_bytes is not None
+        assert dropped == 0
+
+
+class TestFrombandsBytesSkipsCorrupt:
+    # _frombands_bytes now returns (bytes, cellid, dropped: int) or None.
+
+    def test_corrupt_member_does_not_raise(self):
+        good = _valid_tile()
+        corrupt = _corrupt_tile()
+        result = _frombands_bytes([good, corrupt])  # must not raise
+        assert result is not None
+
+    def test_result_is_triple_with_dropped(self):
+        good = _valid_tile(np.array([[5.0, 6.0], [7.0, 8.0]]))
+        corrupt = _corrupt_tile()
+        result = _frombands_bytes([good, corrupt])
+        new_bytes, _cellid, dropped = result
+        assert new_bytes is not None
+        assert dropped == 1
+
+    def test_all_corrupt_returns_none(self):
+        result = _frombands_bytes([_corrupt_tile(), _corrupt_tile()])
+        assert result is None
+
+    def test_clean_group_zero_dropped(self):
+        b0 = _valid_tile(np.full((2, 2), 1.0))
+        b1 = _valid_tile(np.full((2, 2), 2.0))
+        new_bytes, _cellid, dropped = _frombands_bytes([b0, b1])
+        assert new_bytes is not None
+        assert dropped == 0

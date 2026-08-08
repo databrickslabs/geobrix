@@ -120,7 +120,7 @@ def test_h3_rasterize_agg_mask_parity(spark):
             prx.rst_h3_rasterize_agg(
                 "cellid",
                 value=None,
-                srid=f.lit(srid),
+                out_srid=f.lit(srid),
                 pixel_size=f.lit(pixel_size),
                 xmin=f.lit(xmin),
                 ymin=f.lit(ymin),

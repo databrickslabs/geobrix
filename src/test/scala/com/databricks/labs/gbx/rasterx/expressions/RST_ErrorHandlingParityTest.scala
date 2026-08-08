@@ -74,10 +74,19 @@ class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
     }
 
     /**
-      * Negative guard: crashExpressions=true → corrupt accessor RAISES.
+      * Negative guard: crashExpressions=true → corrupt accessor RAISES (java.lang.Error).
       *
       * The dev escape hatch (``spark.databricks.labs.gbx.expressions.crash.on.error``)
       * must still throw even after Tasks 1–7 wired up the null-return default.
+      *
+      * IMPORTANT: the DataFrame must be built AFTER ``spark.conf.set(...)`` so that
+      * ExpressionConfigExpr.snapshot() bakes crashExpressions=true into the plan literal.
+      * Building before the conf.set would snapshot the old value and the guard would not fire.
+      *
+      * RST_ErrorHandler.safeEval throws ``new Error(...)`` (java.lang.Error, NOT Exception)
+      * on the crash path (RST_ErrorHandler.scala:116), so we intercept[Throwable] and assert
+      * the error is the safeEval wrapper — not an incidental analysis/plan error.
+      *
       * Resets the flag in a ``finally`` so it cannot leak into subsequent tests.
       */
     test("crashExpressions=true still raises on corrupt input (escape hatch intact)") {
@@ -87,8 +96,26 @@ class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
         functions.register(spark)
         spark.conf.set("spark.databricks.labs.gbx.expressions.crash.on.error", "true")
         try {
-            val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("raster")
-            intercept[Exception] { df.select(rst_width(col("raster"))).collect() }
+            // DataFrame built AFTER conf.set so ExpressionConfigExpr snapshots crashExpressions=true.
+            // Corrupt tile via rst_fromcontent (same as the other 3 parity tests) so the tile struct
+            // type is correct and the accessor reaches safeEval's crash branch rather than failing
+            // at plan analysis time.
+            val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
+                .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
+            val ex = intercept[Throwable] { df.select(rst_width(col("raster"))).collect() }
+            // Verify it is the safeEval crash-path Error, not an incidental plan/analysis error.
+            // Walk the cause chain: Spark wraps driver-side errors in SparkException layers.
+            val chain = LazyList
+                .iterate(Option(ex))(_.flatMap(t => Option(t.getCause)))
+                .takeWhile(_.isDefined)
+                .flatMap(_.toSeq)
+                .toList
+            val hasError = chain.exists(_.isInstanceOf[java.lang.Error])
+            val hasMsg   = chain.exists(t => t.getMessage != null &&
+                t.getMessage.contains("Error during expression evaluation"))
+            assert(hasError || hasMsg,
+                s"Expected the safeEval crash-path Error in the cause chain but got: " +
+                s"${chain.map(t => s"${t.getClass.getName}: ${t.getMessage}").mkString(" -> ")}")
         } finally {
             spark.conf.set("spark.databricks.labs.gbx.expressions.crash.on.error", "false")
         }

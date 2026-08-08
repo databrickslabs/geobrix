@@ -30,7 +30,7 @@ from rasterio.io import DatasetReader, MemoryFile
 TILE_SCHEMA = StructType(
     [
         StructField("cellid", LongType(), nullable=False),
-        StructField("raster", BinaryType(), nullable=False),
+        StructField("raster", BinaryType(), nullable=True),
         StructField("metadata", MapType(StringType(), StringType()), nullable=True),
     ]
 )
@@ -42,6 +42,15 @@ def open_tile(raster_bytes: bytes) -> Iterator[DatasetReader]:
     with MemoryFile(bytes(raster_bytes)) as mf:
         with mf.open() as ds:
             yield ds
+
+
+def build_error_tile(last_error: str, cellid: int = -1) -> Dict:
+    """Empty/error tile: raster None (and no path) + last_error in metadata.
+
+    Signals a swallowed failure that stays diagnosable. Mirrors heavy's
+    RST_ErrorHandler error-tile row (raster NULL + errorMetadata).
+    """
+    return {"cellid": int(cellid), "raster": None, "metadata": {"last_error": last_error}}
 
 
 def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:

@@ -463,6 +463,100 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         }
     }
 
+    // =========================================================================
+    // Task 3: corrupt-member skip tests — one per aggregator
+    //
+    // A mixed group (one valid tile + one corrupt-bytes tile in the same group)
+    // must (a) NOT throw on .collect(), (b) produce a non-null result tile over
+    // the good member, (c) have metadata("last_error") containing the
+    // aggregator's own class name.
+    //
+    // Each corrupt tile is built via byteConstBytes() for valid bytes and
+    // Array[Byte](1,2,3,4,5,6,7,8) for corrupt bytes. Both are wrapped
+    // through rst_fromcontent so they arrive as proper tile structs. When
+    // the aggregator's eval() calls rowToTile on the corrupt bytes, GDAL open
+    // returns null (no exception), but the downstream RasterDriver call on a
+    // null Dataset throws a NullPointerException — this is the site we guard.
+    // =========================================================================
+
+    test("RST_CombineAvgAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        val df = Seq(valid, corrupt).toDF("content")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .groupBy(lit(1).alias("g"))
+            .agg(rst_combineavg_agg(col("tile")).alias("out"))
+            .select(col("out").as("out"), col("out.metadata").as("md"))
+
+        noException should be thrownBy df.collect()
+
+        val row = df.collect().head
+        assert(row.get(0) != null, "out struct must be non-null (good tile was aggregated)")
+        val mdMap = row.getAs[Map[String, String]]("md")
+        assert(mdMap != null, "metadata must not be null")
+        val errVal = mdMap.get("last_error").orNull
+        assert(errVal != null, "metadata must contain last_error key")
+        errVal should include ("RST_CombineAvgAgg")
+    }
+
+    test("RST_MergeAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        val df = Seq(valid, corrupt).toDF("content")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .groupBy(lit(1).alias("g"))
+            .agg(rst_merge_agg(col("tile")).alias("out"))
+            .select(col("out").as("out"), col("out.metadata").as("md"))
+
+        noException should be thrownBy df.collect()
+
+        val row = df.collect().head
+        assert(row.get(0) != null, "out struct must be non-null (good tile was aggregated)")
+        val mdMap = row.getAs[Map[String, String]]("md")
+        assert(mdMap != null, "metadata must not be null")
+        val errVal = mdMap.get("last_error").orNull
+        assert(errVal != null, "metadata must contain last_error key")
+        errVal should include ("RST_MergeAgg")
+    }
+
+    test("RST_DerivedBandAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        val df = Seq(valid, corrupt).toDF("content")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .groupBy(lit(1).alias("g"))
+            .agg(rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc").alias("out"))
+            .select(col("out").as("out"), col("out.metadata").as("md"))
+
+        noException should be thrownBy df.collect()
+
+        val row = df.collect().head
+        assert(row.get(0) != null, "out struct must be non-null (good tile was aggregated)")
+        val mdMap = row.getAs[Map[String, String]]("md")
+        assert(mdMap != null, "metadata must not be null")
+        val errVal = mdMap.get("last_error").orNull
+        assert(errVal != null, "metadata must contain last_error key")
+        errVal should include ("RST_DerivedBandAgg")
+    }
+
     test("normalizeToV2Row: v1 3-field row becomes 8-field, v2 8-field row is unchanged") {
         val emptyMap = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
         val v1 = new GenericInternalRow(Array[Any](42L, Array[Byte](1, 2, 3), emptyMap))

@@ -13,6 +13,7 @@ import org.apache.spark.sql.catalyst.util.GenericArrayData
 import org.apache.spark.sql.types.{ArrayType, DataType}
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Try
 
 /** Merges rasters into a single raster. */
 //noinspection DuplicatedCode
@@ -78,21 +79,35 @@ case class RST_MergeAgg(
             // nondeterministic: two overlapping tiles sharing an origin tied on the origin
             // and fell back to GetDescription, which for an in-memory BinaryType tile is a
             // per-open /vsimem/<uuid> path -- i.e. random. Raw content has no such hole.
+            var dropped = 0
             val tiles = buffer
                 .map(_.asInstanceOf[InternalRow])
                 .sortBy(row => RST_MergeAgg.contentKey(row))(RST_MergeAgg.unsignedBytesOrdering)
-                .map(row => RasterSerializationUtil.rowToTile(row, rasterType))
+                .flatMap { row =>
+                    Try(RasterSerializationUtil.rowToTile(row, rasterType)).toOption match {
+                        case Some(t) if t._2 != null => Some(t)
+                        case _ => dropped += 1; None
+                    }
+                }
 
-            // If merging multiple index rasters, the index value is dropped
-            val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
-            val (res, resMtd) = MergeRasters.merge(tiles.map(_._2).toArray, tiles.head._3)
+            if (tiles.isEmpty) {
+                null
+            } else {
+                // If merging multiple index rasters, the index value is dropped
+                val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
+                val (res, resMtd) = MergeRasters.merge(tiles.map(_._2).toArray, tiles.head._3)
 
-            val resRow = RasterSerializationUtil.tileToRow((idx, res, resMtd), rasterType, exprConf.hConf)
+                val finalMtd = if (dropped > 0)
+                    resMtd + ("last_error" -> s"RST_MergeAgg: skipped $dropped corrupt input tile(s)")
+                else resMtd
 
-            tiles.foreach(t => RasterDriver.releaseDataset(t._2))
-            RasterDriver.releaseDataset(res)
+                val resRow = RasterSerializationUtil.tileToRow((idx, res, finalMtd), rasterType, exprConf.hConf)
 
-            resRow
+                tiles.foreach(t => RasterDriver.releaseDataset(t._2))
+                RasterDriver.releaseDataset(res)
+
+                resRow
+            }
         }
     }
 

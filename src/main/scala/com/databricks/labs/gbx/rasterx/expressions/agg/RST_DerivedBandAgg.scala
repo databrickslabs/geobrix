@@ -14,6 +14,7 @@ import org.apache.spark.sql.types.{ArrayType, DataType}
 import org.apache.spark.unsafe.types.UTF8String
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Try
 
 /**
   * Returns a new raster that is a result of combining an array of rasters using
@@ -80,20 +81,34 @@ case class RST_DerivedBandAgg(
             val pythonFunc = pythonFuncExpr.eval(null).asInstanceOf[UTF8String].toString
             val funcName = funcNameExpr.eval(null).asInstanceOf[UTF8String].toString
 
-            val tiles = buffer.map(row => RasterSerializationUtil.rowToTile(row.asInstanceOf[InternalRow], rasterType))
+            var dropped = 0
+            val tiles = buffer.flatMap { row =>
+                Try(RasterSerializationUtil.rowToTile(row.asInstanceOf[InternalRow], rasterType)).toOption match {
+                    case Some(t) if t._2 != null => Some(t)
+                    case _ => dropped += 1; None
+                }
+            }
             buffer.clear()
 
-            // If merging multiple index rasters, the index value is dropped
-            val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
+            if (tiles.isEmpty) {
+                null
+            } else {
+                // If merging multiple index rasters, the index value is dropped
+                val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
 
-            val (res, resMtd) = PixelCombineRasters.combine(tiles.map(_._2).toArray, tiles.head._3, pythonFunc, funcName)
+                val (res, resMtd) = PixelCombineRasters.combine(tiles.map(_._2).toArray, tiles.head._3, pythonFunc, funcName)
 
-            val resRow = RasterSerializationUtil.tileToRow((idx, res, resMtd), rasterType, exprConf.hConf)
+                val finalMtd = if (dropped > 0)
+                    resMtd + ("last_error" -> s"RST_DerivedBandAgg: skipped $dropped corrupt input tile(s)")
+                else resMtd
 
-            tiles.foreach(t => RasterDriver.releaseDataset(t._2))
-            RasterDriver.releaseDataset(res)
+                val resRow = RasterSerializationUtil.tileToRow((idx, res, finalMtd), rasterType, exprConf.hConf)
 
-            resRow
+                tiles.foreach(t => RasterDriver.releaseDataset(t._2))
+                RasterDriver.releaseDataset(res)
+
+                resRow
+            }
         }
     }
 

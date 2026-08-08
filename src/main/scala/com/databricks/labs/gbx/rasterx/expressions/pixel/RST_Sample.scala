@@ -37,7 +37,10 @@ case class RST_Sample(
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Sample.name
-    override def replacement: Expression = invoke(RST_Sample)
+    // propagateNull=false: builder() injects Literal(null, StringType) as the optional crs default,
+    // so a null crs must NOT short-circuit the whole result to null (eval must run). doInvoke below
+    // guards a null primary tile row so the prior null-tile→null behavior holds.
+    override def replacement: Expression = invoke(RST_Sample, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -54,7 +57,11 @@ object RST_Sample extends WithExpressionInfo {
     private def doInvoke(
         row: InternalRow, geom: Any, crs: UTF8String, conf: UTF8String, dt: DataType
     ): ArrayData =
-        Option(
+        // With propagateNull=false the invoke now runs eval even for a null primary tile OR a null
+        // geom; preserve the prior "null in -> null out" behavior (rowToDS/safeEval would otherwise
+        // NPE on a null row, and a null geom would hit the `case other` throw -> error path).
+        if (row == null || geom == null) null
+        else Option(
           RST_ErrorHandler.safeEval(
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)

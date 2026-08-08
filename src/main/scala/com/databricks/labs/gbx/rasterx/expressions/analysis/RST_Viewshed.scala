@@ -52,7 +52,11 @@ case class RST_Viewshed(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Viewshed.name
-    override def replacement: Expression = invoke(RST_Viewshed)
+    // propagateNull=false: builder() injects Literal(null, ...) defaults for the optional trailing
+    // args (max_distance — meaningfully null="unlimited" — and crs), so a null there must NOT
+    // short-circuit the whole result to null (eval must run). runDispatch below guards a null
+    // primary tile row so the prior null-tile→null behavior holds.
+    override def replacement: Expression = invoke(RST_Viewshed, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5))
 
@@ -76,7 +80,11 @@ object RST_Viewshed extends WithExpressionInfo {
         row: InternalRow, geomArg: Any, observerHeight: Double, targetHeight: Double,
         maxDistance: Any, crs: UTF8String, conf: UTF8String, dt: DataType
     ): InternalRow =
-        RST_ErrorHandler.safeEval(
+        // With propagateNull=false the invoke now runs eval even for a null primary tile OR a null
+        // observer_geom; preserve the prior "null in -> null tile out" behavior (rowToTile/safeEval
+        // would otherwise NPE on a null row, and a null geom would hit the `case other` throw).
+        if (row == null || geomArg == null) null
+        else RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
@@ -96,12 +104,13 @@ object RST_Viewshed extends WithExpressionInfo {
               // else assume the observer is already in the raster CRS (never errors).
               val clip = Option(crs).map(_.toString).filter(_.nonEmpty)
               val (ox, oy) = reprojectObserver(ds, coord.x, coord.y, parsed.getSRID, clip)
-              val maxDistOpt = maxDistance match {
-                  case null         => None
-                  case d: Double    => Some(d)
-                  case n: Number    => Some(n.doubleValue())
-                  case _            => None
-              }
+              // NaN is the "absent" sentinel for the optional max_distance (see builder): drop it to
+              // None (= unlimited) rather than failing execute()'s `> 0 && !NaN` check.
+              val maxDistOpt = (maxDistance match {
+                  case d: Double => Some(d)
+                  case n: Number => Some(n.doubleValue())
+                  case _         => None
+              }).filterNot(_.isNaN)
               val (resDs, resMtd) = execute(
                   ds, options, ox, oy, observerHeight, targetHeight, maxDistOpt
               )
@@ -224,9 +233,14 @@ object RST_Viewshed extends WithExpressionInfo {
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => {
         val nullCrs = Literal(null, StringType)
+        // max_distance default is NaN, NOT Literal(null, DoubleType): a null primitive-Double arg is
+        // force-null-checked by Spark's Invoke regardless of propagateNull=false (it short-circuits
+        // the whole result to null before eval runs). A non-null NaN sentinel is never null-checked;
+        // eval maps NaN -> None (unlimited). crs stays StringType (object) so its null is fine.
+        val nanDist = Literal(Double.NaN, DoubleType)
         c.length match {
-            case 3 => RST_Viewshed(c(0), c(1), c(2), Literal(1.6), Literal(null, DoubleType), nullCrs)
-            case 4 => RST_Viewshed(c(0), c(1), c(2), c(3), Literal(null, DoubleType), nullCrs)
+            case 3 => RST_Viewshed(c(0), c(1), c(2), Literal(1.6), nanDist, nullCrs)
+            case 4 => RST_Viewshed(c(0), c(1), c(2), c(3), nanDist, nullCrs)
             case 5 => RST_Viewshed(c(0), c(1), c(2), c(3), c(4), nullCrs)
             case 6 => RST_Viewshed(c(0), c(1), c(2), c(3), c(4), c(5)) // + crs override
             case n => throw new IllegalArgumentException(

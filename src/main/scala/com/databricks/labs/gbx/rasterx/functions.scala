@@ -756,13 +756,17 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_setcrs(tile: Column, crs: String): Column =
         rst_setcrs(tile, lit(crs))
 
+    // NaN (not null) is the "derive from band stats" sentinel for min/max: a null primitive-Double
+    // literal is force-null-checked by Spark's Invoke and short-circuits the whole result to null
+    // before eval runs (this silently broke rst_histogram(tile)). eval maps NaN -> None. Mirrors the
+    // NaN default in RST_Histogram.builder() for the SQL path.
     def rst_histogram(tile: Column): Column =
         ColumnAdapter(RST_Histogram.name, Seq(
-            tile, lit(256), lit(null).cast("double"), lit(null).cast("double"), lit(false)
+            tile, lit(256), lit(Double.NaN), lit(Double.NaN), lit(false)
         ))
     def rst_histogram(tile: Column, nBuckets: Column): Column =
         ColumnAdapter(RST_Histogram.name, Seq(
-            tile, nBuckets, lit(null).cast("double"), lit(null).cast("double"), lit(false)
+            tile, nBuckets, lit(Double.NaN), lit(Double.NaN), lit(false)
         ))
     def rst_histogram(tile: Column, nBuckets: Column, minVal: Column, maxVal: Column): Column =
         ColumnAdapter(RST_Histogram.name, Seq(
@@ -814,17 +818,21 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         tile: Column, compression: String, blocksize: Int, overviewResampling: String
     ): Column = rst_cog_convert(tile, lit(compression), lit(blocksize), lit(overviewResampling))
 
+    // NaN (not null) is the "unlimited" sentinel for max_distance: a null primitive-Double literal is
+    // force-null-checked by Spark's Invoke and short-circuits the whole result to null before eval
+    // runs (this silently broke rst_proximity(tile)). eval maps NaN -> None. target_values stays a
+    // nullable string (object type — not force-null-checked). Mirrors RST_Proximity.builder().
     def rst_proximity(tile: Column): Column =
         ColumnAdapter(RST_Proximity.name, Seq(
-            tile, lit(null).cast("string"), lit("GEO"), lit(null).cast("double")
+            tile, lit(null).cast("string"), lit("GEO"), lit(Double.NaN)
         ))
     def rst_proximity(tile: Column, targetValues: Column): Column =
         ColumnAdapter(RST_Proximity.name, Seq(
-            tile, targetValues, lit("GEO"), lit(null).cast("double")
+            tile, targetValues, lit("GEO"), lit(Double.NaN)
         ))
     def rst_proximity(tile: Column, targetValues: Column, distUnits: Column): Column =
         ColumnAdapter(RST_Proximity.name, Seq(
-            tile, targetValues, distUnits, lit(null).cast("double")
+            tile, targetValues, distUnits, lit(Double.NaN)
         ))
     def rst_proximity(
         tile: Column, targetValues: Column, distUnits: Column, maxDistance: Column
@@ -841,14 +849,17 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         tile: Column, levels: Column, interval: Column, base: Column, attrField: Column
     ): Column = ColumnAdapter(RST_Contour.name, Seq(tile, levels, interval, base, attrField))
 
+    // NaN (not null) is the "unlimited" sentinel for max_distance: a null primitive-Double literal is
+    // force-null-checked by Spark's Invoke and short-circuits the whole result to null before eval
+    // runs. eval maps NaN -> None. Mirrors RST_Viewshed.builder().
     def rst_viewshed(tile: Column, observerGeom: Column, observerHeight: Column): Column =
         ColumnAdapter(RST_Viewshed.name, Seq(
-            tile, observerGeom, observerHeight, lit(1.6), lit(null).cast("double")
+            tile, observerGeom, observerHeight, lit(1.6), lit(Double.NaN)
         ))
     def rst_viewshed(
         tile: Column, observerGeom: Column, observerHeight: Column, targetHeight: Column
     ): Column = ColumnAdapter(RST_Viewshed.name, Seq(
-        tile, observerGeom, observerHeight, targetHeight, lit(null).cast("double")
+        tile, observerGeom, observerHeight, targetHeight, lit(Double.NaN)
     ))
     def rst_viewshed(
         tile: Column, observerGeom: Column, observerHeight: Column,

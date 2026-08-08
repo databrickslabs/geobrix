@@ -40,7 +40,10 @@ class PrettyInvoke(
     /** Overrides toString: readable function name and args; long literals redacted as "literal(...)". */
     override def toString(): String = {
         val args = arguments.map {
-            case literal: Literal if literal.value.toString.length > 20 => s"literal(...)"
+            // Guard literal.value != null: an optional-arg default is injected as Literal(null, T)
+            // (e.g. rst_clip's clipCrs), and .toString on a null value NPEs. Spark's Literal.toString
+            // renders a null value as "null", so the fallthrough `arg.toString()` handles it safely.
+            case literal: Literal if literal.value != null && literal.value.toString.length > 20 => s"literal(...)"
             case arg => arg.toString()
         }.mkString(", ")
         val targetClass = targetObject.toString().split("\\$").headOption.getOrElse("Unknown")

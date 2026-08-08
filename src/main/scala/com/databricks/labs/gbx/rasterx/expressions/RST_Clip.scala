@@ -31,7 +31,10 @@ case class RST_Clip(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Clip.name
-    override def replacement: Expression = invoke(RST_Clip)
+    // propagateNull=false: builder() injects Literal(null, StringType) as the optional clipCrs
+    // default, so a null clipCrs must NOT short-circuit the whole result to null (eval must run).
+    // The shared eval below guards a null primary tile row so the prior null-tile→null holds.
+    override def replacement: Expression = invoke(RST_Clip, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -52,7 +55,12 @@ object RST_Clip extends WithExpressionInfo {
         row: InternalRow, geom: Any, cutlineAllTouched: Boolean, clipCrs: UTF8String,
         conf: UTF8String, dt: DataType
     ): InternalRow =
-        RST_ErrorHandler.safeEval(
+        // With propagateNull=false the invoke now runs eval even for a null primary tile OR a null
+        // geom; preserve the prior "null in -> null tile out" behavior. Without these guards a null
+        // row NPEs in rowToTile, and a null geom hits the exhaustive geom match (no `case other`)
+        // -> MatchError -> a non-null error tile from safeEval. Contract: null tile or null geom -> null.
+        if (row == null || geom == null) null
+        else RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)

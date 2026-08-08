@@ -4,7 +4,7 @@ Version bump with notable fixes and improvements. See [Release Notes](docs/docs/
 
 ### Notable changes
 - BNG aggregators (`bng_cellunion_agg`, `bng_cellintersection_agg`): fixed shared aggregation buffer bug (fresh buffer per partition); chip field resolution by type/name in union agg.
-- Reader renames and other API changes documented in Beta Release Notes.
+- Reader renames and other API changes documented in Release Notes.
 
 ---
 

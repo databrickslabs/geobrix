@@ -68,4 +68,4 @@ runs:
         # bench (bench-harness spec/compare/fingerprint/runner unit tests -- guards
         # the light bench FnSpec registry + cross-tier count invariants).
         # See test/conftest.py for the maintained condition.
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench -m "not integration" -v
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core -m "not integration" -v

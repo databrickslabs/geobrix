@@ -124,7 +124,7 @@ runs:
         # invokes a light dir directly. This list MUST stay in sync with
         # _LIGHT_TEST_DIRS in test/conftest.py.
         # pytest-cov is already locked in requirements-ci.txt; no extra install needed.
-        LIGHT_IGNORES="--ignore=test/pyrx --ignore=test/pyvx --ignore=test/pygx --ignore=test/ds --ignore=test/pmtiles_light --ignore=test/stac --ignore=test/earthdata --ignore=test/vizx --ignore=test/sample --ignore=test/bench"
+        LIGHT_IGNORES="--ignore=test/pyrx --ignore=test/pyvx --ignore=test/pygx --ignore=test/ds --ignore=test/pmtiles_light --ignore=test/stac --ignore=test/earthdata --ignore=test/vizx --ignore=test/sample --ignore=test/bench --ignore=test/core"
         if [ "${{ inputs.enable_coverage }}" = "true" ]; then
           pytest -m "not integration" $LIGHT_IGNORES --cov=src --cov-report=xml --cov-report=term --cov-config=pyproject.toml -q
         else

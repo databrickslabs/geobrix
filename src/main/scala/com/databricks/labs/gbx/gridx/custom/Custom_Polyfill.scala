@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.custom
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
@@ -36,12 +37,13 @@ case class Custom_Polyfill(
         val gridVal = gridExpr.eval(input)
         if (gridVal == null) return null
 
-        val geom = Custom_PointAsCell.decodeGeom(geomVal)
-        val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
-        val res  = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")
-
-        val cells: Seq[Long] = sys.polyfill(geom, res)
-        ArrayData.toArrayData(cells.toArray)
+        val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
+        val res = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")  // PARAMETER
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geom = Custom_PointAsCell.decodeGeom(geomVal)
+            val cells: Seq[Long] = sys.polyfill(geom, res)
+            ArrayData.toArrayData(cells.toArray)
+        }
     }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =

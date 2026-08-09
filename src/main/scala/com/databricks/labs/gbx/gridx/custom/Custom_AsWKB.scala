@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.custom
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -32,7 +33,7 @@ case class Custom_AsWKB(
         val cell = cellVal.asInstanceOf[Long]
         val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
 
-        JTS.toWKB(sys.cellIdToGeometry(cell))
+        GridErrorHandler.safeEval[Array[Byte]](null)(JTS.toWKB(sys.cellIdToGeometry(cell)))
     }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =

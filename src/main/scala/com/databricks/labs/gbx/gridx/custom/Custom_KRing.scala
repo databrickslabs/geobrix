@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.custom
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
@@ -36,12 +37,13 @@ case class Custom_KRing(
         val gridVal = gridExpr.eval(input)
         if (gridVal == null) return null
 
-        val cell = cellVal.asInstanceOf[Long]
-        val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
-        val k    = Custom_GridSpec.asInt(kExpr.eval(input), "k")
-
-        val cells: Seq[Long] = sys.kRing(cell, k)
-        ArrayData.toArrayData(cells.toArray)
+        val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
+        val k   = Custom_GridSpec.asInt(kExpr.eval(input), "k")                    // PARAMETER
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val cell = cellVal.asInstanceOf[Long]
+            val cells: Seq[Long] = sys.kRing(cell, k)
+            ArrayData.toArrayData(cells.toArray)
+        }
     }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =

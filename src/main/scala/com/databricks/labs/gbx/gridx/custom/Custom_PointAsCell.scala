@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.custom
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -33,12 +34,13 @@ case class Custom_PointAsCell(
         val gridVal = gridExpr.eval(input)
         if (gridVal == null) return null
 
-        val geom: Geometry = Custom_PointAsCell.decodeGeom(pointVal)
-        val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
-        val res  = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")
-        val c    = geom.getCoordinate
-
-        sys.pointToCellID(c.x, c.y, res)
+        val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
+        val res = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")  // PARAMETER
+        GridErrorHandler.safeEval[java.lang.Long](null) {
+            val geom: Geometry = Custom_PointAsCell.decodeGeom(pointVal)
+            val c = geom.getCoordinate
+            sys.pointToCellIdOrNull(c.x, c.y, res)  // DATA: NaN/bounds -> null
+        }
     }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =

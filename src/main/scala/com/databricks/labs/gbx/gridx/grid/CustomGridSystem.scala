@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.grid
 
 
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.{Coordinate, Geometry}
@@ -263,6 +264,17 @@ case class CustomGridSystem(conf: GridConf) extends Serializable {
 
         val (_, _, cellPos) = getCellPositionFromCoordinates(x, y, resolution)
         getCellId(cellPos, resolution)
+    }
+
+    /** Bad-DATA-tolerant [[pointToCellID]]: the resolution PARAMETER check still raises, but a
+      * NaN or out-of-bounds coordinate (DATA) returns null so one bad row degrades to NULL.
+      */
+    def pointToCellIdOrNull(x: Double, y: Double, resolution: Int): java.lang.Long = {
+        require(
+          resolution <= conf.maxResolution,
+          throw new IllegalStateException(s"Resolution exceeds maximum resolution of ${conf.maxResolution}.")
+        )
+        GridErrorHandler.safeEval[java.lang.Long](null)(pointToCellID(x, y, resolution))
     }
 
     def getCellPositionFromCoordinates(x: Double, y: Double, resolution: Int): (Long, Long, Long) = {

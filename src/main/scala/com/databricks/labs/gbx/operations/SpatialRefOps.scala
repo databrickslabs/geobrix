@@ -203,6 +203,19 @@ object SpatialRefOps {
                 mutable.LinkedHashMap.empty
         }
 
+    // Cached area_of_use bbox per canonical target CRS. The value is an immutable
+    // Option[(Double, Double, Double, Double)] holding no native handle (the AreaOfUse and its
+    // SpatialReference are read, copied into the tuple, and deleted before caching), so — like
+    // crsInfoCache — it needs no lock. Kept thread-local anyway to match the other hot-path
+    // caches; per-thread duplication of four doubles is negligible. Keyed by the SAME canonical
+    // String instance crsInfo hands out, so lookups reuse that String's cached hashCode.
+    private val areaOfUseCache =
+        new ThreadLocal[mutable.LinkedHashMap[String, Option[(Double, Double, Double, Double)]]] {
+            override def initialValue()
+                : mutable.LinkedHashMap[String, Option[(Double, Double, Double, Double)]] =
+                mutable.LinkedHashMap.empty
+        }
+
     /** Authority code as an Int when the CRS carries a numeric one (e.g. `EPSG:4326` -> 4326,
       * `ESRI:54008` -> 54008); None for authority-less CRS (raw WKT / PROJ4) and for
       * non-numeric codes such as `OGC:CRS84`.
@@ -305,20 +318,38 @@ object SpatialRefOps {
     /** Target CRS's area_of_use bbox in EPSG:4326 (west, south, east, north), or None
       * when the CRS carries no area-of-use metadata (caller skips the domain check).
       *
-      * Resource discipline: `AreaOfUse` has `swigCMemOwn=true` and its own native pointer
-      * (confirmed from GDAL 3.11 JAR). It is NOT freed when its parent SpatialReference is
-      * deleted — the two are independent SWIG objects. Both must be explicitly `delete()`d:
-      * the `AreaOfUse` in an inner `finally`, the `SpatialReference` in the outer `finally`. */
+      * Cached by canonical CRS string — the per-row entry point for the transform-path domain
+      * check. On a cache hit this makes ZERO GDAL calls; the steady state (one column reprojected
+      * to one target CRS) resolves the bbox once and reuses the cached tuple for every row. This
+      * is the memoization the transform hot path needs: without it, every row resolved a fresh
+      * SpatialReference and read+deleted an AreaOfUse.
+      *
+      * Resource discipline (miss path only): `AreaOfUse` has `swigCMemOwn=true` and its own
+      * native pointer (confirmed from GDAL 3.11 JAR). It is NOT freed when its parent
+      * SpatialReference is deleted — the two are independent SWIG objects. Both are explicitly
+      * `delete()`d — the `AreaOfUse` in an inner `finally`, the `SpatialReference` in the outer
+      * `finally` — BEFORE the immutable bbox tuple is cached, so nothing native is retained. A
+      * resolve failure caches nothing (mirrors [[crsInfo]]). */
     def areaOfUse(canonical: String): Option[(Double, Double, Double, Double)] = {
-        val sr = resolveCrs(canonical)
-        try {
-            val a = sr.GetAreaOfUse()  // GDAL 3.0+: AreaOfUse (owns native memory) or null
-            if (a == null) None
-            else try {
-                Some((a.getWest_lon_degree, a.getSouth_lat_degree,
-                      a.getEast_lon_degree, a.getNorth_lat_degree))
-            } finally a.delete()
-        } finally sr.delete()
+        val cache = areaOfUseCache.get()
+        cache.get(canonical) match {
+            case Some(bbox) =>
+                cache.remove(canonical); cache.put(canonical, bbox) // move-to-end (most-recent)
+                bbox
+            case None =>
+                val sr = resolveCrs(canonical) // may throw; nothing is cached in that case
+                val bbox = try {
+                    val a = sr.GetAreaOfUse()  // GDAL 3.0+: AreaOfUse (owns native memory) or null
+                    if (a == null) None
+                    else try {
+                        Some((a.getWest_lon_degree, a.getSouth_lat_degree,
+                              a.getEast_lon_degree, a.getNorth_lat_degree))
+                    } finally a.delete()
+                } finally sr.delete()
+                cache.put(canonical, bbox)
+                if (cache.size > CRS_INFO_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
+                bbox
+        }
     }
 
     /** True when every (lon, lat) is inside the bbox; straddling the boundary → false. */

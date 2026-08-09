@@ -139,11 +139,11 @@ private[expressions] object TransformCrsCore {
       * `SpatialRefOps.transformPlan` (cached identity flag + cache-owned CT), so no
       * `SpatialReference` or `CoordinateTransformation` is allocated per row on the steady
       * state. On the steady state — the same CRS pair repeated, which is what a column of
-      * geometries looks like — the GDAL work per row is: (a) the OGR geometry round-trip,
-      * and (b) when the target carries an area_of_use, an `areaOfUse` lookup on the target's
-      * canonical string (resolves, reads, and deletes a SpatialReference). The area_of_use
-      * lookup is a candidate for memoization by canonical target string; that is deferred as
-      * a follow-up perf improvement.  Nothing here owns a GDAL object, so there is no
+      * geometries looks like — the GDAL work per row is just (a) the OGR geometry round-trip.
+      * The `areaOfUse` domain-check lookup is cached by canonical target string in
+      * `SpatialRefOps` (thread-local, same idiom as `crsInfo`/`transformPlan`), so on the steady
+      * state it resolves the bbox once and makes zero GDAL calls per row thereafter.
+      * Nothing here owns a GDAL object, so there is no
       * resource-releasing `finally`, no double-delete, no use-after-delete (the one GDAL
       * handle, `ogrGeom`, is owned and released inside `transformWithCachedCT`). The
       * `try/catch` below is control-flow only — it degrades a transform-time error to NULL.

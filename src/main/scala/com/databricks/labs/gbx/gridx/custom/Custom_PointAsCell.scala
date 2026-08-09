@@ -35,7 +35,9 @@ case class Custom_PointAsCell(
         if (gridVal == null) return null
 
         val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
-        val res = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")  // PARAMETER
+        val res = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")  // PARAMETER (type check)
+        if (res > sys.conf.maxResolution)                                          // PARAMETER range: must raise, not null
+            throw new IllegalStateException(s"Resolution exceeds maximum resolution of ${sys.conf.maxResolution}.")
         GridErrorHandler.safeEval[java.lang.Long](null) {
             val geom: Geometry = Custom_PointAsCell.decodeGeom(pointVal)
             val c = geom.getCoordinate

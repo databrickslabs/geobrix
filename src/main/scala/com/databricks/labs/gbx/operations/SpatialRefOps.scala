@@ -304,15 +304,20 @@ object SpatialRefOps {
 
     /** Target CRS's area_of_use bbox in EPSG:4326 (west, south, east, north), or None
       * when the CRS carries no area-of-use metadata (caller skips the domain check).
-      * The AreaOfUse object is a GDAL-managed value object that does not hold a native
-      * SpatialReference; release the owning SR in a finally as usual. */
+      *
+      * Resource discipline: `AreaOfUse` has `swigCMemOwn=true` and its own native pointer
+      * (confirmed from GDAL 3.11 JAR). It is NOT freed when its parent SpatialReference is
+      * deleted — the two are independent SWIG objects. Both must be explicitly `delete()`d:
+      * the `AreaOfUse` in an inner `finally`, the `SpatialReference` in the outer `finally`. */
     def areaOfUse(canonical: String): Option[(Double, Double, Double, Double)] = {
         val sr = resolveCrs(canonical)
         try {
-            val a = sr.GetAreaOfUse()  // GDAL 3.0+: AreaOfUse or null
+            val a = sr.GetAreaOfUse()  // GDAL 3.0+: AreaOfUse (owns native memory) or null
             if (a == null) None
-            else Some((a.getWest_lon_degree, a.getSouth_lat_degree,
-                       a.getEast_lon_degree, a.getNorth_lat_degree))
+            else try {
+                Some((a.getWest_lon_degree, a.getSouth_lat_degree,
+                      a.getEast_lon_degree, a.getNorth_lat_degree))
+            } finally a.delete()
         } finally sr.delete()
     }
 

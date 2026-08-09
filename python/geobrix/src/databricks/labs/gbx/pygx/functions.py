@@ -460,6 +460,10 @@ def _fold_chip_geom(chip, op):
         if row is None:
             continue
         cur = _chip_tuple(row)
+        # Skip whole row if the cell id is malformed DATA (parse_safe -> None).
+        cellid_str = cur[0]
+        if cellid_str is not None and _bng.parse_safe(cellid_str) is None:
+            continue
         acc = cur if acc is None else op(acc, cur)
     if acc is None:
         return None
@@ -467,7 +471,8 @@ def _fold_chip_geom(chip, op):
     # A core chip carries None geometry in the array form; materialize the full
     # cell polygon so the dissolved output is always a real geometry.
     if (geom is None or geom.is_empty) and core and cellid is not None:
-        geom = _bng.cell_id_to_geometry(_bng.parse(cellid))
+        cid = _bng.parse_safe(cellid)  # bad accumulated cellid -> degrade, don't raise
+        geom = _bng.cell_id_to_geometry(cid) if cid is not None else None
     if geom is None or geom.is_empty:
         return None
     from shapely import to_wkb as _to_wkb

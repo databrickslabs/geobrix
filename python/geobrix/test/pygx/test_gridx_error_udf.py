@@ -5,6 +5,13 @@ Parameter errors (bad resolution, bad grid spec) must still raise.
 
 import pytest
 from pyspark.sql import SparkSession
+from pyspark.sql.types import (
+    BinaryType,
+    BooleanType,
+    StringType,
+    StructField,
+    StructType,
+)
 
 from databricks.labs.gbx.pygx import functions as gx
 
@@ -100,13 +107,79 @@ def test_bng_polyfill_raises_on_bad_resolution(spark):
 
 
 # ---------------------------------------------------------------------------
-# Custom scalar UDF — bad geometry DATA -> NULL; bad resolution -> raises
+# BNG aggregator UDFs — bad member cell id -> skip that member, not raise
+# ---------------------------------------------------------------------------
+
+# Chip-struct schema: (cellid STRING, core BOOLEAN, chip BINARY)
+_CHIP_SCHEMA = StructType(
+    [
+        StructField("cellid", StringType()),
+        StructField("core", BooleanType()),
+        StructField("chip", BinaryType()),
+    ]
+)
+
+
+def _make_chip_df(spark, rows):
+    """Create a DataFrame with the chip struct schema from (cellid, core, chip) tuples."""
+    return spark.createDataFrame(rows, schema=_CHIP_SCHEMA)
+
+
+def test_bng_cellunion_agg_skips_bad_cellid_member(spark):
+    """A group with one bad cell id member does not raise; valid core chip is returned."""
+    # One valid core chip (chip=None, core=True: the fold materializes its polygon)
+    # plus one malformed id.  The agg should return a non-null geometry, not raise.
+    rows = [
+        ("TQ3080", True, None),  # valid core chip — fold materializes full cell polygon
+        ("!!", False, None),  # BAD cell id — must be skipped
+    ]
+    df = _make_chip_df(spark, rows)
+    df.createOrReplaceTempView("_test_chips_union")
+    result = spark.sql(
+        "SELECT gbx_bng_cellunion_agg(struct(cellid, core, chip)) AS geom "
+        "FROM _test_chips_union"
+    ).first()
+    # If the bad cell id were NOT skipped it would raise StopIteration.
+    # With only the valid core chip remaining, the fold materializes TQ3080's polygon.
+    assert result["geom"] is not None, "expected geometry from valid core member"
+
+
+def test_bng_cellintersection_agg_skips_bad_cellid_member(spark):
+    """A group with one bad cell id member does not raise on intersection agg."""
+    rows = [
+        ("TQ3080", True, None),  # valid core chip
+        ("!!", False, None),  # BAD cell id — must be skipped
+    ]
+    df = _make_chip_df(spark, rows)
+    df.createOrReplaceTempView("_test_chips_intersection")
+    # Does not raise even with the malformed member present.
+    result = spark.sql(
+        "SELECT gbx_bng_cellintersection_agg(struct(cellid, core, chip)) AS geom "
+        "FROM _test_chips_intersection"
+    ).first()
+    # After skipping '!!', only one valid core chip remains; the fold materializes
+    # its polygon.  Load-bearing assertion: no exception, and geom is non-null.
+    assert result["geom"] is not None, "expected geometry from valid core member"
+
+
+# ---------------------------------------------------------------------------
+# Custom scalar UDF — out-of-bounds coordinate DATA -> NULL
+# (exercises point_to_cell_id_or_none degrade path, not the early None-input exit)
 # ---------------------------------------------------------------------------
 
 
-def test_custom_pointascell_null_on_bad_geom(spark):
-    """NaN coordinates degrade to NULL, resolution parameter still raises."""
-    # Build a minimal valid grid spec
+def test_custom_pointascell_null_on_null_geom(spark):
+    """NULL geometry input hits the pre-existing early-exit and returns NULL."""
     grid_sql = "gbx_custom_grid(0, 1000000, 0, 1000000, 2, 500000, 500000)"
     r = spark.sql(f"SELECT gbx_custom_pointascell(NULL, {grid_sql}, 1) AS cid").first()
+    assert r["cid"] is None
+
+
+def test_custom_pointascell_null_on_oob_coordinate(spark):
+    """A point outside the grid bounds degrades to NULL via point_to_cell_id_or_none."""
+    # Grid covers [0,1000000)x[0,1000000); POINT(2000000 2000000) is out-of-bounds.
+    grid_sql = "gbx_custom_grid(0, 1000000, 0, 1000000, 2, 500000, 500000)"
+    r = spark.sql(
+        f"SELECT gbx_custom_pointascell('POINT (2000000 2000000)', {grid_sql}, 1) AS cid"
+    ).first()
     assert r["cid"] is None

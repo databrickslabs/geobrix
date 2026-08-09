@@ -196,58 +196,72 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
 
 @pandas_udf(DoubleType())
 def _bng_cellarea_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.area(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _area(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.area(cid) if cid is not None else None
+
+    return pd.Series([_area(c) for c in cellid])
 
 
 @pandas_udf(LongType())
 def _bng_distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                int(_bng.distance(_bng.parse(x), _bng.parse(y)))
-                if x is not None and y is not None
-                else None
-            )
-            for x, y in zip(a, b)
-        ]
-    )
+    def _dist(x, y):
+        if x is None or y is None:
+            return None
+        cx, cy = _bng.parse_safe(x), _bng.parse_safe(y)
+        return int(_bng.distance(cx, cy)) if cx is not None and cy is not None else None
+
+    return pd.Series([_dist(x, y) for x, y in zip(a, b)])
 
 
 @pandas_udf(LongType())
 def _bng_euclideandistance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                int(_bng.euclidean_distance(_bng.parse(x), _bng.parse(y)))
-                if x is not None and y is not None
-                else None
-            )
-            for x, y in zip(a, b)
-        ]
-    )
+    def _edist(x, y):
+        if x is None or y is None:
+            return None
+        cx, cy = _bng.parse_safe(x), _bng.parse_safe(y)
+        return (
+            int(_bng.euclidean_distance(cx, cy))
+            if cx is not None and cy is not None
+            else None
+        )
+
+    return pd.Series([_edist(x, y) for x, y in zip(a, b)])
 
 
 @pandas_udf(BinaryType())
 def _bng_aswkb_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.cell_aswkb(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _aswkb(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.cell_aswkb(cid) if cid is not None else None
+
+    return pd.Series([_aswkb(c) for c in cellid])
 
 
 @pandas_udf(StringType())
 def _bng_aswkt_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.cell_aswkt(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _aswkt(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.cell_aswkt(cid) if cid is not None else None
+
+    return pd.Series([_aswkt(c) for c in cellid])
 
 
 @pandas_udf(BinaryType())
 def _bng_centroid_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.cell_centroid(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _centroid(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.cell_centroid(cid) if cid is not None else None
+
+    return pd.Series([_centroid(c) for c in cellid])
 
 
 # --- chip-pair scalar ops -> pandas_udf returning BNG_CHIP_SCHEMA ------------
@@ -327,13 +341,19 @@ def _bng_cellintersection_udf(left: pd.DataFrame, right: pd.DataFrame) -> pd.Dat
 def _bng_kring(cellid, k):
     if cellid is None or k is None:
         return None
-    return _bng.k_ring_str(cellid, int(k))
+    cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
+    if cid is None:
+        return None
+    return [_bng.format(c) for c in _bng.k_ring(cid, int(k))]
 
 
 def _bng_kloop(cellid, k):
     if cellid is None or k is None:
         return None
-    return _bng.k_loop_str(cellid, int(k))
+    cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
+    if cid is None:
+        return None
+    return [_bng.format(c) for c in _bng.k_loop(cid, int(k))]
 
 
 def _bng_polyfill(geom, res):
@@ -374,8 +394,11 @@ class _BngKRingExplode:
     def eval(self, cellid, k):
         if cellid is None or k is None:
             return
-        for c in _bng.k_ring_str(cellid, int(k)):
-            yield (c,)
+        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
+        if cid is None:
+            return
+        for c in _bng.k_ring(cid, int(k)):
+            yield (_bng.format(c),)
 
 
 @udtf(returnType="cellid: string")
@@ -383,8 +406,11 @@ class _BngKLoopExplode:
     def eval(self, cellid, k):
         if cellid is None or k is None:
             return
-        for c in _bng.k_loop_str(cellid, int(k)):
-            yield (c,)
+        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
+        if cid is None:
+            return
+        for c in _bng.k_loop(cid, int(k)):
+            yield (_bng.format(c),)
 
 
 @udtf(returnType="cellid: string")
@@ -546,7 +572,9 @@ def _custom_pointascell_udf(
             continue
         conf = _custom.conf_from_row(spec)
         x, y = _custom_first_coord(pg)
-        out.append(_custom.point_to_cell_id(conf, x, y, int(r)))
+        # resolution PARAMETER raises (via point_to_cell_id_or_none);
+        # NaN / out-of-bounds coordinate DATA -> None
+        out.append(_custom.point_to_cell_id_or_none(conf, x, y, int(r)))
     return pd.Series(out)
 
 

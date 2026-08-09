@@ -44,11 +44,14 @@ core and coerce the result to the fixed SQL return type.
   cannot be stored in an int, so it raises ``ValueError``.  That covers both
   authority-less definitions (raw WKT / PROJ4) and resolvable CRSes whose code is
   non-numeric (``OGC:CRS84``, ``IGNF:LAMB93``).
-- ``st_transformcrs`` reprojects coordinates.  If the source CRS is unresolvable
-  (no embedded SRID, no explicit ``source_crs``, or the SRID/string is not in
-  any known registry) it returns the input UNCHANGED (never-error invariant).
-  A target with no integer authority code is allowed; it yields a plain geometry
-  with the (now stale) SRID cleared.
+- ``st_transformcrs`` reprojects coordinates.  Source-CRS errors split by type:
+  a geometry with an unresolvable embedded SRID, no embedded SRID and no explicit
+  ``source_crs``, or an unparseable geometry all degrade to NULL (DATA error); an
+  explicitly-provided but unresolvable ``source_crs`` raises ``ValueError``
+  (PARAMETER error).  Geometries whose coordinates lie outside the target CRS's
+  ``area_of_use`` bounding box also return NULL; when the target has no
+  ``area_of_use`` the check is skipped.  A target with no integer authority code
+  is allowed; it yields a plain geometry with the (now stale) SRID cleared.
 
 Both rules go through :func:`databricks.labs.gbx.core.crs.authority_srid_of`, which
 probes the authority at ``confidence_threshold=100`` so a PROJ4 or raw-WKT target is
@@ -439,15 +442,29 @@ def st_transformcrs(
     geom,
     target_crs: Union[int, str],
     source_crs: Optional[Union[int, str]] = None,
-) -> Union[bytes, str]:
+) -> Union[bytes, str, None]:
     """Reproject a geometry to ``target_crs`` (medium-preserving).
 
-    Source CRS resolution order:
-    1. Embedded SRID from the geometry (EWKB / EWKT).
-    2. Explicit ``source_crs`` parameter (for plain WKB / WKT inputs).
-    3. No source CRS resolvable -> return the input UNCHANGED (never-error
-       invariant: a plain geometry without a CRS cannot be reprojected; an
-       unresolvable SRID or source_crs string also degrades gracefully).
+    Source CRS resolution — data errors degrade to NULL; parameter errors raise:
+
+    1. Unparseable geometry input (DATA) -> NULL.
+    2. Embedded SRID present but unresolvable (SRID rides in the geometry = DATA)
+       -> NULL.
+    3. Embedded SRID absent, explicit ``source_crs`` provided but unresolvable
+       (PARAMETER) -> raises ``ValueError`` (a bad argument, not bad data).
+    4. No embedded SRID and no ``source_crs`` (plain geometry with no CRS DATA)
+       -> NULL (cannot reproject without a source CRS).
+    5. Bad / unresolvable ``target_crs`` (PARAMETER) -> raises ``ValueError``
+       (via ``resolve_crs``).
+
+    After reprojection two additional NULL guards apply:
+    - Non-finite X/Y result (PROJ returns Infinity for mislabelled CRS or invalid
+      lat) -> NULL.
+    - Input coordinates outside the target CRS's ``area_of_use`` bounding box
+      (the finite-nonsense survivor: a point on the wrong side of the globe
+      reprojects to a finite but meaningless UTM easting) -> NULL.  When the
+      target CRS has no ``area_of_use`` metadata the check is skipped (never NULL
+      what cannot be disproved).
 
     Output encoding follows the input medium (bytes -> bytes, str -> str).
     Output SRID:
@@ -464,41 +481,47 @@ def st_transformcrs(
         geom: WKB / EWKB bytes, or WKT / EWKT string.
         target_crs: target CRS as EPSG/ESRI string, int SRID, WKT, or PROJ4.
         source_crs: explicit source CRS override for plain (SRID-less) inputs.
+            Providing an invalid string raises ``ValueError`` (parameter error).
 
     Returns:
-        Reprojected geometry in the same encoding as the input, or the input
-        unchanged when no source CRS is resolvable.
+        Reprojected geometry in the same encoding as the input, or ``None`` when
+        the source CRS is unresolvable from the geometry data, or when the input
+        coordinates lie outside the target CRS's valid area.
+
+    Raises:
+        ValueError: if ``target_crs`` is unresolvable (always), or if an explicit
+            ``source_crs`` is provided but unresolvable (parameter error).
     """
     if geom is None:
         return None
     text = _is_text(geom)
     g = _parse_geom_safe(geom)
     if g is None:
-        return geom
+        # Unparseable geometry DATA -> NULL (not a parameter error).
+        return None
     # Partial-Z input is reprojected in 2D: PROJ would otherwise propagate the
     # non-finite Z into X and Y and lose the horizontal position entirely.
     g = _drop_partial_z(g)
 
-    # Resolve source CRS — never-error: any resolution failure -> return unchanged.
+    # Resolve source CRS — data errors degrade to NULL; parameter errors raise.
     embedded_srid = int(get_srid(g))
     src = None
     if embedded_srid > 0:
         try:
             src = resolve_crs(embedded_srid)
         except Exception:
-            # Unresolvable embedded SRID — degrade gracefully, return unchanged.
-            return geom
+            # Unresolvable embedded SRID — the SRID rides in the geometry = DATA.
+            return None
     elif source_crs is not None:
-        try:
-            src = resolve_crs(source_crs)
-        except Exception:
-            # Unresolvable explicit source_crs — degrade gracefully.
-            return geom
+        # An explicit source_crs is a PARAMETER — let resolve_crs raise ValueError.
+        src = resolve_crs(source_crs)
 
     if src is None:
-        # No source CRS at all (plain geometry, no explicit override).
-        return geom
+        # No source CRS at all: plain geometry with no embedded SRID and no
+        # explicit override.  Cannot reproject — DATA has no CRS -> NULL.
+        return None
 
+    # target_crs is a PARAMETER — resolve_crs raises ValueError if invalid.
     tgt = resolve_crs(target_crs)
     tr = get_transformer(src, tgt)
     g_proj = transform(tr.transform, g)
@@ -524,6 +547,49 @@ def st_transformcrs(
     if _has_nonfinite_xy(g_proj):
         return None
 
+    # Area-of-use domain check — catch the finite-nonsense survivor.
+    #
+    # A geometry can reproject to finite-but-wrong coordinates when its coordinates are
+    # plausible for the source CRS's projection math but outside the target CRS's intended
+    # geographic extent (e.g. SRID=4326;POINT(150 -80) -> EPSG:27700 yields a real-looking
+    # BNG easting/northing ~16,500 km south of GB).  The non-finite guard above misses this
+    # because PROJ returns a finite number; only the target CRS's area_of_use bounds catch it.
+    #
+    # The domain check uses the INPUT coordinates in lon/lat (EPSG:4326).  When the source
+    # CRS is geographic (e.g. EPSG:4326, OGC:CRS84) the geometry's own coordinates are
+    # already lon/lat.  When the source is projected, a secondary transform to EPSG:4326 is
+    # required to put the input in the same frame as the bounds.
+    #
+    # If the target CRS has no area_of_use metadata (e.g. raw PROJ4, custom WKT without
+    # USAGE blocks) the check returns None and is skipped — never NULL what cannot be disproved.
+    #
+    # ``tgt`` is a rasterio CRS (from ``resolve_crs``), which does not carry area_of_use.
+    # Convert via the authority tuple when available (preserves the registry bounds); fall
+    # back to from_wkt otherwise (area_of_use will be None -> skip).
+    try:
+        import pyproj as _pyproj
+
+        _auth = tgt.to_authority(confidence_threshold=100)
+        _tgt_pyproj = (
+            _pyproj.CRS.from_authority(*_auth)
+            if _auth
+            else _pyproj.CRS.from_wkt(tgt.to_wkt())
+        )
+    except Exception:
+        _tgt_pyproj = tgt  # fallback: area_of_use absent -> skip
+
+    from databricks.labs.gbx.core.crs import in_target_domain
+
+    lonlat = (
+        get_coordinates(g)
+        if src.is_geographic
+        else get_coordinates(transform(get_transformer(src, resolve_crs(4326)).transform, g))
+    )
+    dom = in_target_domain(lonlat, _tgt_pyproj)
+    if dom is False:
+        return None
+    # dom is True (in-domain) or None (no area_of_use -> skip) -> proceed
+
     # Determine output SRID from the target's integer authority code (None for a
     # raw WKT / PROJ4 target, or for a non-numeric code such as OGC:CRS84).
     tgt_srid = authority_srid_of(tgt)
@@ -548,12 +614,11 @@ def st_transformcrs(
 def _text_result_to_wkb(result: str) -> Optional[bytes]:
     """Re-encode a text-medium core result as (E)WKB for the BINARY SQL surface.
 
-    Uses :func:`_parse_geom_safe`, NOT a bare ``parse_geom``. On a DEGRADE the core
-    returns the caller's ORIGINAL string untouched, which for mixed-dimensionality WKT is
-    a string GEOS refuses to parse — so a bare re-parse here raised ``GEOSException`` on
-    the registered surface even though the core had degraded correctly. That broke the
-    never-error invariant exactly where it matters most: one such row fails the stage.
-    Returns ``None`` only when the text is unparseable even after normalization.
+    Uses :func:`_parse_geom_safe`, NOT a bare ``parse_geom``.  Mixed-dimensionality WKT
+    (e.g. ``GEOMETRYCOLLECTION Z (POINT Z (1 2 3), POINT (4 5))``) fails GEOS's plain
+    parser — a bare re-parse here would raise ``GEOSException`` and fail the stage.
+    Using :func:`_parse_geom_safe` handles the normalisation transparently.
+    Returns ``None`` only when the text is unparseable even after normalisation.
     """
     g = _parse_geom_safe(result)
     if g is None:
@@ -583,8 +648,10 @@ def _udf_st_transformcrs(geom, target_crs, source_crs=None) -> Optional[bytes]:
     """SQL UDF callable for gbx_st_transformcrs (BINARY return type).
 
     Coerces the result to WKB/EWKB bytes regardless of input medium — SQL callers
-    always receive WKB.  Returns None if geom or target_crs is None; returns
-    the input geometry unchanged when no source CRS is resolvable.
+    always receive WKB.  Returns None if geom or target_crs is None, and whenever
+    the core returns None (data error, unresolvable source, or domain-out-of-area).
+    Raises ValueError when an explicitly-provided source_crs or target_crs is invalid
+    (parameter error).
     """
     if geom is None or target_crs is None:
         return None
@@ -592,7 +659,6 @@ def _udf_st_transformcrs(geom, target_crs, source_crs=None) -> Optional[bytes]:
     if result is None:
         return None
     if isinstance(result, str):
-        # Text-input round-trip (including the degrade path, which hands back the
-        # caller's own string) -> convert to (E)WKB for the SQL surface.
+        # Text-input core result -> convert to (E)WKB for the SQL surface.
         return _text_result_to_wkb(result)
     return bytes(result)

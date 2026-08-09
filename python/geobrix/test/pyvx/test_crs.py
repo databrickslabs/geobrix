@@ -25,14 +25,18 @@ shapely = pytest.importorskip("shapely")
 # Helpers
 # ---------------------------------------------------------------------------
 
-# POINT(11, 42) in EPSG:4326 -> EPSG:32633 (UTM33N) = (168701.015089, 4657521.062150)
-_UTM33N_X = pytest.approx(168701.015, rel=1e-4)
-_UTM33N_Y = pytest.approx(4657521.0, rel=1e-4)
+# Standard test point: POINT(15, 51) in EPSG:4326 — inside EPSG:32633 (lon 12°–18°).
+# POINT(15, 51) -> EPSG:32633 (UTM33N) = (500000.000, 5649824.888)
+_UTM33N_X = pytest.approx(500000.0, rel=1e-4)
+_UTM33N_Y = pytest.approx(5649824.888, rel=1e-4)
 
-# POINT(11, 42) in EPSG:4326 -> ESRI:54008 (Sinusoidal) = (911358.377, 4651636.879)
-_ESRI54008_X = pytest.approx(911358.377, rel=1e-4)
+# POINT(15, 51) in EPSG:4326 -> ESRI:54008 (Sinusoidal, world bounds) = (1052965.165, 5652085.723)
+_ESRI54008_X = pytest.approx(1052965.165, rel=1e-4)
 
 # Custom TM (central_meridian=13.7) applied to (11, 42) => x < 0
+# NOTE: the custom TM target has no area_of_use, so the domain check is skipped
+# and (11, 42) still projects.  Tests that use _CUSTOM_TM_WKT keep their own
+# POINT(11, 42) helper or inline the point directly.
 _CUSTOM_TM_X_NEGATIVE = True
 
 _CUSTOM_TM_WKT = (
@@ -72,23 +76,27 @@ def _ewkb_at(lon, lat, srid):
 
 
 def _ewkb(srid):
-    """EWKB bytes for POINT(11, 42) with given SRID."""
+    """EWKB bytes for POINT(15, 51) with given SRID.
+
+    POINT(15, 51) is inside EPSG:32633 (lon 12°–18°, lat 0°–84°), so the
+    area-of-use domain check passes when projecting to UTM zone 33N.
+    """
     import shapely as _sh
 
-    return to_wkb(_sh.set_srid(Point(11.0, 42.0), srid), include_srid=True)
+    return to_wkb(_sh.set_srid(Point(15.0, 51.0), srid), include_srid=True)
 
 
 def _ewkt(srid):
-    """EWKT string POINT(11, 42) with SRID prefix."""
-    return f"SRID={srid};POINT (11 42)"
+    """EWKT string POINT(15, 51) with SRID prefix."""
+    return f"SRID={srid};POINT (15 51)"
 
 
 def _plain_wkb():
-    return to_wkb(Point(11.0, 42.0))
+    return to_wkb(Point(15.0, 51.0))
 
 
 def _plain_wkt():
-    return "POINT (11 42)"
+    return "POINT (15 51)"
 
 
 # ---------------------------------------------------------------------------
@@ -199,8 +207,16 @@ def test_st_transformcrs_ewkb_esri_target():
 
 
 def test_st_transformcrs_ewkb_authority_less_wkt_target():
-    """EWKB + authority-less WKT target -> plain WKB, SRID cleared, coords reprojected."""
-    out = _crs.st_transformcrs(_ewkb(4326), _CUSTOM_TM_WKT)
+    """EWKB + authority-less WKT target -> plain WKB, SRID cleared, coords reprojected.
+
+    The custom TM has no area_of_use, so the domain check is skipped and any source
+    point reprojects.  Use POINT(11, 42) which is west of central_meridian=13.7,
+    so the easting is negative — confirming reprojection happened.
+    """
+    import shapely as _sh
+
+    ewkb_11_42 = to_wkb(_sh.set_srid(Point(11.0, 42.0), 4326), include_srid=True)
+    out = _crs.st_transformcrs(ewkb_11_42, _CUSTOM_TM_WKT)
     assert isinstance(out, (bytes, bytearray))
     g = from_wkb(out)
     assert get_srid(g) == 0
@@ -235,15 +251,24 @@ def test_st_setcrs_proj4_raises_no_fuzzy_epsg_stamp():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("crs", ["OGC:CRS84", "IGNF:LAMB93"])
-def test_st_transformcrs_non_numeric_authority_code_clears_srid(crs):
-    """A resolvable CRS with a non-numeric code takes the authority-less path.
+def test_st_transformcrs_non_numeric_authority_code_clears_srid_ogccrs84():
+    """OGC:CRS84 (world bounds) clears the SRID and reprojects POINT(15, 51)."""
+    out = _crs.st_transformcrs(_ewkb(4326), "OGC:CRS84")
+    assert isinstance(out, (bytes, bytearray))
+    assert get_srid(from_wkb(out)) == 0
 
-    'OGC:CRS84' and 'IGNF:LAMB93' are real CRSes, but their authority codes
-    ('CRS84', 'LAMB93') are not integers, so no SRID can be carried. Under the
-    never-error invariant this must reproject and clear the SRID, not raise.
+
+def test_st_transformcrs_non_numeric_authority_code_clears_srid_ignf():
+    """IGNF:LAMB93 clears the SRID and reprojects a point inside metropolitan France.
+
+    IGNF:LAMB93's area_of_use covers lon -5.5°–10° / lat 41°–52°, so POINT(15, 51)
+    (our standard test point) is outside it.  Use POINT(2, 48) — Paris — which is
+    inside the domain and confirms reprojection without hitting the domain-NULL path.
     """
-    out = _crs.st_transformcrs(_ewkb(4326), crs)
+    import shapely as _sh
+
+    ewkb_paris = to_wkb(_sh.set_srid(Point(2.0, 48.0), 4326), include_srid=True)
+    out = _crs.st_transformcrs(ewkb_paris, "IGNF:LAMB93")
     assert isinstance(out, (bytes, bytearray))
     assert get_srid(from_wkb(out)) == 0
 
@@ -255,16 +280,16 @@ def test_st_setcrs_non_numeric_authority_code_raises(crs):
         _crs.st_setcrs(_plain_wkb(), crs)
 
 
-def test_st_transformcrs_plain_wkb_no_source_unchanged():
-    """Plain WKB, no source_crs -> returned unchanged (never-error invariant)."""
+def test_st_transformcrs_plain_wkb_no_source_returns_none():
+    """Plain WKB, no source_crs -> NULL (geometry DATA has no CRS; cannot reproject)."""
     plain = _plain_wkb()
-    assert _crs.st_transformcrs(plain, "EPSG:32633") == plain
+    assert _crs.st_transformcrs(plain, "EPSG:32633") is None
 
 
-def test_st_transformcrs_plain_wkb_authority_less_target_unchanged():
-    """Plain WKB + authority-less target, no source_crs -> unchanged."""
+def test_st_transformcrs_plain_wkb_authority_less_target_no_source_returns_none():
+    """Plain WKB + authority-less target, no source_crs -> NULL (no CRS DATA)."""
     plain = _plain_wkb()
-    assert _crs.st_transformcrs(plain, _CUSTOM_TM_WKT) == plain
+    assert _crs.st_transformcrs(plain, _CUSTOM_TM_WKT) is None
 
 
 def test_st_transformcrs_plain_wkb_with_explicit_source():
@@ -286,24 +311,31 @@ def test_st_transformcrs_ewkt_epsg_target_text_medium():
 
 
 def test_st_transformcrs_ewkt_authority_less_target_text_medium():
-    """EWKT + authority-less WKT target -> plain WKT str, SRID cleared, coords reprojected."""
-    out = _crs.st_transformcrs(_ewkt(4326), _CUSTOM_TM_WKT)
+    """EWKT + authority-less WKT target -> plain WKT str, SRID cleared, coords reprojected.
+
+    Custom TM has no area_of_use, so the domain check is skipped.  Use POINT(11, 42)
+    (west of central_meridian=13.7) directly to confirm a negative easting.
+    """
+    import shapely as _sh
+
+    ewkt_11_42 = f"SRID=4326;POINT (11 42)"
+    out = _crs.st_transformcrs(ewkt_11_42, _CUSTOM_TM_WKT)
     assert isinstance(out, str)
     assert "SRID=" not in out.upper()
     g = from_wkt(out)
     assert g.x < 0
 
 
-def test_st_transformcrs_plain_wkt_no_source_unchanged():
-    """Plain WKT, no source -> unchanged."""
+def test_st_transformcrs_plain_wkt_no_source_returns_none():
+    """Plain WKT, no source -> NULL (geometry DATA has no CRS; cannot reproject)."""
     plain = _plain_wkt()
-    assert _crs.st_transformcrs(plain, "EPSG:32633") == plain
+    assert _crs.st_transformcrs(plain, "EPSG:32633") is None
 
 
-def test_st_transformcrs_plain_wkt_authority_less_target_unchanged():
-    """Plain WKT + authority-less target, no source -> unchanged."""
+def test_st_transformcrs_plain_wkt_authority_less_target_no_source_returns_none():
+    """Plain WKT + authority-less target, no source -> NULL (no CRS DATA)."""
     plain = _plain_wkt()
-    assert _crs.st_transformcrs(plain, _CUSTOM_TM_WKT) == plain
+    assert _crs.st_transformcrs(plain, _CUSTOM_TM_WKT) is None
 
 
 def test_st_transformcrs_plain_wkt_with_explicit_source():
@@ -316,20 +348,21 @@ def test_st_transformcrs_plain_wkt_with_explicit_source():
 
 
 # ---------------------------------------------------------------------------
-# Never-error invariant: unresolvable source
+# Data vs parameter error handling for unresolvable source
 # ---------------------------------------------------------------------------
 
 
-def test_st_transformcrs_unresolvable_embedded_srid_unchanged():
-    """EWKB with SRID not in EPSG or ESRI -> returned unchanged, no exception."""
+def test_st_transformcrs_unresolvable_embedded_srid_returns_none():
+    """EWKB with SRID not in EPSG or ESRI -> NULL (SRID rides in geometry = DATA)."""
     bad = _ewkb(999999)
-    assert _crs.st_transformcrs(bad, "EPSG:32633") == bad
+    assert _crs.st_transformcrs(bad, "EPSG:32633") is None
 
 
-def test_st_transformcrs_unresolvable_explicit_source_unchanged():
-    """Plain WKB + invalid explicit source_crs string -> unchanged, no exception."""
+def test_st_transformcrs_unresolvable_explicit_source_raises():
+    """Plain WKB + invalid explicit source_crs -> raises ValueError (PARAMETER error)."""
     plain = _plain_wkb()
-    assert _crs.st_transformcrs(plain, "EPSG:32633", source_crs="NOT_A_CRS") == plain
+    with pytest.raises(ValueError):
+        _crs.st_transformcrs(plain, "EPSG:32633", source_crs="NOT_A_CRS")
 
 
 # ---------------------------------------------------------------------------
@@ -350,12 +383,12 @@ def test_st_transformcrs_unresolvable_target_raises():
 
 def test_st_transformcrs_coordinate_preservation_text():
     """to_wkt rounding_precision=-1 must be used; no 6-dp truncation."""
-    # Reproject to UTM33N then back to 4326; round-trip error should be < 1 mm
+    # Reproject POINT(15, 51) to UTM33N then back to 4326; round-trip error should be < 1 mm.
     out_utm = _crs.st_transformcrs(_ewkb(4326), "EPSG:32633")
     out_back = _crs.st_transformcrs(out_utm, "EPSG:4326")
     g = from_wkb(out_back)
-    assert g.x == pytest.approx(11.0, abs=1e-8)
-    assert g.y == pytest.approx(42.0, abs=1e-8)
+    assert g.x == pytest.approx(15.0, abs=1e-8)
+    assert g.y == pytest.approx(51.0, abs=1e-8)
 
 
 # ---------------------------------------------------------------------------
@@ -408,11 +441,14 @@ def test_udf_st_transformcrs_null_target_returns_none():
 
 
 def _mixed_z_linestring_ewkb():
-    """EWKB (3D) for a LINESTRING whose second vertex has no Z."""
+    """EWKB (3D) for a LINESTRING whose second vertex has no Z.
+
+    Uses (15, 51) and (16, 52) — inside EPSG:32633 — so the domain check passes.
+    """
     import shapely as _sh
     from shapely.geometry import LineString
 
-    ls = LineString([(11.0, 42.0, 5.0), (12.0, 43.0, float("nan"))])
+    ls = LineString([(15.0, 51.0, 5.0), (16.0, 52.0, float("nan"))])
     return to_wkb(_sh.set_srid(ls, 4326), include_srid=True, output_dimension=3)
 
 
@@ -420,7 +456,7 @@ def test_st_transformcrs_clean_3d_preserves_z_binary():
     """Every vertex has a finite Z -> Z survives the reprojection (33-byte 3D EWKB)."""
     import shapely as _sh
 
-    pt = _sh.set_srid(from_wkt("POINT Z (11 42 500)"), 4326)
+    pt = _sh.set_srid(from_wkt("POINT Z (15 51 500)"), 4326)
     out = _crs.st_transformcrs(
         to_wkb(pt, include_srid=True, output_dimension=3), "EPSG:32633"
     )
@@ -431,7 +467,7 @@ def test_st_transformcrs_clean_3d_preserves_z_binary():
 
 
 def test_st_transformcrs_clean_3d_preserves_z_text():
-    out = _crs.st_transformcrs("SRID=4326;POINT Z (11 42 500)", "EPSG:32633")
+    out = _crs.st_transformcrs("SRID=4326;POINT Z (15 51 500)", "EPSG:32633")
     assert isinstance(out, str)
     assert out.upper().startswith("SRID=32633;")
     g = from_wkt(out.split(";", 1)[1])
@@ -439,7 +475,10 @@ def test_st_transformcrs_clean_3d_preserves_z_text():
 
 
 def test_st_transformcrs_2d_stays_2d_binary():
-    """A genuinely 2D geometry must not gain a Z slot: 2D EWKB is 25 bytes."""
+    """A genuinely 2D geometry must not gain a Z slot: 2D EWKB is 25 bytes.
+
+    Uses _ewkb(4326) = POINT(15, 51) inside EPSG:32633, so the transform proceeds.
+    """
     assert len(_crs.st_transformcrs(_ewkb(4326), "EPSG:32633")) == 25
     assert len(_crs.st_setcrs(_plain_wkb(), "EPSG:4326")) == 25
 
@@ -458,7 +497,7 @@ def test_st_transformcrs_partial_z_binary_is_2d_no_coord_corruption():
 def test_st_transformcrs_partial_z_text_is_2d_no_coord_corruption():
     """Partial-Z LINESTRING in text medium: no throw, no 'NaN NaN NaN' vertex."""
     out = _crs.st_transformcrs(
-        "SRID=4326;LINESTRING Z (11 42 5, 12 43 NaN)", "EPSG:32633"
+        "SRID=4326;LINESTRING Z (15 51 5, 16 52 NaN)", "EPSG:32633"
     )
     assert isinstance(out, str)
     assert "NAN" not in out.upper(), f"X/Y corrupted by non-finite Z: {out}"
@@ -472,10 +511,10 @@ def test_st_transformcrs_mixed_dimensionality_wkt_does_not_raise():
 
     GEOS rejects this WKT outright, so the text is normalized to uniform 3D and then —
     because the Z is only partial — reprojected as 2D, so no non-finite ordinate can
-    propagate into X or Y.
+    propagate into X or Y.  Uses _MIXED_DIM_WKT coords (15, 51)/(16, 52) inside EPSG:32633.
     """
     out = _crs.st_transformcrs(
-        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))",
+        f"SRID=4326;{_MIXED_DIM_WKT}",
         "EPSG:32633",
     )
     assert isinstance(out, str)
@@ -598,32 +637,29 @@ def test_st_transformcrs_result_independent_of_cache_order(first):
 # Never-error invariant AT THE REGISTERED UDF LEVEL (not just the core)
 # ---------------------------------------------------------------------------
 
-_MIXED_DIM_WKT = "GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT (12 43))"
+# Mixed-dim WKT uses (15 51) / (16 52) coordinates which are inside EPSG:32633
+# (lon 12°–18°, lat 0°–84°), so when the source CRS IS resolvable (SRID=4326),
+# the transform proceeds rather than hitting the domain-NULL path.
+_MIXED_DIM_WKT = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))"
 
 
-@pytest.mark.parametrize(
-    "geom,target,source",
-    [
-        (f"SRID=999999;{_MIXED_DIM_WKT}", "EPSG:32633", None),
-        (_MIXED_DIM_WKT, "EPSG:32633", None),
-        (_MIXED_DIM_WKT, "EPSG:32633", "NOT_A_CRS_XYZ"),
-    ],
-    ids=["unresolvable-srid", "no-source", "bad-source-crs"],
-)
-def test_udf_st_transformcrs_mixed_dim_wkt_degrade_never_raises(geom, target, source):
-    """The registered UDF must not raise on mixed-dimensionality WKT in a DEGRADE path.
+def test_udf_st_transformcrs_mixed_dim_wkt_unresolvable_srid_returns_none():
+    """Unresolvable SRID on mixed-dim WKT -> UDF returns NULL (SRID is DATA)."""
+    geom = f"SRID=999999;{_MIXED_DIM_WKT}"
+    out = _crs._udf_st_transformcrs(geom, "EPSG:32633", None)
+    assert out is None
 
-    The core degrades by handing back the caller's ORIGINAL string; the UDF then has to
-    re-encode that string as BINARY. A bare re-parse there raised GEOSException — so the
-    core was correct while the surface users actually call still failed the stage.
-    """
-    out = _crs._udf_st_transformcrs(geom, target, source)
-    assert isinstance(out, (bytes, bytearray))
-    g = from_wkb(bytes(out))
-    assert g.geom_type == "GeometryCollection"
-    # Degrade = unchanged coordinates.
-    coords = shapely.get_coordinates(g).tolist()
-    assert coords == [[11.0, 42.0], [12.0, 43.0]]
+
+def test_udf_st_transformcrs_mixed_dim_wkt_no_source_returns_none():
+    """Mixed-dim WKT with no SRID and no source_crs -> UDF returns NULL (no CRS DATA)."""
+    out = _crs._udf_st_transformcrs(_MIXED_DIM_WKT, "EPSG:32633", None)
+    assert out is None
+
+
+def test_udf_st_transformcrs_mixed_dim_wkt_bad_explicit_source_raises():
+    """Mixed-dim WKT with invalid explicit source_crs -> raises ValueError (PARAMETER)."""
+    with pytest.raises(Exception):
+        _crs._udf_st_transformcrs(_MIXED_DIM_WKT, "EPSG:32633", "NOT_A_CRS_XYZ")
 
 
 def test_udf_st_setcrs_mixed_dim_wkt_never_raises():
@@ -649,18 +685,21 @@ def test_udf_st_crs_mixed_dim_wkt_never_raises():
 _SHAPES_BEYOND_FLAT = [
     (
         "empty-component",
-        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT EMPTY)",
+        # (15, 51) is inside EPSG:32633 (lon 12°–18°) and POINT EMPTY has no coords.
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT EMPTY)",
         71,
     ),
     (
         "zm-ordinates",
-        "SRID=4326;GEOMETRYCOLLECTION ZM (POINT ZM (1 2 3 4), POINT (5 6))",
+        # (13, 45) and (14, 46) are inside EPSG:32633 (lon 12°–18°, lat 0°–84°).
+        "SRID=4326;GEOMETRYCOLLECTION ZM (POINT ZM (13 45 3 4), POINT (14 46))",
         71,
     ),
     (
         "nested-collection",
-        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (11 42 5), "
-        "GEOMETRYCOLLECTION (POINT (1 2)))",
+        # (15, 51) and (13, 45) are both inside EPSG:32633.
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (15 51 5), "
+        "GEOMETRYCOLLECTION (POINT (13 45)))",
         80,
     ),
 ]
@@ -824,32 +863,34 @@ def test_column_wrappers_accept_literal_crs_string(spark):
 # shapely.ops.transform hands all four ordinates to a transformer that takes 2 or 3 —
 # a never-error violation where one ZM row failed the whole stage.
 _UNIFORM_ZM_SHAPES = [
-    ("point", "POINT ZM (11 42 5 99)", [[11.0, 42.0, 5.0]]),
+    # Coordinates (15, 51) and (16, 52) are inside EPSG:32633 (lon 12°–18°, lat 0°–84°),
+    # so st_transformcrs to EPSG:32633 clears the domain-NULL path.
+    ("point", "POINT ZM (15 51 5 99)", [[15.0, 51.0, 5.0]]),
     (
         "linestring",
-        "LINESTRING ZM (11 42 5 99, 12 43 6 98)",
-        [[11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
+        "LINESTRING ZM (15 51 5 99, 16 52 6 98)",
+        [[15.0, 51.0, 5.0], [16.0, 52.0, 6.0]],
     ),
     (
         "polygon",
-        "POLYGON ZM ((11 42 5 99, 12 42 5 98, 12 43 5 97, 11 42 5 99))",
+        "POLYGON ZM ((15 51 5 99, 16 51 5 98, 16 52 5 97, 15 51 5 99))",
         [
-            [11.0, 42.0, 5.0],
-            [12.0, 42.0, 5.0],
-            [12.0, 43.0, 5.0],
-            [11.0, 42.0, 5.0],
+            [15.0, 51.0, 5.0],
+            [16.0, 51.0, 5.0],
+            [16.0, 52.0, 5.0],
+            [15.0, 51.0, 5.0],
         ],
     ),
     (
         "multipoint",
-        "MULTIPOINT ZM ((11 42 5 99), (12 43 6 98))",
-        [[11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
+        "MULTIPOINT ZM ((15 51 5 99), (16 52 6 98))",
+        [[15.0, 51.0, 5.0], [16.0, 52.0, 6.0]],
     ),
     (
         "geometrycollection",
-        "GEOMETRYCOLLECTION ZM (POINT ZM (11 42 5 99), "
-        "LINESTRING ZM (11 42 5 99, 12 43 6 98))",
-        [[11.0, 42.0, 5.0], [11.0, 42.0, 5.0], [12.0, 43.0, 6.0]],
+        "GEOMETRYCOLLECTION ZM (POINT ZM (15 51 5 99), "
+        "LINESTRING ZM (15 51 5 99, 16 52 6 98))",
+        [[15.0, 51.0, 5.0], [15.0, 51.0, 5.0], [16.0, 52.0, 6.0]],
     ),
 ]
 
@@ -967,11 +1008,11 @@ def test_uniform_zm_transformcrs_never_raises_and_drops_m(wkt, expected_xyz, med
 def test_uniform_zm_point_matches_heavy_byte_count():
     """A ZM POINT comes back as the 33-byte 3D EWKB heavy emits, from BOTH functions.
 
-    Heavy reads ``POINT ZM (11 42 5 99)`` through JTS (XYZ-only) as ``POINT Z (11 42 5)``
+    Heavy reads ``POINT ZM (15 51 5 99)`` through JTS (XYZ-only) as ``POINT Z (15 51 5)``
     and encodes 33 bytes. Pinning the length catches an M that survived (41 bytes) and a Z
-    that did not (25 bytes) in one assertion.
+    that did not (25 bytes) in one assertion.  Coordinates (15, 51) are inside EPSG:32633.
     """
-    for medium, geom in _zm_media("POINT ZM (11 42 5 99)"):
+    for medium, geom in _zm_media("POINT ZM (15 51 5 99)"):
         assert (
             len(bytes(_crs._udf_st_setcrs(geom, "EPSG:4326"))) == 33
         ), f"st_setcrs diverged from heavy's 33-byte XYZ EWKB ({medium})"
@@ -983,44 +1024,54 @@ def test_uniform_zm_point_matches_heavy_byte_count():
 def test_m_only_geometry_becomes_2d_without_fabricating_z():
     """An ``M``-only geometry drops to plain 2D — it must NOT gain an invented ``Z=0``.
 
-    ``shapely.force_3d`` would produce ``POINT Z (11 42 0)`` here, and a downstream consumer
+    ``shapely.force_3d`` would produce ``POINT Z (15 51 0)`` here, and a downstream consumer
     could not tell that fabricated 0 from a surveyed sea-level elevation. Dropping is
     correct; inventing is not.
+
+    st_setcrs never raises here.  st_transformcrs: the SRID=4326 variant has a source CRS
+    and (15, 51) is inside EPSG:32633 so the transform proceeds; the plain-WKB variant has
+    no source CRS -> NULL (cannot reproject, not an error).
     """
-    for geom in ("SRID=4326;POINT M (11 42 99)", _zm_ewkb("POINT M (11 42 99)")):
-        for out in (
-            _crs._udf_st_setcrs(geom, "EPSG:4326"),
-            _crs._udf_st_transformcrs(geom, "EPSG:32633"),
-        ):
-            g = from_wkb(bytes(out))
-            assert not shapely.has_m(g), "the measure is dropped"
-            assert not g.has_z, "no Z is invented to replace it"
-            assert len(bytes(out)) == 25, "plain 2D EWKB"
+    # st_setcrs: always stamps the SRID regardless of domain — 2D, M dropped.
+    for geom in ("SRID=4326;POINT M (15 51 99)", _zm_ewkb("POINT M (15 51 99)")):
+        out = _crs._udf_st_setcrs(geom, "EPSG:4326")
+        g = from_wkb(bytes(out))
+        assert not shapely.has_m(g), "the measure is dropped"
+        assert not g.has_z, "no Z is invented to replace it"
+        assert len(bytes(out)) == 25, "plain 2D EWKB"
+
+    # st_transformcrs with SRID=4326 and (15,51) inside EPSG:32633 -> 2D, M dropped, 25 bytes.
+    for geom in ("SRID=4326;POINT M (15 51 99)", _zm_ewkb("POINT M (15 51 99)")):
+        out = _crs._udf_st_transformcrs(geom, "EPSG:32633")
+        assert out is not None, "SRID=4326 M-only at (15,51) should project, not degrade"
+        g = from_wkb(bytes(out))
+        assert not shapely.has_m(g), "the measure is dropped"
+        assert not g.has_z, "no Z is invented to replace it"
+        assert len(bytes(out)) == 25, "plain 2D EWKB"
 
 
 def test_uniform_zm_st_crs_reads_srid():
     """st_crs must read the SRID off a uniform-ZM geometry rather than returning None."""
-    for _, geom in _zm_media("POINT ZM (11 42 5 99)"):
+    for _, geom in _zm_media("POINT ZM (15 51 5 99)"):
         assert _crs.st_crs(geom) == "EPSG:4326"
 
 
-def test_uniform_zm_degrade_returns_input_unchanged():
-    """A ZM geometry with no resolvable source CRS degrades to the input, still not raising.
+def test_uniform_zm_no_source_returns_none():
+    """A ZM geometry with no embedded SRID and no source_crs -> NULL (no CRS DATA).
 
-    The never-error invariant is medium-preserving on the degrade path too: the core hands
-    back the caller's own object untouched (measure included — nothing was reprojected, so
-    nothing was dropped), and the UDF re-encodes it to BINARY without raising.
+    Previously the core returned the input unchanged ('never-error invariant'); now
+    a geometry with no CRS information degrades to NULL because there is nothing to
+    reproject from.  The UDF follows: no BINARY encoding of 'unchanged' is possible.
     """
-    plain_wkt = "POINT ZM (11 42 5 99)"
+    plain_wkt = "POINT ZM (15 51 5 99)"
     plain_wkb = to_wkb(from_wkt(plain_wkt), output_dimension=4, flavor="iso")
 
-    assert _crs.st_transformcrs(plain_wkt, "EPSG:32633") == plain_wkt
-    assert _crs.st_transformcrs(plain_wkb, "EPSG:32633") == plain_wkb
-    # Registered surface: BINARY out, no raise.
+    assert _crs.st_transformcrs(plain_wkt, "EPSG:32633") is None
+    assert _crs.st_transformcrs(plain_wkb, "EPSG:32633") is None
+    # Registered surface: None out (no geometry to encode).
     for geom in (plain_wkt, plain_wkb):
         out = _crs._udf_st_transformcrs(geom, "EPSG:32633")
-        assert isinstance(out, (bytes, bytearray))
-        assert get_srid(from_wkb(bytes(out))) == 0, "no SRID was stamped by a degrade"
+        assert out is None, "UDF must return None when the core returns None"
 
 
 # ---------------------------------------------------------------------------
@@ -1100,27 +1151,24 @@ def test_udf_st_transformcrs_nonfinite_result_returns_none(geom, target, label):
     ), f"[{label}] UDF expected None for non-finite reprojection result, got {result!r}"
 
 
-def test_st_transformcrs_finite_but_meaningless_not_nulled():
-    """SCOPE BOUNDARY: finite-but-meaningless coordinates must NOT be returned as None.
+def test_st_transformcrs_out_of_area_of_use_returns_none():
+    """POINT(200, 42) -> EPSG:32633 is correctly NULLed by the area-of-use domain check.
 
-    ``POINT (200 42)`` in EPSG:4326 (lon=200, outside [-180,180]) reprojects to a real,
-    finite UTM easting (~85856 m).  This is geometrically invalid but the reprojection
-    arithmetic produces a finite number, so this guard does NOT apply and the result must
-    be a real geometry.  Broader domain validation (catching lon>180 etc.) is a separate
-    queued workstream — this test pins the scope boundary so any future widening is
-    deliberate.
+    The non-finite guard (the original scope-boundary test for this slot) only catches
+    Infinity/NaN X/Y — a reprojection that yields finite-but-wrong coordinates slips past
+    it.  The area-of-use domain check is the second, broader layer that catches this:
+    EPSG:32633 (UTM zone 33N) covers lon 12°–18°, so lon=200 is outside the bbox and the
+    result is NULL.
+
+    Note: the previous test asserted this was NOT nulled because the domain-validation
+    workstream was queued.  That workstream is now implemented.
     """
-    import math
-
     geom = _ewkb_pt(200.0, 42.0, 4326)
     result = _crs.st_transformcrs(geom, "EPSG:32633")
-    assert (
-        result is not None
-    ), "POINT(200 42) reprojects to finite coordinates and must NOT be nulled"
-    g = from_wkb(result)
-    assert math.isfinite(g.x) and math.isfinite(
-        g.y
-    ), f"expected finite coordinates for lon=200, got ({g.x}, {g.y})"
+    assert result is None, (
+        "POINT(200 42) is outside EPSG:32633's area_of_use (lon 12°–18°) "
+        "and must be NULLed by the domain check"
+    )
 
 
 def test_st_transformcrs_nonfinite_does_not_break_nan_z_handling():
@@ -1138,7 +1186,8 @@ def test_st_transformcrs_nonfinite_does_not_break_nan_z_handling():
     from shapely.geometry import LineString
 
     # Partial-Z geometry: one vertex has Z, one does not.
-    ls = LineString([(11.0, 42.0, 5.0), (12.0, 43.0, float("nan"))])
+    # Use (15, 51) and (16, 52) — inside EPSG:32633 — so the domain check passes.
+    ls = LineString([(15.0, 51.0, 5.0), (16.0, 52.0, float("nan"))])
     geom = to_wkb(_sh.set_srid(ls, 4326), include_srid=True, output_dimension=3)
     result = _crs.st_transformcrs(geom, "EPSG:32633")
     assert (
@@ -1184,3 +1233,62 @@ def test_in_target_domain_bounds_absent_returns_none():
     tgt = pyproj.CRS.from_proj4("+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs")
     result = in_target_domain(np.array([[0.0, 0.0]]), tgt)
     assert result is None or result is True  # None if no area_of_use; helper must not raise
+
+
+# ---------------------------------------------------------------------------
+# Task 2: st_transformcrs data→NULL, parameter→raise, domain check
+# ---------------------------------------------------------------------------
+
+
+def _ewkb_task2(lon, lat, srid):
+    """EWKB POINT with embedded SRID — helper for Task-2 tests."""
+    import shapely as _sh
+
+    return to_wkb(_sh.set_srid(Point(lon, lat), srid), include_srid=True)
+
+
+def test_transformcrs_unparseable_data_returns_none():
+    assert _crs.st_transformcrs(b"THIS_IS_NOT_WKB", "EPSG:3857") is None
+
+
+def test_transformcrs_out_of_domain_returns_none():
+    # POINT(150 -80) SRID=4326 -> EPSG:27700 is finite but ~16,500km outside GB.
+    g = _ewkb_task2(150.0, -80.0, 4326)
+    assert _crs.st_transformcrs(g, "EPSG:27700") is None
+
+
+def test_transformcrs_in_domain_succeeds():
+    g = _ewkb_task2(-0.13, 51.5, 4326)  # London, inside GB
+    out = _crs.st_transformcrs(g, "EPSG:27700")
+    assert out is not None and isinstance(out, (bytes, bytearray))
+
+
+def test_transformcrs_embedded_srid_unresolvable_returns_none():
+    g = _ewkb_task2(1.0, 1.0, 99999)  # SRID 99999 rides in the geometry = DATA
+    assert _crs.st_transformcrs(g, "EPSG:3857") is None
+
+
+def test_transformcrs_bad_explicit_source_crs_raises():
+    g = to_wkb(Point(1.0, 1.0))  # plain WKB, no SRID
+    with pytest.raises(ValueError):
+        _crs.st_transformcrs(g, "EPSG:3857", source_crs="EPSG:99999")
+
+
+def test_transformcrs_no_source_crs_returns_none():
+    g = to_wkb(Point(1.0, 1.0))  # plain WKB, no SRID, no source_crs
+    assert _crs.st_transformcrs(g, "EPSG:3857") is None
+
+
+def test_transformcrs_bad_target_raises():
+    g = _ewkb_task2(-0.13, 51.5, 4326)
+    with pytest.raises(ValueError):
+        _crs.st_transformcrs(g, "EPSG:99999")
+
+
+def test_setcrs_unparseable_data_returns_none():
+    assert _crs.st_setcrs(b"NOT_WKB", "EPSG:4326") is None
+
+
+def test_setcrs_authority_less_crs_raises():
+    with pytest.raises(ValueError):
+        _crs.st_setcrs(to_wkb(Point(1, 1)), "+proj=merc +datum=WGS84")

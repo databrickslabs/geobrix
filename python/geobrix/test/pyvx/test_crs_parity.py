@@ -1139,7 +1139,7 @@ def test_st_crs_parity_uniform_zm(heavy, light):
 
 
 # ---------------------------------------------------------------------------
-# Non-finite reprojection: KNOWN DIVERGENCE (pinned)
+# Non-finite reprojection: both tiers NULL (bad data → NULL)
 # ---------------------------------------------------------------------------
 
 
@@ -1161,30 +1161,33 @@ def _ewkt_pt(x, y, srid):
     ],
     ids=lambda x: x if isinstance(x, str) else "",
 )
-def test_st_transformcrs_nonfinite_known_divergence(heavy, light, geom, label):
-    """KNOWN DIVERGENCE (pinned): non-finite reprojection result — light NULL, heavy raises.
+def test_st_transformcrs_nonfinite_both_null(heavy, light, geom, label):
+    """Non-finite reprojection result → NULL on BOTH tiers (bad data → NULL).
 
-    PROJ returns Infinity for inputs that are out-of-domain for the target CRS (e.g.
-    UTM coordinates mislabelled as geographic EPSG:4326, or latitude=100 which is outside
-    the valid geographic range).
+    The two CRS parameters both resolve (source EPSG:4326, target EPSG:32633); it is the
+    input *coordinate* that cannot be projected — UTM coordinates mislabelled as geographic
+    EPSG:4326, or latitude=100 which is outside the valid geographic range. Under the
+    "bad parameter → raise, bad data → NULL" contract this is a data condition, so both
+    tiers degrade to NULL.
 
-    - **heavy raises**: OGR/PROJ throws "PROJ: utm: Invalid latitude" (or equivalent),
-      which surfaces as a Spark AnalysisException / SQL error.
-    - **light returns NULL**: Infinity asserts a *location* — it poisons extents, indexes,
-      and aggregations downstream and is indistinguishable from real data.  NULL is what
-      the never-error invariant already implies here (the target CRS is valid; it is the
-      input row that cannot be projected).
-
-    Flipping the heavy tier from loud-failure to quiet-NULL is a separate, reviewed
-    decision.  This test pins the current divergence so any future cross-tier unification
-    is intentional.
+    The two tiers reach that NULL by different routes, which is why this used to be a pinned
+    divergence:
+    - **light**: pyproj *returns* Infinity, caught by ``_has_nonfinite_xy`` → NULL.
+    - **heavy**: OGR/PROJ *throws* ("PROJ: utm: Invalid latitude" or equivalent) mid-transform;
+      ``TransformCrsCore`` now catches that NonFatal error on an already-valid CRS pair and
+      returns ``NullOut``. Both tiers therefore agree — no divergence.
 
     Both triggers and both media are parametrized to confirm the pattern is consistent
     rather than incidental.
     """
-    # heavy raises on these inputs
-    with pytest.raises(Exception):
-        heavy.sql(f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')").first()
+    # heavy returns NULL (the transform throws internally; TransformCrsCore degrades it)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    assert heavy_value is None, (
+        f"[{label}] heavy must return NULL for non-finite reprojection result, "
+        f"got {heavy_value!r}"
+    )
 
     # light returns NULL (None), not Infinity
     result = light._udf_st_transformcrs(geom, "EPSG:32633")

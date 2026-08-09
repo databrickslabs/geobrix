@@ -143,13 +143,21 @@ private[expressions] object TransformCrsCore {
       * and (b) when the target carries an area_of_use, an `areaOfUse` lookup on the target's
       * canonical string (resolves, reads, and deletes a SpatialReference). The area_of_use
       * lookup is a candidate for memoization by canonical target string; that is deferred as
-      * a follow-up perf improvement.  Nothing here owns a GDAL object, so there is nothing
-      * to release: no `finally`, no double-delete, no use-after-delete.
+      * a follow-up perf improvement.  Nothing here owns a GDAL object, so there is no
+      * resource-releasing `finally`, no double-delete, no use-after-delete (the one GDAL
+      * handle, `ogrGeom`, is owned and released inside `transformWithCachedCT`). The
+      * `try/catch` below is control-flow only — it degrades a transform-time error to NULL.
       *
       * Error contract (mirrors light-tier):
       *   - Bad GEOMETRY DATA (unparseable, unresolvable embedded SRID, no source CRS) → NullOut.
       *   - Bad PARAMETER (explicit source_crs unresolvable, target_crs unresolvable) → raises.
       *   - Non-finite output coordinates → NullOut.
+      *   - A per-coordinate transform failure of an already-valid CRS pair (OGR/PROJ throwing
+      *     e.g. "Invalid latitude" for an out-of-range input ordinate) → NullOut. This is a
+      *     DATA condition — the CRS parameters both resolved; it is the row's coordinate that
+      *     cannot be projected. OGR *throws* here where pyproj merely *returns* Infinity, so
+      *     the light tier's non-finite guard catches the same input; this catch is what keeps
+      *     the two tiers in parity (no pinned divergence).
       *   - Out-of-domain output (GDAL area_of_use check) → NullOut; skipped when target has none. */
     def apply(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): CrsOutcome = {
         if (geom == null || targetCrs == null) return CrsOutcome.NullOut
@@ -172,46 +180,53 @@ private[expressions] object TransformCrsCore {
         }
 
         // --- Resolve target CRS (parameter → allowed to throw on failure) ---
+        // crsInfo is the parameter-resolution boundary: an unresolvable target CRS raises
+        // HERE, before any per-row transform work. Everything below is DATA-domain work on
+        // an already-valid CRS pair, so it degrades to NULL rather than raising.
         val dstInfo = SpatialRefOps.crsInfo(targetCrs.toString)
 
-        // Plan lookup re-resolves the canonical strings on a cache miss. A canonical
-        // round-trip failure (authority-less CRS whose exported WKT does not re-parse) is
-        // a degenerate data condition — degrade to NullOut rather than raise.
+        // Both CRS parameters have resolved. From here the only failures are per-coordinate
+        // DATA conditions — a canonical round-trip that will not re-parse, an OGR/PROJ
+        // transform error for an out-of-range input ordinate, a non-finite or out-of-domain
+        // result — and every one of them degrades to NULL. This mirrors the light tier, where
+        // pyproj returns Infinity (caught by _has_nonfinite_xy) instead of throwing.
         //
         // NonFatal, not Throwable: a fatal error (OutOfMemoryError, StackOverflowError,
-        // InterruptedException) must propagate and fail the task.
-        val plan = try {
-            SpatialRefOps.transformPlan(srcInfo.canonical, dstInfo.canonical)
+        // InterruptedException) must propagate and fail the task. A `return` inside the try is
+        // ControlThrowable, which NonFatal excludes, so the early NullOut exits are unaffected.
+        try {
+            val plan = SpatialRefOps.transformPlan(srcInfo.canonical, dstInfo.canonical)
+            val gProj = if (plan.identity) g else transformWithCachedCT(g, plan.transformation)
+
+            // Non-finite guard: mirrors light's _has_nonfinite_xy. Catches the case where the
+            // transform *returns* a non-finite ordinate rather than throwing.
+            val coords = gProj.getCoordinates
+            val nonFinite = coords.exists(c => c.x.isNaN || c.x.isInfinite || c.y.isNaN || c.y.isInfinite)
+            if (nonFinite) return CrsOutcome.NullOut
+
+            // Domain check: compare input lon/lat against the target CRS's area_of_use.
+            // Skip entirely when the target carries no area_of_use (authority-less WKT / PROJ4).
+            SpatialRefOps.areaOfUse(dstInfo.canonical) match {
+                case Some(bbox) =>
+                    // Get the input in lon/lat. If the source is already EPSG:4326, use g's coords
+                    // directly; otherwise transform source → EPSG:4326 to obtain lon/lat.
+                    val lonLat: Array[(Double, Double)] =
+                        if (srcInfo.canonical == "EPSG:4326") g.getCoordinates.map(c => (c.x, c.y))
+                        else {
+                            val toWgs = SpatialRefOps.transformPlan(srcInfo.canonical, "EPSG:4326")
+                            val gWgs = if (toWgs.identity) g else transformWithCachedCT(g, toWgs.transformation)
+                            gWgs.getCoordinates.map(c => (c.x, c.y))
+                        }
+                    if (!SpatialRefOps.allInBBox(lonLat, bbox)) return CrsOutcome.NullOut
+                case None => // no area_of_use → skip domain check
+            }
+
+            // authoritySrid is None for an authority-less target (raw WKT / PROJ4) and for a
+            // non-numeric authority code (e.g. OGC:CRS84) — both clear the now-stale SRID.
+            CrsOutcome.Geom(gProj, dstInfo.authoritySrid)
         } catch {
-            case NonFatal(_) => return CrsOutcome.NullOut
+            case NonFatal(_) => CrsOutcome.NullOut
         }
-        val gProj = if (plan.identity) g else transformWithCachedCT(g, plan.transformation)
-
-        // Non-finite guard: mirror light's _has_nonfinite_xy (heavy previously had none).
-        val coords = gProj.getCoordinates
-        val nonFinite = coords.exists(c => c.x.isNaN || c.x.isInfinite || c.y.isNaN || c.y.isInfinite)
-        if (nonFinite) return CrsOutcome.NullOut
-
-        // Domain check: compare input lon/lat against the target CRS's area_of_use.
-        // Skip entirely when the target carries no area_of_use (authority-less WKT / PROJ4).
-        SpatialRefOps.areaOfUse(dstInfo.canonical) match {
-            case Some(bbox) =>
-                // Get the input in lon/lat. If the source is already EPSG:4326, use g's coords
-                // directly; otherwise transform source → EPSG:4326 to obtain lon/lat.
-                val lonLat: Array[(Double, Double)] =
-                    if (srcInfo.canonical == "EPSG:4326") g.getCoordinates.map(c => (c.x, c.y))
-                    else {
-                        val toWgs = SpatialRefOps.transformPlan(srcInfo.canonical, "EPSG:4326")
-                        val gWgs = if (toWgs.identity) g else transformWithCachedCT(g, toWgs.transformation)
-                        gWgs.getCoordinates.map(c => (c.x, c.y))
-                    }
-                if (!SpatialRefOps.allInBBox(lonLat, bbox)) return CrsOutcome.NullOut
-            case None => // no area_of_use → skip domain check
-        }
-
-        // authoritySrid is None for an authority-less target (raw WKT / PROJ4) and for a
-        // non-numeric authority code (e.g. OGC:CRS84) — both clear the now-stale SRID.
-        CrsOutcome.Geom(gProj, dstInfo.authoritySrid)
     }
 
     /** Z-aware OGR reprojection through a cache-owned CoordinateTransformation.

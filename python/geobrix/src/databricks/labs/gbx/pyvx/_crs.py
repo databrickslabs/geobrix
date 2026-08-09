@@ -534,8 +534,9 @@ def st_transformcrs(
     # — it poisons extents, spatial indexes, and aggregations downstream and is
     # indistinguishable from real data.  NULL is what the never-error invariant already
     # implies here: the target CRS resolved fine; it is the input row that cannot be
-    # projected.  The heavy tier raises ("PROJ: utm: Invalid latitude") — this tier returns
-    # NULL, a deliberate and documented divergence tracked in test_crs_parity.py.
+    # projected.  The heavy tier reaches the same NULL by a different route: OGR/PROJ throws
+    # ("PROJ: utm: Invalid latitude") mid-transform and TransformCrsCore catches that NonFatal
+    # error on an already-valid CRS pair, so both tiers agree (see test_crs_parity.py).
     #
     # This guard is scoped to NON-FINITE X/Y only.  A reprojection that yields finite-but-
     # meaningless coordinates (e.g. lon=200 reprojects to a real UTM easting) is not caught

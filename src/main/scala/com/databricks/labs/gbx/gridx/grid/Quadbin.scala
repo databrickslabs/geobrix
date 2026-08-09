@@ -45,7 +45,18 @@ object Quadbin extends Serializable {
         tileToCell(z, x, y)
     }
 
-    /** Convert (lon, lat) at zoom z to a (xTile, yTile) tuple. Latitude is clamped to web-mercator bounds. */
+    /** Convert (lon, lat) at zoom z to a (xTile, yTile) tuple.
+      *
+      * Latitude is intentionally clamped to the web-mercator limits ±85.05112878° and
+      * longitude to ±180° — matching every standard slippy-map tiler. An out-of-range
+      * coordinate is snapped to the nearest valid boundary tile rather than returning NULL
+      * or raising an exception. This is deliberate, documented behavior, consistent with
+      * the CARTO quadbin-py reference implementation.
+      *
+      * This is distinct from BNG and Custom grids, which return NULL for coordinates
+      * outside their extent. Quadbin covers the whole web-mercator world; there is no
+      * "outside" — only boundary clamping.
+      */
     def lonLatToTile(lon: Double, lat: Double, z: Int): (Long, Long) = {
         val latClamped = math.max(LAT_MIN, math.min(LAT_MAX, lat))
         val lonClamped = math.max(-180.0, math.min(180.0, lon))

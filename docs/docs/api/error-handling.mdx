@@ -100,16 +100,18 @@ Fix the CRS string; do not expect this to degrade quietly.
 
 `gbx_st_transformcrs` checks whether each geometry falls within the target CRS's valid area. A geometry that lies outside that area — for example, a point at longitude 0° being reprojected into a CRS whose valid area covers only the eastern United States — returns `NULL` rather than producing a silently nonsensical coordinate. A geometry that straddles the boundary also returns `NULL`, erring on the side of correctness.
 
-When the target CRS carries no declared area of use, the domain check is skipped and the reprojection proceeds without a spatial guard. To detect these rows after the fact:
+Reprojections that fell outside the target CRS's valid area are returned as `NULL`. To find them:
 
 ```sql
 SELECT id
 FROM (
-  SELECT id, gbx_st_transformcrs(geom, 'EPSG:32614') AS projected
+  SELECT id, gbx_st_transformcrs(geom, 'EPSG:27700') AS projected
   FROM my_table
 )
 WHERE projected IS NULL
 ```
+
+When the target CRS carries no declared area of use, the domain check is skipped and the reprojection proceeds without a spatial guard.
 
 ## Catching degraded rows
 

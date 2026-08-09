@@ -134,14 +134,17 @@ private[expressions] object TransformCrsCore {
 
     /** Reproject ``geom`` to ``targetCrs``.
       *
-      * Hot-path design: this method allocates NO `SpatialReference` and NO
-      * `CoordinateTransformation` per row. Both CRS ends go through
-      * `SpatialRefOps.crsInfo` (cached canonical string + authority SRID, no live GDAL
-      * handle) and the reprojection itself through `SpatialRefOps.transformPlan` (cached
-      * identity flag + cache-owned CT). On the steady state — the same CRS pair repeated,
-      * which is what a column of geometries looks like — the only GDAL work per row is the
-      * OGR geometry round-trip. Nothing here owns a GDAL object, so there is nothing to
-      * release: no `finally`, no double-delete, no use-after-delete.
+      * Hot-path design: both CRS ends go through `SpatialRefOps.crsInfo` (cached canonical
+      * string + authority SRID, no live GDAL handle) and the reprojection itself through
+      * `SpatialRefOps.transformPlan` (cached identity flag + cache-owned CT), so no
+      * `SpatialReference` or `CoordinateTransformation` is allocated per row on the steady
+      * state. On the steady state — the same CRS pair repeated, which is what a column of
+      * geometries looks like — the GDAL work per row is: (a) the OGR geometry round-trip,
+      * and (b) when the target carries an area_of_use, an `areaOfUse` lookup on the target's
+      * canonical string (resolves, reads, and deletes a SpatialReference). The area_of_use
+      * lookup is a candidate for memoization by canonical target string; that is deferred as
+      * a follow-up perf improvement.  Nothing here owns a GDAL object, so there is nothing
+      * to release: no `finally`, no double-delete, no use-after-delete.
       *
       * Error contract (mirrors light-tier):
       *   - Bad GEOMETRY DATA (unparseable, unresolvable embedded SRID, no source CRS) → NullOut.

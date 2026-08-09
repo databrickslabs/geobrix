@@ -41,6 +41,8 @@ object BNG_CellUnion extends WithExpressionInfo {
         else if (chip2.getBoolean(1)) chip2
         else GridErrorHandler.safeEval[InternalRow](null) {
             val cellId = chip1.getLong(0)
+            // Mismatched cell ids are treated as bad DATA (likely a bad join key) and degrade to NULL
+            // rather than raising. Revisit when the strict-mode workstream lands (strict=raise, default=degrade).
             require(chip2.getLong(0) == cellId, "Can only union chips with the same grid cell id")
             val geom1 = JTS.fromWKB(chip1.getBinary(2))
             val geom2 = JTS.fromWKB(chip2.getBinary(2))
@@ -54,6 +56,8 @@ object BNG_CellUnion extends WithExpressionInfo {
         else if (chip2.getBoolean(1)) chip2
         else GridErrorHandler.safeEval[InternalRow](null) {
             val cellId = chip1.getString(0)
+            // Mismatched cell ids are treated as bad DATA (likely a bad join key) and degrade to NULL
+            // rather than raising. Revisit when the strict-mode workstream lands (strict=raise, default=degrade).
             require(chip2.getString(0) == cellId, "Can only union chips with the same grid cell id")
             val geom1 = JTS.fromWKB(chip1.getBinary(2))
             val geom2 = JTS.fromWKB(chip2.getBinary(2))

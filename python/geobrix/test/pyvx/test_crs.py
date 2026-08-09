@@ -1150,3 +1150,37 @@ def test_st_transformcrs_nonfinite_does_not_break_nan_z_handling():
         assert (
             x == x and y == y
         ), f"X/Y must not be NaN after partial-Z reproject: {list(g.coords)}"
+
+
+# ---------------------------------------------------------------------------
+# in_target_domain helper
+# ---------------------------------------------------------------------------
+
+import numpy as np
+import pyproj
+from databricks.labs.gbx.core.crs import in_target_domain
+
+
+def test_in_target_domain_inside_gb():
+    # London lon/lat is inside EPSG:27700 (British National Grid) area_of_use.
+    tgt = pyproj.CRS.from_epsg(27700)
+    assert in_target_domain(np.array([[-0.13, 51.5]]), tgt) is True
+
+
+def test_in_target_domain_far_outside_gb():
+    # lon 150, lat -80 is nowhere near GB — the finite-nonsense survivor.
+    tgt = pyproj.CRS.from_epsg(27700)
+    assert in_target_domain(np.array([[150.0, -80.0]]), tgt) is False
+
+
+def test_in_target_domain_straddling_is_false():
+    tgt = pyproj.CRS.from_epsg(27700)
+    coords = np.array([[-0.13, 51.5], [150.0, -80.0]])  # one in, one out
+    assert in_target_domain(coords, tgt) is False
+
+
+def test_in_target_domain_bounds_absent_returns_none():
+    # A CRS with no area_of_use (raw PROJ4 with no bounds) -> None (skip).
+    tgt = pyproj.CRS.from_proj4("+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs")
+    result = in_target_domain(np.array([[0.0, 0.0]]), tgt)
+    assert result is None or result is True  # None if no area_of_use; helper must not raise

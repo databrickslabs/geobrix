@@ -227,6 +227,26 @@ def get_transformer(src, dst):
     return tr
 
 
+def in_target_domain(lonlat_coords, target_crs) -> "Optional[bool]":
+    """Is every lon/lat coordinate inside target_crs's area_of_use bbox?
+
+    lonlat_coords: (N,2) ndarray of (lon, lat) in EPSG:4326 degrees.
+    Returns True (all inside), False (any outside -> out-of-domain, incl. straddling),
+    or None when target_crs has no area_of_use metadata (caller skips the check —
+    never NULL what cannot be disproved). Empty input -> True (no coords to reject).
+    """
+    aou = getattr(target_crs, "area_of_use", None)
+    if aou is None or aou.bounds is None:
+        return None
+    west, south, east, north = aou.bounds
+    if lonlat_coords.shape[0] == 0:
+        return True
+    lon = lonlat_coords[:, 0]
+    lat = lonlat_coords[:, 1]
+    inside = (lon >= west) & (lon <= east) & (lat >= south) & (lat <= north)
+    return bool(inside.all())
+
+
 def resolve_source_crs(embedded_srid, srid=None, crs=None) -> Optional[CRS]:
     """Rule 1 (per-geom) source-CRS resolution.
 

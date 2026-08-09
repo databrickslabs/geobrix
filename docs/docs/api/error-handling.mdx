@@ -115,6 +115,50 @@ WHERE projected IS NULL
 
 When the target CRS carries no declared area of use, the domain check is skipped and the reprojection proceeds without a spatial guard.
 
+## GridX
+
+GridX functions (BNG, Quadbin, Custom) return cell ids, geometries, arrays, or structs — there is no metadata carrier — so `NULL` is the single degrade signal for bad-data conditions, the same pattern as VectorX. GridX has no crash-on-error switch.
+
+### Bad cell-id or geometry data
+
+A malformed cell id (an unrecognised BNG grid-square letter pair, a cell string that cannot be decoded) or an unparseable geometry returns `NULL`. Other rows are unaffected; one bad cell id never fails the stage.
+
+```sql
+SELECT id, gbx_bng_aswkb(cellid) AS geom
+FROM my_cells
+-- rows with a malformed cellid produce NULL for `geom`; the query continues
+```
+
+**Aggregators** (`gbx_bng_cellunion_agg`, `gbx_bng_cellintersection_agg`) skip a corrupt member and continue over the remaining valid cell ids.
+
+**Generators** (`gbx_bng_kringexplode`, `gbx_bng_tessellateexplode`) emit zero rows for a bad input cell rather than a single NULL row. Use `LEFT JOIN LATERAL` to identify which inputs produced nothing:
+
+```sql
+SELECT src.id
+FROM my_cells AS src
+LEFT JOIN LATERAL (
+  SELECT gbx_bng_kringexplode(src.cellid, 1)
+) AS rings ON true
+WHERE rings.cellid IS NULL
+```
+
+### Bad resolution or grid argument
+
+An out-of-range resolution, an unrecognised resolution string, or an invalid custom-grid specification raises an error rather than returning `NULL`. This is a parameter problem: the resolution is a constant in your query, not per-row data, so the error surfaces immediately during development rather than silently degrading at scale.
+
+```sql
+-- This raises an error: 99 is not a valid BNG resolution index.
+SELECT gbx_bng_pointascell(geom, 99) FROM my_table
+```
+
+Fix the resolution argument; do not expect this to degrade quietly.
+
+### Quadbin latitude clamp
+
+`gbx_quadbin_pointascell` follows the web-mercator convention: a latitude beyond ±85.05112878° is clamped to that limit, and a longitude beyond ±180° is clamped to ±180°. The function returns a real cell rather than `NULL`. A point at latitude 89° yields the same cell as one at 85.05112878°.
+
+This behaviour is intentional and differs from BNG and Custom, which return `NULL` for a coordinate outside their valid extent.
+
 ## Catching degraded rows
 
 **VectorX / scalar accessors:** filter on `IS NOT NULL`:

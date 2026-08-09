@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -25,8 +26,11 @@ case class BNG_Distance(
 /** Companion: SQL name gbx_bng_distance, builder, and eval. */
 object BNG_Distance extends WithExpressionInfo {
 
-    def eval(cellid1: Long, cellid2: Long): Long = execute(cellid1, cellid2)
-    def eval(cellid1: UTF8String, cellid2: UTF8String): Long = execute(cellid1.toString, cellid2.toString)
+    def eval(cellid1: Long, cellid2: Long): java.lang.Long = GridErrorHandler.safeEval[java.lang.Long](null)(execute(cellid1, cellid2))
+    def eval(cellid1: UTF8String, cellid2: UTF8String): java.lang.Long = {
+        val a = BNG.parseOrNull(cellid1.toString); val b = BNG.parseOrNull(cellid2.toString)
+        if (a == null || b == null) null else GridErrorHandler.safeEval[java.lang.Long](null)(execute(a, b))
+    }
 
     def execute(cellid1: Long, cellid2: Long): Long = BNG.distance(cellid1, cellid2)
 

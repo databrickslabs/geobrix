@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -25,8 +26,11 @@ case class BNG_AsWKT(
 /** Companion: SQL name gbx_bng_aswkt, builder, and eval. */
 object BNG_AsWKT extends WithExpressionInfo {
 
-    def eval(cellID: Long): UTF8String = UTF8String.fromString(execute(cellID))
-    def eval(cellID: UTF8String): UTF8String = UTF8String.fromString(execute(cellID.toString))
+    def eval(cellID: Long): UTF8String = GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(execute(cellID)))
+    def eval(cellID: UTF8String): UTF8String = {
+        val cid = BNG.parseOrNull(cellID.toString)
+        if (cid == null) null else GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(execute(cid)))
+    }
 
     def execute(cellID: String): String = {
         val geom = BNG.cellIdToGeometry(BNG.parse(cellID))

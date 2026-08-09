@@ -90,6 +90,75 @@ def test_bng_kloopexplode_zero_rows_on_bad_cellid(spark):
 
 
 # ---------------------------------------------------------------------------
+# BNG geom-input scalar/array UDFs — bad WKB DATA -> NULL (matches heavy tier)
+# Load-bearing rule: bad RESOLUTION PARAMETER still raises.
+# ---------------------------------------------------------------------------
+
+_BAD_WKB = b"\x01\x02\x03"  # garbage bytes — not valid WKB
+_GOOD_GEOM = "POLYGON ((529900 179900, 530100 179900, 530100 180100, 529900 180100, 529900 179900))"
+
+
+def test_bng_polyfill_null_on_bad_wkb(spark):
+    r = spark.sql("SELECT gbx_bng_polyfill(X'010203', 3) AS arr").first()
+    assert r["arr"] is None
+
+
+def test_bng_geomkring_null_on_bad_wkb(spark):
+    r = spark.sql("SELECT gbx_bng_geomkring(X'010203', 3, 1) AS arr").first()
+    assert r["arr"] is None
+
+
+def test_bng_geomkloop_null_on_bad_wkb(spark):
+    r = spark.sql("SELECT gbx_bng_geomkloop(X'010203', 3, 1) AS arr").first()
+    assert r["arr"] is None
+
+
+def test_bng_tessellate_null_on_bad_wkb(spark):
+    r = spark.sql("SELECT gbx_bng_tessellate(X'010203', 3) AS arr").first()
+    assert r["arr"] is None
+
+
+# ---------------------------------------------------------------------------
+# BNG geom-input UDTFs — bad WKB DATA -> zero rows (matches heavy tier)
+# ---------------------------------------------------------------------------
+
+
+def test_bng_geomkringexplode_zero_rows_on_bad_wkb(spark):
+    df = spark.sql("SELECT cellid FROM gbx_bng_geomkringexplode(X'010203', 3, 1)")
+    assert df.count() == 0
+
+
+def test_bng_geomkloopexplode_zero_rows_on_bad_wkb(spark):
+    df = spark.sql("SELECT cellid FROM gbx_bng_geomkloopexplode(X'010203', 3, 1)")
+    assert df.count() == 0
+
+
+def test_bng_tessellateexplode_zero_rows_on_bad_wkb(spark):
+    df = spark.sql("SELECT cellid FROM gbx_bng_tessellateexplode(X'010203', 3)")
+    assert df.count() == 0
+
+
+# ---------------------------------------------------------------------------
+# Confirm bad RESOLUTION still raises for geom-input ops (param path untouched)
+# ---------------------------------------------------------------------------
+
+
+def test_bng_geomkring_raises_on_bad_resolution(spark):
+    with pytest.raises(Exception):
+        spark.sql(f"SELECT gbx_bng_geomkring('{_GOOD_GEOM}', 'bogus', 1)").first()
+
+
+def test_bng_geomkloop_raises_on_bad_resolution(spark):
+    with pytest.raises(Exception):
+        spark.sql(f"SELECT gbx_bng_geomkloop('{_GOOD_GEOM}', 'bogus', 1)").first()
+
+
+def test_bng_tessellate_raises_on_bad_resolution(spark):
+    with pytest.raises(Exception):
+        spark.sql(f"SELECT gbx_bng_tessellate('{_GOOD_GEOM}', 'bogus')").first()
+
+
+# ---------------------------------------------------------------------------
 # BNG scalar UDFs — bad resolution PARAMETER -> raises
 # ---------------------------------------------------------------------------
 

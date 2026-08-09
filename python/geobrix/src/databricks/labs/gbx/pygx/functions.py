@@ -359,31 +359,47 @@ def _bng_kloop(cellid, k):
 def _bng_polyfill(geom, res):
     if geom is None or res is None:
         return None
-    return _bng.polyfill_str(geom, _norm_res(res))
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    try:
+        return _bng.polyfill_str(geom, _norm_res(res))
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
 def _bng_geomkring(geom, res, k):
     if geom is None or res is None or k is None:
         return None
-    return sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k)))
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    try:
+        return sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k)))
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
 def _bng_geomkloop(geom, res, k):
     if geom is None or res is None or k is None:
         return None
-    return sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k)))
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    try:
+        return sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k)))
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
 def _bng_tessellate(geom, res, keep_core_geom=True):
     if geom is None or res is None:
         return None
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
     keep = True if keep_core_geom is None else bool(keep_core_geom)
-    return [
-        {"cellid": c, "core": bool(core), "chip": chip}
-        for (c, core, chip) in _bng.tessellate_str(
-            geom, _norm_res(res), keep_core_geom=keep
-        )
-    ]
+    try:
+        return [
+            {"cellid": c, "core": bool(core), "chip": chip}
+            for (c, core, chip) in _bng.tessellate_str(
+                geom, _norm_res(res), keep_core_geom=keep
+            )
+        ]
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
 # --- explode UDTFs (SQL-LATERAL only) ---------------------------------------
@@ -418,8 +434,12 @@ class _BngGeomKRingExplode:
     def eval(self, geom, res, k):
         if geom is None or res is None or k is None:
             return
-        for c in sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k))):
-            yield (c,)
+        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        try:
+            for c in sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k))):
+                yield (c,)
+        except Exception:
+            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
 
 
 @udtf(returnType="cellid: string")
@@ -427,8 +447,12 @@ class _BngGeomKLoopExplode:
     def eval(self, geom, res, k):
         if geom is None or res is None or k is None:
             return
-        for c in sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k))):
-            yield (c,)
+        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        try:
+            for c in sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k))):
+                yield (c,)
+        except Exception:
+            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
 
 
 @udtf(returnType="cellid: string, core: boolean, chip: binary")
@@ -436,8 +460,12 @@ class _BngTessellateExplode:
     def eval(self, geom, res):
         if geom is None or res is None:
             return
-        for c, core, chip in _bng.tessellate_str(geom, _norm_res(res)):
-            yield (c, bool(core), chip)
+        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        try:
+            for c, core, chip in _bng.tessellate_str(geom, _norm_res(res)):
+                yield (c, bool(core), chip)
+        except Exception:
+            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
 
 
 # --- grouped-agg pandas_udf returning BNG_CHIP_SCHEMA ------------------------

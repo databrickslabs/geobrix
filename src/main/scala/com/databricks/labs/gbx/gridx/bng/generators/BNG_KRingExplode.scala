@@ -29,8 +29,9 @@ case class BNG_KRingExplode(
 
         cellidValue match {
             case s: UTF8String =>
-                val cid = BNG.parse(s.toString)
-                BNG.kRing(cid, kValue.asInstanceOf[Int])
+                val cid = BNG.parseOrNull(s.toString)
+                if (cid == null) Iterator.empty[InternalRow]
+                else BNG.kRing(cid, kValue.asInstanceOf[Int])
                     .map(cid => InternalRow.fromSeq(Seq(UTF8String.fromString(BNG.format(cid)))))
             case l: Long       => BNG
                     .kRing(l, kValue.asInstanceOf[Int])

@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng.generators
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -31,19 +32,20 @@ case class BNG_GeometryKRingExplode(
         if (geometryRaw == null || resolutionRaw == null || kRaw == null) {
             Seq.empty
         } else {
-            val geometryVal = geom.dataType match {
-                case StringType => JTS.fromWKT(geometryRaw.asInstanceOf[UTF8String].toString)
-                case BinaryType => JTS.fromWKB(geometryRaw.asInstanceOf[Array[Byte]])
-            }
             val resolutionVal = resolution.dataType match {
                 case StringType  => BNG.resolutionMap(resolutionRaw.asInstanceOf[UTF8String].toString)
                 case IntegerType => resolutionRaw.asInstanceOf[Int]
             }
             val kVal = kRaw.asInstanceOf[Int]
 
-            val kRing = BNG.geometryKRing(geometryVal, resolutionVal, kVal)
-
-            kRing.map(row => InternalRow.fromSeq(Seq(UTF8String.fromString(BNG.format(row)))))
+            GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
+                val geometryVal = geom.dataType match {
+                    case StringType => JTS.fromWKT(geometryRaw.asInstanceOf[UTF8String].toString)
+                    case BinaryType => JTS.fromWKB(geometryRaw.asInstanceOf[Array[Byte]])
+                }
+                BNG.geometryKRing(geometryVal, resolutionVal, kVal)
+                    .map(row => InternalRow.fromSeq(Seq(UTF8String.fromString(BNG.format(row)))))
+            }
         }
     }
 

@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng.generators
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -46,27 +47,29 @@ case class BNG_TessellateExplode(
         if (geomRaw == null || resolutionRaw == null || keepGeomRaw == null) {
             return Seq.empty
         }
-        val geometryVal = geom.dataType match {
-            case StringType => JTS.fromWKT(geomRaw.asInstanceOf[UTF8String].toString)
-            case BinaryType => JTS.fromWKB(geomRaw.asInstanceOf[Array[Byte]])
-        }
         val resolutionVal = resolution.dataType match {
             case StringType  => BNG.resolutionMap(resolutionRaw.asInstanceOf[UTF8String].toString)
             case IntegerType => resolutionRaw.asInstanceOf[Int]
         }
         val keepCoreGeomVal = keepGeomRaw.asInstanceOf[Boolean]
 
-        BNG
-            .tessellate(geometryVal, resolutionVal, keepCoreGeomVal)
-            .map(c => {
-                val cellId = UTF8String.fromString(BNG.format(c._1))
-                val g = geom.dataType match {
-                    case StringType if keepCoreGeomVal => UTF8String.fromString(JTS.toWKT(c._3))
-                    case BinaryType if keepCoreGeomVal => JTS.toWKB(c._3)
-                    case _                             => null
-                }
-                InternalRow.fromSeq(Seq(cellId, c._2, g))
-            })
+        GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
+            val geometryVal = geom.dataType match {
+                case StringType => JTS.fromWKT(geomRaw.asInstanceOf[UTF8String].toString)
+                case BinaryType => JTS.fromWKB(geomRaw.asInstanceOf[Array[Byte]])
+            }
+            BNG
+                .tessellate(geometryVal, resolutionVal, keepCoreGeomVal)
+                .map(c => {
+                    val cellId = UTF8String.fromString(BNG.format(c._1))
+                    val g = geom.dataType match {
+                        case StringType if keepCoreGeomVal => UTF8String.fromString(JTS.toWKT(c._3))
+                        case BinaryType if keepCoreGeomVal => JTS.toWKB(c._3)
+                        case _                             => null
+                    }
+                    InternalRow.fromSeq(Seq(cellId, c._2, g))
+                })
+        }
 
     }
 

@@ -37,10 +37,12 @@ final case class BNG_CellIntersectionAgg(
 
     override def update(buf: IntersectionAcc, input: InternalRow): IntersectionAcc = {
         val v = child.eval(input).asInstanceOf[InternalRow]
-        val id = idType match {
-            case StringType => BNG.parse(v.getString(0))
+        if (v == null) return buf
+        val id: java.lang.Long = idType match {
+            case StringType => BNG.parseOrNull(v.getString(0))
             case LongType   => v.getLong(0)
         }
+        if (id == null) return buf  // skip a member with a malformed cell id
         val isCore = v.getBoolean(1)
         val wkb = v.getBinary(2)
         buf.update(id, isCore, wkb)

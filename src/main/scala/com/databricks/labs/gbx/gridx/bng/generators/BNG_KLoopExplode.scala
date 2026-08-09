@@ -29,8 +29,9 @@ case class BNG_KLoopExplode(
 
         cellidValue match {
             case s: UTF8String =>
-                val cid = BNG.parse(s.toString)
-                BNG.kLoop(cid, kValue.asInstanceOf[Int])
+                val cid = BNG.parseOrNull(s.toString)
+                if (cid == null) Iterator.empty[InternalRow]
+                else BNG.kLoop(cid, kValue.asInstanceOf[Int])
                     .map(cid => InternalRow.fromSeq(Seq(UTF8String.fromString(BNG.format(cid)))))
             case l: Long       => BNG
                     .kLoop(l, kValue.asInstanceOf[Int])

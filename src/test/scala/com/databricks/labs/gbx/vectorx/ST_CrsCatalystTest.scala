@@ -29,14 +29,17 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
 
     private val gf = new GeometryFactory()
 
+    /** EWKB hex for POINT(15, 48) with given SRID.
+      * lon=15 is inside EPSG:32633 (UTM Zone 33N, W=12 E=18) and other global-extent CRSes. */
     private def ewkbHex(srid: Int): String = {
-        val g = gf.createPoint(new Coordinate(11.0, 42.0))
+        val g = gf.createPoint(new Coordinate(15.0, 48.0))
         g.setSRID(srid)
         JTS.toEWKB(g).map("%02x".format(_)).mkString
     }
 
+    /** Plain WKB hex for POINT(15, 48) (no SRID). */
     private def plainWkbHex: String = {
-        val g = gf.createPoint(new Coordinate(11.0, 42.0))
+        val g = gf.createPoint(new Coordinate(15.0, 48.0))
         JTS.toWKB(g).map("%02x".format(_)).mkString
     }
 
@@ -67,6 +70,7 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     test("gbx_st_transformcrs 2-arg: EWKB 4326 -> 32633 via SQL (Catalyst null propagation check)") {
         // This is the CRITICAL 1 regression test: the 2-arg form must not return NULL
         // through Catalyst's propagateNull even though there is no third argument.
+        // ewkbHex(4326) = POINT(15,48) SRID=4326, inside EPSG:32633 domain (W=12 E=18).
         val hex = ewkbHex(4326)
         val result = spark.sql(
             s"SELECT gbx_st_transformcrs(unhex('$hex'), 'EPSG:32633')"
@@ -74,7 +78,7 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
         assert(result != null, "2-arg gbx_st_transformcrs must not return NULL through Catalyst")
         val g = JTS.fromWKB(result)
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        g.getCoordinate.getX shouldBe (500000.0 +- 500000.0 * 1e-4)
     }
 
     test("gbx_st_transformcrs 3-arg: plain WKB + source CRS via SQL") {
@@ -86,16 +90,16 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
         g.getSRID shouldBe 32633
     }
 
-    test("gbx_st_transformcrs: plain WKB no source -> returned unchanged via SQL") {
+    test("gbx_st_transformcrs: plain WKB no source -> NULL via SQL (data: no source CRS)") {
+        // Contract change: no source CRS is a data condition → NULL, not unchanged.
         val result = spark.sql(
             s"SELECT gbx_st_transformcrs(unhex('$plainWkbHex'), 'EPSG:32633')"
         ).first().getAs[Array[Byte]](0)
-        assert(result != null)
-        // No embedded SRID, no source arg → unchanged
-        result shouldEqual JTS.toWKB(gf.createPoint(new Coordinate(11.0, 42.0)))
+        assert(result == null, "No source CRS must return NULL (data condition)")
     }
 
     test("gbx_st_transformcrs: integer target CRS coerces to string via SQL") {
+        // ewkbHex(4326) = POINT(15,48) SRID=4326, inside EPSG:32633 domain
         val hex = ewkbHex(4326)
         val result = spark.sql(
             s"SELECT gbx_st_transformcrs(unhex('$hex'), 32633)"
@@ -110,27 +114,30 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     // ------------------------------------------------------------------
 
     test("gbx_st_setcrs: STRING (EWKT) geometry input declares and returns BINARY") {
-        val df = spark.sql("SELECT gbx_st_setcrs('SRID=4326;POINT (11 42)', 'EPSG:32633') AS g")
+        // POINT(15 48) SRID=4326 — ST_SetCrs doesn't reproject, just stamps the SRID
+        val df = spark.sql("SELECT gbx_st_setcrs('SRID=4326;POINT (15 48)', 'EPSG:32633') AS g")
         df.schema.fields(0).dataType shouldBe org.apache.spark.sql.types.BinaryType
         val g = JTS.fromWKB(df.first().getAs[Array[Byte]](0))
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+        g.getCoordinate.getX shouldBe (15.0 +- 1e-12)
     }
 
     test("gbx_st_transformcrs: STRING (EWKT) geometry input declares and returns BINARY") {
+        // POINT(15 48) SRID=4326: inside EPSG:32633 domain (W=12 E=18)
         val df = spark.sql(
-            "SELECT gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633') AS g")
+            "SELECT gbx_st_transformcrs('SRID=4326;POINT (15 48)', 'EPSG:32633') AS g")
         df.schema.fields(0).dataType shouldBe org.apache.spark.sql.types.BinaryType
         val g = JTS.fromWKB(df.first().getAs[Array[Byte]](0))
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+        g.getCoordinate.getX shouldBe (500000.00000000116 +- 1e-6)
     }
 
     test("gbx_st_transformcrs: BINARY and STRING geometry inputs agree via SQL") {
+        // Both BINARY and STRING inputs with POINT(15,48) SRID=4326 — in domain for EPSG:32633
         val hex = ewkbHex(4326)
         val row = spark.sql(
             s"""SELECT gbx_st_transformcrs(unhex('$hex'), 'EPSG:32633') AS from_bin,
-               |       gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633') AS from_txt
+               |       gbx_st_transformcrs('SRID=4326;POINT (15 48)', 'EPSG:32633') AS from_txt
              """.stripMargin).first()
         val a = JTS.fromWKB(row.getAs[Array[Byte]]("from_bin"))
         val b = JTS.fromWKB(row.getAs[Array[Byte]]("from_txt"))
@@ -140,6 +147,7 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     }
 
     test("gbx_st_transformcrs: PROJ4 target clears the SRID via SQL (authority-less)") {
+        // PROJ4 strings have no area_of_use → domain check is skipped; ewkbHex = POINT(15,48)
         val hex = ewkbHex(4326)
         val result = spark.sql(
             s"SELECT gbx_st_transformcrs(unhex('$hex'), " +
@@ -147,6 +155,6 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
         ).first().getAs[Array[Byte]](0)
         val g = JTS.fromWKB(result)
         g.getSRID shouldBe 0
-        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+        g.getCoordinate.getX shouldBe (500000.00000000116 +- 1e-6)
     }
 }

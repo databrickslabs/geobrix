@@ -78,9 +78,9 @@ object ST_TransformCrs extends WithExpressionInfo {
       *                   Unresolvable target raises. Null target → null return.
       * @param sourceCrs  Explicit source CRS for plain (no-SRID) inputs; ignored
       *                   when geom already carries an embedded SRID.
-      *                   Unresolvable source_crs → return unchanged (never-error).
-      * @return           Reprojected geometry in the same encoding as the input, or
-      *                   the input unchanged when no source CRS is resolvable.
+      *                   Unresolvable explicit source_crs raises (parameter condition).
+      * @return           Reprojected geometry in the same encoding as the input, or null
+      *                   when the source CRS is missing/unresolvable (data condition).
       */
     def eval(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Any =
         CrsExpressionUtil.encodeAdaptive(
@@ -107,7 +107,8 @@ object ST_TransformCrs extends WithExpressionInfo {
     override def usageArgs: String = "geom, target_crs [, source_crs]"
     override def description: String =
         "Reproject geometry to target CRS. Optional source_crs for plain (SRID-less) inputs. " +
-        "Returns input unchanged if source CRS is unresolvable (never-error invariant)."
+        "Bad data (unparseable geom, unresolvable embedded SRID, missing source) returns NULL. " +
+        "Bad parameter (unresolvable target or explicit source_crs) raises."
 }
 
 object ST_TransformCrs3 extends WithExpressionInfo {
@@ -142,49 +143,68 @@ private[expressions] object TransformCrsCore {
       * OGR geometry round-trip. Nothing here owns a GDAL object, so there is nothing to
       * release: no `finally`, no double-delete, no use-after-delete.
       *
-      * Never-error invariant: an unresolvable SOURCE (embedded SRID or explicit
-      * `source_crs`) returns the input unchanged. `crsInfo` caches nothing on failure, so a
-      * bad source degrades on every row rather than poisoning the cache. Only an
-      * unresolvable TARGET raises. */
+      * Error contract (mirrors light-tier):
+      *   - Bad GEOMETRY DATA (unparseable, unresolvable embedded SRID, no source CRS) → NullOut.
+      *   - Bad PARAMETER (explicit source_crs unresolvable, target_crs unresolvable) → raises.
+      *   - Non-finite output coordinates → NullOut.
+      *   - Out-of-domain output (GDAL area_of_use check) → NullOut; skipped when target has none. */
     def apply(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): CrsOutcome = {
         if (geom == null || targetCrs == null) return CrsOutcome.NullOut
         val g = CrsExpressionUtil.parseGeom(geom)
-        if (g == null) return CrsOutcome.Unchanged(geom)  // parse failure → return unchanged
+        if (g == null) return CrsOutcome.NullOut  // parse failure → data condition → NULL
 
-        // --- Resolve source CRS (never-error: failure returns input unchanged) ---
+        // --- Resolve source CRS ---
+        // Rule: embedded SRID (DATA) → unresolvable → NullOut.
+        //       explicit sourceCrs (PARAMETER) → unresolvable → RAISE (let crsInfo throw).
+        //       no CRS at all (DATA: plain geometry with no context) → NullOut.
         val embeddedSrid = g.getSRID
         val srcInfo: CrsInfo =
             if (embeddedSrid > 0) Try(SpatialRefOps.crsInfo(embeddedSrid.toString)).getOrElse(null)
-            else if (sourceCrs != null) Try(SpatialRefOps.crsInfo(sourceCrs.toString)).getOrElse(null)
+            else if (sourceCrs != null) SpatialRefOps.crsInfo(sourceCrs.toString)  // raises on bad input
             else null
 
-        // Unresolvable / absent source CRS → unchanged. An empty canonical string would make
-        // the transform-plan lookup raise, which would violate the never-error invariant.
+        // Unresolvable embedded SRID (null result above) or no CRS at all → data → NULL.
         if (srcInfo == null || srcInfo.canonical == null || srcInfo.canonical.isEmpty) {
-            return CrsOutcome.Unchanged(geom)
+            return CrsOutcome.NullOut
         }
 
-        // --- Resolve target CRS (allowed to throw on failure — user asked for a bad CRS) ---
+        // --- Resolve target CRS (parameter → allowed to throw on failure) ---
         val dstInfo = SpatialRefOps.crsInfo(targetCrs.toString)
 
-        // The plan lookup re-resolves the two CANONICAL strings on a cache miss. The target has
-        // already been proven resolvable by `crsInfo` above, so a failure here can only be a
-        // canonical round-trip failure (e.g. an authority-less CRS whose exported WKT does not
-        // re-parse) — never a bad target. Degrade to unchanged rather than raise, so the
-        // never-error invariant holds for every source-side failure mode. A try/catch that does
-        // not throw is zero-cost on the JVM, so this costs nothing on the hot path.
+        // Plan lookup re-resolves the canonical strings on a cache miss. A canonical
+        // round-trip failure (authority-less CRS whose exported WKT does not re-parse) is
+        // a degenerate data condition — degrade to NullOut rather than raise.
         //
         // NonFatal, not Throwable: a fatal error (OutOfMemoryError, StackOverflowError,
-        // InterruptedException) must propagate and fail the task. Swallowing one here would
-        // silently emit un-reprojected rows — a data-correctness failure disguised as success —
-        // and would make an interrupted task ignore cancellation. This matches the `Try`-based
-        // source-CRS degrade above, which is also NonFatal-only.
+        // InterruptedException) must propagate and fail the task.
         val plan = try {
             SpatialRefOps.transformPlan(srcInfo.canonical, dstInfo.canonical)
         } catch {
-            case NonFatal(_) => return CrsOutcome.Unchanged(geom)
+            case NonFatal(_) => return CrsOutcome.NullOut
         }
         val gProj = if (plan.identity) g else transformWithCachedCT(g, plan.transformation)
+
+        // Non-finite guard: mirror light's _has_nonfinite_xy (heavy previously had none).
+        val coords = gProj.getCoordinates
+        val nonFinite = coords.exists(c => c.x.isNaN || c.x.isInfinite || c.y.isNaN || c.y.isInfinite)
+        if (nonFinite) return CrsOutcome.NullOut
+
+        // Domain check: compare input lon/lat against the target CRS's area_of_use.
+        // Skip entirely when the target carries no area_of_use (authority-less WKT / PROJ4).
+        SpatialRefOps.areaOfUse(dstInfo.canonical) match {
+            case Some(bbox) =>
+                // Get the input in lon/lat. If the source is already EPSG:4326, use g's coords
+                // directly; otherwise transform source → EPSG:4326 to obtain lon/lat.
+                val lonLat: Array[(Double, Double)] =
+                    if (srcInfo.canonical == "EPSG:4326") g.getCoordinates.map(c => (c.x, c.y))
+                    else {
+                        val toWgs = SpatialRefOps.transformPlan(srcInfo.canonical, "EPSG:4326")
+                        val gWgs = if (toWgs.identity) g else transformWithCachedCT(g, toWgs.transformation)
+                        gWgs.getCoordinates.map(c => (c.x, c.y))
+                    }
+                if (!SpatialRefOps.allInBBox(lonLat, bbox)) return CrsOutcome.NullOut
+            case None => // no area_of_use → skip domain check
+        }
 
         // authoritySrid is None for an authority-less target (raw WKT / PROJ4) and for a
         // non-numeric authority code (e.g. OGC:CRS84) — both clear the now-stale SRID.

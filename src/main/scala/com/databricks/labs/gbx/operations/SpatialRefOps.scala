@@ -302,6 +302,26 @@ object SpatialRefOps {
         }
     }
 
+    /** Target CRS's area_of_use bbox in EPSG:4326 (west, south, east, north), or None
+      * when the CRS carries no area-of-use metadata (caller skips the domain check).
+      * The AreaOfUse object is a GDAL-managed value object that does not hold a native
+      * SpatialReference; release the owning SR in a finally as usual. */
+    def areaOfUse(canonical: String): Option[(Double, Double, Double, Double)] = {
+        val sr = resolveCrs(canonical)
+        try {
+            val a = sr.GetAreaOfUse()  // GDAL 3.0+: AreaOfUse or null
+            if (a == null) None
+            else Some((a.getWest_lon_degree, a.getSouth_lat_degree,
+                       a.getEast_lon_degree, a.getNorth_lat_degree))
+        } finally sr.delete()
+    }
+
+    /** True when every (lon, lat) is inside the bbox; straddling the boundary → false. */
+    def allInBBox(lonLat: Array[(Double, Double)], b: (Double, Double, Double, Double)): Boolean = {
+        val (w, s, e, n) = b
+        lonLat.forall { case (lon, lat) => lon >= w && lon <= e && lat >= s && lat <= n }
+    }
+
     /** Builds a SpatialReference from an EPSG code; uses WGS84 if code <= 0. */
     def fromEPSGCode(getSRID: Int): SpatialReference = {
         val sr = new SpatialReference()

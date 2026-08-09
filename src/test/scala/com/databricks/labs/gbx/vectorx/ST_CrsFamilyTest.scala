@@ -30,25 +30,27 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
 
     private val gf = new GeometryFactory()
 
-    /** EWKB of POINT(11, 42) with given SRID. */
+    /** EWKB of POINT(15, 48) with given SRID.
+      * lon=15 lat=48 is inside EPSG:32633 (UTM Zone 33N, W=12 E=18 S=0 N=84) and other
+      * global-extent CRSes (ESRI:54008, EPSG:3857, OGC:CRS84). */
     private def ewkb(srid: Int): Array[Byte] = {
-        val g = gf.createPoint(new Coordinate(11.0, 42.0))
+        val g = gf.createPoint(new Coordinate(15.0, 48.0))
         g.setSRID(srid)
         JTS.toEWKB(g)
     }
 
-    /** EWKT of POINT(11, 42) with given SRID. */
+    /** EWKT of POINT(15, 48) with given SRID. */
     private def ewkt(srid: Int): UTF8String =
-        UTF8String.fromString(s"SRID=$srid;POINT (11 42)")
+        UTF8String.fromString(s"SRID=$srid;POINT (15 48)")
 
-    /** Plain WKB of POINT(11, 42) (no SRID). */
+    /** Plain WKB of POINT(15, 48) (no SRID). */
     private def plainWkb(): Array[Byte] = {
-        val g = gf.createPoint(new Coordinate(11.0, 42.0))
+        val g = gf.createPoint(new Coordinate(15.0, 48.0))
         JTS.toWKB(g)
     }
 
-    /** Plain WKT of POINT(11, 42). */
-    private def plainWkt(): UTF8String = UTF8String.fromString("POINT (11 42)")
+    /** Plain WKT of POINT(15, 48). */
+    private def plainWkt(): UTF8String = UTF8String.fromString("POINT (15 48)")
 
     private val _CUSTOM_TM_WKT =
         """PROJCS["Custom_TM",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],PARAMETER["central_meridian",13.7],PARAMETER["scale_factor",0.9996],UNIT["metre",1]]"""
@@ -157,8 +159,8 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(result.isInstanceOf[Array[Byte]])
         val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
-        g.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+        g.getCoordinate.getX shouldBe (500000.0 +- 500000.0 * 1e-4)
+        g.getCoordinate.getY shouldBe (5316300.0 +- 5316300.0 * 1e-4)
     }
 
     test("ST_TransformCrs: EWKB + ESRI target -> EWKB with SRID=54008") {
@@ -167,7 +169,7 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(result.isInstanceOf[Array[Byte]])
         val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
         g.getSRID shouldBe 54008
-        g.getCoordinate.getX shouldBe (911358.0 +- 911358.0 * 1e-4)
+        g.getCoordinate.getX shouldBe (1119380.0 +- 1119380.0 * 1e-4)
     }
 
     test("ST_TransformCrs: EWKB + authority-less WKT target -> plain WKB, SRID=0") {
@@ -184,21 +186,19 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         // GDAL's GetAuthorityName/Code on a PROJ4-imported SpatialReference returns null
         // (PROJ4 strings carry no EPSG/ESRI authority code). The heavy tier therefore
         // treats PROJ4 the same as WKT: reprojects and clears SRID.
+        // PROJ4 strings have no area_of_use, so the domain check is skipped.
         val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString(_PROJ4_UTM33))
         assert(result != null)
         assert(result.isInstanceOf[Array[Byte]])
         val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
         g.getSRID shouldBe 0
-        // Coordinates should be in UTM range (x ~168701 for lon=11, lat=42, zone 33)
-        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        // Coordinates should be in UTM range (x ~500000 for lon=15, lat=48, zone 33)
+        g.getCoordinate.getX shouldBe (500000.0 +- 500000.0 * 1e-4)
     }
 
-    test("ST_TransformCrs: plain WKB + no source -> returned unchanged") {
-        val input = plainWkb()
-        val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
-        assert(result != null)
-        assert(result.isInstanceOf[Array[Byte]])
-        result.asInstanceOf[Array[Byte]] shouldEqual input
+    test("ST_TransformCrs: plain WKB + no source -> NULL (no source CRS = data condition)") {
+        val result = ST_TransformCrs.eval(plainWkb(), UTF8String.fromString("EPSG:32633"))
+        assert(result == null)
     }
 
     test("ST_TransformCrs: plain WKB + explicit source_crs -> reprojected") {
@@ -211,7 +211,7 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(result.isInstanceOf[Array[Byte]])
         val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        g.getCoordinate.getX shouldBe (500000.0 +- 500000.0 * 1e-4)
     }
 
     test("ST_TransformCrs: EWKT + EPSG target -> EWKT starting 'SRID=32633;'") {
@@ -230,12 +230,9 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         wkt should startWith("POINT")
     }
 
-    test("ST_TransformCrs: plain WKT + no source -> returned unchanged") {
-        val input = plainWkt()
-        val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
-        assert(result != null)
-        assert(result.isInstanceOf[UTF8String])
-        result.asInstanceOf[UTF8String].toString shouldEqual input.toString
+    test("ST_TransformCrs: plain WKT + no source -> NULL (no source CRS = data condition)") {
+        val result = ST_TransformCrs.eval(plainWkt(), UTF8String.fromString("EPSG:32633"))
+        assert(result == null)
     }
 
     test("ST_TransformCrs: plain WKT + explicit source_crs -> reprojected WKT") {
@@ -246,27 +243,22 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         )
         assert(result != null)
         assert(result.isInstanceOf[UTF8String])
+        // POINT(15 48) 4326->32633 is in domain; should produce EWKT
         result.asInstanceOf[UTF8String].toString should startWith("SRID=32633;")
     }
 
-    test("ST_TransformCrs: unresolvable embedded SRID (999999) -> returned unchanged") {
-        val input = ewkb(999999)
-        val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
-        assert(result != null)
-        assert(result.isInstanceOf[Array[Byte]])
-        result.asInstanceOf[Array[Byte]] shouldEqual input
+    test("ST_TransformCrs: unresolvable embedded SRID (999999) -> NULL (data condition)") {
+        val result = ST_TransformCrs.eval(ewkb(999999), UTF8String.fromString("EPSG:32633"))
+        assert(result == null)
     }
 
-    test("ST_TransformCrs: unresolvable explicit source_crs -> returned unchanged") {
-        val input = plainWkb()
-        val result = ST_TransformCrs.eval(
-            input,
-            UTF8String.fromString("EPSG:32633"),
-            UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
-        )
-        assert(result != null)
-        assert(result.isInstanceOf[Array[Byte]])
-        result.asInstanceOf[Array[Byte]] shouldEqual input
+    test("ST_TransformCrs: unresolvable explicit source_crs -> raises (parameter condition)") {
+        an[Exception] should be thrownBy
+            ST_TransformCrs.eval(
+                plainWkb(),
+                UTF8String.fromString("EPSG:32633"),
+                UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
+            )
     }
 
     test("ST_TransformCrs: unresolvable target -> throws") {
@@ -279,17 +271,18 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("ST_TransformCrs: coordinate round-trip precision (reproject and back, < 1e-8 error)") {
-        val xIn = 11.0
-        val yIn = 42.0
+        // POINT(15, 48) is inside EPSG:32633 (UTM Zone 33N, W=12 E=18)
+        val xIn = 15.0
+        val yIn = 48.0
         val g = gf.createPoint(new Coordinate(xIn, yIn))
         g.setSRID(4326)
         val wkb4326 = JTS.toEWKB(g)
 
-        // Forward: 4326 -> 32633
+        // Forward: 4326 -> 32633 (in domain: lon=15 inside W=12 E=18)
         val wkb32633 = ST_TransformCrs.eval(wkb4326, UTF8String.fromString("EPSG:32633"))
         assert(wkb32633 != null)
 
-        // Back: 32633 -> 4326
+        // Back: 32633 -> 4326 (4326 has global domain; UTM coords are always in EPSG:4326 domain)
         val wkbBack = ST_TransformCrs.eval(wkb32633, UTF8String.fromString("EPSG:4326"))
         assert(wkbBack != null)
         val gBack = JTS.fromWKB(wkbBack.asInstanceOf[Array[Byte]])
@@ -346,7 +339,8 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("ST_TransformCrs: binary medium preserves Z through reproject") {
-        val g3d = gf.createPoint(new Coordinate(11.0, 42.0, 500.0))
+        // POINT(15, 48, 500) SRID=4326: lon=15 is inside EPSG:32633 domain (W=12 E=18)
+        val g3d = gf.createPoint(new Coordinate(15.0, 48.0, 500.0))
         g3d.setSRID(4326)
         val wkb3d = JTS.toEWKBAdaptive(g3d)
         val result = ST_TransformCrs.eval(wkb3d, UTF8String.fromString("EPSG:32633"))
@@ -357,6 +351,7 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("ST_TransformCrs: 2D binary stays 2D (no NaN-Z injection)") {
+        // ewkb(4326) is POINT(15,48) which is inside EPSG:32633 domain
         val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
         assert(result != null)
         assert(result.isInstanceOf[Array[Byte]])
@@ -373,8 +368,8 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("ST_TransformCrs: text medium preserves Z through reproject") {
-        // POINT Z (11 42 500) with SRID=4326 in EWKT
-        val ewktZ = UTF8String.fromString("SRID=4326;POINT Z (11 42 500)")
+        // POINT Z (15 48 500) SRID=4326: lon=15 is inside EPSG:32633 domain (W=12 E=18)
+        val ewktZ = UTF8String.fromString("SRID=4326;POINT Z (15 48 500)")
         val result = ST_TransformCrs.eval(ewktZ, UTF8String.fromString("EPSG:32633"))
         assert(result != null)
         assert(result.isInstanceOf[UTF8String])
@@ -395,6 +390,7 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("ST_TransformCrs: 2D text stays 2D after reproject") {
+        // plainWkt() = POINT(15 48), source=EPSG:4326, target=EPSG:32633 — in domain
         val result = ST_TransformCrs.eval(plainWkt(), UTF8String.fromString("EPSG:32633"),
             UTF8String.fromString("EPSG:4326"))
         assert(result != null)
@@ -409,17 +405,19 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     // ------------------------------------------------------------------
 
     test("ST_TransformCrs: EWKT + EPSG target -> coordinate values correct") {
+        // ewkt(4326) = SRID=4326;POINT(15 48), inside EPSG:32633 domain
         val result = ST_TransformCrs.eval(ewkt(4326), UTF8String.fromString("EPSG:32633"))
         assert(result != null)
         assert(result.isInstanceOf[UTF8String])
         val wkt = result.asInstanceOf[UTF8String].toString
         val body = wkt.split(";", 2)(1)
         val g = JTS.fromWKT(body)
-        g.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
-        g.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+        g.getCoordinate.getX shouldBe (500000.0 +- 500000.0 * 1e-4)
+        g.getCoordinate.getY shouldBe (5316300.0 +- 5316300.0 * 1e-4)
     }
 
     test("ST_TransformCrs: coordinate round-trip precision via text medium") {
+        // ewkt(4326) = SRID=4326;POINT(15 48), inside EPSG:32633 domain
         val ewktIn = ewkt(4326)
         val toUtm = ST_TransformCrs.eval(ewktIn, UTF8String.fromString("EPSG:32633"))
         assert(toUtm.isInstanceOf[UTF8String])
@@ -427,39 +425,38 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(back.isInstanceOf[UTF8String])
         val body = back.asInstanceOf[UTF8String].toString.split(";", 2)(1)
         val g = JTS.fromWKT(body)
-        g.getCoordinate.getX shouldBe (11.0 +- 1e-8)
-        g.getCoordinate.getY shouldBe (42.0 +- 1e-8)
+        g.getCoordinate.getX shouldBe (15.0 +- 1e-8)
+        g.getCoordinate.getY shouldBe (48.0 +- 1e-8)
     }
 
     // ------------------------------------------------------------------
     // Round 3 — mixed-Z never-error invariant
     // ------------------------------------------------------------------
 
-    test("ST_TransformCrs: mixed-Z GEOMETRYCOLLECTION does not throw (never-error)") {
-        // GEOMETRYCOLLECTION(POINT(0 0), POINT Z(1 1 5)) with SRID=4326.
-        // First coord has NaN Z; toWKBAdaptive would produce 3D WKB that OGR rejects.
-        // toWKBForOGR downcasts to 2D; transform succeeds (never-error invariant).
-        val pt2d = gf.createPoint(new Coordinate(0.0, 0.0))       // Z = NaN
-        val pt3d = gf.createPoint(new Coordinate(1.0, 1.0, 5.0))  // Z = 5
+    test("ST_TransformCrs: mixed-Z GEOMETRYCOLLECTION does not throw") {
+        // GEOMETRYCOLLECTION(POINT(13 47), POINT Z(15 48 5)) with SRID=4326.
+        // Both points are inside EPSG:32633 domain (W=12 E=18).
+        // First coord has NaN Z; toWKBForOGR downcasts to 2D so OGR accepts.
+        val pt2d = gf.createPoint(new Coordinate(13.0, 47.0))       // Z = NaN
+        val pt3d = gf.createPoint(new Coordinate(15.0, 48.0, 5.0))  // Z = 5
         val gc = gf.createGeometryCollection(Array[org.locationtech.jts.geom.Geometry](pt2d, pt3d))
         gc.setSRID(4326)
         val ewkbIn = JTS.toEWKBAdaptive(gc)  // 3D EWKB (any-coord rule) — has NaN Z for first point
-        // This must NOT throw
         val result = ST_TransformCrs.eval(ewkbIn, UTF8String.fromString("EPSG:32633"))
-        assert(result != null, "Mixed-Z input must not throw — never-error invariant")
+        assert(result != null, "Mixed-Z in-domain input must succeed")
         assert(result.isInstanceOf[Array[Byte]])
     }
 
-    test("ST_TransformCrs: mixed-Z LINESTRING does not throw (never-error)") {
-        // LINESTRING where first vertex has NaN Z but second has Z=5
+    test("ST_TransformCrs: mixed-Z LINESTRING does not throw") {
+        // LINESTRING where first vertex has NaN Z but second has Z=5; both in EPSG:32633 domain
         val ls = gf.createLineString(Array(
-            new Coordinate(0.0, 0.0),       // Z = NaN
-            new Coordinate(1.0, 1.0, 5.0)   // Z = 5
+            new Coordinate(13.0, 47.0),       // Z = NaN; lon=13 inside W=12 E=18
+            new Coordinate(15.0, 48.0, 5.0)   // Z = 5
         ))
         ls.setSRID(4326)
         val ewkbIn = JTS.toEWKBAdaptive(ls)  // 3D flag because any coord has Z
         val result = ST_TransformCrs.eval(ewkbIn, UTF8String.fromString("EPSG:32633"))
-        assert(result != null, "Mixed-Z LINESTRING must not throw")
+        assert(result != null, "Mixed-Z in-domain LINESTRING must succeed")
         assert(result.isInstanceOf[Array[Byte]])
     }
 
@@ -487,15 +484,16 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     // Round 4 — hot-path rewrite (cached CrsInfo + TransformPlan) guards
     // ------------------------------------------------------------------
 
-    test("ST_TransformCrs: exact axis-order values for POINT(11 42) 4326 -> 32633") {
+    test("ST_TransformCrs: exact axis-order values for POINT(15 48) 4326 -> 32633") {
         // Exact expected values, matching the light tier bit-for-bit. An axis-order bug
         // silently yields x=3556703.20, y=1361574.16 — which the loose ±1e-4 relative
         // tolerance elsewhere in this suite would also catch, but pinning the exact value
         // guards the cached-plan path against picking up an authority-compliant CT.
+        // POINT(15,48) is inside EPSG:32633 domain (UTM Zone 33N, W=12 E=18).
         val result = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
         val g = JTS.fromWKB(result.asInstanceOf[Array[Byte]])
-        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
-        g.getCoordinate.getY shouldBe (4657521.062149809 +- 1e-6)
+        g.getCoordinate.getX shouldBe (500000.00000000116 +- 1e-6)
+        g.getCoordinate.getY shouldBe (5316300.22445149533 +- 1e-6)
     }
 
     test("ST_TransformCrs: identity 4326 -> 4326 preserves Z and stamps target SRID") {
@@ -510,19 +508,24 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         decoded.getCoordinate.getY shouldBe (42.0 +- 1e-12)
     }
 
-    test("ST_TransformCrs: bad source degrades repeatably (cache miss must not poison)") {
-        // The CrsInfo cache stores nothing on a failed resolve, so an unresolvable source
-        // must degrade to 'return input unchanged' on EVERY row, not just the first.
+    test("ST_TransformCrs: bad embedded SRID returns NULL repeatably (cache miss must not poison)") {
+        // The CrsInfo cache stores nothing on a failed resolve, so an unresolvable embedded
+        // SRID must degrade to NULL on EVERY row, not just the first.
         val input = ewkb(999999)
         for (_ <- 0 until 3) {
             val result = ST_TransformCrs.eval(input, UTF8String.fromString("EPSG:32633"))
-            result.asInstanceOf[Array[Byte]] shouldEqual input
+            assert(result == null, "Unresolvable embedded SRID must always return NULL")
         }
-        val plain = plainWkb()
+    }
+
+    test("ST_TransformCrs: bad explicit source_crs raises repeatably (parameter, not cached)") {
+        // An unresolvable explicit source_crs is a parameter error — raises on every call.
         for (_ <- 0 until 3) {
-            val result = ST_TransformCrs.eval(plain, UTF8String.fromString("EPSG:32633"),
-                UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ"))
-            result.asInstanceOf[Array[Byte]] shouldEqual plain
+            an[Exception] should be thrownBy ST_TransformCrs.eval(
+                plainWkb(),
+                UTF8String.fromString("EPSG:32633"),
+                UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
+            )
         }
     }
 
@@ -536,6 +539,7 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     test("ST_TransformCrs: repeated rows stay stable across cached-plan reuse") {
         // Steady-state correctness guard: the cached CrsInfo / TransformPlan must give the
         // same answer on row 1000 as on row 1 (no mutated or released state behind the cache).
+        // ewkb(4326) = POINT(15,48) which is inside EPSG:32633 domain.
         val first = ST_TransformCrs.eval(ewkb(4326), UTF8String.fromString("EPSG:32633"))
             .asInstanceOf[Array[Byte]]
         for (_ <- 0 until 1000) {
@@ -547,16 +551,17 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     test("ST_TransformCrs: interleaved CRS pairs do not cross-contaminate cached plans") {
         // Alternate two different targets so both plans stay live in the LRU; each must
         // keep producing its own correct coordinates.
+        // ewkb(4326) = POINT(15,48): inside EPSG:32633 (W=12 E=18) and EPSG:3857 (global).
         for (_ <- 0 until 50) {
             val utm33 = JTS.fromWKB(ST_TransformCrs.eval(
                 ewkb(4326), UTF8String.fromString("EPSG:32633")).asInstanceOf[Array[Byte]])
             utm33.getSRID shouldBe 32633
-            utm33.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+            utm33.getCoordinate.getX shouldBe (500000.00000000116 +- 1e-6)
 
             val merc = JTS.fromWKB(ST_TransformCrs.eval(
                 ewkb(4326), UTF8String.fromString("EPSG:3857")).asInstanceOf[Array[Byte]])
             merc.getSRID shouldBe 3857
-            merc.getCoordinate.getX shouldBe (1224514.3987260093 +- 1e-2)
+            merc.getCoordinate.getX shouldBe (1669792.36189910350 +- 1e-2)
         }
     }
 
@@ -572,7 +577,7 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(result != null)
         val g = JTS.fromWKB(result)
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+        g.getCoordinate.getX shouldBe (15.0 +- 1e-12)
     }
 
     test("ST_SetCrs.evalSql: BINARY and TEXT inputs decode to the same geometry + SRID") {
@@ -584,11 +589,12 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("ST_TransformCrs.evalSql: TEXT input returns BINARY EWKB with the target SRID") {
+        // ewkt(4326) = SRID=4326;POINT(15 48) — inside EPSG:32633 domain
         val result = ST_TransformCrs.evalSql(ewkt(4326), UTF8String.fromString("EPSG:32633"))
         assert(result != null)
         val g = JTS.fromWKB(result)
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+        g.getCoordinate.getX shouldBe (500000.00000000116 +- 1e-6)
     }
 
     test("ST_TransformCrs.evalSql: authority-less target returns plain WKB (SRID cleared)") {
@@ -598,34 +604,30 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("ST_TransformCrs.evalSql: 3-arg form with explicit source_crs returns BINARY") {
+        // plainWkt() = POINT(15 48), source=EPSG:4326, target=EPSG:32633 — in domain
         val g = JTS.fromWKB(ST_TransformCrs.evalSql(
             plainWkt(), UTF8String.fromString("EPSG:32633"), UTF8String.fromString("EPSG:4326")))
         g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+        g.getCoordinate.getX shouldBe (500000.00000000116 +- 1e-6)
     }
 
-    test("ST_TransformCrs.evalSql: degrade path with BINARY input returns the input bytes") {
-        // Never-error invariant on the SQL surface: an unresolvable source returns the
-        // input verbatim, not a re-encoding of it.
-        val input = ewkb(999999)
-        ST_TransformCrs.evalSql(input, UTF8String.fromString("EPSG:32633")) shouldEqual input
+    test("ST_TransformCrs.evalSql: unresolvable embedded SRID returns NULL (data condition)") {
+        // Contract change: bad DATA (unresolvable embedded SRID) → NULL, not input-bytes.
+        assert(ST_TransformCrs.evalSql(ewkb(999999), UTF8String.fromString("EPSG:32633")) == null)
     }
 
-    test("ST_TransformCrs.evalSql: degrade path with TEXT input still returns BINARY") {
-        // A STRING cannot be handed back through a BINARY column, so the degrade re-encodes
-        // the parsed geometry — same coordinates, same SRID, binary medium.
-        val result = ST_TransformCrs.evalSql(
-            UTF8String.fromString("SRID=999999;POINT (11 42)"), UTF8String.fromString("EPSG:32633"))
-        assert(result != null)
-        val g = JTS.fromWKB(result)
-        g.getSRID shouldBe 999999
-        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+    test("ST_TransformCrs.evalSql: unresolvable explicit source_crs raises (parameter)") {
+        // Plain WKT has no embedded SRID, so the explicit source_crs is the only source.
+        // An unresolvable explicit source_crs is a parameter error — must raise.
+        an[Exception] should be thrownBy ST_TransformCrs.evalSql(
+            plainWkt(),
+            UTF8String.fromString("EPSG:32633"),
+            UTF8String.fromString("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
+        )
     }
 
-    test("ST_TransformCrs.evalSql: plain WKT + no source returns the unchanged geometry as WKB") {
-        val g = JTS.fromWKB(ST_TransformCrs.evalSql(plainWkt(), UTF8String.fromString("EPSG:32633")))
-        g.getSRID shouldBe 0
-        g.getCoordinate.getX shouldBe (11.0 +- 1e-12)
+    test("ST_TransformCrs.evalSql: plain WKT + no source returns NULL (data: no source CRS)") {
+        assert(ST_TransformCrs.evalSql(plainWkt(), UTF8String.fromString("EPSG:32633")) == null)
     }
 
     test("ST_SetCrs.evalSql / ST_TransformCrs.evalSql: null geom and null crs -> null") {
@@ -638,9 +640,11 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
     test("ST_TransformCrs.evalSql: text-medium Z survives (no NaN token round-trip)") {
         // The always-BINARY surface skips WKT entirely, so a 3D EWKT input keeps its Z.
         // Through the old text path the WKT writer's literal `NaN` token was re-read as 2D.
+        // POINT Z(15 48 500) SRID=4326: lon=15 is inside EPSG:32633 domain (W=12 E=18).
         val result = ST_TransformCrs.evalSql(
-            UTF8String.fromString("SRID=4326;POINT Z (11 42 500)"),
+            UTF8String.fromString("SRID=4326;POINT Z (15 48 500)"),
             UTF8String.fromString("EPSG:32633"))
+        assert(result != null, "In-domain 3D point must produce a result")
         val g = JTS.fromWKB(result)
         assert(!g.getCoordinate.z.isNaN, "Z must survive the text→binary SQL surface")
         g.getSRID shouldBe 32633
@@ -648,5 +652,76 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("ST_SetCrs.evalSql: 2D text input stays 2D binary (25-byte EWKB)") {
         ST_SetCrs.evalSql(plainWkt(), UTF8String.fromString("EPSG:4326")).length shouldBe 25
+    }
+
+    // ------------------------------------------------------------------
+    // Task 3 — Heavy contract: data→NULL, parameter→raise, domain check
+    // ------------------------------------------------------------------
+
+    /** EWKB POINT(lon, lat) with given SRID. */
+    private def ewkbPoint(lon: Double, lat: Double, srid: Int): Array[Byte] = {
+        val g = gf.createPoint(new Coordinate(lon, lat))
+        g.setSRID(srid)
+        JTS.toEWKB(g)
+    }
+
+    /** Plain WKB POINT(lon, lat) with no SRID. */
+    private def wkbPoint(lon: Double, lat: Double): Array[Byte] = {
+        val g = gf.createPoint(new Coordinate(lon, lat))
+        JTS.toWKB(g)
+    }
+
+    test("transformcrs: unparseable data returns NULL (not unchanged)") {
+        val out = ST_TransformCrs.evalSql(Array[Byte](1, 2, 3, 4), UTF8String.fromString("EPSG:3857"))
+        assert(out == null, "unparseable geom must degrade to NULL")
+    }
+
+    test("transformcrs: out-of-domain point returns NULL") {
+        // POINT(150 -80) SRID=4326 -> EPSG:27700, finite but far outside GB
+        val g = ewkbPoint(150.0, -80.0, 4326)
+        val out = ST_TransformCrs.evalSql(g, UTF8String.fromString("EPSG:27700"))
+        assert(out == null, "out-of-domain reprojection must be NULL")
+    }
+
+    test("transformcrs: in-domain point succeeds") {
+        val g = ewkbPoint(-0.13, 51.5, 4326)  // London
+        val out = ST_TransformCrs.evalSql(g, UTF8String.fromString("EPSG:27700"))
+        assert(out != null, "in-domain reprojection must produce a geometry")
+    }
+
+    test("transformcrs: unresolvable embedded SRID returns NULL (data)") {
+        val g = ewkbPoint(1.0, 1.0, 99999)
+        val out = ST_TransformCrs.evalSql(g, UTF8String.fromString("EPSG:3857"))
+        assert(out == null)
+    }
+
+    test("transformcrs: bad explicit source_crs raises (parameter)") {
+        val g = wkbPoint(1.0, 1.0)  // plain, no SRID
+        assertThrows[IllegalArgumentException] {
+            ST_TransformCrs.evalSql(g, UTF8String.fromString("EPSG:3857"), UTF8String.fromString("EPSG:99999"))
+        }
+    }
+
+    test("transformcrs: no source CRS returns NULL (data)") {
+        val g = wkbPoint(1.0, 1.0)
+        val out = ST_TransformCrs.evalSql(g, UTF8String.fromString("EPSG:3857"))
+        assert(out == null)
+    }
+
+    test("transformcrs: bad target raises") {
+        val g = ewkbPoint(-0.13, 51.5, 4326)
+        assertThrows[IllegalArgumentException] {
+            ST_TransformCrs.evalSql(g, UTF8String.fromString("EPSG:99999"))
+        }
+    }
+
+    test("setcrs: unparseable data returns NULL") {
+        assert(ST_SetCrs.evalSql(Array[Byte](1, 2, 3), UTF8String.fromString("EPSG:4326")) == null)
+    }
+
+    test("setcrs: authority-less CRS raises") {
+        assertThrows[IllegalArgumentException] {
+            ST_SetCrs.evalSql(ewkb(4326), UTF8String.fromString("+proj=merc +datum=WGS84"))
+        }
     }
 }

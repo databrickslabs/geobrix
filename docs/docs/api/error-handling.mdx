@@ -1,0 +1,138 @@
+---
+sidebar_position: 6
+title: Error Handling
+---
+
+# Error Handling
+
+GeoBrix distinguishes a **bad parameter** from **bad data**.
+
+- A **bad or non-executable parameter** — an invalid CRS code, a malformed argument, a string that cannot be resolved — raises a clear error. It is a fix-your-code problem and fails fast so you catch it during development.
+- **Bad data flowing through a column** — a corrupt geometry, a coordinate outside the target CRS's valid area — degrades to `NULL` (or an empty result) rather than failing the whole job. One bad row never kills the stage.
+
+This separation keeps large-scale spatial pipelines reliable: parameter mistakes surface immediately, while data quality issues in individual records are isolated and observable.
+
+## RasterX
+
+RasterX has four result shapes, and each expresses the bad-data-degrades rule in a way that fits its shape.
+
+### Scalar accessors
+
+Functions that read a single property from a raster tile (band count, CRS, pixel type, and similar) return `NULL` when the tile is corrupt or unreadable. The rest of the column is unaffected.
+
+```sql
+SELECT path, gbx_rst_bandcount(tile) AS bands
+FROM my_rasters
+-- rows with a corrupt tile produce NULL for `bands`; the query does not fail
+```
+
+### Tile operations
+
+Functions that return a raster tile (transforms, resampling, band math) return an **empty tile** when they encounter bad data. An empty tile is a valid struct — it carries no pixel data, but its `metadata` map contains an `error_message` key that describes what went wrong.
+
+```sql
+SELECT path,
+       gbx_rst_retile(tile, 256, 256)  AS retiled,
+       gbx_rst_retile(tile, 256, 256).metadata['error_message'] AS err
+FROM my_rasters
+-- rows that could not be retiled produce an empty tile; err is non-NULL for those rows
+```
+
+To isolate problem rows:
+
+```sql
+SELECT path, err
+FROM (
+  SELECT path,
+         gbx_rst_retile(tile, 256, 256).metadata['error_message'] AS err
+  FROM my_rasters
+)
+WHERE err IS NOT NULL
+```
+
+### Aggregators
+
+Aggregation functions (mosaic, union, merge) skip any corrupt member tile. The aggregate continues over the remaining valid members. A stage-level error is not raised.
+
+### Generators
+
+Functions that expand a single tile into multiple rows (tessellation, tiling, pyramid generation) emit one error row when a tile fails. The error row's tile column holds an empty tile with `error_message` set; it can be filtered or audited like any other row.
+
+### Flipping data errors to hard failures for debugging
+
+The Spark configuration key `spark.databricks.labs.gbx.expressions.crash.on.error` makes data-level errors raise hard failures instead of degrading. Use it when you want stack traces during development or when diagnosing unexpected `NULL`s in a pipeline.
+
+```python
+spark.conf.set(
+    "spark.databricks.labs.gbx.expressions.crash.on.error",
+    "true"
+)
+```
+
+Set it back to `false` (the default) before running production workloads.
+
+## VectorX
+
+VectorX functions work on geometry columns (WKB, EWKB, WKT, or EWKT). They have no metadata carrier, so `NULL` is the single degrade signal for bad-data conditions.
+
+### Bad geometry data
+
+If the input geometry is corrupt, unparseable, or produces a non-finite result, the function returns `NULL`. Other rows are unaffected.
+
+```sql
+SELECT id, gbx_st_transformcrs(geom, 'EPSG:3857') AS geom_mercator
+FROM my_table
+-- rows with an unparseable geometry produce NULL; the query continues
+```
+
+### Bad CRS argument
+
+If the CRS argument cannot be resolved — an unrecognised authority code, an empty string, a value that is not a valid CRS — the function raises an error. This is a parameter problem: the CRS string is a constant in your query, not data flowing through the column.
+
+```sql
+-- This raises an error: "FAKE:9999" is not a valid CRS.
+SELECT gbx_st_transformcrs(geom, 'FAKE:9999') FROM my_table
+```
+
+Fix the CRS string; do not expect this to degrade quietly.
+
+### Reprojection domain check
+
+`gbx_st_transformcrs` checks whether each geometry falls within the target CRS's valid area. A geometry that lies outside that area — for example, a point at longitude 0° being reprojected into a CRS whose valid area covers only the eastern United States — returns `NULL` rather than producing a silently nonsensical coordinate. A geometry that straddles the boundary also returns `NULL`, erring on the side of correctness.
+
+When the target CRS carries no declared area of use, the domain check is skipped and the reprojection proceeds without a spatial guard. To detect these rows after the fact:
+
+```sql
+SELECT id
+FROM (
+  SELECT id, gbx_st_transformcrs(geom, 'EPSG:32614') AS projected
+  FROM my_table
+)
+WHERE projected IS NULL
+```
+
+## Catching degraded rows
+
+**VectorX / scalar accessors:** filter on `IS NOT NULL`:
+
+```sql
+SELECT *
+FROM results
+WHERE geom IS NOT NULL
+```
+
+**RasterX tile operations:** filter on the `error_message` metadata key:
+
+```sql
+SELECT *
+FROM results
+WHERE tile.metadata['error_message'] IS NULL
+```
+
+Or audit the errors:
+
+```sql
+SELECT path, tile.metadata['error_message'] AS err
+FROM results
+WHERE tile.metadata['error_message'] IS NOT NULL
+```

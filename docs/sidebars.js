@@ -104,6 +104,7 @@ const sidebars = {
         'api/overview',
         'api/execution-tiers',
         'api/coordinate-reference-systems',
+        'api/error-handling',
         'api/language-bindings',
         {
           type: 'category',

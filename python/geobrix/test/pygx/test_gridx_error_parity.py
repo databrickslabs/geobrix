@@ -284,4 +284,3 @@ def test_bng_kloopexplode_zero_rows_both_tiers(spark_with_jar):
     assert (
         heavy_count == 0
     ), f"heavy kloopexplode('!!'): expected 0 rows, got {heavy_count}"
-

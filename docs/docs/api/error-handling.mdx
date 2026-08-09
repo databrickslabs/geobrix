@@ -60,7 +60,7 @@ Functions that expand a single tile into multiple rows (tessellation, tiling, py
 
 ### Flipping data errors to hard failures for debugging
 
-The Spark configuration key `spark.databricks.labs.gbx.expressions.crash.on.error` makes data-level errors raise hard failures instead of degrading. Use it when you want stack traces during development or when diagnosing unexpected `NULL`s in a pipeline.
+The Spark configuration key `spark.databricks.labs.gbx.expressions.crash.on.error` makes RasterX data-level errors raise hard failures instead of degrading. Use it when you want stack traces during development or when diagnosing unexpected `NULL`s or empty tiles in a pipeline.
 
 ```python
 spark.conf.set(
@@ -71,9 +71,11 @@ spark.conf.set(
 
 Set it back to `false` (the default) before running production workloads.
 
+This switch applies **only to the heavyweight (JVM) RasterX expressions**. It is read by the Scala tile expressions and has no effect on the lightweight Python tier (`pyrx`), which does not consult Spark configuration, nor on VectorX (see below), which does not have an equivalent switch.
+
 ## VectorX
 
-VectorX functions work on geometry columns (WKB, EWKB, WKT, or EWKT). They have no metadata carrier, so `NULL` is the single degrade signal for bad-data conditions.
+VectorX functions work on geometry columns (WKB, EWKB, WKT, or EWKT). They have no metadata carrier, so `NULL` is the single degrade signal for bad-data conditions. VectorX has no crash-on-error switch; the RasterX configuration key above does not affect it.
 
 ### Bad geometry data
 

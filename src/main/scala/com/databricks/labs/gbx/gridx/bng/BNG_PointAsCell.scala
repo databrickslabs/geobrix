@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -27,26 +28,20 @@ case class BNG_PointAsCell(
 /** Companion: SQL name gbx_bng_pointascell, builder, and eval. */
 object BNG_PointAsCell extends WithExpressionInfo {
 
-    def eval(wkt: UTF8String, resolution: Int): UTF8String = {
-        val cellID = executeWKT(wkt.toString, resolution)
-        UTF8String.fromString(cellID)
-    }
+    def eval(wkt: UTF8String, resolution: Int): UTF8String =
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKT(wkt.toString, resolution)))
 
     def eval(wkt: UTF8String, resolution: UTF8String): UTF8String = {
-        val res = BNG.resolutionMap(resolution.toString)
-        val cellID = executeWKT(wkt.toString, res)
-        UTF8String.fromString(cellID)
+        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKT(wkt.toString, res)))
     }
 
-    def eval(wkb: Array[Byte], resolution: Int): UTF8String = {
-        val cellID = executeWKB(wkb, resolution)
-        UTF8String.fromString(cellID)
-    }
+    def eval(wkb: Array[Byte], resolution: Int): UTF8String =
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKB(wkb, resolution)))
 
     def eval(wkb: Array[Byte], resolution: UTF8String): UTF8String = {
-        val res = BNG.resolutionMap(resolution.toString)
-        val cellID = executeWKB(wkb, res)
-        UTF8String.fromString(cellID)
+        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeWKB(wkb, res)))
     }
 
     def executeWKT(wkt: String, resolution: Int): String = {

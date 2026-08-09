@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -26,15 +27,17 @@ case class BNG_KLoop(
 /** Companion: SQL name gbx_bng_kloop, builder, and eval. */
 object BNG_KLoop extends WithExpressionInfo {
 
-    def eval(cellid: UTF8String, k: Int): ArrayData = {
-        val indices = execute(cellid.toString, k).map(UTF8String.fromString).toArray
-        ArrayData.toArrayData(indices)
-    }
+    def eval(cellid: UTF8String, k: Int): ArrayData =
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val indices = execute(cellid.toString, k).map(UTF8String.fromString).toArray
+            ArrayData.toArrayData(indices)
+        }
 
-    def eval(cellid: Long, k: Int): ArrayData = {
-        val indices = execute(BNG.format(cellid), k).map(UTF8String.fromString).toArray
-        ArrayData.toArrayData(indices)
-    }
+    def eval(cellid: Long, k: Int): ArrayData =
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val indices = execute(BNG.format(cellid), k).map(UTF8String.fromString).toArray
+            ArrayData.toArrayData(indices)
+        }
 
     def execute(cellid: String, k: Int): Iterator[String] = {
         BNG.kLoop(BNG.parse(cellid), k).map(BNG.format)

@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions._
@@ -26,14 +27,12 @@ case class BNG_EastNorthAsBNG(
 /** Companion: SQL name gbx_bng_eastnorthasbng, builder, and eval. */
 object BNG_EastNorthAsBNG extends WithExpressionInfo {
 
-    def eval(easting: Double, northing: Double, resolution: Int): UTF8String = {
-        val cellId = executeInt(easting, northing, resolution)
-        UTF8String.fromString(cellId)
-    }
+    def eval(easting: Double, northing: Double, resolution: Int): UTF8String =
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeInt(easting, northing, resolution)))
 
     def eval(easting: Double, northing: Double, resolution: UTF8String): UTF8String = {
-        val cellId = executeString(easting, northing, resolution.toString)
-        UTF8String.fromString(cellId)
+        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        GridErrorHandler.safeEval[UTF8String](null)(UTF8String.fromString(executeInt(easting, northing, res)))
     }
 
     def executeString(easting: Double, northing: Double, resolution: String): String = {

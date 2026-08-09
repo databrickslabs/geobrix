@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -29,28 +30,32 @@ case class BNG_Polyfill(
 object BNG_Polyfill extends WithExpressionInfo {
 
     def eval(geom: UTF8String, resolution: UTF8String): ArrayData = {
-        val geometry = JTS.fromWKT(geom.toString)
-        val cells = execute(geometry, resolution.toString)
-        ArrayData.toArrayData(cells.map(UTF8String.fromString).toArray)
+        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geometry = JTS.fromWKT(geom.toString)
+            ArrayData.toArrayData(execute(geometry, res).map(UTF8String.fromString).toArray)
+        }
     }
 
-    def eval(geom: UTF8String, resolution: Int): ArrayData = {
-        val geometry = JTS.fromWKT(geom.toString)
-        val cells = execute(geometry, resolution)
-        ArrayData.toArrayData(cells.map(UTF8String.fromString).toArray)
-    }
+    def eval(geom: UTF8String, resolution: Int): ArrayData =
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geometry = JTS.fromWKT(geom.toString)
+            ArrayData.toArrayData(execute(geometry, resolution).map(UTF8String.fromString).toArray)
+        }
 
     def eval(geom: Array[Byte], resolution: UTF8String): ArrayData = {
-        val geometry = JTS.fromWKB(geom)
-        val cells = execute(geometry, resolution.toString)
-        ArrayData.toArrayData(cells.map(UTF8String.fromString).toArray)
+        val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geometry = JTS.fromWKB(geom)
+            ArrayData.toArrayData(execute(geometry, res).map(UTF8String.fromString).toArray)
+        }
     }
 
-    def eval(geom: Array[Byte], resolution: Int): ArrayData = {
-        val geometry = JTS.fromWKB(geom)
-        val cells = execute(geometry, resolution)
-        ArrayData.toArrayData(cells.map(UTF8String.fromString).toArray)
-    }
+    def eval(geom: Array[Byte], resolution: Int): ArrayData =
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geometry = JTS.fromWKB(geom)
+            ArrayData.toArrayData(execute(geometry, resolution).map(UTF8String.fromString).toArray)
+        }
 
     def execute(geom: Geometry, resolution: Int): Iterator[String] = {
         BNG.polyfill(geom, resolution)

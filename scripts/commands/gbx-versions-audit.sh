@@ -54,7 +54,6 @@ FILES=(
     ".github/workflows/build_python.yml"
     ".github/workflows/build_scala.yml"
     ".github/workflows/build_scala_by_package.yml"
-    ".github/workflows/codecov-upload.yml"
     ".github/workflows/codecov-scala-parallel.yml"
     "scripts/docker/Dockerfile"
     "scripts/geobrix-gdal-init.sh"

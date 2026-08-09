@@ -6,7 +6,7 @@ inputs:
     description: 'Run Python lint (isort, black, flake8) and fail build on errors? true or false. Typically true only for PRs targeting main.'
     default: 'false'
   enable_coverage:
-    description: 'Run pytest with coverage (--cov) and emit coverage.xml for Codecov? true or false.'
+    description: 'Run pytest with coverage (--cov) and emit coverage.xml? true or false.'
     default: 'false'
 runs:
   using: "composite"

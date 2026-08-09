@@ -20,7 +20,7 @@ runs-on:
 
 Currently used by: `build_main` build, `build_python` build, `build_scala`
 build, `build_scala_by_package` test-package, `codecov-scala-parallel`
-coverage-package, `codecov-upload` coverage, `codeql-analysis` analyze.
+coverage-package, `codeql-analysis` analyze.
 
 ### Light jobs — `databrickslabs-protected-runner-group` / `linux-ubuntu-latest`
 
@@ -33,7 +33,7 @@ runs-on:
   labels: linux-ubuntu-latest
 ```
 
-Currently used by: `build_main` update-doc-inventory + codecov,
+Currently used by: `build_main` update-doc-inventory,
 `codecov-scala-parallel` merge-and-upload, `verify-maven-pgp` verify,
 `deploy-docs` build + deploy.
 

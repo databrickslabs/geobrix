@@ -1,8 +1,8 @@
-# Optional: Run Scala coverage by package in parallel, merge, then upload to Codecov.
+# Optional: Run Scala coverage by package in parallel and merge into one report.
 # Faster wall-clock time than a single job running all tests (~10–15 min vs ~30–45 min).
 # Trigger: workflow_dispatch only (or add schedule/on push if desired).
+# The merged scoverage.xml is published as a workflow artifact (scoverage-merged).
 #
-# Requires: CODECOV_TOKEN secret.
 # Merge script: scripts/ci/merge_scoverage.py
 # Design: .github/docs/scala-coverage-parallel-design.md
 
@@ -108,9 +108,9 @@ jobs:
             echo "=============================================================================="
           fi
 
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de  # v5.5.2
+      - name: Upload merged coverage artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
         with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: merged/scoverage.xml
-          fail_ci_if_error: false
+          name: scoverage-merged
+          path: merged/scoverage.xml
+          if-no-files-found: warn

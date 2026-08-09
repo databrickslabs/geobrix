@@ -3,7 +3,7 @@
 Merge multiple scoverage.xml files from separate test runs (e.g. per-package runs)
 into a single scoverage.xml by taking, for each statement, the max invocation-count
 across all files. Use with granular CI: run scoverage:test per package in parallel,
-then run this script and upload the merged result to Codecov.
+then run this script to produce one merged coverage report.
 
 Usage:
   python merge_scoverage.py -o merged/scoverage.xml path/to/scoverage-rasterx.xml path/to/scoverage-gridx.xml ...

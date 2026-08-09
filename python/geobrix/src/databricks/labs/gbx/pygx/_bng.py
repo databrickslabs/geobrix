@@ -297,6 +297,18 @@ def format(cell_id: int) -> str:
     return f"{prefix}{x_str}{y_str}{QUADRANTS[q_idx]}"
 
 
+def parse_safe(cell_id: str):
+    """Bad-DATA-tolerant parse: a malformed BNG cell string (unrecognised prefix or
+    non-digit body) returns None rather than raising StopIteration/ValueError, so one
+    bad cell id in a column degrades to NULL instead of killing the stage."""
+    try:
+        return parse(cell_id)
+    except (
+        Exception
+    ):  # noqa: BLE001 — StopIteration (bad prefix) or ValueError (bad body)
+        return None
+
+
 def parse(cell_id: str) -> int:
     prefix = cell_id[:2] if len(cell_id) >= 2 else f"{cell_id}V"
     letter_row = next(row for row in LETTER_MAP if prefix in row)

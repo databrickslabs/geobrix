@@ -63,3 +63,36 @@ def test_schema_has_v2_fields():
         "crs",
         "metadata",
     }
+
+
+def test_build_tile_returns_v2_materialized_shape():
+    """build_tile emits the 8-field v2 struct: raster set, provenance NULL,
+    metadata carries driver/width/height/count (computed by opening the raster)."""
+    import rasterio
+    import numpy as np
+    from io import BytesIO
+    from databricks.labs.gbx.pyrx import _serde
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    # a tiny in-memory 4x3 single-band GeoTIFF
+    buf = BytesIO()
+    profile = dict(driver="GTiff", height=3, width=4, count=1, dtype="uint8")
+    with rasterio.io.MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(np.zeros((1, 3, 4), dtype="uint8"))
+        raster = mf.read()
+
+    d = _serde.build_tile(raster, "GTiff", 7)
+
+    # exactly the 8 v2 fields, exact names
+    assert set(d.keys()) == {f.name for f in V2_TILE_SCHEMA.fields}
+    assert d["cellid"] == 7
+    assert d["raster"] == raster
+    # provenance fields NULL for a materialized tile
+    for prov in ("path", "window", "clip_polygon", "clip_crs", "crs"):
+        assert d[prov] is None, f"{prov} should be NULL on a materialized tile"
+    # metadata computed by opening the raster (regression guard: NOT dropped)
+    assert d["metadata"]["driver"] == "GTiff"
+    assert d["metadata"]["width"] == "4"
+    assert d["metadata"]["height"] == "3"
+    assert d["metadata"]["count"] == "1"

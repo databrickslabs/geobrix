@@ -10,8 +10,9 @@ struct defined in ``pyrx.core.virtual_tile.V2_TILE_SCHEMA``:
 
 A materialized tile carries raster bytes (``raster`` is not null); the provenance
 fields (``path``, ``window``, ``clip_polygon``, ``clip_crs``, ``crs``) are null for
-a plain materialized tile.  The legacy ``TILE_SCHEMA`` below covers only the
-three-field subset used by older build_tile / open_tile helpers.
+a plain materialized tile. The ``build_tile`` helper now emits the full v2 struct;
+the legacy ``TILE_SCHEMA`` below is retained for backwards compatibility during
+migration.
 """
 
 from contextlib import contextmanager
@@ -26,6 +27,8 @@ from pyspark.sql.types import (
     StructType,
 )
 from rasterio.io import DatasetReader, MemoryFile
+
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
 TILE_SCHEMA = StructType(
     [
@@ -58,7 +61,14 @@ def build_error_tile(last_error: str, cellid: int = -1) -> Dict:
 
 
 def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:
-    """Construct a tile struct dict from raster BINARY content."""
+    """Construct a **v2-materialized** tile struct dict from raster BINARY content.
+
+    Opens the raster to record driver/width/height/count in ``metadata`` and
+    returns the 8-field ``V2_TILE_SCHEMA`` shape with ``raster`` set and every
+    provenance field (``path``/``window``/``clip_polygon``/``clip_crs``/``crs``)
+    NULL — the canonical materialized tile. Nothing in the light tier emits the
+    legacy 3-field struct anymore.
+    """
     raster = bytes(raster_bytes)
     with open_tile(raster) as ds:
         meta = {
@@ -67,4 +77,4 @@ def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:
             "height": str(ds.height),
             "count": str(ds.count),
         }
-    return {"cellid": int(cellid), "raster": raster, "metadata": meta}
+    return VirtualTile(cellid=int(cellid), raster=raster, metadata=meta).to_row()

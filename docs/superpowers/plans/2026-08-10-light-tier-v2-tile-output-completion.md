@@ -19,7 +19,7 @@
 - **Anti-bloat (standing guidance):** do NOT add ~48 per-function schema tests. Add exactly two data-driven standing guards (G1, G2) sourced from the registry; verify the migration with ad-hoc throwaway probes, not committed per-function tests; fold any existing per-function schema assertions into G1.
 - **Grep-authoritative scope:** the set of functions to convert is defined by a fresh grep of `@f.udf(_serde.TILE_SCHEMA)` and `@udtf(returnType=_serde.TILE_SCHEMA)` in `pyrx/functions.py` (41 + 7 = 48 at plan time), NOT any prose list.
 - **Tooling:** all tests/lint run in Docker via `gbx:*` commands — `bash scripts/commands/gbx-test-python.sh --path python/geobrix/test/pyrx/` and `--path python/geobrix/test/rasterx/`, `bash scripts/commands/gbx-lint-python.sh --check`. Never ad-hoc `pytest`/`docker`.
-- **SQL alignment:** widening the light UDF schema widens the registered SQL output struct 3→8 fields to match heavy. This is a desired, release-noted breaking change. No registered-name or arity changes.
+- **SQL alignment:** the light UDF schema is the 8-field v2 struct, matching heavy. This is net-new, unreleased 0.5.0 capability — NOT a change from any released behavior, so it is NOT framed as a breaking change and needs no migration/release note. The end state (both tiers use the v2 tile struct) is already documented on the Virtual Tiles / Tile Structure pages; this plan makes the code match those docs. No registered-name or arity changes.
 - **Do not push. Do not touch heavy Scala. Do not touch the light grouped aggregators** (`_sql_aggregators` — they return BINARY by convention, not a tile struct).
 
 ---
@@ -469,48 +469,6 @@ Only if the run environment has a staged JAR: add a `@pytest.mark.skipif(not _ja
 ```bash
 git add python/geobrix/test/rasterx/test_tile_schema_parity.py
 git commit -m "test(rasterx): G2 light-heavy v2 tile schema parity guard"
-```
-End the commit body with:
-```
-Co-authored-by: Isaac
-```
-
----
-
-### Task 8: Release note the light SQL schema widening
-
-**Files:**
-- Modify: `docs/docs/release-notes.mdx` (the v0.5.0 breaking-changes section)
-
-**Interfaces:**
-- Consumes: nothing (docs).
-- Produces: a user-facing breaking-change note that light-tier tile-returning SQL functions now output the 8-field v2 tile struct (was 3-field), aligning light with heavy.
-
-**Why a task:** the spec calls the SQL output widening a breaking change; 0.5.0 tracks breaking changes in release notes. This is docs-only and must use user-facing voice (no internal vocabulary — QC judge enforces the wave-number/internals-leak check).
-
-- [ ] **Step 1: Add the release note**
-
-In the v0.5.0 breaking-changes section of `docs/docs/release-notes.mdx`, add an entry (user-facing voice, no "wave"/"increment"/internal terms):
-
-```md
-- **Lightweight-tier raster tiles now use the v2 tile structure.** Every lightweight
-  `gbx_rst_*` function that returns a raster tile now outputs the full v2 tile struct
-  (`cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata`), matching the
-  heavyweight tier. Previously some lightweight functions returned a reduced
-  three-field struct (`cellid, raster, metadata`). Code that read tile fields by
-  position may need updating. See [Tile Structure](./api/tile-structure).
-```
-
-- [ ] **Step 2: Voice/leak check**
-
-Run: `grep -rn -iE "wave [0-9]+|wave-[0-9]+|increment [0-9]" docs/docs/release-notes.mdx`
-Expected: no output (nothing added leaks internal vocabulary).
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add docs/docs/release-notes.mdx
-git commit -m "docs(release): note light-tier v2 tile-struct SQL output (breaking)"
 ```
 End the commit body with:
 ```

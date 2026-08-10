@@ -66,11 +66,13 @@ fix; verify they aren't double-touched. Only scalar tile-returning `@f.udf(...TI
 
 ## SQL registration (Q2=yes, align to heavy)
 
-The light UDFs are registered as SQL functions (`"gbx_rst_clip": _clip_udf`, the `_SQL_FUNCTIONS`/register
-map in `pyrx/functions.py`). Widening the UDF schema widens the SQL output struct 3→8. This is **desired
-alignment**: heavy SQL already returns 8-field v2, so light SQL now matches it. Acceptable breaking change
-for 0.5.0 beta. No new registered names; no arity change; the registration map just points at UDFs that now
-carry `V2_TILE_SCHEMA`.
+The light UDFs are registered as SQL functions (`"gbx_rst_clip": _clip_udf`, the `_sql_tile_ops`/register
+map in `pyrx/functions.py`). The light UDF schema is the 8-field v2 struct, matching heavy. This is
+**net-new, unreleased 0.5.0 capability** — there is no released predecessor, so it is NOT a breaking change
+and needs NO migration/release note (the only current "user" is the developer building 0.5.0). Document the
+END STATE (both tiers use the v2 tile struct), which the Virtual Tiles / Tile Structure pages ALREADY do —
+this work just makes the code match those docs. No new registered names; no arity change; the registration
+map just points at UDFs that now carry `V2_TILE_SCHEMA`.
 
 ## Delete v1 (Section 2 = delete)
 
@@ -123,8 +125,9 @@ migration verification:
 
 ## Risk & out of scope
 
-- **Risk — breaking SQL output width.** Downstream positional reads of the 3-field struct break; acceptable
-  per 0.5.0 beta and it aligns light↔heavy (net less surprise). Release-note it under breaking changes.
+- **Not a breaking change.** The light tier is net-new unreleased 0.5.0 capability — no released 3-field
+  behavior ever shipped, so there is nothing to migrate from and no release note. Document only the end
+  state (both tiers emit the v2 tile struct), already covered by the Virtual Tiles / Tile Structure pages.
 - **Out of scope:** heavy tier (already v2); the RasterX tabbed-docs standardization (resumes after this);
   the reader/`virtualize_dir` behavior (unchanged — this only fixes the DEFAULT output SCHEMA of ops that
   were emitting legacy). No op semantics change.

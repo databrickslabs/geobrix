@@ -20,12 +20,14 @@ its own output, not a format string). Rules by return type:
   the function directly; output is its real scalar.
 - **Tile/struct-returning** (rst_clip, rst_resample, rst_transform, the constructors
   rst_fromfile/fromcontent/frombands, rst_getsubdataset, the *_agg family, …): show the
-  function directly; the output NOTE says it returns a **v2 Tile** and LINKS to
-  `./tile-structure` — "(returns a v2 Tile — see [Tile structure](./tile-structure))", the
-  SAME across all tiers. Do NOT enumerate the struct fields per function, and do NOT use the
-  OLD v1 `{cellid, raster, metadata}` / `STRUCT<cellid BIGINT, raster BINARY, metadata
-  MAP<...>>` form (v1; functions emit the v2 Tile Structure). Any representative `.show()`
-  value stays minimal/truthful.
+  function directly; the `_output` CODE BLOCK shows a representative v2-Tile struct —
+  `{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}` (the light-tier VIRTUAL shape,
+  since light defaults to virtual tiles → `path` populated) or similar. Do NOT put a markdown
+  link in `_output`: it renders in a `<CodeBlock language="text">` so `[..](..)` shows
+  literally. The clickable "v2 Tile" → `./tile-structure` pointer lives ONCE in the Conventions
+  section (prose). Do NOT use the OLD v1 `{cellid, raster, metadata}` / `STRUCT<...>` form.
+  Light (virtual, path-populated) and heavy (materialized) tile shapes legitimately DIFFER per
+  tier — correct per-tier rendering, not drift.
 - **Geometry-returning** (rst_boundingbox): `...` + "(WKB binary)" shorthand + note.
 This is the #1 recurring drift — agents wrapped tile-returning functions in an accessor. Do NOT.
 

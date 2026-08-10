@@ -39,11 +39,17 @@ the tabs; and the output-note convention. Individual functions therefore show on
   scalar, **identical across all tiers** (same fixture → same value). No placeholders
   (`[<float>]`), no `{}` where a real value exists.
 - **Tile/struct-returning** (`rst_clip`, `rst_resample`, `rst_transform`, the constructors,
-  `rst_getsubdataset`, the `*_agg` family, …): the output NOTE says it returns a **v2 Tile** and
-  links to the tile-structure page — `(returns a v2 Tile — see [Tile structure](./tile-structure))`.
-  Do **not** enumerate the struct fields per function, and do **not** use the OLD v1
-  `{cellid, raster, metadata}` / `STRUCT<cellid BIGINT, raster BINARY, metadata MAP<...>>` form
-  (functions emit the **v2** Tile Structure). Any representative `.show()` value stays minimal.
+  `rst_getsubdataset`, the `*_agg` family, …): the `_output` code block shows a **representative
+  v2-Tile struct**, e.g. `{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}` — the
+  light-tier virtual-tile shape (light defaults to **virtual tiles**, so its tile carries a
+  populated `path`). Use that (or similar) for all tile output. Do **not** put a markdown link
+  in the `_output` block — it is rendered inside a `<CodeBlock language="text">`, so markdown
+  like `[Tile structure](./tile-structure)` renders LITERALLY, not as a link. The clickable
+  "**v2 Tile**" pointer to `./tile-structure` lives ONCE in the page **Conventions** section
+  (prose, where markdown renders), not per function. Do **not** use the OLD v1 3-field
+  `{cellid, raster, metadata}` / `STRUCT<...>` form. Note: the light tab (virtual, `path`
+  populated) and the heavy tab (materialized) tile shapes legitimately DIFFER per tier — that
+  is correct per-tier rendering, not drift.
 - **Geometry-returning** (`rst_boundingbox`): `...` + `(WKB binary)` shorthand + note.
 - Never let SQL bleed into a Python/Scala tab; each tab is idiomatic to its language.
 

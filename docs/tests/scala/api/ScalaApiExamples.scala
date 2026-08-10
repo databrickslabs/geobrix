@@ -412,19 +412,22 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
 rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-// Plain GeoTIFFs have no subdatasets; rst_getsubdataset returns NULL
-val result = rasters.select(rx.rst_getsubdataset(col("tile"), lit("")).alias("subdataset"))
+// Multi-layer formats such as NetCDF expose each variable as a subdataset.
+// rst_getsubdataset extracts one layer by name and returns it as a new tile.
+val rasters = spark.read.format("netcdf_gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_climate.nc")
+val result = rasters.select(
+  rx.rst_width(rx.rst_getsubdataset(col("tile"), lit("temperature"))).alias("width")
+)
 result.show()
 """.trim
 
   val rst_getsubdataset_scala_example_output: String =
     """
-+----------+
-|subdataset|
-+----------+
-|null      |
-+----------+
++-----+
+|width|
++-----+
+|4    |
++-----+
 """.trim
 
   val rst_height_scala_example: String =

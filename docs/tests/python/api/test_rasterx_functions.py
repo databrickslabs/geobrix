@@ -113,10 +113,10 @@ def test_rst_getnodata_python_heavy_example(spark):
 
 
 def test_rst_getsubdataset_python_heavy_example(spark):
-    """rst_getsubdataset example returns empty dict for plain GTiff."""
+    """rst_getsubdataset extracts a NetCDF subdataset and returns width=4."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_getsubdataset_python_heavy_example(spark)
-    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+    assert result == 4, f"Expected width 4 from extracted subdataset, got {result!r}"
 
 
 def test_rst_height_python_heavy_example(spark):

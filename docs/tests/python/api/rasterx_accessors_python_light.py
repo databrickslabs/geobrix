@@ -43,6 +43,40 @@ def _make_geotiff_bytes(width=4, height=3, count=1, epsg=4326):
         return mf.read()
 
 
+def _make_netcdf_bytes(width=4, height=4):
+    """Return NETCDF4 bytes with 'temperature' and 'precipitation' variables.
+
+    Uses two variables so GDAL exposes them as subdatasets, enabling
+    rst_getsubdataset to extract a named layer.  No real file path needed —
+    rasterio MemoryFile can open NETCDF4 (HDF5-based) bytes from memory.
+    """
+    import numpy as np
+    import netCDF4 as nc4
+    import tempfile, os
+
+    with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as fh:
+        nc_path = fh.name
+    with nc4.Dataset(nc_path, "w", format="NETCDF4") as ds:
+        ds.createDimension("y", height)
+        ds.createDimension("x", width)
+        for vname in ("temperature", "precipitation"):
+            v = ds.createVariable(vname, "f4", ("y", "x"))
+            v[:] = np.arange(width * height, dtype="float32").reshape(height, width)
+    with open(nc_path, "rb") as fh:
+        nc_bytes = fh.read()
+    os.unlink(nc_path)
+    return nc_bytes
+
+
+def _nc_tile_df(spark, width=4, height=4):
+    """One-row DataFrame with a NetCDF tile struct column named 'tile'."""
+    from pyspark.sql import functions as f
+
+    raster = _make_netcdf_bytes(width=width, height=height)
+    df = spark.createDataFrame([(bytearray(raster),)], ["raster"])
+    return df.select(rx.rst_fromcontent("raster", f.lit("netCDF")).alias("tile"))
+
+
 def _tile_df(spark, **kw):
     """One-row DataFrame with a tile struct column named 'tile'."""
     from pyspark.sql import functions as f
@@ -157,25 +191,30 @@ rst_getnodata_python_light_example_output = """
 
 
 def rst_getsubdataset_python_light_example(spark):
-    """Get the subdataset map for a raster tile using the light pyrx tier.
+    """Extract a named subdataset from a NetCDF raster tile using the light pyrx tier.
 
-    Plain GeoTIFFs have no subdatasets, so rst_subdatasets returns an empty map
-    and rst_getsubdataset returns NULL. This example shows both behaviours.
+    Multi-layer formats such as NetCDF expose each variable as a subdataset.
+    rst_getsubdataset extracts one layer by name and returns it as a new tile.
     """
+    from pyspark.sql import functions as f
     from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
-    tile_df = _tile_df(spark)
-    result = tile_df.select(rx.rst_subdatasets("tile").alias("subs")).first()
-    return result["subs"]
+    nc_df = _nc_tile_df(spark, width=4, height=4)
+    result = nc_df.select(
+        rx.rst_width(
+            rx.rst_getsubdataset("tile", f.lit("temperature"))
+        ).alias("width")
+    ).first()
+    return result["width"]
 
 
 rst_getsubdataset_python_light_example_output = """
-+----+
-|subs|
-+----+
-|{}  |
-+----+
++-----+
+|width|
++-----+
+|4    |
++-----+
 """
 
 

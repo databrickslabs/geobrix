@@ -387,21 +387,26 @@ rst_getnodata_sql_example_output = """
 
 
 def rst_getsubdataset_sql_example():
-    """Extract subdataset from multi-layer format"""
+    """Extract a named subdataset from a NetCDF raster and return its width.
+
+    Multi-layer formats such as NetCDF expose each variable as a subdataset.
+    gbx_rst_getsubdataset extracts one layer by name; gbx_rst_width confirms
+    the extracted tile dimensions.
+    """
     return """
 SELECT
     path,
-    gbx_rst_getsubdataset(tile, 'temperature') as temp_layer
-FROM netcdf_files;
+    gbx_rst_width(gbx_rst_getsubdataset(tile, 'temperature')) AS width
+FROM rasters;
 """
 
 
 rst_getsubdataset_sql_example_output = """
-+----+----------------------------------------------+
-|path|temp_layer                                    |
-+----+----------------------------------------------+
-|... |{null, <raster bytes>, {driver -> GTiff, ...}}|
-+----+----------------------------------------------+
++----+-----+
+|path|width|
++----+-----+
+|... |4    |
++----+-----+
 """
 
 

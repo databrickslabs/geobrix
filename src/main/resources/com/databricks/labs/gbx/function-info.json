@@ -297,7 +297,7 @@
       ]
     },
     "gbx_rst_getsubdataset": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_getsubdataset(tile, 'temperature') as temp_layer FROM netcdf_files;",
+      "examples": "Examples:\n      > SELECT path, gbx_rst_width(gbx_rst_getsubdataset(tile, 'temperature')) AS width FROM rasters;",
       "usage_args": "tile, subset_name",
       "bindings": [
         "sql",

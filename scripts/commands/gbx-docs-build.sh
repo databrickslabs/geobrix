@@ -91,6 +91,10 @@ fi
 
 cd "$PROJECT_ROOT/docs" || exit 1
 
+# Clear stale Docusaurus cache + prior build so a corrupt cache can't break a
+# subsequent `gbx:docs:dev` (the user's port-3000 server). Both are gitignored.
+rm -rf "$PROJECT_ROOT/docs/.docusaurus" "$PROJECT_ROOT/docs/build"
+
 echo -e "${CYAN}Running npm run build...${NC}"
 show_separator
 npm run build

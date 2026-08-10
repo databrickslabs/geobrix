@@ -68,7 +68,11 @@ def rst_avg_python_light_example(spark):
 
 
 rst_avg_python_light_example_output = """
-[5.5]
++-------------+
+|band_averages|
++-------------+
+|        [5.5]|
++-------------+
 """
 
 
@@ -92,7 +96,12 @@ def rst_boundingbox_python_light_example(spark):
 
 
 rst_boundingbox_python_light_example_output = """
-[WKB binary bytes — bounding POLYGON of the raster extent]
++----+
+|bbox|
++----+
+|[...|
++----+
+(WKB binary bytes — bounding POLYGON of the raster extent)
 """
 
 
@@ -112,7 +121,11 @@ def rst_numbands_python_light_example(spark):
 
 
 rst_numbands_python_light_example_output = """
-1
++---------+
+|num_bands|
++---------+
+|        1|
++---------+
 """
 
 
@@ -132,7 +145,11 @@ def rst_width_python_light_example(spark):
 
 
 rst_width_python_light_example_output = """
-4
++-----+
+|width|
++-----+
+|    4|
++-----+
 """
 
 
@@ -171,5 +188,9 @@ def rst_fromfile_python_light_example(spark):
 
 
 rst_fromfile_python_light_example_output = """
-4
++-----+
+|width|
++-----+
+|    4|
++-----+
 """

@@ -71,7 +71,11 @@ def rst_bandmetadata_python_light_example(spark):
 
 
 rst_bandmetadata_python_light_example_output = """
-{'STATISTICS_MAXIMUM': '11.0', 'STATISTICS_MEAN': '5.5', 'STATISTICS_MINIMUM': '0.0', ...}
++---------+
+|band_meta|
++---------+
+|{}       |
++---------+
 """
 
 
@@ -91,7 +95,11 @@ def rst_format_python_light_example(spark):
 
 
 rst_format_python_light_example_output = """
-GTiff
++------+
+|format|
++------+
+|GTiff |
++------+
 """
 
 
@@ -111,7 +119,11 @@ def rst_georeference_python_light_example(spark):
 
 
 rst_georeference_python_light_example_output = """
-{'scaleX': 0.5, 'scaleY': -0.5, 'skewX': 0.0, 'skewY': 0.0, 'upperLeftX': 10.0, 'upperLeftY': 50.0}
++------------------------------------------------------------+
+|                                                georeference|
++------------------------------------------------------------+
+|{scaleX -> 0.5, scaleY -> -0.5, upperLeftY -> 50.0, skewX...|
++------------------------------------------------------------+
 """
 
 
@@ -131,7 +143,11 @@ def rst_getnodata_python_light_example(spark):
 
 
 rst_getnodata_python_light_example_output = """
-[-9999.0]
++----------+
+|nodata    |
++----------+
+|[-9999.0] |
++----------+
 """
 
 
@@ -155,7 +171,11 @@ def rst_getsubdataset_python_light_example(spark):
 
 
 rst_getsubdataset_python_light_example_output = """
-{}
++----+
+|subs|
++----+
+|{}  |
++----+
 """
 
 
@@ -175,7 +195,11 @@ def rst_height_python_light_example(spark):
 
 
 rst_height_python_light_example_output = """
-3
++------+
+|height|
++------+
+|3     |
++------+
 """
 
 
@@ -195,7 +219,11 @@ def rst_max_python_light_example(spark):
 
 
 rst_max_python_light_example_output = """
-[11.0]
++--------+
+|band_max|
++--------+
+|[11.0]  |
++--------+
 """
 
 
@@ -215,7 +243,11 @@ def rst_median_python_light_example(spark):
 
 
 rst_median_python_light_example_output = """
-[5.5]
++-----------+
+|band_median|
++-----------+
+|[5.5]      |
++-----------+
 """
 
 
@@ -235,7 +267,11 @@ def rst_memsize_python_light_example(spark):
 
 
 rst_memsize_python_light_example_output = """
-> 0
++-------+
+|memsize|
++-------+
+|432    |
++-------+
 """
 
 
@@ -255,7 +291,11 @@ def rst_metadata_python_light_example(spark):
 
 
 rst_metadata_python_light_example_output = """
-{'AREA_OR_POINT': 'Area', ...}
++--------------------------------------------------+
+|                                          metadata|
++--------------------------------------------------+
+|{driver -> GTiff, crs -> EPSG:4326, count -> 1,...|
++--------------------------------------------------+
 """
 
 
@@ -275,7 +315,11 @@ def rst_min_python_light_example(spark):
 
 
 rst_min_python_light_example_output = """
-[0.0]
++--------+
+|band_min|
++--------+
+|[0.0]   |
++--------+
 """
 
 
@@ -295,7 +339,11 @@ def rst_pixelcount_python_light_example(spark):
 
 
 rst_pixelcount_python_light_example_output = """
-[12]
++-----------+
+|pixel_count|
++-----------+
+|[12]       |
++-----------+
 """
 
 
@@ -315,7 +363,11 @@ def rst_pixelheight_python_light_example(spark):
 
 
 rst_pixelheight_python_light_example_output = """
-0.5
++------------+
+|pixel_height|
++------------+
+|0.5         |
++------------+
 """
 
 
@@ -335,7 +387,11 @@ def rst_pixelwidth_python_light_example(spark):
 
 
 rst_pixelwidth_python_light_example_output = """
-0.5
++-----------+
+|pixel_width|
++-----------+
+|0.5        |
++-----------+
 """
 
 
@@ -355,7 +411,11 @@ def rst_rotation_python_light_example(spark):
 
 
 rst_rotation_python_light_example_output = """
-0.0
++--------+
+|rotation|
++--------+
+|0.0     |
++--------+
 """
 
 
@@ -375,7 +435,11 @@ def rst_scalex_python_light_example(spark):
 
 
 rst_scalex_python_light_example_output = """
-0.5
++-------+
+|scale_x|
++-------+
+|0.5    |
++-------+
 """
 
 
@@ -399,7 +463,11 @@ def rst_scaley_python_light_example(spark):
 
 
 rst_scaley_python_light_example_output = """
--0.5
++-------+
+|scale_y|
++-------+
+|-0.5   |
++-------+
 """
 
 
@@ -419,7 +487,11 @@ def rst_skewx_python_light_example(spark):
 
 
 rst_skewx_python_light_example_output = """
-0.0
++------+
+|skew_x|
++------+
+|0.0   |
++------+
 """
 
 
@@ -439,7 +511,11 @@ def rst_skewy_python_light_example(spark):
 
 
 rst_skewy_python_light_example_output = """
-0.0
++------+
+|skew_y|
++------+
+|0.0   |
++------+
 """
 
 
@@ -459,7 +535,11 @@ def rst_srid_python_light_example(spark):
 
 
 rst_srid_python_light_example_output = """
-4326
++----+
+|srid|
++----+
+|4326|
++----+
 """
 
 
@@ -479,7 +559,11 @@ def rst_crs_python_light_example(spark):
 
 
 rst_crs_python_light_example_output = """
-EPSG:4326
++---------+
+|crs      |
++---------+
+|EPSG:4326|
++---------+
 """
 
 
@@ -504,7 +588,11 @@ def rst_subdatasets_python_light_example(spark):
 
 
 rst_subdatasets_python_light_example_output = """
-{}
++-----------+
+|subdatasets|
++-----------+
+|{}         |
++-----------+
 """
 
 
@@ -524,7 +612,11 @@ def rst_summary_python_light_example(spark):
 
 
 rst_summary_python_light_example_output = """
-{"driver": "GTiff", "size": [4, 3], "crs": "EPSG:4326", "bands": [...]}
++------------------------------------------------------------+
+|                                                     summary|
++------------------------------------------------------------+
+|{driverShortName: GTiff, size: [4, 3], coordinateSystem: ...|
++------------------------------------------------------------+
 """
 
 
@@ -544,7 +636,11 @@ def rst_type_python_light_example(spark):
 
 
 rst_type_python_light_example_output = """
-['Float32']
++----------+
+|band_types|
++----------+
+|[Float32] |
++----------+
 """
 
 
@@ -564,7 +660,11 @@ def rst_upperleftx_python_light_example(spark):
 
 
 rst_upperleftx_python_light_example_output = """
-10.0
++------------+
+|upper_left_x|
++------------+
+|        10.0|
++------------+
 """
 
 
@@ -584,7 +684,11 @@ def rst_upperlefty_python_light_example(spark):
 
 
 rst_upperlefty_python_light_example_output = """
-50.0
++------------+
+|upper_left_y|
++------------+
+|        50.0|
++------------+
 """
 
 
@@ -604,7 +708,11 @@ def rst_isempty_python_light_example(spark):
 
 
 rst_isempty_python_light_example_output = """
-False
++--------+
+|is_empty|
++--------+
+|   false|
++--------+
 """
 
 
@@ -624,7 +732,11 @@ def rst_tryopen_python_light_example(spark):
 
 
 rst_tryopen_python_light_example_output = """
-True
++--------+
+|try_open|
++--------+
+|    true|
++--------+
 """
 
 
@@ -644,5 +756,9 @@ def rst_histogram_python_light_example(spark):
 
 
 rst_histogram_python_light_example_output = """
-{'band_1': [1, 0, 0, ..., 1, 0, ...]}
++--------------------------------------------------+
+|                                         histogram|
++--------------------------------------------------+
+|{band_1 -> [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,...|
++--------------------------------------------------+
 """

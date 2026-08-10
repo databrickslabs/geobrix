@@ -262,7 +262,7 @@ result.show()
 +-------------+
 |band_averages|
 +-------------+
-|[<float>]    |
+|[5.5]        |
 +-------------+
 """.trim
 
@@ -322,7 +322,7 @@ result.show()
 +-----+
 |width|
 +-----+
-|10980|
+|4    |
 +-----+
 """.trim
 
@@ -339,11 +339,11 @@ result.show(truncate = false)
 
   val rst_bandmetadata_scala_example_output: String =
     """
-+--------------------------------------------+
-|band_meta                                   |
-+--------------------------------------------+
-|{STATISTICS_MAXIMUM -> ..., ...}            |
-+--------------------------------------------+
++---------+
+|band_meta|
++---------+
+|{}       |
++---------+
 """.trim
 
   val rst_format_scala_example: String =
@@ -379,11 +379,11 @@ result.show(truncate = false)
 
   val rst_georeference_scala_example_output: String =
     """
-+----------------------------------------------------------------+
-|georeference                                                    |
-+----------------------------------------------------------------+
-|{scaleX -> ..., scaleY -> ..., skewX -> 0.0, skewY -> 0.0, ...}|
-+----------------------------------------------------------------+
++------------------------------------------------------------+
+|                                                georeference|
++------------------------------------------------------------+
+|{scaleX -> 0.5, scaleY -> -0.5, upperLeftY -> 50.0, skewX...|
++------------------------------------------------------------+
 """.trim
 
   val rst_getnodata_scala_example: String =
@@ -399,11 +399,11 @@ result.show()
 
   val rst_getnodata_scala_example_output: String =
     """
-+------+
-|nodata|
-+------+
-|[0.0] |
-+------+
++---------+
+|nodata   |
++---------+
+|[-9999.0]|
++---------+
 """.trim
 
   val rst_getsubdataset_scala_example: String =
@@ -443,7 +443,7 @@ result.show()
 +------+
 |height|
 +------+
-|10980 |
+|3     |
 +------+
 """.trim
 
@@ -460,11 +460,11 @@ result.show()
 
   val rst_max_scala_example_output: String =
     """
-+----------+
-|band_max  |
-+----------+
-|[<float>] |
-+----------+
++--------+
+|band_max|
++--------+
+|[11.0]  |
++--------+
 """.trim
 
   val rst_median_scala_example: String =
@@ -483,7 +483,7 @@ result.show()
 +-----------+
 |band_median|
 +-----------+
-|[<float>]  |
+|[5.5]      |
 +-----------+
 """.trim
 
@@ -500,11 +500,11 @@ result.show()
 
   val rst_memsize_scala_example_output: String =
     """
-+--------+
-|memsize |
-+--------+
-|<bytes> |
-+--------+
++-------+
+|memsize|
++-------+
+|432    |
++-------+
 """.trim
 
   val rst_metadata_scala_example: String =
@@ -520,11 +520,11 @@ result.show(truncate = false)
 
   val rst_metadata_scala_example_output: String =
     """
-+----------------------------------+
-|metadata                          |
-+----------------------------------+
-|{AREA_OR_POINT -> Area, ...}      |
-+----------------------------------+
++--------------------------------------------------+
+|                                          metadata|
++--------------------------------------------------+
+|{driver -> GTiff, crs -> EPSG:4326, count -> 1,...|
++--------------------------------------------------+
 """.trim
 
   val rst_min_scala_example: String =
@@ -540,11 +540,11 @@ result.show()
 
   val rst_min_scala_example_output: String =
     """
-+----------+
-|band_min  |
-+----------+
-|[<float>] |
-+----------+
++--------+
+|band_min|
++--------+
+|[0.0]   |
++--------+
 """.trim
 
   val rst_pixelcount_scala_example: String =
@@ -563,7 +563,7 @@ result.show()
 +-----------+
 |pixel_count|
 +-----------+
-|[<int>]    |
+|[12]       |
 +-----------+
 """.trim
 
@@ -583,7 +583,7 @@ result.show()
 +------------+
 |pixel_height|
 +------------+
-|<float>     |
+|0.5         |
 +------------+
 """.trim
 
@@ -603,7 +603,7 @@ result.show()
 +-----------+
 |pixel_width|
 +-----------+
-|<float>    |
+|0.5        |
 +-----------+
 """.trim
 
@@ -646,7 +646,7 @@ result.show()
 +-------+-------+
 |scale_x|scale_y|
 +-------+-------+
-|<float>|<float>|
+|0.5    |-0.5   |
 +-------+-------+
 """.trim
 
@@ -753,9 +753,9 @@ result.show(truncate = false)
   val rst_summary_scala_example_output: String =
     """
 +------------------------------------------------------------+
-|summary                                                     |
+|                                                     summary|
 +------------------------------------------------------------+
-|{"driverShortName":"GTiff","driverLongName":"GeoTIFF",...}  |
+|{driverShortName: GTiff, size: [4, 3], coordinateSystem: ...|
 +------------------------------------------------------------+
 """.trim
 
@@ -775,7 +775,7 @@ result.show()
 +----------+
 |band_types|
 +----------+
-|[UInt16]  |
+|[Float32] |
 +----------+
 """.trim
 
@@ -798,7 +798,7 @@ result.show()
 +------------+------------+
 |upper_left_x|upper_left_y|
 +------------+------------+
-|<float>     |<float>     |
+|10.0        |50.0        |
 +------------+------------+
 """.trim
 
@@ -858,11 +858,11 @@ result.show(truncate = false)
 
   val rst_histogram_scala_example_output: String =
     """
-+-----------------------------+
-|histogram                    |
-+-----------------------------+
-|{band_1 -> [<counts>, ...]}  |
-+-----------------------------+
++--------------------------------------------------+
+|                                         histogram|
++--------------------------------------------------+
+|{band_1 -> [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,...|
++--------------------------------------------------+
 """.trim
 
 }

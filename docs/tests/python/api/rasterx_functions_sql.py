@@ -10,6 +10,7 @@ view below so SQL examples can use FROM rasters.
 
 # Sample path at runtime (path_config)
 from path_config import SAMPLE_DATA_BASE
+
 SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 # Common setup: create temp view so SQL examples can use FROM rasters
@@ -24,6 +25,7 @@ View `rasters` created. You can now run SELECT ... FROM rasters; for each exampl
 # ============================================================================
 # Accessor Functions - Get Raster Properties
 # ============================================================================
+
 
 def rst_boundingbox_sql_example():
     """Get bounding box of rasters using SQL"""
@@ -52,7 +54,7 @@ rst_width_sql_example_output = """
 +-----+
 |width|
 +-----+
-|10980|
+|4    |
 +-----+
 """
 
@@ -68,7 +70,7 @@ rst_height_sql_example_output = """
 +------+-----+
 |height|width|
 +------+-----+
-|10980 |10980|
+|3     |4    |
 +------+-----+
 """
 
@@ -97,11 +99,11 @@ SELECT gbx_rst_metadata(tile) as metadata FROM rasters;
 
 
 rst_metadata_sql_example_output = """
-+--------+
-|metadata|
-+--------+
-|{...}   |
-+--------+
++--------------------------------------------------+
+|                                          metadata|
++--------------------------------------------------+
+|{driver -> GTiff, crs -> EPSG:4326, count -> 1,...|
++--------------------------------------------------+
 """
 
 
@@ -113,11 +115,11 @@ SELECT gbx_rst_srid(tile) as srid FROM rasters;
 
 
 rst_srid_sql_example_output = """
-+-----+
-|srid |
-+-----+
-|32618|
-+-----+
++----+
+|srid|
++----+
+|4326|
++----+
 """
 
 
@@ -147,11 +149,11 @@ SELECT gbx_rst_georeference(tile) as georeference FROM rasters;
 
 
 rst_georeference_sql_example_output = """
-+------------+
-|georeference|
-+------------+
-|[ ... ]     |
-+------------+
++------------------------------------------------------------+
+|                                                georeference|
++------------------------------------------------------------+
+|{scaleX -> 0.5, scaleY -> -0.5, upperLeftY -> 50.0, skewX...|
++------------------------------------------------------------+
 """
 
 
@@ -166,7 +168,7 @@ rst_bandmetadata_sql_example_output = """
 +--------------+
 |band1_metadata|
 +--------------+
-|{...}         |
+|{}            |
 +--------------+
 """
 
@@ -182,7 +184,7 @@ rst_pixelcount_sql_example_output = """
 +-----------+
 |pixel_count|
 +-----------+
-|120560400  |
+|[12]       |
 +-----------+
 """
 
@@ -207,7 +209,7 @@ rst_avg_sql_example_output = """
 +----+-------------+---------+
 |path|band_averages|band1_avg|
 +----+-------------+---------+
-|... |[0.42]       |0.42     |
+|... |[5.5]        |5.5      |
 +----+-------------+---------+
 """
 
@@ -239,7 +241,7 @@ rst_max_sql_example_output = """
 +----+------------+---------+
 |path|max_per_band|band1_max|
 +----+------------+---------+
-|... |[255.0]     |255.0    |
+|... |[11.0]      |11.0     |
 +----+------------+---------+
 """
 
@@ -284,7 +286,7 @@ rst_median_sql_example_output = """
 +----+----------+------------+--------+
 |path|mean_value|median_value|skewness|
 +----+----------+------------+--------+
-|... |0.45      |0.42        |0.03    |
+|... |5.5       |5.5         |0.0     |
 +----+----------+------------+--------+
 """
 
@@ -338,7 +340,7 @@ rst_type_sql_example_output = """
 +----+----------+----------+
 |path|band_types|band1_type|
 +----+----------+----------+
-|... |[Byte]    |Byte      |
+|... |[Float32] |Float32   |
 +----+----------+----------+
 """
 
@@ -359,7 +361,7 @@ rst_pixelsize_sql_example_output = """
 +----+-----------+------------+-------------+
 |path|pixel_width|pixel_height|total_width_m|
 +----+-----------+------------+-------------+
-|... |30.0       |-30.0       |329400.0     |
+|... |0.5        |-0.5        |2.0          |
 +----+-----------+------------+-------------+
 """
 
@@ -414,7 +416,7 @@ rst_memsize_sql_example_output = """
 +----+----------+
 |path|size_bytes|
 +----+----------+
-|... |120560400 |
+|... |432       |
 +----+----------+
 """
 
@@ -450,7 +452,7 @@ rst_scalex_scaley_sql_example_output = """
 +----+-------+-------+
 |path|scale_x|scale_y|
 +----+-------+-------+
-|... |30.0   |-30.0  |
+|... |0.5    |-0.5   |
 +----+-------+-------+
 """
 
@@ -499,11 +501,11 @@ SELECT path, gbx_rst_summary(tile) as summary FROM rasters;
 
 
 rst_summary_sql_example_output = """
-+----+-------+
-|path|summary|
-+----+-------+
-|... |{...}  |
-+----+-------+
++----+------------------------------------------------------------+
+|path|                                                     summary|
++----+------------------------------------------------------------+
+|... |{driverShortName: GTiff, size: [4, 3], coordinateSystem: ...|
++----+------------------------------------------------------------+
 """
 
 
@@ -522,7 +524,7 @@ rst_upperleft_sql_example_output = """
 +----+------------+------------+
 |path|upper_left_x|upper_left_y|
 +----+------------+------------+
-|... |500000.0    |200000.0    |
+|... |10.0        |50.0        |
 +----+------------+------------+
 """
 
@@ -530,6 +532,7 @@ rst_upperleft_sql_example_output = """
 # ============================================================================
 # Constructor Functions - Create/Load Rasters
 # ============================================================================
+
 
 def rst_fromfile_sql_example():
     """Load raster from file path"""
@@ -623,6 +626,7 @@ rst_frombands_agg_sql_example_output = """
 # ============================================================================
 # Transformation Functions - Modify Rasters
 # ============================================================================
+
 
 def rst_clip_sql_example():
     """Clip raster with geometry"""
@@ -802,6 +806,7 @@ rst_convolve_sql_example_output = """
 # Coordinate Transformation Functions
 # ============================================================================
 
+
 def rst_rastertoworldcoord_sql_example():
     """Convert pixel coordinates to world coordinates"""
     return """
@@ -929,6 +934,7 @@ rst_worldtorastercoordy_sql_example_output = """
 # Validation Functions
 # ============================================================================
 
+
 def rst_isempty_sql_example():
     """Check for empty rasters"""
     return """
@@ -987,6 +993,7 @@ rst_tryopen_sql_example_output = """
 # ============================================================================
 # Advanced Operations
 # ============================================================================
+
 
 def rst_mapalgebra_sql_example():
     """Apply map algebra expression"""
@@ -1102,6 +1109,7 @@ rst_merge_sql_example_output = """
 # ============================================================================
 # H3 Grid Functions
 # ============================================================================
+
 
 def rst_h3_tessellate_sql_example():
     """Tessellate raster to H3 grid (covering or centroid mode)"""
@@ -1725,6 +1733,7 @@ rst_bng_rastertogridstddev_sql_example_output = """
 # Generator Functions - Produce Multiple Rows
 # ============================================================================
 
+
 def rst_maketiles_sql_example():
     """Subdivide rasters into tiles by approximate size in MB"""
     return """
@@ -1828,6 +1837,7 @@ rst_separatebands_sql_example_output = """
 # Aggregation Functions
 # ============================================================================
 
+
 def rst_combineavg_sql_example():
     """Average multiple rasters for temporal composite"""
     return """
@@ -1900,6 +1910,7 @@ rst_merge_agg_sql_example_output = """
 # ============================================================================
 # Web-Mercator Tile Output Functions
 # ============================================================================
+
 
 def rst_to_webmercator_sql_example():
     """Reproject a raster to EPSG:3857 (web mercator)"""
@@ -1974,6 +1985,7 @@ rst_xyzpyramid_sql_example_output = """
 # ============================================================================
 # Vector<->Raster Bridge Functions
 # ============================================================================
+
 
 def rst_rasterize_sql_example():
     """Burn a square polygon (WKB) into a 100x100 raster tile."""
@@ -2654,6 +2666,7 @@ rst_dtmfromgeoms_agg_sql_example_output = """
 # ============================================================================
 # H3 Cell Rasterizer Functions
 # ============================================================================
+
 
 def rst_h3_rasterize_agg_sql_example():
     """Aggregator: rasterize a group of H3 cells into one tile (pixel-centroid burn)."""

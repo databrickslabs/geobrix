@@ -10,9 +10,7 @@ struct defined in ``pyrx.core.virtual_tile.V2_TILE_SCHEMA``:
 
 A materialized tile carries raster bytes (``raster`` is not null); the provenance
 fields (``path``, ``window``, ``clip_polygon``, ``clip_crs``, ``crs``) are null for
-a plain materialized tile. The ``build_tile`` helper now emits the full v2 struct;
-the legacy ``TILE_SCHEMA`` below is retained for backwards compatibility during
-migration.
+a plain materialized tile. The ``build_tile`` helper now emits the full v2 struct.
 """
 
 from contextlib import contextmanager
@@ -29,14 +27,6 @@ from pyspark.sql.types import (
 from rasterio.io import DatasetReader, MemoryFile
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
-
-TILE_SCHEMA = StructType(
-    [
-        StructField("cellid", LongType(), nullable=False),
-        StructField("raster", BinaryType(), nullable=True),
-        StructField("metadata", MapType(StringType(), StringType()), nullable=True),
-    ]
-)
 
 
 @contextmanager

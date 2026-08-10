@@ -5346,7 +5346,7 @@ def _as_tile_cellid_envelope_udf_fn(raster_bytes):
     return _serde.build_tile(rb[8:], "GTiff", cellid)
 
 
-_as_tile_cellid_envelope_udf = f.udf(_serde.TILE_SCHEMA)(
+_as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(
     _as_tile_cellid_envelope_udf_fn
 )
 

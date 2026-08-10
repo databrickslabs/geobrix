@@ -455,7 +455,7 @@ def _histogram_udf(tile, n_buckets, min_val, max_val, include_nodata):
         return accessors.histogram(ds, nb, lo, hi, inc)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _getsubdataset_udf(tile, name):
     if _tile_is_empty(tile) or name is None:
         return None
@@ -527,7 +527,7 @@ def _worldtorastercoord_udf(tile, x, y):
 
 
 # --- Constructor ------------------------------------------------------------
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _fromcontent_udf(raster, drv):
     if raster is None:
         return None
@@ -544,7 +544,7 @@ def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
 # driver is a format hint carried into metadata (rasterio auto-detects on open).
 # The heavyweight wraps eval in Option(...).orNull, so a bad/missing path
 # yields NULL rather than raising — match that by returning None on failure.
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _fromfile_udf(path, driver):
     if path is None:
         return None
@@ -644,7 +644,7 @@ def _merge_bytes(tiles):
     return agg_core.merge_tiles(rasters), dropped
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _merge_udf(tiles):
     if not tiles:
         return None
@@ -759,7 +759,7 @@ def _combineavg_bytes(tiles):
     return agg_core.combineavg_tiles(rasters), cellid, dropped
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _combineavg_udf(tiles):
     if not tiles:
         return None
@@ -874,7 +874,7 @@ def _frombands_bytes(bands):
     return agg_core.frombands_tiles(indexed), cellid, dropped
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _frombands_udf(bands):
     if not bands:
         return None
@@ -971,7 +971,7 @@ def _transform_bytes(tile, target_srid):
         return warp.reproject_to_srid(ds, int(target_srid))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _transform_udf(tile, target_srid):
     if _tile_is_empty(tile):
         return None
@@ -999,7 +999,7 @@ def _to_webmercator_bytes(tile, resampling):
         return warp.reproject_to_srid(ds, 3857, resampling=str(resampling))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _to_webmercator_udf(tile, resampling):
     if _tile_is_empty(tile):
         return None
@@ -1083,7 +1083,7 @@ def _resample_bytes(tile, factor, algorithm):
         return resample.resample_by_factor(ds, float(factor), str(algorithm))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _resample_udf(tile, factor, algorithm):
     if _tile_is_empty(tile):
         return None
@@ -1113,7 +1113,7 @@ def _resample_to_size_bytes(tile, width_px, height_px, algorithm):
         )
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _resample_to_size_udf(tile, width_px, height_px, algorithm):
     if _tile_is_empty(tile):
         return None
@@ -1141,7 +1141,7 @@ def _resample_to_res_bytes(tile, x_res, y_res, algorithm):
         return resample.resample_to_res(ds, float(x_res), float(y_res), str(algorithm))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _resample_to_res_udf(tile, x_res, y_res, algorithm):
     if _tile_is_empty(tile):
         return None
@@ -1269,7 +1269,7 @@ def _clip_bytes(tile, geom_wkb, all_touched, clip_crs=None):
         return edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _clip_udf(tile, geom_wkb, all_touched, clip_crs=None):
     if _tile_is_empty(tile) or geom_wkb is None:
         return None
@@ -1309,7 +1309,7 @@ def _update_type_bytes(tile, new_type):
         return edit.update_type(ds, str(new_type))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _update_type_udf(tile, new_type):
     if _tile_is_empty(tile):
         return None
@@ -1615,7 +1615,7 @@ def _asformat_bytes(tile, new_format):
         return ops_core.as_format(ds, str(new_format))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _asformat_udf(tile, new_format):
     if _tile_is_empty(tile) or new_format is None:
         return None
@@ -1643,7 +1643,7 @@ def _buildoverviews_bytes(tile, levels, resampling):
         return ops_core.build_overviews(ds, list(levels), resamp)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _buildoverviews_udf(tile, levels, resampling):
     if _tile_is_empty(tile):
         return None
@@ -1696,7 +1696,7 @@ def _proximity_bytes(tile, target_values, distunits, max_distance):
         return analysis_core.proximity(ds, tv, units, md)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _proximity_udf(tile, target_values, distunits, max_distance):
     if _tile_is_empty(tile):
         return None
@@ -1790,7 +1790,7 @@ def _viewshed_bytes(
         return analysis_core.viewshed(ds, ox, oy, oh, th, md)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _viewshed_udf(
     tile, observer_geom, observer_height, target_height, max_distance, crs=None
 ):
@@ -1837,7 +1837,7 @@ def _cog_convert_bytes(tile, compression, blocksize, overview_resampling):
         return analysis_core.cog_convert(ds, comp, bs, resamp)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _cog_convert_udf(tile, compression, blocksize, overview_resampling):
     if _tile_is_empty(tile):
         return None
@@ -2354,7 +2354,7 @@ def _threshold_bytes(tile, op, value):
         return edit.threshold(ds, op, value)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _threshold_udf(tile, op, value):
     if _tile_is_empty(tile):
         return None
@@ -2380,7 +2380,7 @@ def _filter_bytes(tile, kernel_size, operation):
         return focal.filt(ds, int(kernel_size), str(operation))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _filter_udf(tile, kernel_size, operation):
     if _tile_is_empty(tile):
         return None
@@ -2408,7 +2408,7 @@ def _convolve_bytes(tile, kernel):
         return focal.convolve(ds, kernel)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _convolve_udf(tile, kernel):
     if _tile_is_empty(tile):
         return None
@@ -2558,7 +2558,7 @@ def _mapalgebra_bytes(tiles, expression):
     return mapalgebra_core.mapalgebra(rasters, str(expression))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _mapalgebra_udf(tiles, expression):
     if tiles is None or expression is None:
         return None
@@ -2629,7 +2629,7 @@ def _index_bytes(tile, formula_name, band_map):
         return indices.index(ds, str(formula_name), dict(band_map or {}))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _index_udf(tile, formula_name, band_map):
     if _tile_is_empty(tile) or formula_name is None:
         return None
@@ -2702,7 +2702,7 @@ def _ndvi_bytes(tile, red_band, nir_band):
         return indices.ndvi(ds, int(red_band), int(nir_band))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _ndvi_udf(tile, red_band, nir_band):
     if _tile_is_empty(tile):
         return None
@@ -2730,7 +2730,7 @@ def _ndwi_bytes(tile, green_idx, nir_idx):
         return indices.ndwi(ds, int(green_idx), int(nir_idx))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _ndwi_udf(tile, green_idx, nir_idx):
     if _tile_is_empty(tile):
         return None
@@ -2758,7 +2758,7 @@ def _nbr_bytes(tile, nir_idx, swir_idx):
         return indices.nbr(ds, int(nir_idx), int(swir_idx))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _nbr_udf(tile, nir_idx, swir_idx):
     if _tile_is_empty(tile):
         return None
@@ -2786,7 +2786,7 @@ def _savi_bytes(tile, red_idx, nir_idx, l_val):
         return indices.savi(ds, int(red_idx), int(nir_idx), l=float(l_val))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _savi_udf(tile, red_idx, nir_idx, l_val):
     if _tile_is_empty(tile):
         return None
@@ -2823,7 +2823,7 @@ def _evi_bytes(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
         )
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _evi_udf(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
     if _tile_is_empty(tile):
         return None
@@ -2994,7 +2994,7 @@ def rst_evi(  # noqa: E741
 
 
 # --- Tier 1e: constructor + fill UDFs (vector bridge) -----------------------
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _rasterize_udf(
     geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, out_crs=None
 ):
@@ -3061,7 +3061,7 @@ def _fillnodata_bytes(tile, max_search_dist, smoothing_iter):
         return features.fill_nodata(ds, max_search_dist, smoothing_iter)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _fillnodata_udf(tile, max_search_dist, smoothing_iter):
     if _tile_is_empty(tile):
         return None
@@ -3112,7 +3112,7 @@ def rst_fillnodata(
 
 
 # --- Tier 1e3: TIN / IDW constructors (point-array -> tile) -----------------
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _gridfrompoints_udf(
     points,
     values,
@@ -3221,7 +3221,7 @@ def rst_gridfrompoints(
     )
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _dtmfromgeoms_udf(
     points,
     breaklines,
@@ -3796,7 +3796,7 @@ def _slope_bytes(tile, unit, xscale, yscale):
         return terrain.slope(ds, unit=str(unit), xscale=xs, yscale=ys)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _slope_udf(tile, unit, xscale, yscale):
     if _tile_is_empty(tile):
         return None
@@ -3829,7 +3829,7 @@ def _aspect_bytes(tile, trigonometric, zero_for_flat):
         )
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _aspect_udf(tile, trigonometric, zero_for_flat):
     if _tile_is_empty(tile):
         return None
@@ -3866,7 +3866,7 @@ def _hillshade_bytes(tile, azimuth, altitude, z_factor, xscale, yscale):
         )
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _hillshade_udf(tile, azimuth, altitude, z_factor, xscale, yscale):
     if _tile_is_empty(tile):
         return None
@@ -4054,7 +4054,7 @@ def _ruggedness_bytes(tile, core_fn):
         return core_fn(ds)
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _tri_udf(tile):
     if _tile_is_empty(tile):
         return None
@@ -4072,7 +4072,7 @@ def _tri_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
     )
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _tpi_udf(tile):
     if _tile_is_empty(tile):
         return None
@@ -4090,7 +4090,7 @@ def _tpi_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
     )
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _roughness_udf(tile):
     if _tile_is_empty(tile):
         return None
@@ -4202,7 +4202,7 @@ def _color_relief_bytes(tile, color_table_path):
         return terrain.color_relief(ds, str(color_table_path))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _color_relief_udf(tile, color_table_path):
     if _tile_is_empty(tile) or color_table_path is None:
         return None
@@ -4521,7 +4521,7 @@ def _derivedband_bytes(tile, pyfunc, func_name):
         return derivedband_core.derivedband(ds, str(pyfunc), str(func_name))
 
 
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _derivedband_udf(tile, pyfunc, func_name):
     if _tile_is_empty(tile) or pyfunc is None or func_name is None:
         return None
@@ -5321,7 +5321,7 @@ def _tile_raster_bytes(row):
 
 
 # --- scalar as_tile UDFs: wrap an aggregated BINARY result into a tile struct
-@f.udf(_serde.TILE_SCHEMA)
+@f.udf(V2_TILE_SCHEMA)
 def _as_tile_udf(raster_bytes):
     if raster_bytes is None:
         return None

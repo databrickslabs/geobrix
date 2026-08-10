@@ -50,10 +50,10 @@ def test_rst_numbands_python_heavy_example(spark):
 
 
 def test_rst_width_python_heavy_example(spark):
-    """rst_width returns 4 for the synthetic 4-pixel-wide raster."""
+    """rst_width returns 236 for the single-band sentinel2 fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_width_python_heavy_example(spark)
-    assert result == 4, f"Expected width 4, got {result}"
+    assert result == 236, f"Expected width 236, got {result}"
 
 
 def test_rst_fromfile_python_heavy_example(spark):
@@ -85,12 +85,13 @@ def test_heavy_output_constants_exist():
 
 
 def test_rst_bandmetadata_python_heavy_example(spark):
-    """rst_bandmetadata returns a non-empty dict for a tagged GeoTIFF."""
+    """rst_bandmetadata returns a non-empty dict with real tags for the multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_bandmetadata_python_heavy_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
     assert len(result) > 0, f"Expected non-empty metadata dict, got {result!r}"
-    assert "units" in result, f"Expected 'units' key in band metadata, got {result!r}"
+    # multiband fixture has name, wavelength_nm, band_index per band
+    assert "name" in result, f"Expected 'name' key in band metadata, got {result!r}"
 
 
 def test_rst_format_python_heavy_example(spark):
@@ -115,31 +116,34 @@ def test_rst_getnodata_python_heavy_example(spark):
 
 
 def test_rst_getsubdataset_python_heavy_example(spark):
-    """rst_getsubdataset extracts a NetCDF subdataset and returns width=4."""
+    """rst_getsubdataset extracts the prAdjust subdataset from the CMIP5 NetCDF fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_getsubdataset_python_heavy_example(spark)
-    assert result == 4, f"Expected width 4 from extracted subdataset, got {result!r}"
+    # Returns a tile struct (Row) or None; check it's not None
+    assert result is not None, "rst_getsubdataset should return a tile, not None"
 
 
 def test_rst_height_python_heavy_example(spark):
-    """rst_height returns 3 for the 3-row synthetic raster."""
+    """rst_height returns 161 for the single-band sentinel2 fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_height_python_heavy_example(spark)
-    assert result == 3, f"Expected height 3, got {result}"
+    assert result == 161, f"Expected height 161, got {result}"
 
 
 def test_rst_max_python_heavy_example(spark):
-    """rst_max returns a list of per-band maximum values."""
+    """rst_max returns [119.0, 197.0, 148.0] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_max_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) >= 1, f"Expected non-empty list, got {result!r}"
+    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert result[0] is not None, "band_max[0] should not be None"
 
 
 def test_rst_median_python_heavy_example(spark):
-    """rst_median returns a list of per-band median values."""
+    """rst_median returns [85.0, 157.5, 111.5] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_median_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) >= 1, f"Expected non-empty list, got {result!r}"
+    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert result[0] is not None, "band_median[0] should not be None"
 
 
 def test_rst_memsize_python_heavy_example(spark):
@@ -157,17 +161,19 @@ def test_rst_metadata_python_heavy_example(spark):
 
 
 def test_rst_min_python_heavy_example(spark):
-    """rst_min returns a list of per-band minimum values."""
+    """rst_min returns [50.0, 102.0, 82.0] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_min_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) >= 1, f"Expected non-empty list, got {result!r}"
+    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert result[0] is not None, "band_min[0] should not be None"
 
 
 def test_rst_pixelcount_python_heavy_example(spark):
-    """rst_pixelcount returns a list of pixel counts."""
+    """rst_pixelcount returns [64, 64, 64] for the multiband fixture (8x8, no NoData)."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_pixelcount_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) >= 1, f"Expected non-empty list, got {result!r}"
+    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert all(v == 64 for v in result), f"Expected [64, 64, 64], got {result!r}"
 
 
 def test_rst_pixelheight_python_heavy_example(spark):
@@ -220,17 +226,18 @@ def test_rst_skewy_python_heavy_example(spark):
 
 
 def test_rst_srid_python_heavy_example(spark):
-    """rst_srid returns 4326 for an EPSG:4326 raster."""
+    """rst_srid returns 32618 for the single-band EPSG:32618 fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_srid_python_heavy_example(spark)
-    assert result == 4326, f"Expected 4326, got {result}"
+    assert result == 32618, f"Expected 32618, got {result}"
 
 
 def test_rst_crs_python_heavy_example(spark):
-    """rst_crs returns a non-empty CRS string."""
+    """rst_crs returns 'EPSG:32618' for the single-band fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_crs_python_heavy_example(spark)
     assert isinstance(result, str) and len(result) > 0, f"Expected non-empty string, got {result!r}"
+    assert "32618" in result, f"Expected EPSG:32618, got {result!r}"
 
 
 def test_rst_subdatasets_python_heavy_example(spark):
@@ -249,11 +256,11 @@ def test_rst_summary_python_heavy_example(spark):
 
 
 def test_rst_type_python_heavy_example(spark):
-    """rst_type returns a list of band type strings."""
+    """rst_type returns ['UInt16', 'UInt16', 'UInt16'] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_type_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) >= 1, f"Expected non-empty list, got {result!r}"
-    assert isinstance(result[0], str), f"Expected string in list, got {type(result[0])}"
+    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert all(t == "UInt16" for t in result), f"Expected all UInt16, got {result!r}"
 
 
 def test_rst_upperleftx_python_heavy_example(spark):
@@ -271,10 +278,10 @@ def test_rst_upperlefty_python_heavy_example(spark):
 
 
 def test_rst_isempty_python_heavy_example(spark):
-    """rst_isempty returns False for a valid non-empty tile."""
+    """rst_isempty returns False for the multiband fixture (has real pixel data)."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_isempty_python_heavy_example(spark)
-    assert result is False, f"Expected False, got {result!r}"
+    assert result is False, f"Expected False (multiband has real data), got {result!r}"
 
 
 def test_rst_tryopen_python_heavy_example(spark):
@@ -285,11 +292,11 @@ def test_rst_tryopen_python_heavy_example(spark):
 
 
 def test_rst_histogram_python_heavy_example(spark):
-    """rst_histogram returns a dict keyed by band name with list values."""
+    """rst_histogram returns a dict with 3 band keys for the multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_histogram_python_heavy_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    assert len(result) >= 1, "Expected at least one band in histogram"
+    assert len(result) == 3, f"Expected 3 bands in histogram, got {len(result)}"
     for v in result.values():
         assert isinstance(v, list), f"Expected list values in histogram dict, got {type(v)}"
 

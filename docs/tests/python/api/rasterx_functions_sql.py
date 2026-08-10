@@ -44,9 +44,9 @@ rst_boundingbox_sql_example_output = """
 
 
 def rst_width_sql_example():
-    """Get width from raster table"""
+    """Get pixel width of a raster tile."""
     return """
-SELECT gbx_rst_width(tile) as width FROM rasters;
+SELECT gbx_rst_width(tile) AS width FROM rasters;
 """
 
 
@@ -54,40 +54,44 @@ rst_width_sql_example_output = """
 +-----+
 |width|
 +-----+
-|4    |
+|236  |
 +-----+
 """
 
 
 def rst_height_sql_example():
-    """Get height and calculate total pixels"""
+    """Get pixel height of a raster tile."""
     return """
-SELECT gbx_rst_height(tile) as height, gbx_rst_width(tile) as width FROM rasters;
+SELECT gbx_rst_height(tile) AS height FROM rasters;
 """
 
 
 rst_height_sql_example_output = """
-+------+-----+
-|height|width|
-+------+-----+
-|3     |4    |
-+------+-----+
++------+
+|height|
++------+
+|161   |
++------+
 """
 
 
 def rst_numbands_sql_example():
-    """Get number of bands from rasters"""
+    """Get number of bands from a multiband raster.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands).
+    """
     return """
-SELECT gbx_rst_numbands(tile) as bands FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_numbands(tile) AS num_bands FROM multiband_rasters;
 """
 
 
 rst_numbands_sql_example_output = """
-+-----+
-|bands|
-+-----+
-|1    |
-+-----+
++---------+
+|num_bands|
++---------+
+|3        |
++---------+
 """
 
 
@@ -100,149 +104,160 @@ SELECT gbx_rst_metadata(tile) as metadata FROM rasters;
 
 rst_metadata_sql_example_output = """
 +--------------------------------------------------+
-|                                          metadata|
+|metadata                                          |
 +--------------------------------------------------+
-|{driver -> GTiff, crs -> EPSG:4326, count -> 1,...|
+|{driver -> GTiff, crs -> EPSG:32618, count -> 1,..|
 +--------------------------------------------------+
 """
 
 
 def rst_srid_sql_example():
-    """Get spatial reference identifier"""
+    """Get spatial reference identifier (integer EPSG code) for a raster tile."""
     return """
-SELECT gbx_rst_srid(tile) as srid FROM rasters;
+SELECT gbx_rst_srid(tile) AS srid FROM rasters;
 """
 
 
 rst_srid_sql_example_output = """
-+----+
-|srid|
-+----+
-|4326|
-+----+
++-----+
+|srid |
++-----+
+|32618|
++-----+
 """
 
 
 def rst_crs_sql_example():
-    """Get the CRS as a string (authority code like EPSG:4326 / ESRI:54008, else WKT)."""
+    """Get the CRS as a string (authority code like EPSG:32618 / ESRI:54008, else WKT)."""
     return """
--- rst_crs always returns a CRS string, including non-EPSG rasters
--- (ESRI codes, WKT, PROJ4) where rst_srid returns NULL.
-SELECT gbx_rst_crs(tile) as crs FROM rasters;
+SELECT gbx_rst_crs(tile) AS crs FROM rasters;
 """
 
 
 rst_crs_sql_example_output = """
-+---------+
-|crs      |
-+---------+
-|EPSG:4326|
-+---------+
++----------+
+|crs       |
++----------+
+|EPSG:32618|
++----------+
 """
 
 
 def rst_georeference_sql_example():
     """Get georeference (geotransform) parameters."""
     return """
-SELECT gbx_rst_georeference(tile) as georeference FROM rasters;
+SELECT gbx_rst_georeference(tile) AS georeference FROM rasters;
 """
 
 
 rst_georeference_sql_example_output = """
-+------------------------------------------------------------+
-|                                                georeference|
-+------------------------------------------------------------+
-|{scaleX -> 0.5, scaleY -> -0.5, upperLeftY -> 50.0, skewX...|
-+------------------------------------------------------------+
++--------------------------------------------------------------+
+|georeference                                                  |
++--------------------------------------------------------------+
+|{scaleX -> 10.0, scaleY -> -10.0, upperLeftX -> 2121950.0,...|
++--------------------------------------------------------------+
 """
 
 
 def rst_bandmetadata_sql_example():
-    """Get band metadata."""
+    """Get band 1 metadata for a multiband raster.
+
+    Uses the multiband fixture (rgb_nir_small.tif) which carries per-band
+    GDAL metadata tags.
+    """
     return """
-SELECT gbx_rst_bandmetadata(tile, 1) as band1_metadata FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_bandmetadata(tile, 1) AS band_meta FROM multiband_rasters;
 """
 
 
 rst_bandmetadata_sql_example_output = """
-+--------------+
-|band1_metadata|
-+--------------+
-|{}            |
-+--------------+
++----------------------------------------------+
+|band_meta                                     |
++----------------------------------------------+
+|{name -> red, wavelength_nm -> 665, band_in...|
++----------------------------------------------+
 """
 
 
 def rst_pixelcount_sql_example():
-    """Get total pixel count."""
+    """Get count of valid (non-NoData) pixels per band from a multiband raster.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 8x8=64 valid pixels per band).
+    """
     return """
-SELECT gbx_rst_pixelcount(tile) as pixel_count FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_pixelcount(tile) AS pixel_count FROM multiband_rasters;
 """
 
 
 rst_pixelcount_sql_example_output = """
-+-----------+
-|pixel_count|
-+-----------+
-|[12]       |
-+-----------+
++------------+
+|pixel_count |
++------------+
+|[64, 64, 64]|
++------------+
 """
 
 
 def rst_avg_sql_example():
-    """Get average pixel values"""
-    return """
--- Get average values
-SELECT
-    path,
-    gbx_rst_avg(tile) as band_averages,
-    gbx_rst_avg(tile)[0] as band1_avg
-FROM rasters;
+    """Get per-band average pixel values from a multiband raster.
 
--- Filter by average threshold
-SELECT * FROM rasters
-WHERE gbx_rst_avg(tile)[0] > 50.0;
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) because the
+    canonical single-band sentinel2 tile is all-NoData.
+    """
+    return """
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_avg(tile) AS band_averages FROM multiband_rasters;
 """
 
 
 rst_avg_sql_example_output = """
-+----+-------------+---------+
-|path|band_averages|band1_avg|
-+----+-------------+---------+
-|... |[5.5]        |5.5      |
-+----+-------------+---------+
++------------------------------------+
+|band_averages                       |
++------------------------------------+
+|[83.59375, 153.125, 114.3125]       |
++------------------------------------+
 """
 
 
 def rst_min_sql_example():
-    """Get minimum pixel values per band"""
+    """Get minimum pixel values per band from a multiband raster.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands).
+    """
     return """
-SELECT path, gbx_rst_min(tile) as min_per_band, gbx_rst_min(tile)[0] as band1_min FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_min(tile) AS band_min FROM multiband_rasters;
 """
 
 
 rst_min_sql_example_output = """
-+----+------------+---------+
-|path|min_per_band|band1_min|
-+----+------------+---------+
-|... |[0.0]       |0.0      |
-+----+------------+---------+
++------------------+
+|band_min          |
++------------------+
+|[50.0, 102.0, 82.0]|
++------------------+
 """
 
 
 def rst_max_sql_example():
-    """Get maximum pixel values per band"""
+    """Get maximum pixel values per band from a multiband raster.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands).
+    """
     return """
-SELECT path, gbx_rst_max(tile) as max_per_band, gbx_rst_max(tile)[0] as band1_max FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_max(tile) AS band_max FROM multiband_rasters;
 """
 
 
 rst_max_sql_example_output = """
-+----+------------+---------+
-|path|max_per_band|band1_max|
-+----+------------+---------+
-|... |[11.0]      |11.0     |
-+----+------------+---------+
++---------------------+
+|band_max             |
++---------------------+
+|[119.0, 197.0, 148.0]|
++---------------------+
 """
 
 
@@ -271,84 +286,65 @@ ORDER BY date;
 
 
 def rst_median_sql_example():
-    """Compare mean and median values"""
+    """Get median pixel values per band from a multiband raster.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands).
+    """
     return """
-SELECT
-    path,
-    gbx_rst_avg(tile)[0] as mean_value,
-    gbx_rst_median(tile)[0] as median_value,
-    ABS(gbx_rst_avg(tile)[0] - gbx_rst_median(tile)[0]) as skewness
-FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_median(tile) AS band_median FROM multiband_rasters;
 """
 
 
 rst_median_sql_example_output = """
-+----+----------+------------+--------+
-|path|mean_value|median_value|skewness|
-+----+----------+------------+--------+
-|... |5.5       |5.5         |0.0     |
-+----+----------+------------+--------+
++---------------------+
+|band_median          |
++---------------------+
+|[85.0, 157.5, 111.5] |
++---------------------+
 """
 
 
 def rst_format_sql_example():
-    """Identify raster formats"""
+    """Get the GDAL format name of a raster tile."""
     return """
--- Identify formats
-SELECT
-    gbx_rst_format(tile) as format,
-    COUNT(*) as count
-FROM rasters
-GROUP BY gbx_rst_format(tile);
-
--- Find non-GeoTIFF files
-SELECT path, gbx_rst_format(tile) as format
-FROM rasters
-WHERE gbx_rst_format(tile) != 'GTiff';
+SELECT gbx_rst_format(tile) AS format FROM rasters;
 """
 
 
 rst_format_sql_example_output = """
-+------+-----+
-|format|count|
-+------+-----+
-|GTiff |10   |
-+------+-----+
++------+
+|format|
++------+
+|GTiff |
++------+
 """
 
 
 def rst_type_sql_example():
-    """Get raster data types"""
-    return """
--- Get data types
-SELECT
-    path,
-    gbx_rst_type(tile) as band_types,
-    gbx_rst_type(tile)[0] as band1_type
-FROM rasters;
+    """Get data type string per band from a multiband raster.
 
--- Group by data type
-SELECT
-    gbx_rst_type(tile)[0] as data_type,
-    COUNT(*) as count
-FROM rasters
-GROUP BY gbx_rst_type(tile)[0];
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands, UInt16).
+    """
+    return """
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_type(tile) AS band_types FROM multiband_rasters;
 """
 
 
 rst_type_sql_example_output = """
-+----+----------+----------+
-|path|band_types|band1_type|
-+----+----------+----------+
-|... |[Float32] |Float32   |
-+----+----------+----------+
++-----------------------------+
+|band_types                   |
++-----------------------------+
+|[UInt16, UInt16, UInt16]     |
++-----------------------------+
 """
 
 
 def rst_pixelwidth_sql_example():
-    """Get pixel width in coordinate system units (degrees for EPSG:4326 rasters)"""
+    """Get pixel width in coordinate system units (metres for EPSG:32618 rasters)."""
     return """
-SELECT gbx_rst_pixelwidth(tile) as pixel_width FROM rasters;
+SELECT gbx_rst_pixelwidth(tile) AS pixel_width FROM rasters;
 """
 
 
@@ -356,15 +352,15 @@ rst_pixelwidth_sql_example_output = """
 +-----------+
 |pixel_width|
 +-----------+
-|0.5        |
+|10.0       |
 +-----------+
 """
 
 
 def rst_pixelheight_sql_example():
-    """Get pixel height in coordinate system units (negative for north-up rasters)"""
+    """Get pixel height in coordinate system units (metres for EPSG:32618 rasters)."""
     return """
-SELECT gbx_rst_pixelheight(tile) as pixel_height FROM rasters;
+SELECT gbx_rst_pixelheight(tile) AS pixel_height FROM rasters;
 """
 
 
@@ -372,7 +368,7 @@ rst_pixelheight_sql_example_output = """
 +------------+
 |pixel_height|
 +------------+
-|-0.5        |
+|10.0        |
 +------------+
 """
 
@@ -399,85 +395,82 @@ rst_pixelsize_sql_example_output = """
 
 
 def rst_getnodata_sql_example():
-    """Get NoData values for raster bands"""
+    """Get NoData values for raster bands.
+
+    The canonical single-band sentinel2 fixture has nodata=0.0.
+    """
     return """
-SELECT
-    path,
-    gbx_rst_getnodata(tile) as nodata_values,
-    gbx_rst_getnodata(tile)[0] as band1_nodata
-FROM rasters;
+SELECT gbx_rst_getnodata(tile) AS nodata FROM rasters;
 """
 
 
 rst_getnodata_sql_example_output = """
-+----+-------------+------------+
-|path|nodata_values|band1_nodata|
-+----+-------------+------------+
-|... |[-9999.0]    |-9999.0     |
-+----+-------------+------------+
++--------+
+|nodata  |
++--------+
+|[0.0]   |
++--------+
 """
 
 
 def rst_getsubdataset_sql_example():
-    """Extract a named subdataset from a NetCDF raster and return its width.
+    """Extract a named subdataset from a NetCDF raster.
 
-    Multi-layer formats such as NetCDF expose each variable as a subdataset.
-    gbx_rst_getsubdataset extracts one layer by name; gbx_rst_width confirms
-    the extracted tile dimensions.
+    Uses the committed CMIP5 NetCDF fixture which has two subdatasets:
+    time_bnds and prAdjust. Subdatasets require a multi-layer format such as NetCDF.
     """
     return """
-SELECT
-    path,
-    gbx_rst_width(gbx_rst_getsubdataset(tile, 'temperature')) AS width
-FROM rasters;
+-- netcdf_rasters view is from the CMIP5 NetCDF fixture (has time_bnds and prAdjust)
+SELECT gbx_rst_getsubdataset(tile, 'prAdjust') AS subdataset FROM netcdf_rasters;
 """
 
 
 rst_getsubdataset_sql_example_output = """
-+----+-----+
-|path|width|
-+----+-----+
-|... |4    |
-+----+-----+
++-------------+
+|subdataset   |
++-------------+
+|{..., ..., ..|
++-------------+
+(tile struct for the prAdjust subdataset — 31 bands, 360x720 pixels)
 """
 
 
 def rst_memsize_sql_example():
-    """Get in-memory size of raster tile in bytes"""
+    """Get in-memory size of a raster tile in bytes."""
     return """
-SELECT path, gbx_rst_memsize(tile) as size_bytes FROM rasters;
+SELECT gbx_rst_memsize(tile) AS memsize FROM rasters;
 """
 
 
 rst_memsize_sql_example_output = """
-+----+----------+
-|path|size_bytes|
-+----+----------+
-|... |432       |
-+----+----------+
++-------+
+|memsize|
++-------+
+|71749  |
++-------+
 """
 
 
 def rst_rotation_sql_example():
-    """Get rotation (skew) of raster in radians"""
+    """Get rotation angle of a raster tile in radians."""
     return """
-SELECT path, gbx_rst_rotation(tile) as rotation_rad FROM rasters;
+SELECT gbx_rst_rotation(tile) AS rotation FROM rasters;
 """
 
 
 rst_rotation_sql_example_output = """
-+----+------------+
-|path|rotation_rad|
-+----+------------+
-|... |0.0         |
-+----+------------+
++--------+
+|rotation|
++--------+
+|0.0     |
++--------+
 """
 
 
 def rst_scalex_sql_example():
-    """Get the X scale factor (pixel size in the X direction) of a raster"""
+    """Get the pixel scale in the X direction."""
     return """
-SELECT gbx_rst_scalex(tile) as scale_x FROM rasters;
+SELECT gbx_rst_scalex(tile) AS scale_x FROM rasters;
 """
 
 
@@ -485,15 +478,15 @@ rst_scalex_sql_example_output = """
 +-------+
 |scale_x|
 +-------+
-|0.5    |
+|10.0   |
 +-------+
 """
 
 
 def rst_scaley_sql_example():
-    """Get the Y scale factor (negative for north-up rasters) of a raster"""
+    """Get the pixel scale in the Y direction (negative for north-up rasters)."""
     return """
-SELECT gbx_rst_scaley(tile) as scale_y FROM rasters;
+SELECT gbx_rst_scaley(tile) AS scale_y FROM rasters;
 """
 
 
@@ -501,7 +494,7 @@ rst_scaley_sql_example_output = """
 +-------+
 |scale_y|
 +-------+
-|-0.5   |
+|-10.0  |
 +-------+
 """
 
@@ -527,9 +520,9 @@ rst_scalex_scaley_sql_example_output = """
 
 
 def rst_skewx_sql_example():
-    """Get the X skew coefficient (rotation term) of a raster's geotransform"""
+    """Get the skew coefficient in the X direction."""
     return """
-SELECT gbx_rst_skewx(tile) as skew_x FROM rasters;
+SELECT gbx_rst_skewx(tile) AS skew_x FROM rasters;
 """
 
 
@@ -543,9 +536,9 @@ rst_skewx_sql_example_output = """
 
 
 def rst_skewy_sql_example():
-    """Get the Y skew coefficient (rotation term) of a raster's geotransform"""
+    """Get the skew coefficient in the Y direction."""
     return """
-SELECT gbx_rst_skewy(tile) as skew_y FROM rasters;
+SELECT gbx_rst_skewy(tile) AS skew_y FROM rasters;
 """
 
 
@@ -579,41 +572,51 @@ rst_skewx_skewy_sql_example_output = """
 
 
 def rst_subdatasets_sql_example():
-    """List subdatasets (e.g. NetCDF layers)"""
+    """List subdatasets from a NetCDF raster.
+
+    Uses the committed CMIP5 NetCDF fixture which has two subdatasets:
+    time_bnds and prAdjust. Plain GeoTIFFs return an empty map.
+    """
     return """
-SELECT path, gbx_rst_subdatasets(tile) as subdatasets FROM netcdf_rasters;
+-- netcdf_rasters view is from the CMIP5 NetCDF fixture (has time_bnds and prAdjust)
+SELECT gbx_rst_subdatasets(tile) AS subdatasets FROM netcdf_rasters;
 """
 
 
 rst_subdatasets_sql_example_output = """
-+----+-------------------+
-|path|subdatasets        |
-+----+-------------------+
-|... |[temp, precip, ...]|
-+----+-------------------+
++------------------------------------------------------+
+|subdatasets                                           |
++------------------------------------------------------+
+|{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> [31...|
++------------------------------------------------------+
+(map with SUBDATASET_1_NAME/DESC for time_bnds and SUBDATASET_2_NAME/DESC for prAdjust)
 """
 
 
 def rst_summary_sql_example():
-    """Get statistical summary of raster values"""
+    """Get statistical summary of a multiband raster tile.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
+    """
     return """
-SELECT path, gbx_rst_summary(tile) as summary FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_summary(tile) AS summary FROM multiband_rasters;
 """
 
 
 rst_summary_sql_example_output = """
-+----+------------------------------------------------------------+
-|path|                                                     summary|
-+----+------------------------------------------------------------+
-|... |{driverShortName: GTiff, size: [4, 3], coordinateSystem: ...|
-+----+------------------------------------------------------------+
++------------------------------------------------------------+
+|summary                                                     |
++------------------------------------------------------------+
+|{"driverShortName": "GTiff", "size": [8, 8], "coordinateS...|
++------------------------------------------------------------+
 """
 
 
 def rst_upperleftx_sql_example():
-    """Get the X coordinate of the upper-left (origin) corner of the raster"""
+    """Get the X coordinate of the upper-left corner of a raster tile."""
     return """
-SELECT gbx_rst_upperleftx(tile) as upper_left_x FROM rasters;
+SELECT gbx_rst_upperleftx(tile) AS upper_left_x FROM rasters;
 """
 
 
@@ -621,24 +624,24 @@ rst_upperleftx_sql_example_output = """
 +------------+
 |upper_left_x|
 +------------+
-|10.0        |
+|2121950.0   |
 +------------+
 """
 
 
 def rst_upperlefty_sql_example():
-    """Get the Y coordinate of the upper-left (origin) corner of the raster"""
+    """Get the Y coordinate of the upper-left corner of a raster tile."""
     return """
-SELECT gbx_rst_upperlefty(tile) as upper_left_y FROM rasters;
+SELECT gbx_rst_upperlefty(tile) AS upper_left_y FROM rasters;
 """
 
 
 rst_upperlefty_sql_example_output = """
-+------------+
-|upper_left_y|
-+------------+
-|50.0        |
-+------------+
++---------------+
+|upper_left_y   |
++---------------+
+|-10790470.0    |
++---------------+
 """
 
 
@@ -671,11 +674,11 @@ def rst_fromfile_sql_example():
     """Load raster from file path"""
     return """
 -- Load from path
-SELECT 
+SELECT
     gbx_rst_fromfile('/data/raster.tif', 'GTiff') as tile;
 
 -- Load multiple and get properties
-SELECT 
+SELECT
     path,
     gbx_rst_width(gbx_rst_fromfile(path, 'GTiff')) as width,
     gbx_rst_height(gbx_rst_fromfile(path, 'GTiff')) as height
@@ -702,7 +705,7 @@ def rst_fromcontent_sql_example():
     """Load raster from binary content"""
     return """
 -- Load from binary table
-SELECT 
+SELECT
     path,
     gbx_rst_fromcontent(content, 'GTiff') as tile
 FROM binary_raster_table;
@@ -1069,57 +1072,42 @@ rst_worldtorastercoordy_sql_example_output = """
 
 
 def rst_isempty_sql_example():
-    """Check for empty rasters"""
-    return """
--- Filter out empty rasters
-SELECT * FROM rasters
-WHERE NOT gbx_rst_isempty(tile);
+    """Check if a raster tile is empty (all pixels are NoData).
 
--- Count empty vs valid
-SELECT
-    COUNT(*) as total,
-    SUM(CASE WHEN gbx_rst_isempty(tile) THEN 1 ELSE 0 END) as empty_count,
-    SUM(CASE WHEN NOT gbx_rst_isempty(tile) THEN 1 ELSE 0 END) as valid_count
-FROM rasters;
+    Uses the multiband fixture (rgb_nir_small.tif) which carries real pixel data.
+    """
+    return """
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_isempty(tile) AS is_empty FROM multiband_rasters;
 """
 
 
 rst_isempty_sql_example_output = """
-+-----+-----------+-----------+
-|total|empty_count|valid_count|
-+-----+-----------+-----------+
-|100  |0          |100        |
-+-----+-----------+-----------+
++--------+
+|is_empty|
++--------+
+|false   |
++--------+
 """
 
 
 def rst_tryopen_sql_example():
-    """Validate raster can be opened"""
+    """Validate that a raster tile can be opened successfully.
+
+    Uses the multiband fixture (rgb_nir_small.tif) which is always openable.
+    """
     return """
--- Filter valid rasters
-SELECT * FROM rasters
-WHERE gbx_rst_tryopen(tile) = true;
-
--- Identify corrupt rasters
-SELECT path
-FROM rasters
-WHERE gbx_rst_tryopen(tile) = false;
-
--- Validation summary
-SELECT
-    COUNT(*) as total,
-    SUM(CASE WHEN gbx_rst_tryopen(tile) THEN 1 ELSE 0 END) as valid,
-    SUM(CASE WHEN NOT gbx_rst_tryopen(tile) THEN 1 ELSE 0 END) as invalid
-FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_tryopen(tile) AS try_open FROM multiband_rasters;
 """
 
 
 rst_tryopen_sql_example_output = """
-+-----+-----+-------+
-|total|valid|invalid|
-+-----+-----+-------+
-|100  |98   |2      |
-+-----+-----+-------+
++--------+
+|try_open|
++--------+
+|true    |
++--------+
 """
 
 
@@ -1220,7 +1208,7 @@ def rst_merge_sql_example():
     return """
 -- Merge rasters from a table
 WITH loaded_tiles AS (
-  SELECT 
+  SELECT
     id,
     gbx_rst_fromfile(path, 'GTiff') as tile
   FROM raster_paths
@@ -1337,13 +1325,13 @@ def rst_h3_rastertogridavg_sql_example():
     """Aggregate raster values to H3 grid using average"""
     return """
 -- Aggregate raster to H3 grid
-SELECT 
+SELECT
     path,
     gbx_rst_h3_rastertogridavg(tile, 6) as h3_grid
 FROM rasters;
 
 -- Get cells from first band
-SELECT 
+SELECT
     path,
     cell.cellID as h3_cell,
     cell.measure as avg_value
@@ -1976,13 +1964,13 @@ def rst_combineavg_sql_example():
     return """
 -- Average rasters for temporal composite
 WITH loaded_tiles AS (
-  SELECT 
+  SELECT
     date_trunc('week', date) as week,
     gbx_rst_fromfile(path, 'GTiff') as tile
   FROM daily_rasters
   WHERE date >= '2024-01-01'
 )
-SELECT 
+SELECT
     week,
     gbx_rst_combineavg(collect_list(tile)) as weekly_composite
 FROM loaded_tiles
@@ -2601,20 +2589,23 @@ rst_setcrs_sql_example_output = """
 
 
 def rst_histogram_sql_example():
-    """Per-band pixel histogram as MAP<STRING, ARRAY<LONG>>."""
+    """Per-band pixel histogram from a multiband raster.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) so the histogram
+    has entries for each band.
+    """
     return """
--- 16 equal-width buckets over [0, 1000]; one entry per band keyed band_<i>.
-SELECT gbx_rst_histogram(tile, 16, cast(0 as double), cast(1000 as double), false) AS hist
-FROM rasters;
+-- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
+SELECT gbx_rst_histogram(tile) AS histogram FROM multiband_rasters;
 """
 
 
 rst_histogram_sql_example_output = """
-+-------------------------------+
-|hist                           |
-+-------------------------------+
-|{band_1 -> [120, 340, 510, 88]}|
-+-------------------------------+
++--------------------------------------------------+
+|histogram                                         |
++--------------------------------------------------+
+|{band_1 -> [1, 0, 0, ...], band_2 -> [1, 0, 1,...|
++--------------------------------------------------+
 """
 
 

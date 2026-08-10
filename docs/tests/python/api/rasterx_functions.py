@@ -3,6 +3,7 @@ Python code examples for RasterX Function Reference documentation.
 Single source of truth for docs/docs/api/rasterx-functions.mdx
 
 Imports and registration are in the common setup only. SQL examples are in rasterx_functions_sql.py.
+All accessor examples use the shared canonical fixtures from _fixtures.py.
 """
 
 try:
@@ -14,6 +15,26 @@ except ImportError:
 from path_config import SAMPLE_DATA_BASE
 
 SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers — imported from _fixtures.py (canonical fixture builders)
+# ---------------------------------------------------------------------------
+
+
+def _get_single_band_df_heavy(spark):
+    from _fixtures import single_band_tile_df_heavy  # noqa: PLC0415
+    return single_band_tile_df_heavy(spark)
+
+
+def _get_multiband_df_heavy(spark):
+    from _fixtures import multiband_tile_df_heavy  # noqa: PLC0415
+    return multiband_tile_df_heavy(spark)
+
+
+def _get_netcdf_df_heavy(spark):
+    from _fixtures import netcdf_tile_df_heavy  # noqa: PLC0415
+    return netcdf_tile_df_heavy(spark)
 
 
 def rasterx_setup_example(spark):
@@ -67,9 +88,11 @@ def _make_netcdf_bytes(width=4, height=4):
     Two variables cause GDAL to expose them as subdatasets, enabling
     rst_getsubdataset to extract a named layer by name.
     """
-    import numpy as np
+    import os
+    import tempfile
+
     import netCDF4 as nc4
-    import tempfile, os
+    import numpy as np
 
     with tempfile.NamedTemporaryFile(suffix=".nc", delete=False) as fh:
         nc_path = fh.name
@@ -116,8 +139,8 @@ def _make_tagged_geotiff_bytes(width=4, height=3, epsg=4326):
 
 def _heavy_tagged_tile_df(spark, **kw):
     """One-row heavy-tier tile DataFrame built from a tagged GeoTIFF."""
-    from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
 
     raster = _make_tagged_geotiff_bytes(**kw)
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"])
@@ -126,8 +149,8 @@ def _heavy_tagged_tile_df(spark, **kw):
 
 def _heavy_nc_tile_df(spark, width=4, height=4):
     """One-row heavy-tier tile DataFrame built from NetCDF bytes."""
-    from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
 
     raster = _make_netcdf_bytes(width=width, height=height)
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"])
@@ -136,8 +159,8 @@ def _heavy_nc_tile_df(spark, width=4, height=4):
 
 def _heavy_tile_df(spark, **kw):
     """One-row heavy-tier tile DataFrame built from in-memory synthetic bytes."""
-    from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
 
     raster = _make_geotiff_bytes(**kw)
     df = spark.createDataFrame([(raster,)], ["raster"])
@@ -146,30 +169,36 @@ def _heavy_tile_df(spark, **kw):
 
 # ---------------------------------------------------------------------------
 # rst_avg — per-band average pixel values (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 def rst_avg_python_heavy_example(spark):
-    """Get per-band average pixel values via the heavy rasterx tier."""
+    """Get per-band average pixel values via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) because the
+    canonical single-band sentinel2 tile is all-NoData (rst_avg returns [None]).
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3, count=1)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_avg("tile").alias("band_averages")).first()
     return result["band_averages"]
 
 
 rst_avg_python_heavy_example_output = """
-+-------------+
-|band_averages|
-+-------------+
-|        [5.5]|
-+-------------+
++------------------------------------+
+|band_averages                       |
++------------------------------------+
+|[83.59375, 153.125, 114.3125]       |
++------------------------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_boundingbox — bounding polygon (heavy tier; returns WKB binary)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
@@ -178,7 +207,7 @@ def rst_boundingbox_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_boundingbox("tile").alias("bbox")).first()
     return result["bbox"]
 
@@ -189,21 +218,26 @@ rst_boundingbox_python_heavy_example_output = """
 +----+
 |[...|
 +----+
-(WKB binary bytes — bounding POLYGON of the raster extent)
+(WKB binary — bounding POLYGON of the raster extent in EPSG:32618)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_numbands — band count (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — 3 bands)
 # ---------------------------------------------------------------------------
 
 
 def rst_numbands_python_heavy_example(spark):
-    """Get the number of bands in a raster tile via the heavy rasterx tier."""
+    """Get the number of bands in a raster tile via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) to show a
+    meaningful multi-band result.
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, count=1)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_numbands("tile").alias("num_bands")).first()
     return result["num_bands"]
 
@@ -212,13 +246,14 @@ rst_numbands_python_heavy_example_output = """
 +---------+
 |num_bands|
 +---------+
-|        1|
+|3        |
 +---------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_width — pixel width (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 236 columns)
 # ---------------------------------------------------------------------------
 
 
@@ -227,7 +262,7 @@ def rst_width_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_width("tile").alias("width")).first()
     return result["width"]
 
@@ -236,7 +271,7 @@ rst_width_python_heavy_example_output = """
 +-----+
 |width|
 +-----+
-|    4|
+|236  |
 +-----+
 """
 
@@ -253,10 +288,11 @@ def rst_fromfile_python_heavy_example(spark):
     There is no Scala Column form: the JVM executor cannot read UC Volume FUSE paths,
     so this function delegates to the Python worker.
     """
-    import tempfile
     import os
-    from pyspark.sql import functions as f
+    import tempfile
+
     from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
 
     rx.register(spark)
 
@@ -286,21 +322,22 @@ rst_fromfile_python_heavy_example_output = """
 
 # ---------------------------------------------------------------------------
 # rst_bandmetadata — per-band metadata map (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — has per-band GDAL metadata tags)
 # ---------------------------------------------------------------------------
 
 
 def rst_bandmetadata_python_heavy_example(spark):
     """Get metadata for band 1 of a raster tile via the heavy rasterx tier.
 
-    Band metadata is non-empty when the GeoTIFF carries GDAL_METADATA tags
-    (written via rasterio ``update_tags``).  Plain GeoTIFFs without tags
-    return ``{}``.
+    Uses the multiband fixture (rgb_nir_small.tif) which carries per-band
+    GDAL metadata tags (name, wavelength_nm, band_index) written at fixture
+    creation time.
     """
-    from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
 
     rx.register(spark)
-    tile_df = _heavy_tagged_tile_df(spark)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(
         rx.rst_bandmetadata("tile", f.lit(1)).alias("band_meta")
     ).first()
@@ -308,16 +345,17 @@ def rst_bandmetadata_python_heavy_example(spark):
 
 
 rst_bandmetadata_python_heavy_example_output = """
-+-------------------------------+
-|band_meta                      |
-+-------------------------------+
-|{units -> m, source -> synthetic}|
-+-------------------------------+
++----------------------------------------------+
+|band_meta                                     |
++----------------------------------------------+
+|{name -> red, wavelength_nm -> 665, band_in...|
++----------------------------------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_format — GDAL format name (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
@@ -326,7 +364,7 @@ def rst_format_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_format("tile").alias("format")).first()
     return result["format"]
 
@@ -335,13 +373,14 @@ rst_format_python_heavy_example_output = """
 +------+
 |format|
 +------+
-| GTiff|
+|GTiff |
 +------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_georeference — georeference parameters map (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
@@ -350,22 +389,23 @@ def rst_georeference_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_georeference("tile").alias("georeference")).first()
     return result["georeference"]
 
 
 rst_georeference_python_heavy_example_output = """
-+------------------------------------------------------------+
-|                                                georeference|
-+------------------------------------------------------------+
-|{scaleX -> 0.5, scaleY -> -0.5, upperLeftY -> 50.0, skewX...|
-+------------------------------------------------------------+
++--------------------------------------------------------------+
+|georeference                                                  |
++--------------------------------------------------------------+
+|{scaleX -> 10.0, scaleY -> -10.0, upperLeftX -> 2121950.0,...|
++--------------------------------------------------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_getnodata — NoData values per band (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0)
 # ---------------------------------------------------------------------------
 
 
@@ -374,55 +414,56 @@ def rst_getnodata_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, count=1)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_getnodata("tile").alias("nodata")).first()
     return result["nodata"]
 
 
 rst_getnodata_python_heavy_example_output = """
-+---------+
-|   nodata|
-+---------+
-|[-9999.0]|
-+---------+
++--------+
+|nodata  |
++--------+
+|[0.0]   |
++--------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_getsubdataset — extract named subdataset (heavy tier)
+# Fixture: NETCDF (prAdjust_day_HadGEM2-CC_*.nc — has time_bnds and prAdjust)
 # ---------------------------------------------------------------------------
 
 
 def rst_getsubdataset_python_heavy_example(spark):
     """Extract a named subdataset from a NetCDF raster tile via the heavy rasterx tier.
 
-    Multi-layer formats such as NetCDF expose each variable as a subdataset.
-    rst_getsubdataset extracts one layer by name and returns it as a new tile.
+    Uses the committed CMIP5 NetCDF fixture which has two subdatasets: time_bnds
+    and prAdjust. Subdatasets require a multi-layer format such as NetCDF.
     """
-    from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
 
     rx.register(spark)
-    nc_df = _heavy_nc_tile_df(spark, width=4, height=4)
+    nc_df = _get_netcdf_df_heavy(spark)
     result = nc_df.select(
-        rx.rst_width(
-            rx.rst_getsubdataset("tile", f.lit("temperature"))
-        ).alias("width")
+        rx.rst_getsubdataset("tile", f.lit("prAdjust")).alias("subdataset")
     ).first()
-    return result["width"]
+    return result["subdataset"]
 
 
 rst_getsubdataset_python_heavy_example_output = """
-+-----+
-|width|
-+-----+
-|4    |
-+-----+
++-------------+
+|subdataset   |
++-------------+
+|{..., ..., ..|
++-------------+
+(tile struct for the prAdjust subdataset — 31 bands, 360x720 pixels)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_height — raster height in pixels (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 161 rows)
 # ---------------------------------------------------------------------------
 
 
@@ -431,7 +472,7 @@ def rst_height_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_height("tile").alias("height")).first()
     return result["height"]
 
@@ -440,61 +481,72 @@ rst_height_python_heavy_example_output = """
 +------+
 |height|
 +------+
-|     3|
+|161   |
 +------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_max — maximum pixel values per band (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 def rst_max_python_heavy_example(spark):
-    """Get the maximum pixel value for each band via the heavy rasterx tier."""
+    """Get the maximum pixel value for each band via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) because the
+    canonical single-band sentinel2 tile is all-NoData (rst_max returns [None]).
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3, count=1)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_max("tile").alias("band_max")).first()
     return result["band_max"]
 
 
 rst_max_python_heavy_example_output = """
-+--------+
-|band_max|
-+--------+
-|  [11.0]|
-+--------+
++---------------------+
+|band_max             |
++---------------------+
+|[119.0, 197.0, 148.0]|
++---------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_median — median pixel values per band (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 def rst_median_python_heavy_example(spark):
-    """Get the median pixel value for each band via the heavy rasterx tier."""
+    """Get the median pixel value for each band via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) because the
+    canonical single-band sentinel2 tile is all-NoData (rst_median returns [None]).
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3, count=1)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_median("tile").alias("band_median")).first()
     return result["band_median"]
 
 
 rst_median_python_heavy_example_output = """
-+-----------+
-|band_median|
-+-----------+
-|      [5.5]|
-+-----------+
++---------------------+
+|band_median          |
++---------------------+
+|[85.0, 157.5, 111.5] |
++---------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_memsize — in-memory size in bytes (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
@@ -503,7 +555,7 @@ def rst_memsize_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_memsize("tile").alias("memsize")).first()
     return result["memsize"]
 
@@ -512,13 +564,14 @@ rst_memsize_python_heavy_example_output = """
 +-------+
 |memsize|
 +-------+
-|    432|
+|71749  |
 +-------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_metadata — raster metadata map (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
@@ -527,70 +580,82 @@ def rst_metadata_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_metadata("tile").alias("metadata")).first()
     return result["metadata"]
 
 
 rst_metadata_python_heavy_example_output = """
 +--------------------------------------------------+
-|                                          metadata|
+|metadata                                          |
 +--------------------------------------------------+
-|{driver -> GTiff, crs -> EPSG:4326, count -> 1,...|
+|{driver -> GTiff, crs -> EPSG:32618, count -> 1,..|
 +--------------------------------------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_min — minimum pixel values per band (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 def rst_min_python_heavy_example(spark):
-    """Get the minimum pixel value for each band via the heavy rasterx tier."""
+    """Get the minimum pixel value for each band via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) because the
+    canonical single-band sentinel2 tile is all-NoData (rst_min returns [None]).
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3, count=1)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_min("tile").alias("band_min")).first()
     return result["band_min"]
 
 
 rst_min_python_heavy_example_output = """
-+--------+
-|band_min|
-+--------+
-|   [0.0]|
-+--------+
++------------------+
+|band_min          |
++------------------+
+|[50.0, 102.0, 82.0]|
++------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_pixelcount — total pixel count (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — 8x8=64 valid pixels per band)
 # ---------------------------------------------------------------------------
 
 
 def rst_pixelcount_python_heavy_example(spark):
-    """Get the total pixel count for a raster tile via the heavy rasterx tier."""
+    """Get the count of valid (non-NoData) pixels per band via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 8x8, no NoData set) so
+    each band yields 64 valid pixels. The single-band sentinel2 tile has
+    NoData=0 and all pixels equal zero, making pixelcount return [0].
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_pixelcount("tile").alias("pixel_count")).first()
     return result["pixel_count"]
 
 
 rst_pixelcount_python_heavy_example_output = """
-+-----------+
-|pixel_count|
-+-----------+
-|       [12]|
-+-----------+
++------------+
+|pixel_count |
++------------+
+|[64, 64, 64]|
++------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_pixelheight — pixel height in ground units (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 10.0 m pixels in EPSG:32618)
 # ---------------------------------------------------------------------------
 
 
@@ -599,7 +664,7 @@ def rst_pixelheight_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_pixelheight("tile").alias("pixel_height")).first()
     return result["pixel_height"]
 
@@ -608,13 +673,14 @@ rst_pixelheight_python_heavy_example_output = """
 +------------+
 |pixel_height|
 +------------+
-|         0.5|
+|10.0        |
 +------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_pixelwidth — pixel width in ground units (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 10.0 m pixels in EPSG:32618)
 # ---------------------------------------------------------------------------
 
 
@@ -623,7 +689,7 @@ def rst_pixelwidth_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_pixelwidth("tile").alias("pixel_width")).first()
     return result["pixel_width"]
 
@@ -632,13 +698,14 @@ rst_pixelwidth_python_heavy_example_output = """
 +-----------+
 |pixel_width|
 +-----------+
-|        0.5|
+|10.0       |
 +-----------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_rotation — rotation in radians (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — axis-aligned, rotation=0.0)
 # ---------------------------------------------------------------------------
 
 
@@ -647,7 +714,7 @@ def rst_rotation_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_rotation("tile").alias("rotation")).first()
     return result["rotation"]
 
@@ -656,13 +723,14 @@ rst_rotation_python_heavy_example_output = """
 +--------+
 |rotation|
 +--------+
-|     0.0|
+|0.0     |
 +--------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_scalex — scale in X (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — scalex=10.0)
 # ---------------------------------------------------------------------------
 
 
@@ -671,7 +739,7 @@ def rst_scalex_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_scalex("tile").alias("scale_x")).first()
     return result["scale_x"]
 
@@ -680,25 +748,26 @@ rst_scalex_python_heavy_example_output = """
 +-------+
 |scale_x|
 +-------+
-|    0.5|
+|10.0   |
 +-------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_scaley — scale in Y (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — scaley=-10.0 for north-up)
 # ---------------------------------------------------------------------------
 
 
 def rst_scaley_python_heavy_example(spark):
     """Get the pixel scale in the Y direction via the heavy rasterx tier.
 
-    For north-up rasters, the Y scale is negative (top row = maximum latitude).
+    For north-up rasters, the Y scale is negative (top row = maximum Y).
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_scaley("tile").alias("scale_y")).first()
     return result["scale_y"]
 
@@ -707,13 +776,14 @@ rst_scaley_python_heavy_example_output = """
 +-------+
 |scale_y|
 +-------+
-|   -0.5|
+|-10.0  |
 +-------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_skewx — skew in X (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — axis-aligned, skewx=0.0)
 # ---------------------------------------------------------------------------
 
 
@@ -722,7 +792,7 @@ def rst_skewx_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_skewx("tile").alias("skew_x")).first()
     return result["skew_x"]
 
@@ -731,13 +801,14 @@ rst_skewx_python_heavy_example_output = """
 +------+
 |skew_x|
 +------+
-|   0.0|
+|0.0   |
 +------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_skewy — skew in Y (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — axis-aligned, skewy=0.0)
 # ---------------------------------------------------------------------------
 
 
@@ -746,7 +817,7 @@ def rst_skewy_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_skewy("tile").alias("skew_y")).first()
     return result["skew_y"]
 
@@ -755,13 +826,14 @@ rst_skewy_python_heavy_example_output = """
 +------+
 |skew_y|
 +------+
-|   0.0|
+|0.0   |
 +------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_srid — spatial reference ID integer (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
 # ---------------------------------------------------------------------------
 
 
@@ -770,22 +842,23 @@ def rst_srid_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, epsg=4326)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_srid("tile").alias("srid")).first()
     return result["srid"]
 
 
 rst_srid_python_heavy_example_output = """
-+----+
-|srid|
-+----+
-|4326|
-+----+
++-----+
+|srid |
++-----+
+|32618|
++-----+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_crs — CRS as authority string or WKT (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
 # ---------------------------------------------------------------------------
 
 
@@ -794,100 +867,109 @@ def rst_crs_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, epsg=4326)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_crs("tile").alias("crs")).first()
     return result["crs"]
 
 
 rst_crs_python_heavy_example_output = """
-+---------+
-|      crs|
-+---------+
-|EPSG:4326|
-+---------+
++----------+
+|crs       |
++----------+
+|EPSG:32618|
++----------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_subdatasets — list of subdataset names (heavy tier)
+# Fixture: NETCDF (prAdjust_day_HadGEM2-CC_*.nc — has time_bnds and prAdjust)
 # ---------------------------------------------------------------------------
 
 
 def rst_subdatasets_python_heavy_example(spark):
     """Get the subdatasets map for a NetCDF raster tile via the heavy rasterx tier.
 
-    Multi-layer formats such as NetCDF expose each variable as a subdataset.
-    The returned map has one entry per subdataset keyed by SUBDATASET_N_NAME
-    and SUBDATASET_N_DESC.  Plain GeoTIFFs return an empty map.
+    Uses the committed CMIP5 NetCDF fixture which has two subdatasets: time_bnds
+    and prAdjust. Plain GeoTIFFs return an empty map.
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_nc_tile_df(spark)
+    tile_df = _get_netcdf_df_heavy(spark)
     result = tile_df.select(rx.rst_subdatasets("tile").alias("subdatasets")).first()
     return result["subdatasets"]
 
 
 rst_subdatasets_python_heavy_example_output = """
-+-----------------------------------------------------+
-|subdatasets                                          |
-+-----------------------------------------------------+
-|{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> ..., |
-| SUBDATASET_2_NAME -> ..., SUBDATASET_2_DESC -> ...} |
-+-----------------------------------------------------+
++------------------------------------------------------+
+|subdatasets                                           |
++------------------------------------------------------+
+|{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> [31...|
++------------------------------------------------------+
+(map with SUBDATASET_1_NAME/DESC for time_bnds and SUBDATASET_2_NAME/DESC for prAdjust)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_summary — statistical summary as JSON string (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — 8x8, 3 bands; single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 def rst_summary_python_heavy_example(spark):
-    """Get a statistical summary of a raster tile via the heavy rasterx tier."""
+    """Get a statistical summary of a raster tile via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_summary("tile").alias("summary")).first()
     return result["summary"]
 
 
 rst_summary_python_heavy_example_output = """
 +------------------------------------------------------------+
-|                                                     summary|
+|summary                                                     |
 +------------------------------------------------------------+
-|{driverShortName: GTiff, size: [4, 3], coordinateSystem: ...|
+|{"driverShortName": "GTiff", "size": [8, 8], "coordinateS...|
 +------------------------------------------------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_type — data type per band (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — UInt16 per band)
 # ---------------------------------------------------------------------------
 
 
 def rst_type_python_heavy_example(spark):
-    """Get the data type string for each band via the heavy rasterx tier."""
+    """Get the data type string for each band via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands, UInt16).
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, count=1)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_type("tile").alias("band_types")).first()
     return result["band_types"]
 
 
 rst_type_python_heavy_example_output = """
-+----------+
-|band_types|
-+----------+
-| [Float32]|
-+----------+
++-----------------------------+
+|band_types                   |
++-----------------------------+
+|[UInt16, UInt16, UInt16]     |
++-----------------------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_upperleftx — upper-left corner X coordinate (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — upperleftx=2121950.0 in EPSG:32618)
 # ---------------------------------------------------------------------------
 
 
@@ -896,7 +978,7 @@ def rst_upperleftx_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_upperleftx("tile").alias("upper_left_x")).first()
     return result["upper_left_x"]
 
@@ -905,13 +987,14 @@ rst_upperleftx_python_heavy_example_output = """
 +------------+
 |upper_left_x|
 +------------+
-|        10.0|
+|2121950.0   |
 +------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_upperlefty — upper-left corner Y coordinate (heavy tier)
+# Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — upperlefty=-10790470.0 in EPSG:32618)
 # ---------------------------------------------------------------------------
 
 
@@ -920,31 +1003,37 @@ def rst_upperlefty_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(rx.rst_upperlefty("tile").alias("upper_left_y")).first()
     return result["upper_left_y"]
 
 
 rst_upperlefty_python_heavy_example_output = """
-+------------+
-|upper_left_y|
-+------------+
-|        50.0|
-+------------+
++---------------+
+|upper_left_y   |
++---------------+
+|-10790470.0    |
++---------------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_isempty — check if raster is empty (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — has real pixel data, not empty)
 # ---------------------------------------------------------------------------
 
 
 def rst_isempty_python_heavy_example(spark):
-    """Check whether a raster tile is empty via the heavy rasterx tier."""
+    """Check whether a raster tile is empty via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif) which carries real pixel data.
+    The canonical single-band sentinel2 tile has NoData=0 and all pixels equal zero,
+    causing rst_isempty to return True.
+    """
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_isempty("tile").alias("is_empty")).first()
     return result["is_empty"]
 
@@ -953,13 +1042,14 @@ rst_isempty_python_heavy_example_output = """
 +--------+
 |is_empty|
 +--------+
-|   false|
+|false   |
 +--------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_tryopen — validate raster can be opened (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — committed, always openable)
 # ---------------------------------------------------------------------------
 
 
@@ -968,7 +1058,7 @@ def rst_tryopen_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark)
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(rx.rst_tryopen("tile").alias("try_open")).first()
     return result["try_open"]
 
@@ -977,34 +1067,41 @@ rst_tryopen_python_heavy_example_output = """
 +--------+
 |try_open|
 +--------+
-|    true|
+|true    |
 +--------+
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_histogram — per-band histogram (heavy tier)
+# Fixture: MULTIBAND (rgb_nir_small.tif — 3 bands with real pixel data)
 # ---------------------------------------------------------------------------
 
 
 def rst_histogram_python_heavy_example(spark):
-    """Compute a per-band histogram with explicit min/max via the heavy rasterx tier."""
-    from pyspark.sql import functions as f
+    """Compute a per-band histogram with explicit bounds via the heavy rasterx tier.
+
+    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) so the histogram
+    has entries for each band. Explicit min/max bounds are required for the
+    heavy tier to avoid the null-sentinel short-circuit (GDAL auto-detect
+    returns None when statistics are not pre-computed). Bounds cover the
+    UInt16 data range: 50–200.
+    """
     from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, count=1)
-    # Pass explicit n_buckets, min_val, max_val to avoid null-sentinel short-circuit.
+    tile_df = _get_multiband_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_histogram("tile", f.lit(16), f.lit(0.0), f.lit(11.0)).alias("histogram")
+        rx.rst_histogram("tile", f.lit(256), f.lit(0.0), f.lit(255.0)).alias("histogram")
     ).first()
     return result["histogram"]
 
 
 rst_histogram_python_heavy_example_output = """
 +--------------------------------------------------+
-|                                         histogram|
+|histogram                                         |
 +--------------------------------------------------+
-|{band_1 -> [1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0,...|
+|{band_1 -> [1, 0, 0, ...], band_2 -> [1, 0, 1,...|
 +--------------------------------------------------+
 """

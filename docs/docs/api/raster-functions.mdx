@@ -235,12 +235,14 @@ Powered by **rasterio** + **NumPy**. Per-band mean over valid (non-NoData) pixel
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands: red, NIR, green); the canonical single-band sentinel2 tile is all-NoData for this function._
+
 <FunctionExamples
   name="rst_avg"
-  sql={rasterxSqlCode}           sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxLightCode} pythonLightSource="docs/tests/python/api/rasterx_functions_python_light.py"
-  pythonHeavy={rasterxCode}      pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -253,6 +255,8 @@ Powered by **rasterio**.
 :::
 
 **Signature:** `rst_bandmetadata(tile: Column, band: Column): Column` — Band metadata map.
+
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with per-band GDAL metadata tags); plain single-band GeoTIFFs without tags return an empty map `{}`._
 
 <FunctionExamples
   name="rst_bandmetadata"
@@ -275,10 +279,10 @@ Powered by **rasterio**.
 
 <FunctionExamples
   name="rst_boundingbox"
-  sql={rasterxSqlCode}           sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxLightCode} pythonLightSource="docs/tests/python/api/rasterx_functions_python_light.py"
-  pythonHeavy={rasterxCode}      pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -362,6 +366,8 @@ Powered by **rasterio**. Subdataset availability depends on rasterio's bundled G
 
 **Signature:** `rst_getsubdataset(tile: Column, subsetName: Column): Column` — Extract subdataset.
 
+_Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which has two subdatasets: `time_bnds` and `prAdjust`. Subdatasets require a multi-layer format such as NetCDF; plain GeoTIFFs return no subdatasets._
+
 <FunctionExamples
   name="rst_getsubdataset"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
@@ -402,6 +408,8 @@ Powered by **rasterio** + **NumPy**. Per-band maximum over valid (non-NoData) pi
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonical single-band sentinel2 tile is all-NoData for this function._
+
 <FunctionExamples
   name="rst_max"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
@@ -422,6 +430,8 @@ Powered by **rasterio** + **NumPy**. Per-band median over valid (non-NoData) pix
 **Signature:** `rst_median(tile: Column): Column` — Median pixel values per band.
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
+
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonical single-band sentinel2 tile is all-NoData for this function._
 
 <FunctionExamples
   name="rst_median"
@@ -482,6 +492,8 @@ Powered by **rasterio** + **NumPy**. Per-band minimum over valid (non-NoData) pi
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonical single-band sentinel2 tile is all-NoData for this function._
+
 <FunctionExamples
   name="rst_min"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
@@ -501,12 +513,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_numbands(tile: Column): Column` — Number of bands.
 
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands: red, NIR, green)._
+
 <FunctionExamples
   name="rst_numbands"
-  sql={rasterxSqlCode}           sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxLightCode} pythonLightSource="docs/tests/python/api/rasterx_functions_python_light.py"
-  pythonHeavy={rasterxCode}      pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -519,6 +533,8 @@ Powered by **rasterio** + **NumPy**. Per-band count of valid (non-NoData) pixels
 :::
 
 **Signature:** `rst_pixelcount(tile: Column): Column` — Total pixel count.
+
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 8×8, 3 bands, no NoData set), yielding 64 valid pixels per band; the canonical single-band sentinel2 tile has NoData=0 with all pixels equal zero, returning `[0]`._
 
 <FunctionExamples
   name="rst_pixelcount"
@@ -698,6 +714,8 @@ Powered by **rasterio**. Empty for single-dataset rasters (e.g. a plain GeoTIFF)
 
 **Signature:** `rst_subdatasets(tile: Column): Column` — List of subdataset names.
 
+_Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which has two subdatasets: `time_bnds` and `prAdjust`. Subdatasets require a multi-layer format; plain GeoTIFFs return an empty map._
+
 <FunctionExamples
   name="rst_subdatasets"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
@@ -717,6 +735,8 @@ Powered by **rasterio** + **NumPy**. Returns a JSON summary (driver, size, CRS, 
 
 **Signature:** `rst_summary(tile: Column): Column` — Statistical summary of values.
 
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) which has real pixel data._
+
 <FunctionExamples
   name="rst_summary"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
@@ -735,6 +755,8 @@ Powered by **rasterio**.
 :::
 
 **Signature:** `rst_type(tile: Column): Column` — Data type per band.
+
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands, `UInt16`)._
 
 <FunctionExamples
   name="rst_type"
@@ -785,10 +807,10 @@ Powered by **rasterio**.
 
 <FunctionExamples
   name="rst_width"
-  sql={rasterxSqlCode}           sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxLightCode} pythonLightSource="docs/tests/python/api/rasterx_functions_python_light.py"
-  pythonHeavy={rasterxCode}      pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -1885,6 +1907,8 @@ Powered by **rasterio**.
 
 Returns `true` when the raster has no size **or** every band is entirely NoData.
 
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixel data); the canonical single-band sentinel2 tile has NoData=0 with all pixels equal zero, returning `true`._
+
 <FunctionExamples
   name="rst_isempty"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
@@ -2003,6 +2027,8 @@ Powered by **rasterio**.
 :::
 
 **Signature:** `rst_tryopen(tile: Column): Column` — Validate raster can be opened.
+
+_Examples use the multiband fixture (`rgb_nir_small.tif`, committed to the repo, always openable)._
 
 <FunctionExamples
   name="rst_tryopen"
@@ -2441,6 +2467,8 @@ Powered by **rasterio** + **NumPy**. Per-band bucket counts via `numpy.histogram
 :::
 
 **Signature:** `rst_histogram(tile: Column, [bands: Column = null, nBuckets: Column = lit(256), min: Column = null, max: Column = null, includeNodata: Column = lit(false)]): Column` — Compute per-band histograms via `band.GetHistogram`. Returns `MAP<STRING, ARRAY<LONG>>` keyed by `"band_<n>"` with bucket counts. If `bands` is null, all bands are processed; if `min` / `max` are null, GDAL auto-detects the range.
+
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) so the histogram has entries for each band._
 
 <FunctionExamples
   name="rst_histogram"

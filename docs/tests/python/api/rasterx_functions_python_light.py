@@ -1,40 +1,24 @@
 """
-Python code examples for RasterX Function Reference documentation.
-Single source of truth for docs/docs/api/rasterx-functions.mdx
+Python code examples for the light (pyrx) tier of RasterX functions — per-function examples.
+Single source of truth for per-function light-Python tabs in docs/docs/api/rasterx-functions.mdx.
 
-Imports and registration are in the common setup only. SQL examples are in rasterx_functions_sql.py.
+All examples are self-contained and JAR-free: they build a synthetic in-memory GeoTIFF
+using rasterio + numpy rather than reading from /Volumes sample data.
+No path_config import is needed.
 """
 
 try:
-    from databricks.labs.gbx.rasterx import functions as rx
+    from databricks.labs.gbx.pyrx import functions as rx
 except ImportError:
     rx = None
 
-# Sample data path at runtime (path_config)
-from path_config import SAMPLE_DATA_BASE
-SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
-
-
-def rasterx_setup_example(spark):
-    """Common setup: import, register RasterX, and load sample rasters. Run once before examples."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
-    rasters = spark.read.format("gdal").load(SAMPLE_RASTER_PATH)
-    rasters.createOrReplaceTempView("rasters")
-    return rasters
-
-
-rasterx_setup_example_output = """
-RasterX registered. Temp view `rasters` created from sample raster.
-"""
-
 
 # ---------------------------------------------------------------------------
-# Shared helper — in-memory GeoTIFF (no sample data needed)
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 def _make_geotiff_bytes(width=4, height=3, count=1, epsg=4326):
-    """Return in-memory float32 GTiff bytes (width x height, count bands)."""
+    """Return in-memory float32 GTiff bytes (width x height, count bands, EPSG:epsg)."""
     import numpy as np
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
@@ -58,10 +42,9 @@ def _make_geotiff_bytes(width=4, height=3, count=1, epsg=4326):
         return mf.read()
 
 
-def _heavy_tile_df(spark, **kw):
-    """One-row heavy-tier tile DataFrame built from in-memory synthetic bytes."""
+def _tile_df(spark, **kw):
+    """One-row DataFrame with a tile struct column named 'tile'."""
     from pyspark.sql import functions as f
-    from databricks.labs.gbx.rasterx import functions as rx
 
     raster = _make_geotiff_bytes(**kw)
     df = spark.createDataFrame([(raster,)], ["raster"])
@@ -69,100 +52,104 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_avg — per-band average pixel values (heavy tier)
+# rst_avg — per-band average pixel values
 # ---------------------------------------------------------------------------
 
-def rst_avg_python_heavy_example(spark):
-    """Get per-band average pixel values via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
+def rst_avg_python_light_example(spark):
+    """Get per-band average pixel values from a raster tile using the light pyrx tier."""
+    from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3, count=1)
+    tile_df = _tile_df(spark, width=4, height=3, count=1)
     result = tile_df.select(rx.rst_avg("tile").alias("band_averages")).first()
     return result["band_averages"]
 
 
-rst_avg_python_heavy_example_output = """
+rst_avg_python_light_example_output = """
 [5.5]
 """
 
 
 # ---------------------------------------------------------------------------
-# rst_boundingbox — bounding polygon (heavy tier; returns WKB binary)
+# rst_boundingbox — bounding polygon (returns WKB binary)
 # ---------------------------------------------------------------------------
 
-def rst_boundingbox_python_heavy_example(spark):
-    """Get the bounding box of a raster tile as WKB binary via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
+def rst_boundingbox_python_light_example(spark):
+    """Get the bounding box of a raster tile as WKB binary using the light pyrx tier.
+
+    The light tier returns the bounding polygon as WKB binary. Use
+    st_geomfromwkb / shapely.wkb.loads to decode to a geometry object.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4, height=3)
+    tile_df = _tile_df(spark, width=4, height=3)
     result = tile_df.select(rx.rst_boundingbox("tile").alias("bbox")).first()
     return result["bbox"]
 
 
-rst_boundingbox_python_heavy_example_output = """
+rst_boundingbox_python_light_example_output = """
 [WKB binary bytes — bounding POLYGON of the raster extent]
 """
 
 
 # ---------------------------------------------------------------------------
-# rst_numbands — band count (heavy tier)
+# rst_numbands — band count
 # ---------------------------------------------------------------------------
 
-def rst_numbands_python_heavy_example(spark):
-    """Get the number of bands in a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
+def rst_numbands_python_light_example(spark):
+    """Get the number of bands in a raster tile using the light pyrx tier."""
+    from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, count=1)
+    tile_df = _tile_df(spark, count=1)
     result = tile_df.select(rx.rst_numbands("tile").alias("num_bands")).first()
     return result["num_bands"]
 
 
-rst_numbands_python_heavy_example_output = """
+rst_numbands_python_light_example_output = """
 1
 """
 
 
 # ---------------------------------------------------------------------------
-# rst_width — pixel width (heavy tier)
+# rst_width — pixel width
 # ---------------------------------------------------------------------------
 
-def rst_width_python_heavy_example(spark):
-    """Get the pixel width of a raster tile via the heavy rasterx tier."""
-    from databricks.labs.gbx.rasterx import functions as rx
+def rst_width_python_light_example(spark):
+    """Get the pixel width of a raster tile using the light pyrx tier."""
+    from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
-    tile_df = _heavy_tile_df(spark, width=4)
+    tile_df = _tile_df(spark, width=4)
     result = tile_df.select(rx.rst_width("tile").alias("width")).first()
     return result["width"]
 
 
-rst_width_python_heavy_example_output = """
+rst_width_python_light_example_output = """
 4
 """
 
 
 # ---------------------------------------------------------------------------
-# rst_fromfile — load raster from a file path (heavy Python tier; no Scala Column form)
+# rst_fromfile — load a raster tile from a file path (light / heavy Python only)
 # ---------------------------------------------------------------------------
 
-def rst_fromfile_python_heavy_example(spark):
-    """Load a raster tile from a file path using the heavy rasterx Python tier.
+def rst_fromfile_python_light_example(spark):
+    """Load a raster tile from a file path using the light pyrx tier.
 
     rst_fromfile is available in the light (pyrx) and heavy (rasterx) Python tiers only.
     There is no Scala Column form: the JVM executor cannot read UC Volume FUSE paths,
-    so this function delegates to the Python worker.
+    so this function is implemented exclusively by the Python worker.
     """
     import tempfile
     import os
     from pyspark.sql import functions as f
-    from databricks.labs.gbx.rasterx import functions as rx
+    from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
 
-    # Write a synthetic GeoTIFF to a temp file on the driver
+    # Write a small synthetic GeoTIFF to a temp file on the driver
     raster_bytes = _make_geotiff_bytes(width=4, height=3, count=1)
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
         tmp.write(raster_bytes)
@@ -177,6 +164,6 @@ def rst_fromfile_python_heavy_example(spark):
         os.unlink(tmp_path)
 
 
-rst_fromfile_python_heavy_example_output = """
+rst_fromfile_python_light_example_output = """
 4
 """

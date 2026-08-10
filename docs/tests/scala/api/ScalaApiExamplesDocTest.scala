@@ -71,4 +71,30 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.GridXBNGFunctions_output.nonEmpty)
     assert(ScalaApiExamples.VectorXConversionFunctions_output.nonEmpty)
   }
+
+  // =========================================================================
+  // RasterX per-function Scala example vals
+  // =========================================================================
+
+  test("ScalaApiExamples RasterX per-function snippet vals are non-empty") {
+    assert(ScalaApiExamples.rst_avg_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_boundingbox_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_numbands_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_width_scala_example.nonEmpty)
+  }
+
+  test("ScalaApiExamples RasterX per-function output vals are non-empty") {
+    assert(ScalaApiExamples.rst_avg_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_boundingbox_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_numbands_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_width_scala_example_output.nonEmpty)
+  }
+
+  test("RasterX rst_avg rst_boundingbox rst_numbands rst_width signatures compile") {
+    val _: Column = rx.rst_avg(col("tile"))
+    val _: Column = rx.rst_boundingbox(col("tile"))
+    val _: Column = rx.rst_numbands(col("tile"))
+    val _: Column = rx.rst_width(col("tile"))
+    succeed
+  }
 }

@@ -242,4 +242,88 @@ Table raster_catalog created with path, bbox, width, height, bands, metadata
 Table converted_features: feature_id, wkb_geom, geometry columns
 """.trim
 
+  // =========================================================================
+  // RasterX per-function examples (proof subset for tabbed docs)
+  // =========================================================================
+
+  val rst_avg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_avg(col("tile")).alias("band_averages"))
+result.show()
+""".trim
+
+  val rst_avg_scala_example_output: String =
+    """
++-------------+
+|band_averages|
++-------------+
+|[<float>]    |
++-------------+
+""".trim
+
+  val rst_boundingbox_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_boundingbox(col("tile")).alias("bbox"))
+result.show(truncate = false)
+""".trim
+
+  val rst_boundingbox_scala_example_output: String =
+    """
++-----------------------------------------------+
+|bbox                                           |
++-----------------------------------------------+
+|POLYGON ((-74... 40..., -73... 40..., ...))    |
++-----------------------------------------------+
+""".trim
+
+  val rst_numbands_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_numbands(col("tile")).alias("num_bands"))
+result.show()
+""".trim
+
+  val rst_numbands_scala_example_output: String =
+    """
++---------+
+|num_bands|
++---------+
+|1        |
++---------+
+""".trim
+
+  val rst_width_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_width(col("tile")).alias("width"))
+result.show()
+""".trim
+
+  val rst_width_scala_example_output: String =
+    """
++-----+
+|width|
++-----+
+|10980|
++-----+
+""".trim
+
 }

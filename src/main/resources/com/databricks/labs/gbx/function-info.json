@@ -19,7 +19,10 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_avg(tile) as band_averages, gbx_rst_avg(tile)[0] as band1_avg FROM rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_band": {
@@ -110,7 +113,10 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_boundingbox(tile) as bbox FROM rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_buildoverviews": {
@@ -256,7 +262,9 @@
     "gbx_rst_fromfile": {
       "examples": "Examples:\n      > SELECT gbx_rst_fromfile('/data/raster.tif', 'GTiff') as tile;",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy"
       ]
     },
     "gbx_rst_georeference": {
@@ -494,7 +502,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_numbands(tile) as bands FROM rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_pixelcount": {
@@ -872,7 +883,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_width(tile) as width FROM rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_worldtorastercoord": {

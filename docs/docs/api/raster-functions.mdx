@@ -17,6 +17,7 @@ import rasterxScalaCode from '!!raw-loader!../../tests/scala/packages/RasterxPac
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import rasterxLightCode from '!!raw-loader!../../tests/python/api/rasterx_functions_python_light.py';
 import rasterxAccessorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_accessors_python_light.py';
+import rasterxTileopsLightCode from '!!raw-loader!../../tests/python/api/rasterx_tileops_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -1156,13 +1157,15 @@ Load a raster from a file path.
 
 **Returns:** Binary raster tile data
 
+_Constructor — loads a tile from a file path. Light (pyrx) and SQL only; no Scala/JVM form (JVM executors cannot read UC Volume FUSE paths). For a tier-agnostic alternative use `binaryFile` + `rst_fromcontent`._
+
 <FunctionExamples
   name="rst_fromfile"
-  sql={rasterxSqlCode}           sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxLightCode} pythonLightSource="docs/tests/python/api/rasterx_functions_python_light.py"
-  pythonHeavy={rasterxCode}      pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 :::tip Portable alternative — `binaryFile` + `rst_fromcontent`
@@ -1200,9 +1203,16 @@ Create a raster from binary content.
 
 **Returns:** Binary raster tile data
 
-**SQL:**
+_Constructor — builds a tile from binary content. Example uses Spark's `binaryFile` reader to load bytes, then `rst_fromcontent` to decode them — this is the canonical tier-agnostic pattern (works on any compute including Serverless)._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_fromcontent_sql_example" outputConstant="rst_fromcontent_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_fromcontent"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ---
 
@@ -1238,9 +1248,16 @@ Create a raster from an array of band tiles.
 
 **Signature:** `rst_frombands(bands: Column): Column`
 
-**SQL:**
+_Constructor — stacks per-band tiles into a multi-band tile. Example splits the multiband fixture into per-band tiles via `rst_band`, then re-stacks them into a 3-band tile._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_frombands_sql_example" outputConstant="rst_frombands_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_frombands"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ---
 
@@ -1803,9 +1820,14 @@ Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL w
 
 **Signature:** `rst_asformat(tile: Column, newFormat: Column): Column` — Convert to another format.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_asformat_sql_example" outputConstant="rst_asformat_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_asformat"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_clip
 
@@ -1821,9 +1843,16 @@ Powered by **rasterio** (`rasterio.mask`). The clip geometry is assumed to be in
 - **EWKT** (`SRID=4326;POLYGON(...)`) or **EWKB** (SRID encoded in the byte header) — the SRID is read, and if it differs from the raster's CRS the cutline is reprojected before clipping. Use this form whenever the geometry and raster may be in different CRSs.
 - **Plain WKT / WKB** (no SRID) — the geometry is assumed to already be in the raster's CRS. If that assumption is wrong (for example, lon/lat polygons against a UTM raster), the cutline will land outside the raster and you'll get an empty or blank output. Either switch to EWKT/EWKB, or reproject the geometry to the raster's CRS first.
 
-**SQL:**
+_Example clip geometry: a WKT polygon in the raster's native CRS (EPSG:32618, no SRID prefix). To clip with a WGS84 geometry use EWKT: `SRID=4326;POLYGON(...)` — the embedded SRID triggers auto-reprojection to the raster's CRS._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_clip_sql_example" outputConstant="rst_clip_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_clip"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_combineavg
 
@@ -1849,9 +1878,16 @@ Powered by **SciPy** (`scipy.ndimage`). Output is Float64 and border pixels are 
 
 **Signature:** `rst_convolve(tile: Column, kernel: Column): Column` — Apply convolution kernel.
 
-**SQL:**
+_Example kernel: 3×3 identity (`[[0,0,0],[0,1,0],[0,0,0]]`), which passes pixels through unchanged._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_convolve_sql_example" outputConstant="rst_convolve_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_convolve"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_derivedband
 
@@ -1877,9 +1913,14 @@ Powered by **SciPy** (`scipy.ndimage`). The averaging filter is named `'mean'` (
 
 **Signature:** `rst_filter(tile: Column, kernelSize: Column, operation: Column): Column` — Spatial filter (e.g. median, avg).
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_filter_sql_example" outputConstant="rst_filter_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_filter"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_initnodata
 
@@ -1891,9 +1932,14 @@ Powered by **rasterio**. When no NoData is set it assigns -9999.0; the heavyweig
 
 **Signature:** `rst_initnodata(tile: Column): Column` — Initialize NoData values.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_initnodata_sql_example" outputConstant="rst_initnodata_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_initnodata"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_isempty
 
@@ -1998,9 +2044,14 @@ Powered by **rasterio** (`rasterio.warp`). Reprojection uses the GDAL build bund
 
 **Signature:** `rst_transform(tile: Column, targetSrid: Column): Column` — Reproject to a target SRID (a positive EPSG or ESRI code, classified at apply time); `0` or a code in neither registry is rejected with a clear error. Use `rst_transformcrs` to reproject to a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_transform_sql_example" outputConstant="rst_transform_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_transform"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_transformcrs
 
@@ -2014,9 +2065,14 @@ Powered by **rasterio** (`rasterio.warp`) + **pyproj**. Reprojection uses the GD
 
 Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so you can reproject to a non-EPSG target. An int-castable string (`'3857'`) is treated as an EPSG SRID. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_transformcrs_sql_example" outputConstant="rst_transformcrs_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_transformcrs"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_tryopen
 
@@ -2049,9 +2105,14 @@ Powered by **rasterio**. Output is re-encoded as GeoTIFF; a NoData value that is
 
 **Signature:** `rst_updatetype(tile: Column, newType: Column): Column` — Convert raster data type.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_updatetype_sql_example" outputConstant="rst_updatetype_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_updatetype"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_resample
 
@@ -2069,7 +2130,14 @@ Resample a raster tile by a multiplicative factor via `gdal.Warp -r`, scaling pi
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_resample_sql_example" outputConstant="rst_resample_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_resample"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_resample_to_res
 
@@ -2087,7 +2155,14 @@ Resample a raster tile to an explicit ground resolution in CRS units via `gdal.W
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_resample_to_res_sql_example" outputConstant="rst_resample_to_res_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_resample_to_res"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_resample_to_size
 
@@ -2105,7 +2180,14 @@ Resample a raster tile to an explicit pixel grid size via `gdal.Warp -ts`.
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_resample_to_size_sql_example" outputConstant="rst_resample_to_size_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_resample_to_size"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_worldtorastercoord
 
@@ -2432,7 +2514,16 @@ Powered by **rasterio**.
 
 **Signature:** `rst_band(tile: Column, bandIndex: Column): Column` — Extract a single band from a multi-band raster as a new single-band tile (`gdal.Translate -b N`). 1-based band index.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_band_sql_example" outputConstant="rst_band_sql_example_output" code={rasterxSqlCode} />
+_Example uses the multiband fixture (`rgb_nir_small.tif`, 3 bands) to demonstrate extraction; result has `num_bands = 1`._
+
+<FunctionExamples
+  name="rst_band"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_buildoverviews
 
@@ -2444,7 +2535,14 @@ Powered by **rasterio**. Builds internal GeoTIFF overviews.
 
 **Signature:** `rst_buildoverviews(tile: Column, levels: Column, [resampling: Column = lit("average")]): Column` — Add pyramid overview levels to a tile via `ds.BuildOverviews`. `levels` is an `ARRAY<INT>` (e.g. `array(2, 4, 8, 16)`); `resampling` is one of `nearest`, `average`, `gauss`, `cubic`, `cubicspline`, `lanczos`, `bilinear`, `mode`.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_buildoverviews_sql_example" outputConstant="rst_buildoverviews_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_buildoverviews"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_fillnodata
 
@@ -2456,7 +2554,14 @@ Powered by **rasterio** (`rasterio.fill`).
 
 **Signature:** `rst_fillnodata(tile: Column, [maxSearchDist: Column = lit(100), smoothingIter: Column = lit(0)]): Column` — Fill NoData pixels via `gdal.FillNodata` using inverse-distance interpolation from neighbors within `maxSearchDist` pixels. `smoothingIter` applies an optional post-fill 3×3 smoothing pass.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_fillnodata_sql_example" outputConstant="rst_fillnodata_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_fillnodata"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_histogram
 
@@ -2501,7 +2606,14 @@ Powered by **rasterio**. Stamps the CRS without reprojecting.
 
 **Signature:** `rst_setsrid(tile: Column, srid: Column): Column` — Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a wrong) spatial reference; `0` clears the CRS. Does NOT reproject — only rewrites the CRS metadata. A negative SRID is rejected, and a positive code that is neither EPSG nor ESRI raises when stamped. Use `rst_transform` when you need an actual reprojection, or `rst_setcrs` to stamp from a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_setsrid_sql_example" outputConstant="rst_setsrid_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_setsrid"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_setcrs
 
@@ -2515,7 +2627,14 @@ Powered by **rasterio** + **pyproj**. Stamps the CRS without reprojecting.
 
 Distinct from `rst_setsrid` (integer EPSG only): `rst_setcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so a non-EPSG CRS can be applied. An int-castable string (`'4326'`) behaves like `rst_setsrid(tile, 4326)`. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_setcrs_sql_example" outputConstant="rst_setcrs_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_setcrs"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_threshold
 
@@ -2527,7 +2646,14 @@ Powered by **NumPy**. This tier keeps each passing pixel's original value and se
 
 **Signature:** `rst_threshold(tile: Column, op: Column, value: Column): Column` — Binarize the raster: pixels matching `op value` get `1`, others get `0`. `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`. Output is a `Byte` raster (0/1) sized to the input extent. Implemented as a `gbx_rst_mapalgebra` template.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_threshold_sql_example" outputConstant="rst_threshold_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_threshold"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ## Analysis
 
@@ -2543,7 +2669,14 @@ Re-encodes the tile as a Cloud Optimized GeoTIFF (validated with `cog_validate`)
 
 **Signature:** `rst_cog_convert(tile: Column, [compression: Column, blocksize: Column = lit(512), overviewResampling: Column = lit("AVERAGE")]): Column` — Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Both tiers use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec on either tier — `ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP` — and its default is `ZSTD` on the heavyweight tier. The **lightweight tier additionally accepts `AUTO`** (its default): a size-adaptive ZSTD level with the dtype predictor. `blocksize` is the internal tile size in pixels (square). `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_cog_convert_sql_example" outputConstant="rst_cog_convert_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_cog_convert"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
 
 ### rst_proximity
 

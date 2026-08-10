@@ -5,7 +5,10 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_asformat(tile, 'GTiff') as geotiff_tile FROM netcdf_rasters;",
       "usage_args": "tile, new_format",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_aspect": {
@@ -29,7 +32,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_band(tile, 1) AS b1 FROM rasters;",
       "usage_args": "tile, band_index",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bandmetadata": {
@@ -126,21 +132,30 @@
       "examples": "Examples:\n      > SELECT gbx_rst_buildoverviews(tile, array(2, 4), 'average') AS withovr FROM rasters;",
       "usage_args": "tile, levels, [resampling]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_clip": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_clip( tile, 'POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))', true ) as clipped FROM rasters;",
       "usage_args": "tile, geom, cutline_all_touched, [clip_crs]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_cog_convert": {
       "examples": "Examples:\n      > SELECT gbx_rst_cog_convert(tile, 'ZSTD', 512, 'AVERAGE') AS cog FROM rasters;",
       "usage_args": "tile, [compression], [blocksize], [overview_resampling]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_color_relief": {
@@ -175,7 +190,10 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_convolve(tile, kernel) as filtered FROM rasters_with_kernels;",
       "usage_args": "tile, kernel",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_crs": {
@@ -227,14 +245,20 @@
       "examples": "Examples:\n      > SELECT gbx_rst_fillnodata(tile, 100.0, 0) AS filled FROM rasters;",
       "usage_args": "tile, [max_search_dist], [smoothing_iter]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_filter": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_filter(tile, 3, 'median') as denoised FROM noisy_rasters;",
       "usage_args": "tile, kernel_size, operation",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_format": {
@@ -251,7 +275,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_frombands(array(band1, band2, band3)) as multi_band FROM separated_bands;",
       "usage_args": "bands",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_frombands_agg": {
@@ -265,7 +292,10 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_fromcontent(content, 'GTiff') as tile FROM binary_raster_table;",
       "usage_args": "content, driver",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_fromfile": {
@@ -428,7 +458,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_initnodata(tile) as tile FROM rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_isempty": {
@@ -703,21 +736,30 @@
       "examples": "Examples:\n      > SELECT gbx_rst_resample(tile, 2.0, 'bilinear') AS upsampled FROM rasters;",
       "usage_args": "tile, factor, [algorithm]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_resample_to_res": {
       "examples": "Examples:\n      > SELECT gbx_rst_resample_to_res(tile, 100.0, 100.0, 'average') AS coarse FROM rasters;",
       "usage_args": "tile, x_res, y_res, [algorithm]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_resample_to_size": {
       "examples": "Examples:\n      > SELECT gbx_rst_resample_to_size(tile, 512, 512, 'near') AS sized FROM rasters;",
       "usage_args": "tile, width_px, height_px, [algorithm]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_retile": {
@@ -789,14 +831,20 @@
       "examples": "Examples:\n      > SELECT gbx_rst_setcrs(tile, 'EPSG:3857') AS tagged FROM rasters;",
       "usage_args": "tile, crs",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_setsrid": {
       "examples": "Examples:\n      > SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters;",
       "usage_args": "tile, srid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_skewx": {
@@ -860,7 +908,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_threshold(tile, '>', 100.0) AS mask FROM rasters;",
       "usage_args": "tile, op, value",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_tilexyz": {
@@ -895,14 +946,20 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_transform(tile, 4326) as wgs84_tile, gbx_rst_srid(gbx_rst_transform(tile, 4326)) as new_srid FROM rasters;",
       "usage_args": "tile, srid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_transformcrs": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_transformcrs(tile, 'EPSG:3857') as webmercator_tile, gbx_rst_crs(gbx_rst_transformcrs(tile, 'EPSG:3857')) as new_crs FROM rasters;",
       "usage_args": "tile, crs",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_tri": {
@@ -936,7 +993,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_updatetype(tile, 'Float32') as float_tile FROM rasters;",
       "usage_args": "tile, new_type",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_upperleftx": {

@@ -926,4 +926,449 @@ result.show(truncate = false)
 +--------------------------------------------------+
 """.trim
 
+  // ===========================================================================
+  // Tile ops & constructors family (Scala)
+  // ===========================================================================
+
+  val rst_asformat_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_asformat(col("tile"), lit("GTiff"))).alias("format"))
+result.show()
+""".trim
+
+  val rst_asformat_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(GDAL format name of the re-encoded tile)
+""".trim
+
+  val rst_band_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Uses multiband fixture (rgb_nir_small.tif, 3 bands) to demonstrate band extraction.
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = rasters.select(rx.rst_numbands(rx.rst_band(col("tile"), lit(1))).alias("num_bands"))
+result.show()
+""".trim
+
+  val rst_band_scala_example_output: String =
+    """
++---------+
+|num_bands|
++---------+
+|1        |
++---------+
+(band count of the extracted single-band tile)
+""".trim
+
+  val rst_buildoverviews_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_buildoverviews(col("tile"), array(lit(2), lit(4)))).alias("format"))
+result.show()
+""".trim
+
+  val rst_buildoverviews_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the tile with internal overviews at levels [2, 4])
+""".trim
+
+  val rst_clip_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// WKT polygon in raster's native CRS (EPSG:32618); no SRID prefix = no reprojection.
+// To clip with a WGS84 geometry use EWKT: "SRID=4326;POLYGON(...)".
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val clipGeom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
+val result = rasters.select(rx.rst_format(rx.rst_clip(col("tile"), lit(clipGeom), lit(true))).alias("format"))
+result.show()
+""".trim
+
+  val rst_clip_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
+""".trim
+
+  val rst_cog_convert_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_cog_convert(col("tile"))).alias("format"))
+result.show()
+""".trim
+
+  val rst_cog_convert_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(a COG is a valid GeoTIFF; use rst_memsize to confirm the tiled internal layout)
+""".trim
+
+  val rst_convolve_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val kernel = array(
+  array(lit(0.0), lit(0.0), lit(0.0)),
+  array(lit(0.0), lit(1.0), lit(0.0)),
+  array(lit(0.0), lit(0.0), lit(0.0))
+)
+val result = rasters.select(rx.rst_format(rx.rst_convolve(col("tile"), kernel)).alias("format"))
+result.show()
+""".trim
+
+  val rst_convolve_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the convolved tile; kernel is a 3x3 identity)
+""".trim
+
+  val rst_fillnodata_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_fillnodata(col("tile"), lit(100.0), lit(0))).alias("format"))
+result.show()
+""".trim
+
+  val rst_fillnodata_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the filled tile; NoData holes searched within 100 pixels)
+""".trim
+
+  val rst_filter_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_filter(col("tile"), lit(3), lit("median"))).alias("format"))
+result.show()
+""".trim
+
+  val rst_filter_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the filtered tile; 3x3 median filter applied)
+""".trim
+
+  val rst_fromcontent_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Constructor: binaryFile reader + rst_fromcontent is the canonical tier-agnostic pattern.
+// binaryFile runs in Spark (holds the Volume credential) and works on any compute.
+val binary = spark.read.format("binaryFile")
+  .load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val tiles = binary.select(rx.rst_fromcontent(col("content"), lit("GTiff")).alias("tile"))
+val result = tiles.select(rx.rst_format(col("tile")).alias("format"))
+result.show()
+""".trim
+
+  val rst_fromcontent_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the tile loaded from binary content via binaryFile reader)
+""".trim
+
+  val rst_frombands_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Constructor: extract per-band tiles from the multiband fixture, then stack them back.
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val withBands = rasters.select(
+  array(
+    rx.rst_band(col("tile"), lit(1)),
+    rx.rst_band(col("tile"), lit(2)),
+    rx.rst_band(col("tile"), lit(3))
+  ).alias("bands")
+)
+val result = withBands.select(rx.rst_numbands(rx.rst_frombands(col("bands"))).alias("num_bands"))
+result.show()
+""".trim
+
+  val rst_frombands_scala_example_output: String =
+    """
++---------+
+|num_bands|
++---------+
+|3        |
++---------+
+(band count of the re-stacked 3-band tile)
+""".trim
+
+  val rst_initnodata_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_initnodata(col("tile"))).alias("format"))
+result.show()
+""".trim
+
+  val rst_initnodata_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the tile with NoData initialized)
+""".trim
+
+  val rst_resample_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_width(rx.rst_resample(col("tile"), lit(2.0), lit("bilinear"))).alias("width"))
+result.show()
+""".trim
+
+  val rst_resample_scala_example_output: String =
+    """
++-----+
+|width|
++-----+
+|472  |
++-----+
+(width in pixels of the 2x upsampled tile; source is 236 px wide)
+""".trim
+
+  val rst_resample_to_res_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_width(rx.rst_resample_to_res(col("tile"), lit(20.0), lit(20.0), lit("average"))).alias("width"))
+result.show()
+""".trim
+
+  val rst_resample_to_res_scala_example_output: String =
+    """
++-----+
+|width|
++-----+
+|118  |
++-----+
+(width in pixels after downsampling from 10 m to 20 m resolution)
+""".trim
+
+  val rst_resample_to_size_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_width(rx.rst_resample_to_size(col("tile"), lit(100), lit(100), lit("near"))).alias("width"))
+result.show()
+""".trim
+
+  val rst_resample_to_size_scala_example_output: String =
+    """
++-----+
+|width|
++-----+
+|100  |
++-----+
+(width in pixels of the resampled tile forced to 100x100)
+""".trim
+
+  val rst_setcrs_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_crs(rx.rst_setcrs(col("tile"), lit("EPSG:32618"))).alias("crs"))
+result.show()
+""".trim
+
+  val rst_setcrs_scala_example_output: String =
+    """
++----------+
+|crs       |
++----------+
+|EPSG:32618|
++----------+
+(CRS string after stamping; does NOT reproject — use rst_transformcrs to reproject)
+""".trim
+
+  val rst_setsrid_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_srid(rx.rst_setsrid(col("tile"), lit(32618))).alias("srid"))
+result.show()
+""".trim
+
+  val rst_setsrid_scala_example_output: String =
+    """
++-----+
+|srid |
++-----+
+|32618|
++-----+
+(EPSG SRID after stamping; does NOT reproject — use rst_transform to reproject)
+""".trim
+
+  val rst_threshold_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_threshold(col("tile"), lit(">"), lit(0.0))).alias("format"))
+result.show()
+""".trim
+
+  val rst_threshold_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the binary mask tile; pixels > 0.0 → 1, others → 0)
+""".trim
+
+  val rst_transform_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_srid(rx.rst_transform(col("tile"), lit(4326))).alias("srid"))
+result.show()
+""".trim
+
+  val rst_transform_scala_example_output: String =
+    """
++----+
+|srid|
++----+
+|4326|
++----+
+(EPSG SRID of the reprojected tile; source is EPSG:32618 (UTM Zone 18N))
+""".trim
+
+  val rst_transformcrs_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_crs(rx.rst_transformcrs(col("tile"), lit("EPSG:3857"))).alias("crs"))
+result.show()
+""".trim
+
+  val rst_transformcrs_scala_example_output: String =
+    """
++----------+
+|crs       |
++----------+
+|EPSG:3857 |
++----------+
+(CRS string of the reprojected tile; accepts authority codes, WKT, or PROJ4)
+""".trim
+
+  val rst_updatetype_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(rx.rst_updatetype(col("tile"), lit("Float32"))).alias("format"))
+result.show()
+""".trim
+
+  val rst_updatetype_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+(format of the type-converted tile; use rst_type to confirm the new data type)
+""".trim
+
 }

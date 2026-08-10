@@ -19,11 +19,13 @@ its own output, not a format string). Rules by return type:
 - **Scalar-returning** (rst_height, rst_srid, rst_numbands, rst_format, rst_width, …): show
   the function directly; output is its real scalar.
 - **Tile/struct-returning** (rst_clip, rst_resample, rst_transform, the constructors
-  rst_fromfile/fromcontent/frombands, rst_getsubdataset, …): show the function directly;
-  output is the returned TILE STRUCT rendered representatively + a note —
-  `{cellid: ..., raster: <bytes>, metadata: {driver -> GTiff, ...}}` + "(returns a raster
-  tile)", the SAME across all tiers (the accepted rst_boundingbox WKB-annotation pattern
-  applied to tiles).
+  rst_fromfile/fromcontent/frombands, rst_getsubdataset, the *_agg family, …): show the
+  function directly; the output NOTE says it returns a **v2 Tile** and LINKS to
+  `./tile-structure` — "(returns a v2 Tile — see [Tile structure](./tile-structure))", the
+  SAME across all tiers. Do NOT enumerate the struct fields per function, and do NOT use the
+  OLD v1 `{cellid, raster, metadata}` / `STRUCT<cellid BIGINT, raster BINARY, metadata
+  MAP<...>>` form (v1; functions emit the v2 Tile Structure). Any representative `.show()`
+  value stays minimal/truthful.
 - **Geometry-returning** (rst_boundingbox): `...` + "(WKB binary)" shorthand + note.
 This is the #1 recurring drift — agents wrapped tile-returning functions in an accessor. Do NOT.
 

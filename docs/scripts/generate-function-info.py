@@ -55,12 +55,15 @@ def _load_parsed_builders() -> Dict[str, dict]:
         # Execute the extend_function_metadata script as a subprocess
         import subprocess
         import json
-        script_path = os.path.join(os.path.dirname(__file__), "extend-function-metadata.py")
+
+        script_path = os.path.join(
+            os.path.dirname(__file__), "extend-function-metadata.py"
+        )
         result = subprocess.run(
             [sys.executable, script_path, REPO_ROOT],
             capture_output=True,
             text=True,
-            timeout=30
+            timeout=30,
         )
         # Fail LOUDLY, never silently. Returning {} on error looks like "no functions have
         # signatures" and would quietly wipe usage_args out of the JSON on the next run.
@@ -72,7 +75,7 @@ def _load_parsed_builders() -> Dict[str, dict]:
             )
         # Find the first '{' and parse from there (skip diagnostic output)
         output = result.stdout
-        json_start = output.find('{')
+        json_start = output.find("{")
         if json_start < 0:
             raise SystemExit(
                 "generate-function-info: signature parser produced no JSON.\n"
@@ -165,7 +168,10 @@ def format_examples_block(sql_line: str) -> str:
 
 
 def _collect_from_module(
-    mod, local_prefix: str, spark_prefix: str, registered_for_package: Optional[List[str]] = None
+    mod,
+    local_prefix: str,
+    spark_prefix: str,
+    registered_for_package: Optional[List[str]] = None,
 ) -> dict:
     """
     Collect examples from one doc module.
@@ -191,7 +197,7 @@ def _collect_from_module(
         if not callable(getattr(mod, attr)):
             continue
         middle = attr[: -len("_sql_example")]
-        dedicated_targets.add(spark_prefix + middle[len(local_prefix):])
+        dedicated_targets.add(spark_prefix + middle[len(local_prefix) :])
 
     result = {}
     for attr in dir(mod):
@@ -222,7 +228,7 @@ def _collect_from_module(
             # is no dedicated cellunion_sql_example), but a name that DOES have its own
             # dedicated example function never picks up another's example as substring.
             middle = attr[: -len("_sql_example")]
-            exact_target = spark_prefix + middle[len(local_prefix):]
+            exact_target = spark_prefix + middle[len(local_prefix) :]
             for name in registered_for_package:
                 if name not in stmt or name in result:
                     continue
@@ -260,7 +266,9 @@ def discover_and_collect(registered: Optional[List[str]] = None) -> dict:
                 if registered
                 else None
             )
-            collected = _collect_from_module(mod, local_prefix, spark_prefix, reg_for_pkg)
+            collected = _collect_from_module(
+                mod, local_prefix, spark_prefix, reg_for_pkg
+            )
             # First example wins for each name
             for k, v in collected.items():
                 if k not in result:
@@ -338,8 +346,7 @@ def _package_for(name: str) -> str:
 # All MODULES entries (including optional ones) used for base derivation.
 # Each tuple: (spark_prefix, local_prefix)
 _ALL_MODULE_PREFIXES = [
-    (spark_prefix, local_prefix)
-    for (_mod, local_prefix, spark_prefix) in MODULES
+    (spark_prefix, local_prefix) for (_mod, local_prefix, spark_prefix) in MODULES
 ] + [
     (VECTORX_MODULE[2], VECTORX_MODULE[1]),
     (PMTILES_MODULE[2], PMTILES_MODULE[1]),
@@ -356,7 +363,7 @@ def _base_for_spark_name(spark_name: str) -> str:
     """
     for spark_prefix, local_prefix in _ALL_MODULE_PREFIXES:
         if spark_name.startswith(spark_prefix):
-            suffix = spark_name[len(spark_prefix):]
+            suffix = spark_name[len(spark_prefix) :]
             return local_prefix + suffix
     # Fallback: strip leading 'gbx_'
     if spark_name.startswith("gbx_"):
@@ -368,7 +375,7 @@ def _base_for_spark_name(spark_name: str) -> str:
 # Missing files are tolerated; their tier is simply absent from bindings for all functions.
 _TIER_SCANS = [
     (
-        "tests/python/api/rasterx_functions_python_light.py",
+        "tests/python/api/rasterx_*_python_light.py",
         "def {base}_python_light_example",
         "python-light",
     ),
@@ -390,13 +397,19 @@ def _scan_tier_bindings(docs_root: str, spark_names: List[str]) -> Dict[str, Set
     Return spark_name -> set of tier labels whose example symbol is present in source text.
 
     Detection is TEXT-SCAN only (no import/execution). Missing files are tolerated
-    (that tier is simply absent from bindings for all functions).
+    (that tier is simply absent from bindings for all functions). A glob pattern
+    (containing '*') expands to all matching files; their text is concatenated before
+    scanning, and an empty glob match is treated as missing (empty text, tier absent).
     """
     found: Dict[str, Set[str]] = {name: set() for name in spark_names}
     docs_path = Path(docs_root)
     for rel, template, label in _TIER_SCANS:
-        path = docs_path / rel
-        text = path.read_text() if path.exists() else ""
+        if "*" in rel:
+            matches = sorted(docs_path.glob(rel))
+            text = "".join(p.read_text() for p in matches)
+        else:
+            path = docs_path / rel
+            text = path.read_text() if path.exists() else ""
         for spark_name in spark_names:
             base = _base_for_spark_name(spark_name)
             symbol = template.format(base=base)
@@ -496,6 +509,7 @@ def build_functions_object(
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(
         description="Generate function-info.json from doc SQL examples (no empty usage; fix missing upstream in docs)"
     )
@@ -522,8 +536,14 @@ def main():
     included = {k for k in functions if not k.startswith("_")}
     missing_or_empty = [n for n in registered if n not in included]
     if missing_or_empty:
-        print("ERROR: Empty or missing usage is not allowed. Fix upstream: add SQL examples in docs.", file=sys.stderr)
-        print("Functions missing a doc SQL example (add *_sql_example() in the API function ref):", file=sys.stderr)
+        print(
+            "ERROR: Empty or missing usage is not allowed. Fix upstream: add SQL examples in docs.",
+            file=sys.stderr,
+        )
+        print(
+            "Functions missing a doc SQL example (add *_sql_example() in the API function ref):",
+            file=sys.stderr,
+        )
         for name in sorted(missing_or_empty):
             pkg = _package_for(name)
             if pkg in ("rasterx", "rasterx_h3"):
@@ -537,7 +557,10 @@ def main():
             else:
                 path = "docs/tests/python/api/*_functions_sql.py"
             print(f"  {name}  -> {path}", file=sys.stderr)
-        print(f"\nTotal: {len(missing_or_empty)} function(s) need a doc SQL example.", file=sys.stderr)
+        print(
+            f"\nTotal: {len(missing_or_empty)} function(s) need a doc SQL example.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     with open(RESOURCE_FILE, "w") as f:

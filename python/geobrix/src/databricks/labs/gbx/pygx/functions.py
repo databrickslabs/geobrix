@@ -77,10 +77,19 @@ def _resolution_udf(cell: pd.Series) -> pd.Series:
 def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
     # Same-resolution-or-error; Chebyshev on cell_to_tile coords. Looped per
     # element (cell_to_tile is scalar in the lib); batched Arrow transfer is the win.
+    # NULL input -> NULL (matches heavy NULL propagation).  ValueError from
+    # mismatched-resolution pair still propagates unchanged.
     return pd.Series(
-        [int(_quadbin.distance(int(x), int(y))) for x, y in zip(a, b)],
-        dtype="int32",
-    )
+        [
+            (
+                int(_quadbin.distance(int(x), int(y)))
+                if (x is not None and y is not None)
+                else None
+            )
+            for x, y in zip(a, b)
+        ],
+        dtype="object",
+    ).astype("Int32")
 
 
 # --- single-geometry UDFs (pandas_udf, bounded scalar output) --------------------------------
@@ -370,8 +379,9 @@ def _bng_geomkring(geom, res, k):
     if geom is None or res is None or k is None:
         return None
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    k_int = int(k)  # bad k PARAMETER -> raises
     try:
-        return sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k)))
+        return sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), k_int))
     except Exception:
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
@@ -380,8 +390,9 @@ def _bng_geomkloop(geom, res, k):
     if geom is None or res is None or k is None:
         return None
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    k_int = int(k)  # bad k PARAMETER -> raises
     try:
-        return sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k)))
+        return sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), k_int))
     except Exception:
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
@@ -435,8 +446,9 @@ class _BngGeomKRingExplode:
         if geom is None or res is None or k is None:
             return
         _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        k_int = int(k)  # bad k PARAMETER -> raises
         try:
-            for c in sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k))):
+            for c in sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), k_int)):
                 yield (c,)
         except Exception:
             return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
@@ -448,8 +460,9 @@ class _BngGeomKLoopExplode:
         if geom is None or res is None or k is None:
             return
         _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        k_int = int(k)  # bad k PARAMETER -> raises
         try:
-            for c in sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k))):
+            for c in sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), k_int)):
                 yield (c,)
         except Exception:
             return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)

@@ -158,6 +158,32 @@ def test_bng_tessellate_raises_on_bad_resolution(spark):
         spark.sql(f"SELECT gbx_bng_tessellate('{_GOOD_GEOM}', 'bogus')").first()
 
 
+def test_bng_polyfill_geom_raises_on_bad_resolution(spark):
+    with pytest.raises(Exception):
+        spark.sql(f"SELECT gbx_bng_polyfill('{_GOOD_GEOM}', 'bogus')").first()
+
+
+def test_bng_geomkringexplode_raises_on_bad_resolution(spark):
+    with pytest.raises(Exception):
+        spark.sql(
+            f"SELECT cellid FROM gbx_bng_geomkringexplode('{_GOOD_GEOM}', 'bogus', 1)"
+        ).first()
+
+
+def test_bng_geomkloopexplode_raises_on_bad_resolution(spark):
+    with pytest.raises(Exception):
+        spark.sql(
+            f"SELECT cellid FROM gbx_bng_geomkloopexplode('{_GOOD_GEOM}', 'bogus', 1)"
+        ).first()
+
+
+def test_bng_tessellateexplode_raises_on_bad_resolution(spark):
+    with pytest.raises(Exception):
+        spark.sql(
+            f"SELECT cellid FROM gbx_bng_tessellateexplode('{_GOOD_GEOM}', 'bogus')"
+        ).first()
+
+
 # ---------------------------------------------------------------------------
 # BNG scalar UDFs — bad resolution PARAMETER -> raises
 # ---------------------------------------------------------------------------
@@ -252,3 +278,28 @@ def test_custom_pointascell_null_on_oob_coordinate(spark):
         f"SELECT gbx_custom_pointascell('POINT (2000000 2000000)', {grid_sql}, 1) AS cid"
     ).first()
     assert r["cid"] is None
+
+
+# ---------------------------------------------------------------------------
+# Quadbin distance — NULL input -> NULL (matches heavy NULL propagation)
+# ---------------------------------------------------------------------------
+
+_QB_CELL = 5192650370358181887  # a valid quadbin cell at resolution 0 (tile 0,0,0)
+
+
+def test_quadbin_distance_null_on_null_first_arg(spark):
+    """NULL first cellid -> NULL (not TypeError)."""
+    r = spark.sql(f"SELECT gbx_quadbin_distance(NULL, {_QB_CELL}L) AS d").first()
+    assert r["d"] is None
+
+
+def test_quadbin_distance_null_on_null_second_arg(spark):
+    """NULL second cellid -> NULL (not TypeError)."""
+    r = spark.sql(f"SELECT gbx_quadbin_distance({_QB_CELL}L, NULL) AS d").first()
+    assert r["d"] is None
+
+
+def test_quadbin_distance_valid_pair_returns_int(spark):
+    """A valid same-resolution pair returns a non-negative integer distance."""
+    r = spark.sql(f"SELECT gbx_quadbin_distance({_QB_CELL}L, {_QB_CELL}L) AS d").first()
+    assert r["d"] is not None and r["d"] >= 0

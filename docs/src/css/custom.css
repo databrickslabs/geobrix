@@ -83,3 +83,46 @@
   border-left-color: #6b8cff;
   background: rgba(107, 140, 255, 0.08);
 }
+
+/* --------------------------------------------------------------------------
+ * Per-example language tabs (groupId="gbx-example-lang"): SQL(1) and
+ * Python-light(2) keep the default green accent. Python-heavy(3) and
+ * Scala-heavy(4) get the blue heavyweight tint — same tokens as
+ * .gbx-tier-tabs above. Scoped to .gbx-example-lang-tabs.
+ * ------------------------------------------------------------------------ */
+
+/* Heavy tabs = 3rd + 4th .tabs__item; recolor active underline + label. */
+.gbx-example-lang-tabs.tabs .tabs__item:nth-child(3).tabs__item--active,
+.gbx-example-lang-tabs.tabs .tabs__item:nth-child(4).tabs__item--active {
+  --ifm-tabs-color-active: #2545b3;
+  --ifm-tabs-color-active-border: #2545b3;
+}
+
+/* Tint the visible heavy content panel while it is selected. */
+.tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(3).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]),
+.tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(4).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]) {
+  border-left: 3px solid #2545b3;
+  background: #f5f8ff;
+  padding: 0.75rem 1rem;
+  border-radius: 0 4px 4px 0;
+}
+
+[data-theme='dark']
+  .tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(3).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]),
+[data-theme='dark']
+  .tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(4).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]) {
+  border-left-color: #6b8cff;
+  background: rgba(107, 140, 255, 0.08);
+}

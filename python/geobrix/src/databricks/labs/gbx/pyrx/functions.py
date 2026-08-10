@@ -3378,10 +3378,10 @@ def rst_polygonize(
 # All four fan out to ARRAY<tile> in the heavyweight tier; the light tier
 # streams one tile struct per row via UDTFs (eval yields each tile dict
 # incrementally from the iter_* cores — never buffers the full list).
-# Each UDTF row IS the tile struct (TILE_SCHEMA: cellid, raster, metadata).
+# Each UDTF row IS the tile struct (V2_TILE_SCHEMA: 8-field v2 tile with cellid, raster, metadata, etc).
 
 
-@udtf(returnType=_serde.TILE_SCHEMA)
+@udtf(returnType=V2_TILE_SCHEMA)
 class _RstSeparateBandsUDTF:
     """Streaming UDTF: yield one single-band tile struct per band."""
 
@@ -3403,7 +3403,7 @@ class _RstSeparateBandsUDTF:
             return
 
 
-@udtf(returnType=_serde.TILE_SCHEMA)
+@udtf(returnType=V2_TILE_SCHEMA)
 class _RstRetileUDTF:
     """Streaming UDTF: yield one sub-tile struct per non-overlapping window."""
 
@@ -3426,7 +3426,7 @@ class _RstRetileUDTF:
             return
 
 
-@udtf(returnType=_serde.TILE_SCHEMA)
+@udtf(returnType=V2_TILE_SCHEMA)
 class _RstToOverlappingTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per overlapping window."""
 
@@ -3453,7 +3453,7 @@ class _RstToOverlappingTilesUDTF:
             return
 
 
-@udtf(returnType=_serde.TILE_SCHEMA)
+@udtf(returnType=V2_TILE_SCHEMA)
 class _RstMakeTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per power-of-4 split tile."""
 
@@ -3489,7 +3489,7 @@ class _RstMakeTilesUDTF:
             return
 
 
-@udtf(returnType=_serde.TILE_SCHEMA)
+@udtf(returnType=V2_TILE_SCHEMA)
 class _RstH3TessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping H3 cell."""
 
@@ -3616,7 +3616,7 @@ def rst_h3_tessellate(
     )
 
 
-@udtf(returnType=_serde.TILE_SCHEMA)
+@udtf(returnType=V2_TILE_SCHEMA)
 class _RstQuadbinTessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping quadbin cell."""
 
@@ -3649,7 +3649,7 @@ class _RstQuadbinTessellateUDTF:
             return
 
 
-@udtf(returnType=_serde.TILE_SCHEMA)
+@udtf(returnType=V2_TILE_SCHEMA)
 class _RstBngTessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping BNG cell.
 

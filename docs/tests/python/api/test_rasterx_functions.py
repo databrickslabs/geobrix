@@ -116,11 +116,10 @@ def test_rst_getnodata_python_heavy_example(spark):
 
 
 def test_rst_getsubdataset_python_heavy_example(spark):
-    """rst_getsubdataset extracts the prAdjust subdataset from the CMIP5 NetCDF fixture."""
+    """rst_getsubdataset extracts the prAdjust subdataset; width of result is 720."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_getsubdataset_python_heavy_example(spark)
-    # Returns a tile struct (Row) or None; check it's not None
-    assert result is not None, "rst_getsubdataset should return a tile, not None"
+    assert result == 720, f"Expected width 720 for prAdjust subdataset, got {result!r}"
 
 
 def test_rst_height_python_heavy_example(spark):

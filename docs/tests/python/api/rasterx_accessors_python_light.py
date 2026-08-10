@@ -235,6 +235,7 @@ def rst_getsubdataset_python_light_example(spark):
     Uses the committed CMIP5 NetCDF fixture (prAdjust_day_HadGEM2-CC_*.nc) which
     has two subdatasets: time_bnds and prAdjust. Subdatasets require a multi-layer
     format such as NetCDF; plain GeoTIFFs return no subdatasets.
+    Returns the width of the extracted subdataset to prove extraction.
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
@@ -242,18 +243,20 @@ def rst_getsubdataset_python_light_example(spark):
     rx.register(spark)
     df = _get_netcdf_df(spark)
     result = df.select(
-        rx.rst_getsubdataset("tile", f.lit("prAdjust")).alias("subdataset")
+        rx.rst_width(
+            rx.rst_getsubdataset("tile", f.lit("prAdjust"))
+        ).alias("width")
     ).first()
-    return result["subdataset"]
+    return result["width"]
 
 
 rst_getsubdataset_python_light_example_output = """
-+-------------+
-|subdataset   |
-+-------------+
-|{..., ..., ..|
-+-------------+
-(tile struct for the prAdjust subdataset — 31 bands, 360x720 pixels)
++-----+
+|width|
++-----+
+|  720|
++-----+
+(width of the extracted prAdjust subdataset — 720 pixels, 31 bands, 360 rows)
 """
 
 

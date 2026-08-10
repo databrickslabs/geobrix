@@ -286,6 +286,33 @@ Powered by **rasterio**.
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
+### rst_crs
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **pyproj**.
+:::
+
+**Signature:** `rst_crs(tile: Column): Column` — the tile's CRS as a string (authority string like `EPSG:4326` / `ESRI:54008`, else WKT); **always** returns a value, including for non-EPSG rasters where `rst_srid` is NULL. See [Coordinate Reference Systems](./coordinate-reference-systems).
+
+Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS has one, otherwise its WKT. Unlike `rst_srid` (which returns the integer EPSG code, or `NULL`/`0` for a CRS with no EPSG code), `rst_crs` always returns a value — including for non-EPSG rasters defined by an ESRI code, WKT, or PROJ4 string.
+
+:::tip CRS: SRID int vs CRS string
+- **`rst_srid`** returns the integer EPSG code (e.g. `4326`); `NULL` (lightweight) or `0` (heavyweight) when the CRS has no EPSG code. Use it when you need the numeric SRID for the native ST bridge or an EPSG-only workflow.
+- **`rst_crs`** returns the CRS string and never loses a non-EPSG CRS.
+- **`rst_setcrs`** / **`rst_transformcrs`** take a CRS *string*. An int-castable string is treated as an EPSG SRID (`'4326'` behaves like SRID `4326`); otherwise the string is parsed as an authority code (`EPSG:`/`ESRI:`), WKT, or PROJ4. This is how ESRI codes, WKT, and PROJ4 definitions survive a round trip.
+:::
+
+<FunctionExamples
+  name="rst_crs"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
+
 ### rst_format
 
 <Tier both/>
@@ -670,33 +697,6 @@ Powered by **rasterio**.
 
 <FunctionExamples
   name="rst_srid"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
-/>
-
-### rst_crs
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **pyproj**.
-:::
-
-**Signature:** `rst_crs(tile: Column): Column` — the tile's CRS as a string (authority string like `EPSG:4326` / `ESRI:54008`, else WKT); **always** returns a value, including for non-EPSG rasters where `rst_srid` is NULL. See [Coordinate Reference Systems](./coordinate-reference-systems).
-
-Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS has one, otherwise its WKT. Unlike `rst_srid` (which returns the integer EPSG code, or `NULL`/`0` for a CRS with no EPSG code), `rst_crs` always returns a value — including for non-EPSG rasters defined by an ESRI code, WKT, or PROJ4 string.
-
-:::tip CRS: SRID int vs CRS string
-- **`rst_srid`** returns the integer EPSG code (e.g. `4326`); `NULL` (lightweight) or `0` (heavyweight) when the CRS has no EPSG code. Use it when you need the numeric SRID for the native ST bridge or an EPSG-only workflow.
-- **`rst_crs`** returns the CRS string and never loses a non-EPSG CRS.
-- **`rst_setcrs`** / **`rst_transformcrs`** take a CRS *string*. An int-castable string is treated as an EPSG SRID (`'4326'` behaves like SRID `4326`); otherwise the string is parsed as an authority code (`EPSG:`/`ESRI:`), WKT, or PROJ4. This is how ESRI codes, WKT, and PROJ4 definitions survive a round trip.
-:::
-
-<FunctionExamples
-  name="rst_crs"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"

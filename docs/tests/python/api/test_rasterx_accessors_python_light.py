@@ -290,11 +290,10 @@ def test_rst_width_python_light_example(spark):
 
 
 def test_rst_getsubdataset_python_light_example(spark):
-    """rst_getsubdataset extracts the prAdjust subdataset from the CMIP5 NetCDF fixture."""
+    """rst_getsubdataset extracts the prAdjust subdataset; width of result is 720."""
     assert light_examples is not None
     result = light_examples.rst_getsubdataset_python_light_example(spark)
-    # Returns a tile struct (dict-like Row) or None; just check it's not None
-    assert result is not None, "rst_getsubdataset should return a tile, not None"
+    assert result == 720, f"Expected width 720 for prAdjust subdataset, got {result!r}"
 
 
 def test_rst_subdatasets_python_light_example(spark):

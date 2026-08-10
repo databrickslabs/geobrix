@@ -418,20 +418,21 @@ import org.apache.spark.sql.functions._
 rx.register(spark)
 // Uses committed CMIP5 NetCDF fixture (has time_bnds and prAdjust subdatasets).
 // Subdatasets require a multi-layer format such as NetCDF.
+// rst_width wraps the result to return a real scalar proving extraction.
 val rasters = spark.read.format("netcdf_gdal").load("src/test/resources/binary/netcdf-CMIP5/prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc_rcp45_r1i1p1_20201201-20201231.nc")
 val result = rasters.select(
-  rx.rst_getsubdataset(col("tile"), lit("prAdjust")).alias("subdataset")
+  rx.rst_width(rx.rst_getsubdataset(col("tile"), lit("prAdjust"))).alias("width")
 )
 result.show()
 """.trim
 
   val rst_getsubdataset_scala_example_output: String =
     """
-+-------------+
-|subdataset   |
-+-------------+
-|{..., ..., ..|
-+-------------+
++-----+
+|width|
++-----+
+|  720|
++-----+
 """.trim
 
   val rst_height_scala_example: String =

@@ -439,6 +439,7 @@ def rst_getsubdataset_python_heavy_example(spark):
 
     Uses the committed CMIP5 NetCDF fixture which has two subdatasets: time_bnds
     and prAdjust. Subdatasets require a multi-layer format such as NetCDF.
+    Returns the width of the extracted subdataset to prove extraction.
     """
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
@@ -446,18 +447,20 @@ def rst_getsubdataset_python_heavy_example(spark):
     rx.register(spark)
     nc_df = _get_netcdf_df_heavy(spark)
     result = nc_df.select(
-        rx.rst_getsubdataset("tile", f.lit("prAdjust")).alias("subdataset")
+        rx.rst_width(
+            rx.rst_getsubdataset("tile", f.lit("prAdjust"))
+        ).alias("width")
     ).first()
-    return result["subdataset"]
+    return result["width"]
 
 
 rst_getsubdataset_python_heavy_example_output = """
-+-------------+
-|subdataset   |
-+-------------+
-|{..., ..., ..|
-+-------------+
-(tile struct for the prAdjust subdataset — 31 bands, 360x720 pixels)
++-----+
+|width|
++-----+
+|  720|
++-----+
+(width of the extracted prAdjust subdataset — 720 pixels, 31 bands, 360 rows)
 """
 
 

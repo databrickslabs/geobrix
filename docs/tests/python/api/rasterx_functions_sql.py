@@ -414,24 +414,25 @@ rst_getnodata_sql_example_output = """
 
 
 def rst_getsubdataset_sql_example():
-    """Extract a named subdataset from a NetCDF raster.
+    """Extract a named subdataset from a NetCDF raster and verify its width.
 
     Uses the committed CMIP5 NetCDF fixture which has two subdatasets:
     time_bnds and prAdjust. Subdatasets require a multi-layer format such as NetCDF.
+    Wraps with rst_width to prove extraction and return a real scalar.
     """
     return """
 -- netcdf_rasters view is from the CMIP5 NetCDF fixture (has time_bnds and prAdjust)
-SELECT gbx_rst_getsubdataset(tile, 'prAdjust') AS subdataset FROM netcdf_rasters;
+SELECT gbx_rst_width(gbx_rst_getsubdataset(tile, 'prAdjust')) AS width FROM netcdf_rasters;
 """
 
 
 rst_getsubdataset_sql_example_output = """
-+-------------+
-|subdataset   |
-+-------------+
-|{..., ..., ..|
-+-------------+
-(tile struct for the prAdjust subdataset — 31 bands, 360x720 pixels)
++-----+
+|width|
++-----+
+|  720|
++-----+
+(width of the extracted prAdjust subdataset — 720 pixels, 31 bands, 360 rows)
 """
 
 

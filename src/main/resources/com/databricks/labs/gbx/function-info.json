@@ -297,7 +297,7 @@
       ]
     },
     "gbx_rst_getsubdataset": {
-      "examples": "Examples:\n      > SELECT gbx_rst_getsubdataset(tile, 'prAdjust') AS subdataset FROM netcdf_rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_width(gbx_rst_getsubdataset(tile, 'prAdjust')) AS width FROM netcdf_rasters;",
       "usage_args": "tile, subset_name",
       "bindings": [
         "sql",

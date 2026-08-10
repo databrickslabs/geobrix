@@ -17,8 +17,10 @@ Usage (from repo root):
 
 import json
 import os
+import re
 import sys
-from typing import Dict, List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 # Script lives in docs/scripts/; repo root is two levels up.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -333,17 +335,105 @@ def _package_for(name: str) -> str:
     return "other"
 
 
+# All MODULES entries (including optional ones) used for base derivation.
+# Each tuple: (spark_prefix, local_prefix)
+_ALL_MODULE_PREFIXES = [
+    (spark_prefix, local_prefix)
+    for (_mod, local_prefix, spark_prefix) in MODULES
+] + [
+    (VECTORX_MODULE[2], VECTORX_MODULE[1]),
+    (PMTILES_MODULE[2], PMTILES_MODULE[1]),
+]
+
+
+def _base_for_spark_name(spark_name: str) -> str:
+    """
+    Derive the 'base' name for tier example symbol lookup.
+
+    Mirrors the SQL convention: strip spark_prefix, prepend local_prefix.
+    E.g. gbx_rst_avg (spark_prefix='gbx_rst_', local_prefix='rst_') -> 'rst_avg'.
+    Falls back to stripping 'gbx_' if no prefix matches.
+    """
+    for spark_prefix, local_prefix in _ALL_MODULE_PREFIXES:
+        if spark_name.startswith(spark_prefix):
+            suffix = spark_name[len(spark_prefix):]
+            return local_prefix + suffix
+    # Fallback: strip leading 'gbx_'
+    if spark_name.startswith("gbx_"):
+        return spark_name[4:]
+    return spark_name
+
+
+# tier -> (doc-test source path relative to docs/, symbol template, binding label)
+# Missing files are tolerated; their tier is simply absent from bindings for all functions.
+_TIER_SCANS = [
+    (
+        "tests/python/api/rasterx_functions_python_light.py",
+        "def {base}_python_light_example",
+        "python-light",
+    ),
+    (
+        "tests/python/api/rasterx_functions.py",
+        "def {base}_python_heavy_example",
+        "python-heavy",
+    ),
+    (
+        "tests/scala/api/ScalaApiExamples.scala",
+        "val {base}_scala_example",
+        "scala",
+    ),
+]
+
+
+def _scan_tier_bindings(docs_root: str, spark_names: List[str]) -> Dict[str, Set[str]]:
+    """
+    Return spark_name -> set of tier labels whose example symbol is present in source text.
+
+    Detection is TEXT-SCAN only (no import/execution). Missing files are tolerated
+    (that tier is simply absent from bindings for all functions).
+    """
+    found: Dict[str, Set[str]] = {name: set() for name in spark_names}
+    docs_path = Path(docs_root)
+    for rel, template, label in _TIER_SCANS:
+        path = docs_path / rel
+        text = path.read_text() if path.exists() else ""
+        for spark_name in spark_names:
+            base = _base_for_spark_name(spark_name)
+            symbol = template.format(base=base)
+            # Match symbol followed by '(' (Python def) or ':'/whitespace (Scala val).
+            if re.search(re.escape(symbol) + r"\s*[(:]", text):
+                found[spark_name].add(label)
+    return found
+
+
 def build_functions_object(
-    registered: list, doc_examples: dict, parsed_builders: Optional[Dict] = None
+    registered: list,
+    doc_examples: dict,
+    parsed_builders: Optional[Dict] = None,
+    docs_root: Optional[str] = None,
 ) -> dict:
     """
     Build the "functions" object: only functions with non-empty examples from docs.
     Ordered by package, then sorted by function name. Section markers _package_<name>
     separate packages. Optionally merge in parsed builder metadata (usage_args).
     Empty usage is not allowed; only doc-derived entries are included.
+
+    Each function entry gains a 'bindings' list (subset of
+    ["sql","python-light","python-heavy","scala"]) recording which tiers have an example.
+    'sql' is present whenever the entry has a non-empty examples value.
+    The other three are present when a text-scan of the tier's doc-test source file finds
+    the corresponding example symbol (e.g. def rst_avg_python_light_example).
     """
     if parsed_builders is None:
         parsed_builders = {}
+
+    # Pre-compute per-tier bindings via text scan (missing files -> empty set).
+    tier_bindings: Dict[str, Set[str]] = _scan_tier_bindings(
+        docs_root or DOCS_ROOT, list(registered)
+    )
+
+    # Fixed order for the 'bindings' list.
+    _BINDING_ORDER = ["sql", "python-light", "python-heavy", "scala"]
 
     by_package = {}
     for name in registered:
@@ -368,6 +458,15 @@ def build_functions_object(
                     parsed = parsed_builders[name]
                     if "usage_args" in parsed and parsed["usage_args"]:
                         func_entry["usage_args"] = parsed["usage_args"]
+                # Build bindings list in fixed order
+                present = tier_bindings.get(name, set())
+                bindings = []
+                if examples:
+                    bindings.append("sql")
+                for b in _BINDING_ORDER[1:]:
+                    if b in present:
+                        bindings.append(b)
+                func_entry["bindings"] = bindings
                 out[name] = func_entry
     other_names = by_package.get("other", [])
     if other_names:
@@ -382,6 +481,15 @@ def build_functions_object(
                     parsed = parsed_builders[name]
                     if "usage_args" in parsed and parsed["usage_args"]:
                         func_entry["usage_args"] = parsed["usage_args"]
+                # Build bindings list in fixed order
+                present = tier_bindings.get(name, set())
+                bindings = []
+                if examples:
+                    bindings.append("sql")
+                for b in _BINDING_ORDER[1:]:
+                    if b in present:
+                        bindings.append(b)
+                func_entry["bindings"] = bindings
                 out[name] = func_entry
     return out
 

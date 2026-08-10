@@ -270,10 +270,8 @@ case class CustomGridSystem(conf: GridConf) extends Serializable {
       * NaN or out-of-bounds coordinate (DATA) returns null so one bad row degrades to NULL.
       */
     def pointToCellIdOrNull(x: Double, y: Double, resolution: Int): java.lang.Long = {
-        require(
-          resolution <= conf.maxResolution,
-          throw new IllegalStateException(s"Resolution exceeds maximum resolution of ${conf.maxResolution}.")
-        )
+        if (resolution > conf.maxResolution)
+            throw new IllegalStateException(s"Resolution exceeds maximum resolution of ${conf.maxResolution}.")
         GridErrorHandler.safeEval[java.lang.Long](null)(pointToCellID(x, y, resolution))
     }
 

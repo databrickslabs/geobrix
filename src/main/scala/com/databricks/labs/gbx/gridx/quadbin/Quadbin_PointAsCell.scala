@@ -19,6 +19,9 @@ case class Quadbin_PointAsCell(
     override def nullable: Boolean = true
     override def prettyName: String = Quadbin_PointAsCell.name
     override def replacement: Expression = invoke(Quadbin_PointAsCell)
+    // Pin lon/lat to DoubleType so Catalyst coerces bare decimal literals (Decimal) to Double
+    // before dispatch — avoids INTERNAL_ERROR when users write gbx_quadbin_pointascell(10.0, 89.0, 10).
+    override def inputTypes: Seq[DataType] = Seq(DoubleType, DoubleType, IntegerType)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }

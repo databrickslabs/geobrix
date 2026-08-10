@@ -24,6 +24,17 @@ class QuadbinFunctionsTest extends PlanTest with SilentSparkSession {
         Quadbin.resolution(cell) shouldBe 10
     }
 
+    test("gbx_quadbin_pointascell — bare decimal literals coerce without CAST (Decimal→Double fix)") {
+        // Regression: Spark infers bare decimal literals (10.0) as DecimalType; without an
+        // explicit inputTypes pin the reflective dispatch fails with INTERNAL_ERROR.
+        // With the inputTypes = Seq(DoubleType, DoubleType, IntegerType) pin, Catalyst inserts
+        // the Decimal→Double cast automatically and the query succeeds.
+        functions.register(spark)
+        val cell = spark.sql("SELECT gbx_quadbin_pointascell(10.0, 89.0, 10)").head().getLong(0)
+        cell should not be 0L
+        Quadbin.resolution(cell) shouldBe 10
+    }
+
     test("gbx_quadbin_aswkb — returns parseable 5-point polygon EWKB at SRID=4326") {
         functions.register(spark)
         import functions._

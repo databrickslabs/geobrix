@@ -326,4 +326,543 @@ result.show()
 +-----+
 """.trim
 
+  val rst_bandmetadata_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_bandmetadata(col("tile"), lit(1)).alias("band_meta"))
+result.show(truncate = false)
+""".trim
+
+  val rst_bandmetadata_scala_example_output: String =
+    """
++--------------------------------------------+
+|band_meta                                   |
++--------------------------------------------+
+|{STATISTICS_MAXIMUM -> ..., ...}            |
++--------------------------------------------+
+""".trim
+
+  val rst_format_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_format(col("tile")).alias("format"))
+result.show()
+""".trim
+
+  val rst_format_scala_example_output: String =
+    """
++------+
+|format|
++------+
+|GTiff |
++------+
+""".trim
+
+  val rst_georeference_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_georeference(col("tile")).alias("georeference"))
+result.show(truncate = false)
+""".trim
+
+  val rst_georeference_scala_example_output: String =
+    """
++----------------------------------------------------------------+
+|georeference                                                    |
++----------------------------------------------------------------+
+|{scaleX -> ..., scaleY -> ..., skewX -> 0.0, skewY -> 0.0, ...}|
++----------------------------------------------------------------+
+""".trim
+
+  val rst_getnodata_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_getnodata(col("tile")).alias("nodata"))
+result.show()
+""".trim
+
+  val rst_getnodata_scala_example_output: String =
+    """
++------+
+|nodata|
++------+
+|[0.0] |
++------+
+""".trim
+
+  val rst_getsubdataset_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+// Plain GeoTIFFs have no subdatasets; rst_getsubdataset returns NULL
+val result = rasters.select(rx.rst_getsubdataset(col("tile"), lit("")).alias("subdataset"))
+result.show()
+""".trim
+
+  val rst_getsubdataset_scala_example_output: String =
+    """
++----------+
+|subdataset|
++----------+
+|null      |
++----------+
+""".trim
+
+  val rst_height_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_height(col("tile")).alias("height"))
+result.show()
+""".trim
+
+  val rst_height_scala_example_output: String =
+    """
++------+
+|height|
++------+
+|10980 |
++------+
+""".trim
+
+  val rst_max_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_max(col("tile")).alias("band_max"))
+result.show()
+""".trim
+
+  val rst_max_scala_example_output: String =
+    """
++----------+
+|band_max  |
++----------+
+|[<float>] |
++----------+
+""".trim
+
+  val rst_median_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_median(col("tile")).alias("band_median"))
+result.show()
+""".trim
+
+  val rst_median_scala_example_output: String =
+    """
++-----------+
+|band_median|
++-----------+
+|[<float>]  |
++-----------+
+""".trim
+
+  val rst_memsize_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_memsize(col("tile")).alias("memsize"))
+result.show()
+""".trim
+
+  val rst_memsize_scala_example_output: String =
+    """
++--------+
+|memsize |
++--------+
+|<bytes> |
++--------+
+""".trim
+
+  val rst_metadata_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_metadata(col("tile")).alias("metadata"))
+result.show(truncate = false)
+""".trim
+
+  val rst_metadata_scala_example_output: String =
+    """
++----------------------------------+
+|metadata                          |
++----------------------------------+
+|{AREA_OR_POINT -> Area, ...}      |
++----------------------------------+
+""".trim
+
+  val rst_min_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_min(col("tile")).alias("band_min"))
+result.show()
+""".trim
+
+  val rst_min_scala_example_output: String =
+    """
++----------+
+|band_min  |
++----------+
+|[<float>] |
++----------+
+""".trim
+
+  val rst_pixelcount_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_pixelcount(col("tile")).alias("pixel_count"))
+result.show()
+""".trim
+
+  val rst_pixelcount_scala_example_output: String =
+    """
++-----------+
+|pixel_count|
++-----------+
+|[<int>]    |
++-----------+
+""".trim
+
+  val rst_pixelheight_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_pixelheight(col("tile")).alias("pixel_height"))
+result.show()
+""".trim
+
+  val rst_pixelheight_scala_example_output: String =
+    """
++------------+
+|pixel_height|
++------------+
+|<float>     |
++------------+
+""".trim
+
+  val rst_pixelwidth_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_pixelwidth(col("tile")).alias("pixel_width"))
+result.show()
+""".trim
+
+  val rst_pixelwidth_scala_example_output: String =
+    """
++-----------+
+|pixel_width|
++-----------+
+|<float>    |
++-----------+
+""".trim
+
+  val rst_rotation_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_rotation(col("tile")).alias("rotation"))
+result.show()
+""".trim
+
+  val rst_rotation_scala_example_output: String =
+    """
++--------+
+|rotation|
++--------+
+|0.0     |
++--------+
+""".trim
+
+  val rst_scalex_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(
+  rx.rst_scalex(col("tile")).alias("scale_x"),
+  rx.rst_scaley(col("tile")).alias("scale_y")
+)
+result.show()
+""".trim
+
+  val rst_scalex_scala_example_output: String =
+    """
++-------+-------+
+|scale_x|scale_y|
++-------+-------+
+|<float>|<float>|
++-------+-------+
+""".trim
+
+  val rst_scaley_scala_example: String = rst_scalex_scala_example
+  val rst_scaley_scala_example_output: String = rst_scalex_scala_example_output
+
+  val rst_skewx_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(
+  rx.rst_skewx(col("tile")).alias("skew_x"),
+  rx.rst_skewy(col("tile")).alias("skew_y")
+)
+result.show()
+""".trim
+
+  val rst_skewx_scala_example_output: String =
+    """
++------+------+
+|skew_x|skew_y|
++------+------+
+|0.0   |0.0   |
++------+------+
+""".trim
+
+  val rst_skewy_scala_example: String = rst_skewx_scala_example
+  val rst_skewy_scala_example_output: String = rst_skewx_scala_example_output
+
+  val rst_srid_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_srid(col("tile")).alias("srid"))
+result.show()
+""".trim
+
+  val rst_srid_scala_example_output: String =
+    """
++----+
+|srid|
++----+
+|4326|
++----+
+""".trim
+
+  val rst_crs_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_crs(col("tile")).alias("crs"))
+result.show(truncate = false)
+""".trim
+
+  val rst_crs_scala_example_output: String =
+    """
++------------------------------------+
+|crs                                 |
++------------------------------------+
+|EPSG:4326                           |
++------------------------------------+
+""".trim
+
+  val rst_subdatasets_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_subdatasets(col("tile")).alias("subdatasets"))
+result.show()
+""".trim
+
+  val rst_subdatasets_scala_example_output: String =
+    """
++-----------+
+|subdatasets|
++-----------+
+|{}         |
++-----------+
+""".trim
+
+  val rst_summary_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_summary(col("tile")).alias("summary"))
+result.show(truncate = false)
+""".trim
+
+  val rst_summary_scala_example_output: String =
+    """
++------------------------------------------------------------+
+|summary                                                     |
++------------------------------------------------------------+
+|{"driverShortName":"GTiff","driverLongName":"GeoTIFF",...}  |
++------------------------------------------------------------+
+""".trim
+
+  val rst_type_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_type(col("tile")).alias("band_types"))
+result.show()
+""".trim
+
+  val rst_type_scala_example_output: String =
+    """
++----------+
+|band_types|
++----------+
+|[UInt16]  |
++----------+
+""".trim
+
+  val rst_upperleftx_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(
+  rx.rst_upperleftx(col("tile")).alias("upper_left_x"),
+  rx.rst_upperlefty(col("tile")).alias("upper_left_y")
+)
+result.show()
+""".trim
+
+  val rst_upperleftx_scala_example_output: String =
+    """
++------------+------------+
+|upper_left_x|upper_left_y|
++------------+------------+
+|<float>     |<float>     |
++------------+------------+
+""".trim
+
+  val rst_upperlefty_scala_example: String = rst_upperleftx_scala_example
+  val rst_upperlefty_scala_example_output: String = rst_upperleftx_scala_example_output
+
+  val rst_isempty_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_isempty(col("tile")).alias("is_empty"))
+result.show()
+""".trim
+
+  val rst_isempty_scala_example_output: String =
+    """
++--------+
+|is_empty|
++--------+
+|false   |
++--------+
+""".trim
+
+  val rst_tryopen_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_tryopen(col("tile")).alias("try_open"))
+result.show()
+""".trim
+
+  val rst_tryopen_scala_example_output: String =
+    """
++--------+
+|try_open|
++--------+
+|true    |
++--------+
+""".trim
+
+  val rst_histogram_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_histogram(col("tile")).alias("histogram"))
+result.show(truncate = false)
+""".trim
+
+  val rst_histogram_scala_example_output: String =
+    """
++-----------------------------+
+|histogram                    |
++-----------------------------+
+|{band_1 -> [<counts>, ...]}  |
++-----------------------------+
+""".trim
+
 }

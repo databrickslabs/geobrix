@@ -16,6 +16,7 @@ import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.
 import rasterxScalaCode from '!!raw-loader!../../tests/scala/packages/RasterxPackageExamples.scala';
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import rasterxLightCode from '!!raw-loader!../../tests/python/api/rasterx_functions_python_light.py';
+import rasterxAccessorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_accessors_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -207,9 +208,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_bandmetadata(tile: Column, band: Column): Column` — Band metadata map.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bandmetadata_sql_example" outputConstant="rst_bandmetadata_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bandmetadata"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_boundingbox
 
@@ -240,9 +246,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_format(tile: Column): Column` — GDAL format name.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_format_sql_example" outputConstant="rst_format_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_format"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_georeference
 
@@ -267,9 +278,14 @@ The result is a **MapType** with the following keys, corresponding to [GDAL's 6-
 
 See the [GDAL geotransform tutorial](https://gdal.org/en/stable/tutorials/geotransforms_tut.html) and [raster data model](https://gdal.org/en/stable/user/raster_data_model.html) for details.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_georeference_sql_example" outputConstant="rst_georeference_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_georeference"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_getnodata
 
@@ -281,9 +297,14 @@ Powered by **rasterio**. Returns the dataset NoData value repeated once per band
 
 **Signature:** `rst_getnodata(tile: Column): Column` — NoData values per band.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_getnodata_sql_example" outputConstant="rst_getnodata_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_getnodata"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_getsubdataset
 
@@ -295,9 +316,14 @@ Powered by **rasterio**. Subdataset availability depends on rasterio's bundled G
 
 **Signature:** `rst_getsubdataset(tile: Column, subsetName: Column): Column` — Extract subdataset.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_getsubdataset_sql_example" outputConstant="rst_getsubdataset_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_getsubdataset"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_height
 
@@ -309,9 +335,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_height(tile: Column): Column` — Height in pixels.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_height_sql_example" outputConstant="rst_height_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_height"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_max
 
@@ -325,9 +356,14 @@ Powered by **rasterio** + **NumPy**. Per-band maximum over valid (non-NoData) pi
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_max_sql_example" outputConstant="rst_max_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_max"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_median
 
@@ -341,9 +377,14 @@ Powered by **rasterio** + **NumPy**. Per-band median over valid (non-NoData) pix
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_median_sql_example" outputConstant="rst_median_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_median"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_memsize
 
@@ -355,9 +396,14 @@ Powered by **rasterio**. Returns the serialized raster size in bytes.
 
 **Signature:** `rst_memsize(tile: Column): Column` — In-memory size in bytes.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_memsize_sql_example" outputConstant="rst_memsize_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_memsize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_metadata
 
@@ -369,9 +415,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_metadata(tile: Column): Column` — Metadata map.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_metadata_sql_example" outputConstant="rst_metadata_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_metadata"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_min
 
@@ -385,9 +436,14 @@ Powered by **rasterio** + **NumPy**. Per-band minimum over valid (non-NoData) pi
 
 Returns `NULL` for a band with zero valid pixels (all NoData) on both tiers.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_min_sql_example" outputConstant="rst_min_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_min"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_numbands
 
@@ -418,9 +474,14 @@ Powered by **rasterio** + **NumPy**. Per-band count of valid (non-NoData) pixels
 
 **Signature:** `rst_pixelcount(tile: Column): Column` — Total pixel count.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_pixelcount_sql_example" outputConstant="rst_pixelcount_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_pixelcount"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_pixelheight
 
@@ -432,9 +493,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_pixelheight(tile: Column): Column` — Pixel height in ground units.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_pixelsize_sql_example" outputConstant="rst_pixelsize_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_pixelheight"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_pixelwidth
 
@@ -446,9 +512,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_pixelwidth(tile: Column): Column` — Pixel width in ground units.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_pixelsize_sql_example" outputConstant="rst_pixelsize_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_pixelwidth"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_rotation
 
@@ -460,9 +531,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_rotation(tile: Column): Column` — Rotation in radians.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_rotation_sql_example" outputConstant="rst_rotation_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_rotation"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_scalex / rst_scaley
 
@@ -474,9 +550,23 @@ Powered by **rasterio**.
 
 **Signature:** `rst_scalex(tile: Column): Column`, `rst_scaley(tile: Column): Column` — Scale (pixel size) in X/Y.
 
-**SQL:**
+<FunctionExamples
+  name="rst_scalex"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_scalex_scaley_sql_example" outputConstant="rst_scalex_scaley_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_scaley"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_skewx / rst_skewy
 
@@ -488,9 +578,23 @@ Powered by **rasterio**.
 
 **Signature:** `rst_skewx(tile: Column): Column`, `rst_skewy(tile: Column): Column` — Skew in X/Y.
 
-**SQL:**
+<FunctionExamples
+  name="rst_skewx"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_skewx_skewy_sql_example" outputConstant="rst_skewx_skewy_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_skewy"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_srid
 
@@ -502,9 +606,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_srid(tile: Column): Column` — the stored spatial reference ID integer (an EPSG or ESRI code), or NULL when the tile has none. Returns the code as stored; it is classified only when applied. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model and the epsg→esri resolution rule.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_srid_sql_example" outputConstant="rst_srid_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_srid"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_crs
 
@@ -524,9 +633,14 @@ Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`
 - **`rst_setcrs`** / **`rst_transformcrs`** take a CRS *string*. An int-castable string is treated as an EPSG SRID (`'4326'` behaves like SRID `4326`); otherwise the string is parsed as an authority code (`EPSG:`/`ESRI:`), WKT, or PROJ4. This is how ESRI codes, WKT, and PROJ4 definitions survive a round trip.
 :::
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_crs_sql_example" outputConstant="rst_crs_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_crs"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_subdatasets
 
@@ -538,9 +652,14 @@ Powered by **rasterio**. Empty for single-dataset rasters (e.g. a plain GeoTIFF)
 
 **Signature:** `rst_subdatasets(tile: Column): Column` — List of subdataset names.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_subdatasets_sql_example" outputConstant="rst_subdatasets_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_subdatasets"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_summary
 
@@ -552,9 +671,14 @@ Powered by **rasterio** + **NumPy**. Returns a JSON summary (driver, size, CRS, 
 
 **Signature:** `rst_summary(tile: Column): Column` — Statistical summary of values.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_summary_sql_example" outputConstant="rst_summary_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_summary"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_type
 
@@ -566,9 +690,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_type(tile: Column): Column` — Data type per band.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_type_sql_example" outputConstant="rst_type_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_type"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_upperleftx / rst_upperlefty
 
@@ -580,9 +709,23 @@ Powered by **rasterio**.
 
 **Signature:** `rst_upperleftx(tile: Column): Column`, `rst_upperlefty(tile: Column): Column` — Upper-left corner coordinates.
 
-**SQL:**
+<FunctionExamples
+  name="rst_upperleftx"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_upperleft_sql_example" outputConstant="rst_upperleft_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_upperlefty"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_width
 
@@ -1696,9 +1839,14 @@ Powered by **rasterio**.
 
 Returns `true` when the raster has no size **or** every band is entirely NoData.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_isempty_sql_example" outputConstant="rst_isempty_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_isempty"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_mapalgebra
 
@@ -1810,9 +1958,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_tryopen(tile: Column): Column` — Validate raster can be opened.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tryopen_sql_example" outputConstant="rst_tryopen_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_tryopen"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_updatetype
 
@@ -2243,7 +2396,14 @@ Powered by **rasterio** + **NumPy**. Per-band bucket counts via `numpy.histogram
 
 **Signature:** `rst_histogram(tile: Column, [bands: Column = null, nBuckets: Column = lit(256), min: Column = null, max: Column = null, includeNodata: Column = lit(false)]): Column` — Compute per-band histograms via `band.GetHistogram`. Returns `MAP<STRING, ARRAY<LONG>>` keyed by `"band_<n>"` with bucket counts. If `bands` is null, all bands are processed; if `min` / `max` are null, GDAL auto-detects the range.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_histogram_sql_example" outputConstant="rst_histogram_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_histogram"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAccessorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
+/>
 
 ### rst_sample
 

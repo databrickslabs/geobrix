@@ -167,3 +167,276 @@ def rst_fromfile_python_light_example(spark):
 rst_fromfile_python_light_example_output = """
 4
 """
+
+
+# ---------------------------------------------------------------------------
+# Accessor family — thin wrappers delegating to rasterx_accessors_python_light.py
+# generate-function-info.py text-scans THIS file for "def {base}_python_light_example("
+# The full implementations live in rasterx_accessors_python_light.py (used by MDX).
+# ---------------------------------------------------------------------------
+
+try:
+    import rasterx_accessors_python_light as _acc
+except ImportError:
+    _acc = None
+
+
+def rst_bandmetadata_python_light_example(spark):
+    return _acc.rst_bandmetadata_python_light_example(spark) if _acc else None
+
+
+rst_bandmetadata_python_light_example_output = (
+    _acc.rst_bandmetadata_python_light_example_output if _acc else ""
+)
+
+
+def rst_format_python_light_example(spark):
+    return _acc.rst_format_python_light_example(spark) if _acc else None
+
+
+rst_format_python_light_example_output = (
+    _acc.rst_format_python_light_example_output if _acc else ""
+)
+
+
+def rst_georeference_python_light_example(spark):
+    return _acc.rst_georeference_python_light_example(spark) if _acc else None
+
+
+rst_georeference_python_light_example_output = (
+    _acc.rst_georeference_python_light_example_output if _acc else ""
+)
+
+
+def rst_getnodata_python_light_example(spark):
+    return _acc.rst_getnodata_python_light_example(spark) if _acc else None
+
+
+rst_getnodata_python_light_example_output = (
+    _acc.rst_getnodata_python_light_example_output if _acc else ""
+)
+
+
+def rst_getsubdataset_python_light_example(spark):
+    return _acc.rst_getsubdataset_python_light_example(spark) if _acc else None
+
+
+rst_getsubdataset_python_light_example_output = (
+    _acc.rst_getsubdataset_python_light_example_output if _acc else ""
+)
+
+
+def rst_height_python_light_example(spark):
+    return _acc.rst_height_python_light_example(spark) if _acc else None
+
+
+rst_height_python_light_example_output = (
+    _acc.rst_height_python_light_example_output if _acc else ""
+)
+
+
+def rst_max_python_light_example(spark):
+    return _acc.rst_max_python_light_example(spark) if _acc else None
+
+
+rst_max_python_light_example_output = (
+    _acc.rst_max_python_light_example_output if _acc else ""
+)
+
+
+def rst_median_python_light_example(spark):
+    return _acc.rst_median_python_light_example(spark) if _acc else None
+
+
+rst_median_python_light_example_output = (
+    _acc.rst_median_python_light_example_output if _acc else ""
+)
+
+
+def rst_memsize_python_light_example(spark):
+    return _acc.rst_memsize_python_light_example(spark) if _acc else None
+
+
+rst_memsize_python_light_example_output = (
+    _acc.rst_memsize_python_light_example_output if _acc else ""
+)
+
+
+def rst_metadata_python_light_example(spark):
+    return _acc.rst_metadata_python_light_example(spark) if _acc else None
+
+
+rst_metadata_python_light_example_output = (
+    _acc.rst_metadata_python_light_example_output if _acc else ""
+)
+
+
+def rst_min_python_light_example(spark):
+    return _acc.rst_min_python_light_example(spark) if _acc else None
+
+
+rst_min_python_light_example_output = (
+    _acc.rst_min_python_light_example_output if _acc else ""
+)
+
+
+def rst_pixelcount_python_light_example(spark):
+    return _acc.rst_pixelcount_python_light_example(spark) if _acc else None
+
+
+rst_pixelcount_python_light_example_output = (
+    _acc.rst_pixelcount_python_light_example_output if _acc else ""
+)
+
+
+def rst_pixelheight_python_light_example(spark):
+    return _acc.rst_pixelheight_python_light_example(spark) if _acc else None
+
+
+rst_pixelheight_python_light_example_output = (
+    _acc.rst_pixelheight_python_light_example_output if _acc else ""
+)
+
+
+def rst_pixelwidth_python_light_example(spark):
+    return _acc.rst_pixelwidth_python_light_example(spark) if _acc else None
+
+
+rst_pixelwidth_python_light_example_output = (
+    _acc.rst_pixelwidth_python_light_example_output if _acc else ""
+)
+
+
+def rst_rotation_python_light_example(spark):
+    return _acc.rst_rotation_python_light_example(spark) if _acc else None
+
+
+rst_rotation_python_light_example_output = (
+    _acc.rst_rotation_python_light_example_output if _acc else ""
+)
+
+
+def rst_scalex_python_light_example(spark):
+    return _acc.rst_scalex_python_light_example(spark) if _acc else None
+
+
+rst_scalex_python_light_example_output = (
+    _acc.rst_scalex_python_light_example_output if _acc else ""
+)
+
+
+def rst_scaley_python_light_example(spark):
+    return _acc.rst_scaley_python_light_example(spark) if _acc else None
+
+
+rst_scaley_python_light_example_output = (
+    _acc.rst_scaley_python_light_example_output if _acc else ""
+)
+
+
+def rst_skewx_python_light_example(spark):
+    return _acc.rst_skewx_python_light_example(spark) if _acc else None
+
+
+rst_skewx_python_light_example_output = (
+    _acc.rst_skewx_python_light_example_output if _acc else ""
+)
+
+
+def rst_skewy_python_light_example(spark):
+    return _acc.rst_skewy_python_light_example(spark) if _acc else None
+
+
+rst_skewy_python_light_example_output = (
+    _acc.rst_skewy_python_light_example_output if _acc else ""
+)
+
+
+def rst_srid_python_light_example(spark):
+    return _acc.rst_srid_python_light_example(spark) if _acc else None
+
+
+rst_srid_python_light_example_output = (
+    _acc.rst_srid_python_light_example_output if _acc else ""
+)
+
+
+def rst_crs_python_light_example(spark):
+    return _acc.rst_crs_python_light_example(spark) if _acc else None
+
+
+rst_crs_python_light_example_output = (
+    _acc.rst_crs_python_light_example_output if _acc else ""
+)
+
+
+def rst_subdatasets_python_light_example(spark):
+    return _acc.rst_subdatasets_python_light_example(spark) if _acc else None
+
+
+rst_subdatasets_python_light_example_output = (
+    _acc.rst_subdatasets_python_light_example_output if _acc else ""
+)
+
+
+def rst_summary_python_light_example(spark):
+    return _acc.rst_summary_python_light_example(spark) if _acc else None
+
+
+rst_summary_python_light_example_output = (
+    _acc.rst_summary_python_light_example_output if _acc else ""
+)
+
+
+def rst_type_python_light_example(spark):
+    return _acc.rst_type_python_light_example(spark) if _acc else None
+
+
+rst_type_python_light_example_output = (
+    _acc.rst_type_python_light_example_output if _acc else ""
+)
+
+
+def rst_upperleftx_python_light_example(spark):
+    return _acc.rst_upperleftx_python_light_example(spark) if _acc else None
+
+
+rst_upperleftx_python_light_example_output = (
+    _acc.rst_upperleftx_python_light_example_output if _acc else ""
+)
+
+
+def rst_upperlefty_python_light_example(spark):
+    return _acc.rst_upperlefty_python_light_example(spark) if _acc else None
+
+
+rst_upperlefty_python_light_example_output = (
+    _acc.rst_upperlefty_python_light_example_output if _acc else ""
+)
+
+
+def rst_isempty_python_light_example(spark):
+    return _acc.rst_isempty_python_light_example(spark) if _acc else None
+
+
+rst_isempty_python_light_example_output = (
+    _acc.rst_isempty_python_light_example_output if _acc else ""
+)
+
+
+def rst_tryopen_python_light_example(spark):
+    return _acc.rst_tryopen_python_light_example(spark) if _acc else None
+
+
+rst_tryopen_python_light_example_output = (
+    _acc.rst_tryopen_python_light_example_output if _acc else ""
+)
+
+
+def rst_histogram_python_light_example(spark):
+    return _acc.rst_histogram_python_light_example(spark) if _acc else None
+
+
+rst_histogram_python_light_example_output = (
+    _acc.rst_histogram_python_light_example_output if _acc else ""
+)

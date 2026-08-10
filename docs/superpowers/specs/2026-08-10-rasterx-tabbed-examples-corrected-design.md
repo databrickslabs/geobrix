@@ -9,6 +9,24 @@
 
 The first pass authored each tier's example INDEPENDENTLY, so the four tabs of one function drifted to DIFFERENT examples — different fixtures, inputs, even operations. E.g. `rst_height`: SQL queries a `rasters` view; light uses a synthetic in-memory `_tile_df(4x3)` → `3`; Scala loads `nyc_sentinel2_red.tif`. The earlier "output normalization" only matched output *strings* (cosmetic), not the underlying example (structural). A reader flipping tabs cannot tell whether a difference is a genuine tier difference, a different chosen example, or an inaccurate doc — the tabs look like they were not co-designed. This spans ALL of Batch A (34 functions), not the 2 originally flagged, and must reshape the authoring contract for the remaining families and other packages.
 
+## The invocation-showcases-THE-function rule (user ruling 2026-08-10, load-bearing)
+
+The shown example code invokes THE NAMED FUNCTION and NOTHING wraps it to change the result
+type. NEVER wrap a tile-returning function in a derived accessor to manufacture a clean scalar
+(`rst_width(rst_clip(...))`, `rst_format(rst_fromfile(...))`) — that showcases the WRONG
+function and confuses the reader (the example for `rst_clip` must demonstrate `rst_clip` and
+its own output, not a format string). Rules by return type:
+- **Scalar-returning** (rst_height, rst_srid, rst_numbands, rst_format, rst_width, …): show
+  the function directly; output is its real scalar.
+- **Tile/struct-returning** (rst_clip, rst_resample, rst_transform, the constructors
+  rst_fromfile/fromcontent/frombands, rst_getsubdataset, …): show the function directly;
+  output is the returned TILE STRUCT rendered representatively + a note —
+  `{cellid: ..., raster: <bytes>, metadata: {driver -> GTiff, ...}}` + "(returns a raster
+  tile)", the SAME across all tiers (the accepted rst_boundingbox WKB-annotation pattern
+  applied to tiles).
+- **Geometry-returning** (rst_boundingbox): `...` + "(WKB binary)" shorthand + note.
+This is the #1 recurring drift — agents wrapped tile-returning functions in an accessor. Do NOT.
+
 ## The ratified standard (user)
 
 **For each function there is ONE example**, shared across all four tabs: the same input fixture, the same operation, the same argument values — expressed in each tier's language (SQL / pyrx-light / rasterx-heavy / Scala), rendered in each tier's NATURAL form. Where a tier's rendering genuinely differs, use a consistent shorthand + a short clarifying NOTE (e.g. `...` + "(WKB binary)" for geometry; `SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> ...` for subdataset maps; similar for band metadata maps). The goal: a reader never has to reason about *why* tabs differ — sameness is visible, residual formatting differences are noted.

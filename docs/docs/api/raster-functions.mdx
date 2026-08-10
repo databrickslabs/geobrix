@@ -173,6 +173,52 @@ Examples on this page use **SQL**, where RasterX functions are prefixed with **`
 
 As of v0.4.0, **all RasterX functions run in both execution tiers** — the lightweight `pyrx` (pure-Python) and heavyweight `rasterx` tiers share the same `rst_*` / `gbx_rst_*` names, and each function below carries a `:::note Lightweight tier (pyrx)` admonition with its backing library and any behavioral differences. For the heavyweight VRT Python pixel-function configuration (used by `gbx_rst_combineavg` / `gbx_rst_derivedband`), see **[VRT Python pixel functions](#vrt-python-pixel-functions)** at the end of this page.
 
+## Examples — Conventions
+
+Every function on this page shows one example, expressed identically across four tabs. This section defines the shared setup so each function tab contains only its invocation — nothing more.
+
+### Canonical sample files
+
+Each function uses one of four canonical files, chosen by what the function demonstrates:
+
+| File | What it demonstrates | Used by |
+|---|---|---|
+| `nyc_sentinel2_red.tif` | Single-band GeoTIFF (Sentinel-2 red band, NYC area) | **Default** — most accessor, tile-ops, transform, and generator functions |
+| `rgb_nir_small.tif` | 3-band GeoTIFF with per-band metadata (red, NIR, green — 8×8 px) | Band-math and spectral-index functions (`rst_ndvi`, `rst_evi`, …), `rst_numbands`, `rst_bandmetadata` |
+| `srtm_n40w073.tif` | Digital Elevation Model (SRTM, NYC area) | Terrain functions (`rst_slope`, `rst_aspect`, `rst_hillshade`, …) |
+| CMIP5 NetCDF (`prAdjust_day_…nc`) | Multi-variable NetCDF with two subdatasets | `rst_subdatasets`, `rst_getsubdataset` only |
+
+### The `tile`-column convention
+
+In every example on this page:
+
+- **SQL:** `rasters` is a temporary view whose `tile` column holds the canonical sample loaded via the reader. `FROM rasters` means "the sample as tiles."
+- **Python (light and heavy):** `df` is a DataFrame with a `tile` column loaded from the canonical file. `df.select(...)` means "apply this function to the sample tiles."
+- **Scala:** `rasters` is a DataFrame with the same `tile` column. `rasters.select(...)` is identical in intent to the Python form.
+
+Each function's example therefore shows only the invocation — the load is the convention, not the code.
+
+### How to read the four tabs
+
+| Tab | Tier | Color |
+|---|---|---|
+| **SQL** | Both (default) | — |
+| **Python (light)** | `pyrx` lightweight tier | — |
+| **Python (heavy)** | `rasterx` heavyweight tier | Blue badge |
+| **Scala** | `rasterx` heavyweight tier | Blue badge |
+
+All four tabs show the **same operation** on the **same file**. Where a tier's output genuinely differs in form, a short note explains why — for example:
+
+- Geometry-returning functions (`rst_boundingbox`, `rst_georeference`): SQL returns WKT; Python and Scala return a binary column. The note reads `...` `(WKB binary)`.
+- Subdataset maps (`rst_subdatasets`): SQL returns `map<string,string>`; rendered as `{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> ...}`. A note clarifies the key pattern.
+- Band-metadata maps (`rst_bandmetadata`): similarly noted where the rendering differs between tiers.
+
+Scalar values are **identical across all tabs** — same fixture, same function, same result.
+
+### Per-function notes
+
+Functions that use a non-default fixture (multiband GeoTIFF, DEM, or NetCDF) carry a one-line note immediately before their code example flagging the file. Functions that produce a tile rather than consuming one (constructors: `rst_fromfile`, `rst_fromcontent`, `rst_frombands`, …) show a fuller load/build example with a note — the bare-invocation model does not apply when there is no input `tile` yet.
+
 ## Accessor Functions
 
 Functions to read raster properties and metadata (29 total).

@@ -1,27 +1,239 @@
 """
 Shared test fixture generators for API documentation tests.
 
-The committed .tif artifacts in src/test/resources/binary/ are the
+The committed .tif/.nc artifacts in src/test/resources/binary/ are the
 canonical fixtures; the generator functions here document how they were
-produced and can be re-run if the file needs to be regenerated.
+produced and can be re-run if a file needs to be regenerated.
 
 NOTE: sample-data/Volumes/main/default/geobrix_samples/ is gitignored
 (see .gitignore lines 40-41), so committed test fixtures live under
 src/test/resources/binary/ instead.
+
+Fixture paths
+-------------
+SINGLE_BAND   nyc_sentinel2_red.tif — sourced from the sample-data /Volumes mount
+               via path_config.SAMPLE_DATA_BASE; resolves to
+               /Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/
+               nyc_sentinel2_red.tif in the geobrix-dev container.
+MULTIBAND     rgb_nir_small.tif — committed under
+               src/test/resources/binary/geotiff-small/ (3 bands: red/NIR/green,
+               8x8 pixels, EPSG:4326, per-band metadata tags).
+DEM           srtm_n40w073.tif — sourced from the sample-data /Volumes mount
+               via path_config.SAMPLE_DATA_BASE; resolves to
+               /Volumes/main/default/test-data/geobrix-examples/nyc/elevation/
+               srtm_n40w073.tif in the geobrix-dev container.
+NETCDF        prAdjust_day_HadGEM2-CC_*.nc — committed under
+               src/test/resources/binary/netcdf-CMIP5/; has two subdatasets
+               (time_bnds, prAdjust) and is used by rst_subdatasets /
+               rst_getsubdataset examples.
 """
 
 from pathlib import Path
+import sys
+import os
 
 # ---------------------------------------------------------------------------
-# Multiband GeoTIFF fixture
+# Path constants (relative paths are relative to repo root)
+# ---------------------------------------------------------------------------
+
+# Repo-root-relative paths for committed fixtures
+MULTIBAND = "src/test/resources/binary/geotiff-small/rgb_nir_small.tif"
+
+# Long filename committed under netcdf-CMIP5/
+_NETCDF_FILENAME = (
+    "prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc"
+    "_rcp45_r1i1p1_20201201-20201231.nc"
+)
+NETCDF = f"src/test/resources/binary/netcdf-CMIP5/{_NETCDF_FILENAME}"
+
+# Single-band and DEM are sourced from the /Volumes mount (available in the
+# geobrix-dev container when started with sample-data volumes).
+# We compute these lazily from path_config so tests that don't need them
+# don't import path_config at module load time.
+_SINGLE_BAND: str | None = None
+_DEM: str | None = None
+
+
+def _sample_data_base() -> str:
+    """Return SAMPLE_DATA_BASE from path_config (lazy import)."""
+    try:
+        from path_config import SAMPLE_DATA_BASE  # noqa: PLC0415
+        return SAMPLE_DATA_BASE
+    except ImportError:
+        # Fallback for environments where path_config is not on sys.path
+        root = os.environ.get("GBX_SAMPLE_DATA_ROOT", "/Volumes/main/default/test-data")
+        return f"{root.rstrip('/')}/geobrix-examples"
+
+
+def single_band_path() -> str:
+    """Absolute path to the canonical single-band GeoTIFF."""
+    return f"{_sample_data_base()}/nyc/sentinel2/nyc_sentinel2_red.tif"
+
+
+def dem_path() -> str:
+    """Absolute path to the canonical DEM GeoTIFF."""
+    return f"{_sample_data_base()}/nyc/elevation/srtm_n40w073.tif"
+
+
+def multiband_path() -> Path:
+    """Absolute path to the committed multiband GeoTIFF."""
+    repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
+    return repo_root / MULTIBAND
+
+
+def netcdf_path() -> Path:
+    """Absolute path to the committed NetCDF fixture."""
+    repo_root = Path(__file__).parents[4]
+    return repo_root / NETCDF
+
+
+# ---------------------------------------------------------------------------
+# Light-tier (pyrx) DataFrame builders
+# Each returns a DataFrame with a `tile` column loaded from the canonical file.
+# Use rst_fromcontent (binaryFile reader) so no JAR is needed.
+# ---------------------------------------------------------------------------
+
+
+def single_band_tile_df(spark):
+    """
+    Light-tier (pyrx) one-row DataFrame with `tile` from nyc_sentinel2_red.tif.
+
+    The SHOWN example in each function tab is the bare invocation on this
+    DataFrame; the tile is a single-band GeoTIFF (the default fixture for
+    most accessor and tile-ops examples).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+
+    path = single_band_path()
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+    )
+
+
+def multiband_tile_df(spark):
+    """
+    Light-tier (pyrx) one-row DataFrame with `tile` from rgb_nir_small.tif.
+
+    3-band GeoTIFF (red, NIR, green) with per-band metadata tags.
+    Used by band-math, rst_numbands, and rst_bandmetadata examples.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+
+    path = str(multiband_path())
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+    )
+
+
+def dem_tile_df(spark):
+    """
+    Light-tier (pyrx) one-row DataFrame with `tile` from srtm_n40w073.tif.
+
+    Single-band DEM raster (SRTM elevation, NYC area).
+    Used by terrain function examples (slope, aspect, hillshade, …).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+
+    path = dem_path()
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+    )
+
+
+def netcdf_tile_df(spark):
+    """
+    Light-tier (pyrx) one-row DataFrame with `tile` from the CMIP5 NetCDF.
+
+    The file has two subdatasets (time_bnds, prAdjust).
+    Used only by rst_subdatasets and rst_getsubdataset examples.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+
+    path = str(netcdf_path())
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("netCDF")).alias("tile")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Heavy-tier (rasterx) DataFrame builders
+# Same files; loaded via the rasterx shim with rst_fromcontent.
+# ---------------------------------------------------------------------------
+
+
+def single_band_tile_df_heavy(spark):
+    """
+    Heavy-tier (rasterx) one-row DataFrame with `tile` from nyc_sentinel2_red.tif.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    path = single_band_path()
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+    )
+
+
+def multiband_tile_df_heavy(spark):
+    """
+    Heavy-tier (rasterx) one-row DataFrame with `tile` from rgb_nir_small.tif.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    path = str(multiband_path())
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+    )
+
+
+def dem_tile_df_heavy(spark):
+    """
+    Heavy-tier (rasterx) one-row DataFrame with `tile` from srtm_n40w073.tif.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    path = dem_path()
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+    )
+
+
+def netcdf_tile_df_heavy(spark):
+    """
+    Heavy-tier (rasterx) one-row DataFrame with `tile` from the CMIP5 NetCDF.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    path = str(netcdf_path())
+    binary_df = spark.read.format("binaryFile").load(path)
+    return binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("netCDF")).alias("tile")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Multiband GeoTIFF fixture generator
 # ---------------------------------------------------------------------------
 
 # Path relative to repo root — tracked in git (not gitignored).
 # band 1 = red, band 2 = NIR, band 3 = green
-MULTIBAND = "src/test/resources/binary/geotiff-small/rgb_nir_small.tif"
 
 
-def make_multiband_fixture(path: str | Path | None = None) -> Path:
+def make_multiband_fixture(path: "str | Path | None" = None) -> Path:
     """
     Generate a small (8x8) 3-band GeoTIFF suitable for band-math tests.
 
@@ -44,10 +256,10 @@ def make_multiband_fixture(path: str | Path | None = None) -> Path:
     -------
     pathlib.Path pointing at the written file.
     """
-    import numpy as np
-    import rasterio
-    from rasterio.crs import CRS
-    from rasterio.transform import from_bounds
+    import numpy as np  # noqa: PLC0415
+    import rasterio  # noqa: PLC0415
+    from rasterio.crs import CRS  # noqa: PLC0415
+    from rasterio.transform import from_bounds  # noqa: PLC0415
 
     repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
     dest = Path(path) if path else repo_root / MULTIBAND

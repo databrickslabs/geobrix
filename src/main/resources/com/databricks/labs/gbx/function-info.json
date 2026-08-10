@@ -52,7 +52,10 @@
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;",
       "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridavg": {
@@ -176,7 +179,10 @@
       "examples": "Examples:\n      > SELECT region, gbx_rst_combineavg_agg(tile) as regional_average FROM rasters GROUP BY region;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_contour": {
@@ -217,7 +223,10 @@
       "examples": "Examples:\n      > SELECT region, gbx_rst_derivedband_agg(tile, 'def f(a): return a', 'f') as result FROM rasters GROUP BY region;",
       "usage_args": "tile, python_func, func_name",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_dtmfromgeoms": {
@@ -231,7 +240,10 @@
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_dtmfromgeoms_agg( point_wkb, breaklines_wkb_array, 0.0, 0.01, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax, 100, 100, 32633 ) AS dtm FROM survey_points GROUP BY region_id;",
       "usage_args": "point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_evi": {
@@ -285,7 +297,10 @@
       "examples": "Examples:\n      > SELECT scene_id, gbx_rst_frombands_agg(tile, band_index) AS multi_band FROM band_tiles GROUP BY scene_id;",
       "usage_args": "tile, band_index",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_fromcontent": {
@@ -347,14 +362,20 @@
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_gridfrompoints_agg( station_wkb, observation, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax, 256, 256, 32633 ) AS idw FROM observations GROUP BY region_id;",
       "usage_args": "point, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power], [max_pts]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_h3_rasterize_agg( cellid, burn_value, 4326, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(1 as int) ) AS tile FROM h3_cell_values GROUP BY region_id;",
       "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridavg": {
@@ -529,7 +550,10 @@
       "examples": "Examples:\n      > SELECT scene_id, gbx_rst_merge_agg(tile) as merged_scene FROM satellite_tiles GROUP BY scene_id;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_metadata": {
@@ -631,7 +655,10 @@
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_quadbin_rasterize_agg( cellid, burn_value, 4326, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM quadbin_cell_values GROUP BY region_id;",
       "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridavg": {
@@ -708,7 +735,10 @@
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_rasterize_agg( geom_wkb, burn_value, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax, 256, 256, 4326 ) AS tile FROM features GROUP BY region_id;",
       "usage_args": "geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_rastertoworldcoord": {

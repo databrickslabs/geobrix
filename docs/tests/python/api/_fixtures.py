@@ -298,6 +298,73 @@ def make_multiband_fixture(path: "str | Path | None" = None) -> Path:
     return dest
 
 
+# ---------------------------------------------------------------------------
+# Multi-tile DataFrame builders (aggregator family)
+# Each returns a DataFrame with multiple `tile` rows for use with groupBy+agg.
+# ---------------------------------------------------------------------------
+
+
+def multi_band_tiles_df(spark):
+    """
+    Light-tier (pyrx) 3-row DataFrame from rgb_nir_small.tif.
+
+    Each row holds one single-band tile extracted from the 3-band multiband
+    fixture (band 1, 2, 3 as separate rows).  All three tiles share the same
+    grid (extent/shape/CRS), so they are suitable for:
+      - rst_combineavg_agg (requires aligned tiles)
+      - rst_frombands_agg  (stacks by band_index)
+      - rst_derivedband_agg (stacks all bands, applies pixel function)
+      - rst_merge_agg       (merges/mosaics; co-registered = exact overlap)
+
+    The returned DataFrame has columns: tile, band_index (1/2/3), region (='R1').
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+
+    path = str(multiband_path())
+    binary_df = spark.read.format("binaryFile").load(path)
+    mb_df = binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("mb_tile")
+    )
+    # Produce 3 rows: one per band extracted from the multi-band tile
+    b1 = mb_df.select(rx.rst_band("mb_tile", f.lit(1)).alias("tile")).withColumn(
+        "band_index", f.lit(1)
+    )
+    b2 = mb_df.select(rx.rst_band("mb_tile", f.lit(2)).alias("tile")).withColumn(
+        "band_index", f.lit(2)
+    )
+    b3 = mb_df.select(rx.rst_band("mb_tile", f.lit(3)).alias("tile")).withColumn(
+        "band_index", f.lit(3)
+    )
+    return b1.union(b2).union(b3).withColumn("region", f.lit("R1"))
+
+
+def multi_band_tiles_df_heavy(spark):
+    """
+    Heavy-tier (rasterx) 3-row DataFrame from rgb_nir_small.tif.
+
+    Mirror of multi_band_tiles_df for the heavy tier.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    path = str(multiband_path())
+    binary_df = spark.read.format("binaryFile").load(path)
+    mb_df = binary_df.select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("mb_tile")
+    )
+    b1 = mb_df.select(rx.rst_band("mb_tile", f.lit(1)).alias("tile")).withColumn(
+        "band_index", f.lit(1)
+    )
+    b2 = mb_df.select(rx.rst_band("mb_tile", f.lit(2)).alias("tile")).withColumn(
+        "band_index", f.lit(2)
+    )
+    b3 = mb_df.select(rx.rst_band("mb_tile", f.lit(3)).alias("tile")).withColumn(
+        "band_index", f.lit(3)
+    )
+    return b1.union(b2).union(b3).withColumn("region", f.lit("R1"))
+
+
 if __name__ == "__main__":
     out = make_multiband_fixture()
     print(f"Written: {out}")

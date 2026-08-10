@@ -18,6 +18,7 @@ import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExa
 import rasterxLightCode from '!!raw-loader!../../tests/python/api/rasterx_functions_python_light.py';
 import rasterxAccessorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_accessors_python_light.py';
 import rasterxTileopsLightCode from '!!raw-loader!../../tests/python/api/rasterx_tileops_python_light.py';
+import rasterxAggregatorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_aggregators_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -844,9 +845,16 @@ GROUP BY group_key
 
 **Signature:** `rst_combineavg_agg(tile: Column): Column` — Average tiles per group.
 
-**SQL:**
+_Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` (same grid). All tabs use the same grouped-agg invocation on multiple `tile` rows._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_combineavg_agg_sql_example" outputConstant="rst_combineavg_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_combineavg_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_derivedband_agg
 
@@ -871,9 +879,16 @@ GROUP BY group_key
 
 **Signature:** `rst_derivedband_agg(tile: Column, pyfunc: String, funcName: String): Column` — Apply Python UDF to tiles per group.
 
-**SQL:**
+_Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg invocation; pixel function selects band 0 (identity)._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_derivedband_agg_sql_example" outputConstant="rst_derivedband_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_derivedband_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_dtmfromgeoms_agg
 
@@ -905,9 +920,16 @@ Streaming aggregator that accepts one Z-valued point WKB per row and produces a 
 
 **Parameters:** `point` — WKB point geometry with Z coordinate (one per row); `breaklines` — constant WKB array of breakline geometries per group (pass `null` or empty array if unused); remaining parameters match `rst_dtmfromgeoms`
 
-**SQL:**
+_Multi-row fixture: 4 Z-valued WKB POINT rows (elevation 100–250 m) over a `[0,0,1,1]` EPSG:4326 extent. All tabs use the same grouped-agg invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_dtmfromgeoms_agg_sql_example" outputConstant="rst_dtmfromgeoms_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_dtmfromgeoms_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_frombands_agg
 
@@ -936,9 +958,16 @@ Streaming aggregator that collects ordered per-band tiles (one row per band) int
 
 **Parameters:** `tile` — Single-band raster tile; `bandIndex` — 1-based band position within the output raster
 
-**SQL:**
+_Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` with `band_index` 1/2/3. All tabs stack via the same grouped-agg invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_frombands_agg_sql_example" outputConstant="rst_frombands_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_frombands_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_merge_agg
 
@@ -963,9 +992,16 @@ GROUP BY group_key
 
 **Signature:** `rst_merge_agg(tile: Column): Column` — Merge tiles per group.
 
-**SQL:**
+_Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg mosaic invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_merge_agg_sql_example" outputConstant="rst_merge_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_merge_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_rasterize_agg
 
@@ -997,9 +1033,16 @@ Streaming aggregator that burns geometry/value pairs (one row per feature) into 
 
 **Parameters:** `geom` — WKB geometry to burn; `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
 
-**SQL:**
+_Multi-row fixture: 3 polygon rows burned at values 1.0/2.0/3.0 over a `[0,0,4,4]` EPSG:4326 extent. All tabs use the same grouped-agg burn invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_rasterize_agg_sql_example" outputConstant="rst_rasterize_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_rasterize_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_gridfrompoints_agg
 
@@ -1031,9 +1074,16 @@ Streaming IDW-interpolation aggregator that accepts one point geometry and one s
 
 **Parameters:** `point` — WKB point geometry (one per row); `value` — scalar observation for the point; `xmin/ymin/xmax/ymax` — output extent in CRS units (constant per group); `widthPx/heightPx` — output dimensions in pixels; `srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is standard); `maxPts` — maximum nearest neighbours considered per output pixel
 
-**SQL:**
+_Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]` EPSG:4326 extent. All tabs use the same grouped-agg IDW invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_gridfrompoints_agg_sql_example" outputConstant="rst_gridfrompoints_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_gridfrompoints_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_h3_rasterize_agg
 
@@ -1077,9 +1127,16 @@ The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to
 - `mode` — `'centroids'` (default, burns the cell-centroid pixel only) or `'spatial_envelope'` (burns all pixels inside the hexagon envelope)
 - `kring_pad` — ring count by which to expand the auto-computed canvas (default `1`)
 
-**SQL:**
+_Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rasterize_agg_sql_example" outputConstant="rst_h3_rasterize_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rasterize_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_quadbin_rasterize_agg
 
@@ -1101,9 +1158,16 @@ Streaming aggregator that burns quadbin cell geometry/value pairs (one row per c
 
 **Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
 
-**SQL:**
+_Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rasterize_agg_sql_example" outputConstant="rst_quadbin_rasterize_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rasterize_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_bng_rasterize_agg
 
@@ -1125,9 +1189,16 @@ Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell)
 
 **Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS (typically `27700`)
 
-**SQL:**
+_Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rasterize_agg_sql_example" outputConstant="rst_bng_rasterize_agg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rasterize_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ---
 

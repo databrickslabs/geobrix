@@ -338,3 +338,85 @@ def test_accessor_heavy_output_constants_exist():
         assert hasattr(rasterx_functions, name), f"Missing output constant: {name}"
         val = getattr(rasterx_functions, name)
         assert isinstance(val, str) and val.strip(), f"Output constant is empty: {name}"
+
+
+# ---------------------------------------------------------------------------
+# Aggregator heavy-Python tests
+# ---------------------------------------------------------------------------
+
+
+def _assert_heavy_tile(result, name):
+    """Assert a heavy-tier tile Row has non-None, non-empty raster bytes."""
+    assert result is not None, f"{name}: result Row is None"
+    assert result["raster"] is not None, f"{name}: raster bytes is None"
+    assert len(bytes(result["raster"])) > 0, f"{name}: raster bytes is empty"
+
+
+def test_rst_combineavg_agg_python_heavy_example(spark):
+    """rst_combineavg_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combineavg_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combineavg_agg")
+
+
+def test_rst_derivedband_agg_python_heavy_example(spark):
+    """rst_derivedband_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_derivedband_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_derivedband_agg")
+
+
+def test_rst_frombands_agg_python_heavy_example(spark):
+    """rst_frombands_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_frombands_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_frombands_agg")
+
+
+def test_rst_merge_agg_python_heavy_example(spark):
+    """rst_merge_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_merge_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_merge_agg")
+
+
+def test_rst_rasterize_agg_python_heavy_example(spark):
+    """rst_rasterize_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_rasterize_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_rasterize_agg")
+
+
+def test_rst_gridfrompoints_agg_python_heavy_example(spark):
+    """rst_gridfrompoints_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_gridfrompoints_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_gridfrompoints_agg")
+
+
+def test_rst_dtmfromgeoms_agg_python_heavy_example(spark):
+    """rst_dtmfromgeoms_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_dtmfromgeoms_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_dtmfromgeoms_agg")
+
+
+def test_rst_h3_rasterize_agg_python_heavy_example(spark):
+    """rst_h3_rasterize_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_h3_rasterize_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_h3_rasterize_agg")
+
+
+def test_rst_quadbin_rasterize_agg_python_heavy_example(spark):
+    """rst_quadbin_rasterize_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_quadbin_rasterize_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_quadbin_rasterize_agg")
+
+
+def test_rst_bng_rasterize_agg_python_heavy_example(spark):
+    """rst_bng_rasterize_agg returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_bng_rasterize_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_bng_rasterize_agg")

@@ -91,13 +91,49 @@ def _tile_df(spark, **kw):
 # ---------------------------------------------------------------------------
 
 
+def _make_tagged_geotiff_bytes(width=4, height=3, epsg=4326):
+    """Return in-memory float32 GTiff bytes with band-level metadata tags.
+
+    Band 1 carries GDAL_METADATA tags ``units`` and ``source`` so that
+    rst_bandmetadata returns a non-empty map.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    transform = from_origin(10.0, 50.0, 0.5, 0.5)
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="float32",
+        crs=f"EPSG:{epsg}",
+        transform=transform,
+        nodata=-9999.0,
+    )
+    data = np.arange(width * height, dtype="float32").reshape(height, width)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(data, 1)
+            ds.update_tags(1, units="m", source="synthetic")
+        return mf.read()
+
+
 def rst_bandmetadata_python_light_example(spark):
-    """Get metadata for band 1 of a raster tile using the light pyrx tier."""
+    """Get metadata for band 1 of a raster tile using the light pyrx tier.
+
+    Band metadata is non-empty when the GeoTIFF carries GDAL_METADATA tags
+    (written via rasterio ``update_tags``).  Plain GeoTIFFs without tags
+    return ``{}``.
+    """
     from pyspark.sql import functions as f
     from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
-    tile_df = _tile_df(spark, width=4, height=3, count=1)
+    tagged = _make_tagged_geotiff_bytes()
+    df = spark.createDataFrame([(bytearray(tagged),)], ["raster"])
+    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     result = tile_df.select(
         rx.rst_bandmetadata("tile", f.lit(1)).alias("band_meta")
     ).first()
@@ -105,11 +141,11 @@ def rst_bandmetadata_python_light_example(spark):
 
 
 rst_bandmetadata_python_light_example_output = """
-+---------+
-|band_meta|
-+---------+
-|{}       |
-+---------+
++-------------------------------+
+|band_meta                      |
++-------------------------------+
+|{units -> m, source -> synthetic}|
++-------------------------------+
 """
 
 
@@ -612,26 +648,28 @@ rst_crs_python_light_example_output = """
 
 
 def rst_subdatasets_python_light_example(spark):
-    """Get the subdatasets map for a raster tile using the light pyrx tier.
+    """Get the subdatasets map for a NetCDF raster tile using the light pyrx tier.
 
-    Plain GeoTIFFs have no subdatasets and return an empty map.
-    Multi-dataset formats (NetCDF, HDF5, etc.) return a map of dataset names
-    to descriptions.
+    Multi-layer formats such as NetCDF expose each variable as a subdataset.
+    The returned map has one entry per subdataset keyed by SUBDATASET_N_NAME
+    and SUBDATASET_N_DESC.  Plain GeoTIFFs return an empty map.
     """
+    from pyspark.sql import functions as f
     from databricks.labs.gbx.pyrx import functions as rx
 
     rx.register(spark)
-    tile_df = _tile_df(spark)
+    tile_df = _nc_tile_df(spark)
     result = tile_df.select(rx.rst_subdatasets("tile").alias("subdatasets")).first()
     return result["subdatasets"]
 
 
 rst_subdatasets_python_light_example_output = """
-+-----------+
-|subdatasets|
-+-----------+
-|{}         |
-+-----------+
++-----------------------------------------------------+
+|subdatasets                                          |
++-----------------------------------------------------+
+|{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> ..., |
+| SUBDATASET_2_NAME -> ..., SUBDATASET_2_DESC -> ...} |
++-----------------------------------------------------+
 """
 
 

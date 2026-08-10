@@ -85,10 +85,12 @@ def test_heavy_output_constants_exist():
 
 
 def test_rst_bandmetadata_python_heavy_example(spark):
-    """rst_bandmetadata returns a dict of band metadata."""
+    """rst_bandmetadata returns a non-empty dict for a tagged GeoTIFF."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_bandmetadata_python_heavy_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+    assert len(result) > 0, f"Expected non-empty metadata dict, got {result!r}"
+    assert "units" in result, f"Expected 'units' key in band metadata, got {result!r}"
 
 
 def test_rst_format_python_heavy_example(spark):
@@ -232,10 +234,11 @@ def test_rst_crs_python_heavy_example(spark):
 
 
 def test_rst_subdatasets_python_heavy_example(spark):
-    """rst_subdatasets returns a dict (empty for plain GeoTIFF)."""
+    """rst_subdatasets returns a non-empty dict for a NetCDF raster."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_subdatasets_python_heavy_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+    assert len(result) > 0, f"Expected non-empty subdatasets dict (NetCDF fixture), got {result!r}"
 
 
 def test_rst_summary_python_heavy_example(spark):

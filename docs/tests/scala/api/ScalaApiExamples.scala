@@ -332,18 +332,19 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
 rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+// Load a raster that has per-band GDAL metadata (statistics tags embedded by gdalinfo).
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red_byte.tif")
 val result = rasters.select(rx.rst_bandmetadata(col("tile"), lit(1)).alias("band_meta"))
 result.show(truncate = false)
 """.trim
 
   val rst_bandmetadata_scala_example_output: String =
     """
-+---------+
-|band_meta|
-+---------+
-|{}       |
-+---------+
++--------------------------------------------------------------------+
+|band_meta                                                           |
++--------------------------------------------------------------------+
+|{STATISTICS_MAXIMUM -> 255, STATISTICS_MEAN -> 37.59..., ...}       |
++--------------------------------------------------------------------+
 """.trim
 
   val rst_format_scala_example: String =
@@ -653,8 +654,25 @@ result.show()
 +-------+-------+
 """.trim
 
-  val rst_scaley_scala_example: String = rst_scalex_scala_example
-  val rst_scaley_scala_example_output: String = rst_scalex_scala_example_output
+  val rst_scaley_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_scaley(col("tile")).alias("scale_y"))
+result.show()
+""".trim
+
+  val rst_scaley_scala_example_output: String =
+    """
++-------+
+|scale_y|
++-------+
+|-0.5   |
++-------+
+""".trim
 
   val rst_skewx_scala_example: String =
     """
@@ -679,8 +697,25 @@ result.show()
 +------+------+
 """.trim
 
-  val rst_skewy_scala_example: String = rst_skewx_scala_example
-  val rst_skewy_scala_example_output: String = rst_skewx_scala_example_output
+  val rst_skewy_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_skewy(col("tile")).alias("skew_y"))
+result.show()
+""".trim
+
+  val rst_skewy_scala_example_output: String =
+    """
++------+
+|skew_y|
++------+
+|0.0   |
++------+
+""".trim
 
   val rst_srid_scala_example: String =
     """
@@ -728,18 +763,20 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
 rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+// Multi-layer formats such as NetCDF expose each variable as a subdataset.
+// Load a NetCDF raster to get a non-empty subdatasets map.
+val rasters = spark.read.format("netcdf_gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_climate.nc")
 val result = rasters.select(rx.rst_subdatasets(col("tile")).alias("subdatasets"))
-result.show()
+result.show(truncate = false)
 """.trim
 
   val rst_subdatasets_scala_example_output: String =
     """
-+-----------+
-|subdatasets|
-+-----------+
-|{}         |
-+-----------+
++-------------------------------------------------------+
+|subdatasets                                            |
++-------------------------------------------------------+
+|{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> [4x4...|
++-------------------------------------------------------+
 """.trim
 
   val rst_summary_scala_example: String =
@@ -805,8 +842,25 @@ result.show()
 +------------+------------+
 """.trim
 
-  val rst_upperlefty_scala_example: String = rst_upperleftx_scala_example
-  val rst_upperlefty_scala_example_output: String = rst_upperleftx_scala_example_output
+  val rst_upperlefty_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val result = rasters.select(rx.rst_upperlefty(col("tile")).alias("upper_left_y"))
+result.show()
+""".trim
+
+  val rst_upperlefty_scala_example_output: String =
+    """
++------------+
+|upper_left_y|
++------------+
+|50.0        |
++------------+
+""".trim
 
   val rst_isempty_scala_example: String =
     """

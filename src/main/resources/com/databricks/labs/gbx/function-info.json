@@ -561,7 +561,7 @@
       ]
     },
     "gbx_rst_pixelheight": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_pixelwidth(tile) as pixel_width, gbx_rst_pixelheight(tile) as pixel_height, gbx_rst_width(tile) * gbx_rst_pixelwidth(tile) as total_width_m FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_pixelheight(tile) as pixel_height FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -571,7 +571,7 @@
       ]
     },
     "gbx_rst_pixelwidth": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_pixelwidth(tile) as pixel_width, gbx_rst_pixelheight(tile) as pixel_height, gbx_rst_width(tile) * gbx_rst_pixelwidth(tile) as total_width_m FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_pixelwidth(tile) as pixel_width FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -759,7 +759,7 @@
       ]
     },
     "gbx_rst_scalex": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_scalex(tile) as scale_x, gbx_rst_scaley(tile) as scale_y FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_scalex(tile) as scale_x FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -769,7 +769,7 @@
       ]
     },
     "gbx_rst_scaley": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_scalex(tile) as scale_x, gbx_rst_scaley(tile) as scale_y FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_scaley(tile) as scale_y FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -800,7 +800,7 @@
       ]
     },
     "gbx_rst_skewx": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_skewx(tile) as skew_x, gbx_rst_skewy(tile) as skew_y FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_skewx(tile) as skew_x FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -810,7 +810,7 @@
       ]
     },
     "gbx_rst_skewy": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_skewx(tile) as skew_x, gbx_rst_skewy(tile) as skew_y FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_skewy(tile) as skew_y FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -940,7 +940,7 @@
       ]
     },
     "gbx_rst_upperleftx": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_upperleftx(tile) as upper_left_x, gbx_rst_upperlefty(tile) as upper_left_y FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_upperleftx(tile) as upper_left_x FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -950,7 +950,7 @@
       ]
     },
     "gbx_rst_upperlefty": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_upperleftx(tile) as upper_left_x, gbx_rst_upperlefty(tile) as upper_left_y FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_upperlefty(tile) as upper_left_y FROM rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",

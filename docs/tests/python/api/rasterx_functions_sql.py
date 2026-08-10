@@ -345,6 +345,38 @@ rst_type_sql_example_output = """
 """
 
 
+def rst_pixelwidth_sql_example():
+    """Get pixel width in coordinate system units (degrees for EPSG:4326 rasters)"""
+    return """
+SELECT gbx_rst_pixelwidth(tile) as pixel_width FROM rasters;
+"""
+
+
+rst_pixelwidth_sql_example_output = """
++-----------+
+|pixel_width|
++-----------+
+|0.5        |
++-----------+
+"""
+
+
+def rst_pixelheight_sql_example():
+    """Get pixel height in coordinate system units (negative for north-up rasters)"""
+    return """
+SELECT gbx_rst_pixelheight(tile) as pixel_height FROM rasters;
+"""
+
+
+rst_pixelheight_sql_example_output = """
++------------+
+|pixel_height|
++------------+
+|-0.5        |
++------------+
+"""
+
+
 def rst_pixelsize_sql_example():
     """Get pixel dimensions in coordinate system units"""
     return """
@@ -442,6 +474,38 @@ rst_rotation_sql_example_output = """
 """
 
 
+def rst_scalex_sql_example():
+    """Get the X scale factor (pixel size in the X direction) of a raster"""
+    return """
+SELECT gbx_rst_scalex(tile) as scale_x FROM rasters;
+"""
+
+
+rst_scalex_sql_example_output = """
++-------+
+|scale_x|
++-------+
+|0.5    |
++-------+
+"""
+
+
+def rst_scaley_sql_example():
+    """Get the Y scale factor (negative for north-up rasters) of a raster"""
+    return """
+SELECT gbx_rst_scaley(tile) as scale_y FROM rasters;
+"""
+
+
+rst_scaley_sql_example_output = """
++-------+
+|scale_y|
++-------+
+|-0.5   |
++-------+
+"""
+
+
 def rst_scalex_scaley_sql_example():
     """Get scale (pixel size) in X and Y"""
     return """
@@ -459,6 +523,38 @@ rst_scalex_scaley_sql_example_output = """
 +----+-------+-------+
 |... |0.5    |-0.5   |
 +----+-------+-------+
+"""
+
+
+def rst_skewx_sql_example():
+    """Get the X skew coefficient (rotation term) of a raster's geotransform"""
+    return """
+SELECT gbx_rst_skewx(tile) as skew_x FROM rasters;
+"""
+
+
+rst_skewx_sql_example_output = """
++------+
+|skew_x|
++------+
+|0.0   |
++------+
+"""
+
+
+def rst_skewy_sql_example():
+    """Get the Y skew coefficient (rotation term) of a raster's geotransform"""
+    return """
+SELECT gbx_rst_skewy(tile) as skew_y FROM rasters;
+"""
+
+
+rst_skewy_sql_example_output = """
++------+
+|skew_y|
++------+
+|0.0   |
++------+
 """
 
 
@@ -511,6 +607,38 @@ rst_summary_sql_example_output = """
 +----+------------------------------------------------------------+
 |... |{driverShortName: GTiff, size: [4, 3], coordinateSystem: ...|
 +----+------------------------------------------------------------+
+"""
+
+
+def rst_upperleftx_sql_example():
+    """Get the X coordinate of the upper-left (origin) corner of the raster"""
+    return """
+SELECT gbx_rst_upperleftx(tile) as upper_left_x FROM rasters;
+"""
+
+
+rst_upperleftx_sql_example_output = """
++------------+
+|upper_left_x|
++------------+
+|10.0        |
++------------+
+"""
+
+
+def rst_upperlefty_sql_example():
+    """Get the Y coordinate of the upper-left (origin) corner of the raster"""
+    return """
+SELECT gbx_rst_upperlefty(tile) as upper_left_y FROM rasters;
+"""
+
+
+rst_upperlefty_sql_example_output = """
++------------+
+|upper_left_y|
++------------+
+|50.0        |
++------------+
 """
 
 

@@ -12,10 +12,13 @@ Covers:
 - Unresolvable target raises
 """
 
+import numpy as np
+import pyproj
 import pytest
 from shapely import from_wkb, from_wkt, get_srid, to_wkb, to_wkt
 from shapely.geometry import Point
 
+from databricks.labs.gbx.core.crs import in_target_domain
 from databricks.labs.gbx.pyvx import _crs
 
 shapely = pytest.importorskip("shapely")
@@ -316,9 +319,7 @@ def test_st_transformcrs_ewkt_authority_less_target_text_medium():
     Custom TM has no area_of_use, so the domain check is skipped.  Use POINT(11, 42)
     (west of central_meridian=13.7) directly to confirm a negative easting.
     """
-    import shapely as _sh
-
-    ewkt_11_42 = f"SRID=4326;POINT (11 42)"
+    ewkt_11_42 = "SRID=4326;POINT (11 42)"
     out = _crs.st_transformcrs(ewkt_11_42, _CUSTOM_TM_WKT)
     assert isinstance(out, str)
     assert "SRID=" not in out.upper()
@@ -1206,11 +1207,6 @@ def test_st_transformcrs_nonfinite_does_not_break_nan_z_handling():
 # ---------------------------------------------------------------------------
 # in_target_domain helper
 # ---------------------------------------------------------------------------
-
-import numpy as np
-import pyproj
-
-from databricks.labs.gbx.core.crs import in_target_domain
 
 
 def test_in_target_domain_inside_gb():

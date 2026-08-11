@@ -8,38 +8,44 @@ Run Common setup first (Python/Scala) to register RasterX; then create the
 views below so SQL examples can use FROM rasters or FROM multiband_rasters.
 """
 
-# Sample paths at runtime (path_config)
-from path_config import SAMPLE_DATA_BASE
-
-SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
-
 # Committed fixtures for band-math and terrain examples. Import under an underscore alias so
 # the imported functions are not picked up by inspect.getmembers in the
 # test_all_sql_* introspection guards (which require public names to be
 # *_sql_example functions).
 from _fixtures import (
+    single_band_path as _single_band_path,
     multiband_path as _multiband_path,
     dem_path as _dem_path,
+    netcdf_path as _netcdf_path,
     color_table_path as _color_table_path,
 )
 
+SAMPLE_RASTER_PATH = str(_single_band_path())
 MULTIBAND_RASTER_PATH = str(_multiband_path())
 DEM_RASTER_PATH = str(_dem_path())
+NETCDF_RASTER_PATH = str(_netcdf_path())
 COLOR_TABLE_PATH = str(_color_table_path())
 
-# Common setup: create temp views so SQL examples can use FROM rasters, multiband_rasters, or dem_rasters
+# Common setup: create the temp views the SQL examples read from. Point the
+# paths at your own rasters — GTIFF_SAMPLE_DIR (single-band) is the default;
+# GTIFF_MULTI_DIR, DTM_DIR, and NETCDF_DIR back the band-math/terrain/subdataset
+# examples. GeoTIFFs use the `gdal` reader; NetCDF uses `netcdf_gdal`.
 RASTERX_SQL_SETUP = f"""-- After registering RasterX (Python: rx.register(spark)), create the views:
 CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;
+SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;              -- GTIFF_SAMPLE_DIR (single-band)
 
 CREATE OR REPLACE TEMP VIEW multiband_rasters AS
-SELECT * FROM gdal.`{MULTIBAND_RASTER_PATH}`;
+SELECT * FROM gdal.`{MULTIBAND_RASTER_PATH}`;           -- GTIFF_MULTI_DIR
 
 CREATE OR REPLACE TEMP VIEW dem_rasters AS
-SELECT * FROM gdal.`{DEM_RASTER_PATH}`;"""
+SELECT * FROM gdal.`{DEM_RASTER_PATH}`;                 -- DTM_DIR
+
+CREATE OR REPLACE TEMP VIEW netcdf_rasters AS
+SELECT * FROM netcdf_gdal.`{NETCDF_RASTER_PATH}`;       -- NETCDF_DIR"""
 
 RASTERX_SQL_SETUP_output = """
-Views `rasters`, `multiband_rasters`, and `dem_rasters` created.
+Views `rasters`, `multiband_rasters`, `dem_rasters`, and `netcdf_rasters` created.
+Every example on this page reads from one of these views.
 """
 
 # ============================================================================

@@ -12,8 +12,6 @@ import RasterXIcon from '../../../resources/images/brand/RasterX.png';
 import rasterxCode from '!!raw-loader!../../tests/python/api/rasterx_functions.py';
 import pyrxCode from '!!raw-loader!../../tests/python/api/pyrx_functions.py';
 import rasterxSqlCode from '!!raw-loader!../../tests/python/api/rasterx_functions_sql.py';
-import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.py';
-import rasterxScalaCode from '!!raw-loader!../../tests/scala/packages/RasterxPackageExamples.scala';
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import rasterxLightCode from '!!raw-loader!../../tests/python/api/rasterx_functions_python_light.py';
 import rasterxAccessorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_accessors_python_light.py';
@@ -88,7 +86,18 @@ Functions that internally build via an intermediate VRT — `gbx_rst_merge`, `gb
 
 ## Setup
 
-Pick your execution tier and run this once. Both tiers alias the module as `rx`, so every example below is identical regardless of tier — only this setup differs. (See [Choosing an Execution Tier](./execution-tiers) for the comparison.)
+With the geobrix library already installed ([Installation](../installation)), pick your execution tier and run this once. Both tiers alias the module as `rx`, so every example below is identical regardless of tier — only this setup differs. (See [Choosing an Execution Tier](./execution-tiers) for the comparison.)
+
+The examples on this page read from **four temp views**, each a raster loaded as a `tile` column. Point the four path placeholders at your own rasters:
+
+| Placeholder | Sample file | Temp view | Backs |
+|---|---|---|---|
+| `GTIFF_SAMPLE_DIR` | single-band GeoTIFF | `rasters` | **Default** — most accessor, tile-ops, transform, and generator examples |
+| `GTIFF_MULTI_DIR` | multi-band GeoTIFF (red/NIR/green) | `multiband_rasters` | band-math and spectral-index examples, `rst_numbands`, `rst_bandmetadata` |
+| `DTM_DIR` | digital elevation model | `dem_rasters` | terrain examples (`rst_slope`, `rst_aspect`, …) |
+| `NETCDF_DIR` | NetCDF with subdatasets | `netcdf_rasters` | `rst_subdatasets`, `rst_getsubdataset` |
+
+The setup below loads `GTIFF_SAMPLE_DIR` into `rasters` and then loads the other three the same way — swap the path and view name (and, for NetCDF, the reader). Every example on the page assumes these four views exist.
 
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight (pyrx)">
@@ -116,7 +125,7 @@ Pick your execution tier and run this once. Both tiers alias the module as `rx`,
   code={rasterxCode}
 />
 
-After registering RasterX, create the SQL view so the SQL examples below can use `FROM rasters`:
+Prefer pure SQL? Register RasterX (Python: `rx.register(spark)`), then create the same four views directly so the SQL examples can use `FROM rasters`, `FROM multiband_rasters`, and so on:
 
 <CodeFromTest
   language="sql"
@@ -130,51 +139,6 @@ After registering RasterX, create the SQL view so the SQL examples below can use
 
 </TabItem>
 </Tabs>
-
-## Usage Examples
-
-### Python/PySpark
-
-These examples assume your tier is set up as in [Setup](#setup) above — imported as `rx`, registered (for the SQL examples), and a raster `DataFrame` (`raster_df`, with a `tile` column) loaded for your tier. The calls are identical in both tiers:
-
-```python
-# Read raster properties off the `tile` column:
-metadata_df = raster_df.select(
-    rx.rst_width("tile").alias("width"),
-    rx.rst_height("tile").alias("height"),
-    rx.rst_numbands("tile").alias("bands"),
-    rx.rst_srid("tile").alias("srid"),
-)
-metadata_df.show()
-```
-
-### Scala
-
-<CodeFromTest
-  code={rasterxScalaCode}
-  language="scala"
-  source="docs/tests/scala/packages/RasterxPackageExamples.scala"
-  testFile="docs/tests/scala/packages/RasterxExamplesDocTest.scala"
-  functionName="RASTERX_SCALA_USAGE"
-  outputConstant="RASTERX_SCALA_USAGE_output"
-/>
-
-### SQL
-
-<CodeFromTest
-  code={packagesExamples}
-  language="sql"
-  source="docs/tests/python/packages/examples.py"
-  testFile="docs/tests/python/packages/test_examples.py"
-  functionName="SQL_RASTERX_USAGE"
-  outputConstant="SQL_RASTERX_USAGE_output"
-/>
-
----
-
-:::note SQL examples
-Examples on this page use **SQL**, where RasterX functions are prefixed with **`gbx_`** (e.g. `gbx_rst_boundingbox`, `gbx_rst_width`). For Python and Scala usage and more tips, see [Language Bindings](./language-bindings). In the lightweight tier, the registered `gbx_rst_*` SQL functions require every argument to be passed explicitly — optional defaults are honored only through the Python `prx.*` API.
-:::
 
 ## Tier availability
 
@@ -222,7 +186,9 @@ All four tabs show the **same operation** on the **same file**. Where a tier's o
 
 Scalar values are **identical across all tabs** — same fixture, same function, same result.
 
-Tile-returning functions (`rst_clip`, `rst_resample`, `rst_transform`, the aggregators, the constructors, …) return a **[v2 Tile](./tile-structure)**. Their output is shown as a representative struct — `{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}` — rather than a literal byte dump. The lightweight tier defaults to [**virtual tiles**](./virtual-tiles): the tile carries a `path` and reads its raster bytes lazily, so a populated `path` in the output is expected.
+Tile-returning functions (`rst_clip`, `rst_resample`, `rst_transform`, the aggregators, the constructors, …) return a **[v2 Tile](./tile-structure)**. Their output is shown as a representative struct — `{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}` — rather than a literal byte dump. Tiles loaded via `rst_fromcontent` / `rst_fromfile` (as in [Setup](#setup)) are **materialized**: the `raster` field holds the encoded bytes and `path` is null. [**Virtual tiles**](./virtual-tiles) — a populated `path` with lazily-read bytes — arise from the force-output parameters, not from the default load.
+
+**SQL naming and arguments:** in the SQL tab, RasterX functions carry the **`gbx_`** prefix (e.g. `gbx_rst_boundingbox`, `gbx_rst_width`); Python and Scala use the bare `rst_*` name via `rx`. In the lightweight tier the registered `gbx_rst_*` SQL functions require **every argument to be passed explicitly** — optional defaults are honored only through the Python `rx.*` API. See [Language Bindings](./language-bindings) for more.
 
 ### Per-function notes
 

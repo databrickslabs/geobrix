@@ -47,17 +47,42 @@ def _get_dem_df_heavy(spark):
 
 
 def rasterx_setup_example(spark):
-    """Common setup: import, register RasterX, and load sample rasters. Run once before examples."""
+    """Register RasterX and load each sample raster into a `tile` view. Run once.
+
+    Assumes the geobrix JAR is on the cluster (see the Installation guide).
+    The examples on this page read from four temp views; this builds all of them.
+    """
     from databricks.labs.gbx.rasterx import functions as rx
+    from _fixtures import single_band_path, multiband_path, dem_path, netcdf_path
 
     rx.register(spark)
-    rasters = spark.read.format("gdal").load(SAMPLE_RASTER_PATH)
-    rasters.createOrReplaceTempView("rasters")
+
+    # Point these at your own rasters. The examples on this page use four samples:
+    GTIFF_SAMPLE_DIR = str(single_band_path())  # single-band GeoTIFF
+    GTIFF_MULTI_DIR = str(multiband_path())  # multi-band GeoTIFF (red/NIR/green)
+    DTM_DIR = str(dem_path())  # digital elevation model
+    NETCDF_DIR = str(netcdf_path())  # NetCDF with subdatasets
+
+    def load_tiles(path, reader, view):
+        # The gdal / netcdf_gdal readers yield a `tile` column directly.
+        df = spark.read.format(reader).load(path)
+        df.createOrReplaceTempView(view)
+        return df
+
+    # Load the default single-band raster into the `rasters` view:
+    rasters = load_tiles(GTIFF_SAMPLE_DIR, "gdal", "rasters")
+
+    # The other three views load the same way (the netcdf_gdal reader for NetCDF):
+    load_tiles(GTIFF_MULTI_DIR, "gdal", "multiband_rasters")
+    load_tiles(DTM_DIR, "gdal", "dem_rasters")
+    load_tiles(NETCDF_DIR, "netcdf_gdal", "netcdf_rasters")
     return rasters
 
 
 rasterx_setup_example_output = """
-RasterX registered. Temp view `rasters` created from sample raster.
+RasterX registered. Four temp views created — `rasters` (single-band),
+`multiband_rasters`, `dem_rasters`, and `netcdf_rasters` — each with a `tile`
+column. Every example on this page reads from one of these views.
 """
 
 

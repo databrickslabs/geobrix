@@ -795,6 +795,39 @@ Powered by **rasterio**.
 
 Combine or merge rasters in group-by (7 total).
 
+### rst_bng_rasterize_agg
+
+<Tier both/> <Impl groupedAgg/>
+
+:::note Lightweight tier (pyrx)
+The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
+:::
+
+:::warning NoData sentinel is -9999.0
+Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-registered NoData). Filter or mask downstream via `gbx_rst_getnodata` or `IS NULL` on the extracted band value.
+:::
+
+Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is automatically reprojected to **EPSG:27700** (British National Grid) before rasterization. BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
+
+`gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
+
+**Signature:** `rst_bng_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
+
+**Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS (typically `27700`)
+
+_Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
+
+<FunctionExamples
+  name="rst_bng_rasterize_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
+
+---
+
 ### rst_combineavg_agg
 
 <Tier both/> <Impl groupedAgg/>
@@ -942,81 +975,6 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` with `band_index` 
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
-### rst_merge_agg
-
-<Tier both/> <Impl groupedAgg/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent).
-:::
-
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_merge_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_merge_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(gbx_rst_merge_agg(tile), 'GTiff') AS tile
-FROM tiles
-GROUP BY group_key
-```
-:::
-
-**Signature:** `rst_merge_agg(tile: Column): Column` — Merge tiles per group.
-
-_Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg mosaic invocation._
-
-<FunctionExamples
-  name="rst_merge_agg"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
-/>
-
-### rst_rasterize_agg
-
-<Tier both/> <Impl groupedAgg/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.features`). Aggregate — burns the group's `(geom, value)` rows into one tile over the given extent/size/SRID (last-wins on overlap).
-:::
-
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(
-    gbx_rst_rasterize_agg(geom, value, 0,0,10,10, 8,8, 32633),
-    'GTiff'
-  ) AS tile
-FROM features
-GROUP BY group_key
-```
-:::
-
-Streaming aggregator that burns geometry/value pairs (one row per feature) into a single rasterized tile per group; use when features arrive as individual rows rather than as a pre-built collection.
-
-**Signature:** `rst_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column): Column`
-
-**Parameters:** `geom` — WKB geometry to burn; `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
-
-_Multi-row fixture: 3 polygon rows burned at values 1.0/2.0/3.0 over a `[0,0,4,4]` EPSG:4326 extent. All tabs use the same grouped-agg burn invocation._
-
-<FunctionExamples
-  name="rst_rasterize_agg"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
-/>
-
 ### rst_gridfrompoints_agg
 
 <Tier both/> <Impl groupedAgg/>
@@ -1111,6 +1069,40 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
+### rst_merge_agg
+
+<Tier both/> <Impl groupedAgg/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent).
+:::
+
+:::warning Lightweight SQL returns BINARY (not the tile struct)
+Heavyweight `gbx_rst_merge_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_merge_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+
+```sql
+-- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
+SELECT
+  group_key AS cellid,
+  gbx_rst_fromcontent(gbx_rst_merge_agg(tile), 'GTiff') AS tile
+FROM tiles
+GROUP BY group_key
+```
+:::
+
+**Signature:** `rst_merge_agg(tile: Column): Column` — Merge tiles per group.
+
+_Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg mosaic invocation._
+
+<FunctionExamples
+  name="rst_merge_agg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
+
 ### rst_quadbin_rasterize_agg
 
 <Tier both/> <Impl groupedAgg/>
@@ -1142,30 +1134,40 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
-### rst_bng_rasterize_agg
+### rst_rasterize_agg
 
 <Tier both/> <Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
-The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
+Powered by **rasterio** (`rasterio.features`). Aggregate — burns the group's `(geom, value)` rows into one tile over the given extent/size/SRID (last-wins on overlap).
 :::
 
-:::warning NoData sentinel is -9999.0
-Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-registered NoData). Filter or mask downstream via `gbx_rst_getnodata` or `IS NULL` on the extracted band value.
+:::warning Lightweight SQL returns BINARY (not the tile struct)
+Heavyweight `gbx_rst_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+
+```sql
+-- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
+SELECT
+  group_key AS cellid,
+  gbx_rst_fromcontent(
+    gbx_rst_rasterize_agg(geom, value, 0,0,10,10, 8,8, 32633),
+    'GTiff'
+  ) AS tile
+FROM features
+GROUP BY group_key
+```
 :::
 
-Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is automatically reprojected to **EPSG:27700** (British National Grid) before rasterization. BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
+Streaming aggregator that burns geometry/value pairs (one row per feature) into a single rasterized tile per group; use when features arrive as individual rows rather than as a pre-built collection.
 
-`gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
+**Signature:** `rst_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column): Column`
 
-**Signature:** `rst_bng_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
+**Parameters:** `geom` — WKB geometry to burn; `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
 
-**Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS (typically `27700`)
-
-_Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
+_Multi-row fixture: 3 polygon rows burned at values 1.0/2.0/3.0 over a `[0,0,4,4]` EPSG:4326 extent. All tabs use the same grouped-agg burn invocation._
 
 <FunctionExamples
-  name="rst_bng_rasterize_agg"
+  name="rst_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
@@ -1173,11 +1175,88 @@ _Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) 
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
----
-
 ## Constructor Functions
 
 Create or load rasters from path, binary content, or bands (4 total).
+
+### rst_dtmfromgeoms
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric interpolation over an **unconstrained** Delaunay TIN; cells outside the convex hull are NoData. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted for signature parity but not enforced — the heavyweight tier builds a constrained TIN that honors them.
+:::
+
+Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries, with an optional array of breakline WKB geometries to preserve sharp terrain transitions.
+
+**Signature:** `rst_dtmfromgeoms(points_array: Column, breaklines_array: Column, merge_tolerance: Column, snap_tolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width_px: Column, height_px: Column, out_srid: Column, [no_data: Column, out_crs: Column = null]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+
+**Parameters:** `points_array` — Array of WKB point geometries with Z coordinates; `breaklines_array` — Array of WKB line/polygon geometries enforcing hard edges (pass `null` or empty array if unused); `merge_tolerance`/`snap_tolerance` — Delaunay triangulation tolerances (vertex-merge distance and snapping distance; small values such as `0.0` and `0.01` are typical); `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output raster dimensions in pixels (for N-metre cells set `width_px = round((xmax-xmin)/N)`); `out_srid` — EPSG code for the output CRS. An optional trailing `no_data` argument overrides the default fill for cells outside the triangulated hull.
+
+<FunctionExamples
+  name="rst_dtmfromgeoms"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
+---
+
+### rst_frombands
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**. Stacks an `ARRAY` of single-band tiles into one multi-band tile in array order (element 0 → band 1), preserving georeference/CRS/dtype/NoData from the first.
+:::
+
+Create a raster from an array of band tiles.
+
+**Signature:** `rst_frombands(bands: Column): Column`
+
+_Constructor — stacks per-band tiles into a multi-band tile. Example splits the multiband fixture into per-band tiles via `rst_band`, then re-stacks them into a 3-band tile._
+
+<FunctionExamples
+  name="rst_frombands"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
+---
+
+### rst_fromcontent
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**. The driver defaults to GTiff when unspecified and outputs are re-encoded as GeoTIFF; readable input formats are limited to the GDAL build bundled with rasterio.
+:::
+
+Create a raster from binary content.
+
+**Signature:** `rst_fromcontent(content: Column, driver: Column): Column`
+
+**Parameters:** `content` — Binary column; `driver` — GDAL driver name
+
+**Returns:** Binary raster tile data
+
+_Constructor — builds a tile from binary content. Example uses Spark's `binaryFile` reader to load bytes, then `rst_fromcontent` to decode them — this is the canonical tier-agnostic pattern (works on any compute including Serverless)._
+
+<FunctionExamples
+  name="rst_fromcontent"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
+---
 
 ### rst_fromfile
 
@@ -1231,85 +1310,6 @@ FROM read_files('/Volumes/main/geobrix_samples/geobrix-examples/nyc/', format =>
 
 ---
 
-### rst_fromcontent
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio**. The driver defaults to GTiff when unspecified and outputs are re-encoded as GeoTIFF; readable input formats are limited to the GDAL build bundled with rasterio.
-:::
-
-Create a raster from binary content.
-
-**Signature:** `rst_fromcontent(content: Column, driver: Column): Column`
-
-**Parameters:** `content` — Binary column; `driver` — GDAL driver name
-
-**Returns:** Binary raster tile data
-
-_Constructor — builds a tile from binary content. Example uses Spark's `binaryFile` reader to load bytes, then `rst_fromcontent` to decode them — this is the canonical tier-agnostic pattern (works on any compute including Serverless)._
-
-<FunctionExamples
-  name="rst_fromcontent"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
-/>
-
----
-
-### rst_dtmfromgeoms
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric interpolation over an **unconstrained** Delaunay TIN; cells outside the convex hull are NoData. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted for signature parity but not enforced — the heavyweight tier builds a constrained TIN that honors them.
-:::
-
-Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries, with an optional array of breakline WKB geometries to preserve sharp terrain transitions.
-
-**Signature:** `rst_dtmfromgeoms(points_array: Column, breaklines_array: Column, merge_tolerance: Column, snap_tolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width_px: Column, height_px: Column, out_srid: Column, [no_data: Column, out_crs: Column = null]): Column` — output CRS via `out_srid` (int) or `out_crs` (string, wins); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
-
-**Parameters:** `points_array` — Array of WKB point geometries with Z coordinates; `breaklines_array` — Array of WKB line/polygon geometries enforcing hard edges (pass `null` or empty array if unused); `merge_tolerance`/`snap_tolerance` — Delaunay triangulation tolerances (vertex-merge distance and snapping distance; small values such as `0.0` and `0.01` are typical); `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output raster dimensions in pixels (for N-metre cells set `width_px = round((xmax-xmin)/N)`); `out_srid` — EPSG code for the output CRS. An optional trailing `no_data` argument overrides the default fill for cells outside the triangulated hull.
-
-<FunctionExamples
-  name="rst_dtmfromgeoms"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
-/>
-
----
-
-### rst_frombands
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio**. Stacks an `ARRAY` of single-band tiles into one multi-band tile in array order (element 0 → band 1), preserving georeference/CRS/dtype/NoData from the first.
-:::
-
-Create a raster from an array of band tiles.
-
-**Signature:** `rst_frombands(bands: Column): Column`
-
-_Constructor — stacks per-band tiles into a multi-band tile. Example splits the multiband fixture into per-band tiles via `rst_band`, then re-stacks them into a 3-band tile._
-
-<FunctionExamples
-  name="rst_frombands"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
-/>
-
----
-
 ### rst_gridfrompoints
 
 <Tier both/>
@@ -1339,50 +1339,6 @@ IDW-interpolate an array of Z-valued point geometries to a Float64 GeoTIFF tile 
 
 Produce multiple tiles or bands (7 total).
 
-### rst_h3_tessellate
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Clips the raster to each overlapping H3 cell at `resolution`, returning one row per cell via streaming UDTF (matches the heavyweight generator behavior).
-:::
-
-**Signature:** `rst_h3_tessellate(tile: Column, resolution: Column, mode: Column = "covering"): Column` — Tessellate raster to H3 cells. `mode` is `"covering"` (default — every overlapping cell, clipped) or `"centroid"` (pixel-centroid single-assignment partition). See [H3 Raster Tessellation](./h3-raster-tessellation) for the full mode guide.
-
-Covering mode uses a **positive-area overlap** rule (shared by all three grids — `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`): a cell is emitted **iff its geometry has greater-than-zero area overlap** with the raster. A cell that merely touches the raster along a boundary edge or corner (zero pixel overlap — common on grid-aligned tiles where the raster edges land on cell boundaries) is **excluded**. A within-extent cell whose pixels are all NoData **is** emitted — NoData renders in place, it does not punch a gap into the mosaic. This rule is identical on the lightweight and heavyweight tiers, so covering-mode cell sets match exactly across tiers.
-
-<FunctionExamples
-  name="rst_h3_tessellate"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
-/>
-
-### rst_quadbin_tessellate
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio`. It enumerates the overlapping quadbin cells for the raster bbox and clips one tile per cell, matching the heavyweight cell set and clip windows.
-:::
-
-Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. The input raster must be in EPSG:4326 (lon/lat); reproject upstream with `rst_transform` if your source CRS differs. Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
-
-**Signature:** `rst_quadbin_tessellate(tile: Column, resolution: Column): Column`
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_quadbin_tessellate"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
-/>
-
 ### rst_bng_tessellate
 
 <Tier both/> <Impl udtf/>
@@ -1401,6 +1357,27 @@ Natural fit for CV image-tiling workflows that require Ordnance Survey–scale c
 
 <FunctionExamples
   name="rst_bng_tessellate"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
+
+### rst_h3_tessellate
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Clips the raster to each overlapping H3 cell at `resolution`, returning one row per cell via streaming UDTF (matches the heavyweight generator behavior).
+:::
+
+**Signature:** `rst_h3_tessellate(tile: Column, resolution: Column, mode: Column = "covering"): Column` — Tessellate raster to H3 cells. `mode` is `"covering"` (default — every overlapping cell, clipped) or `"centroid"` (pixel-centroid single-assignment partition). See [H3 Raster Tessellation](./h3-raster-tessellation) for the full mode guide.
+
+Covering mode uses a **positive-area overlap** rule (shared by all three grids — `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`): a cell is emitted **iff its geometry has greater-than-zero area overlap** with the raster. A cell that merely touches the raster along a boundary edge or corner (zero pixel overlap — common on grid-aligned tiles where the raster edges land on cell boundaries) is **excluded**. A within-extent cell whose pixels are all NoData **is** emitted — NoData renders in place, it does not punch a gap into the mosaic. This rule is identical on the lightweight and heavyweight tiers, so covering-mode cell sets match exactly across tiers.
+
+<FunctionExamples
+  name="rst_h3_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
@@ -1427,6 +1404,29 @@ Powered by **rasterio**. Streams one tile row per subdivided region via streamin
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+/>
+
+### rst_quadbin_tessellate
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio`. It enumerates the overlapping quadbin cells for the raster bbox and clips one tile per cell, matching the heavyweight cell set and clip windows.
+:::
+
+Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. The input raster must be in EPSG:4326 (lon/lat); reproject upstream with `rst_transform` if your source CRS differs. Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
+
+**Signature:** `rst_quadbin_tessellate(tile: Column, resolution: Column): Column`
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_quadbin_tessellate"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_retile
@@ -1498,174 +1498,6 @@ Powered by **rasterio**. Streams one tile row per overlapping region via streami
 
 Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (9 total).
 
-### rst_h3_rastertogridavg
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridavg(tile: Column, resolution: Column): Column`
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridavg"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
-### rst_h3_rastertogridcount
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridcount(tile: Column, resolution: Column): Column` — Pixel count per H3 cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridcount"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
-### rst_h3_rastertogridmax
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridmax(tile: Column, resolution: Column): Column` — Max value per H3 cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridmax"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
-### rst_h3_rastertogridmin
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridmin(tile: Column, resolution: Column): Column` — Min value per H3 cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridmin"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
-### rst_h3_rastertogridmedian
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridmedian(tile: Column, resolution: Column): Column` — Median value per H3 cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridmedian"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
-### rst_h3_rastertogridsum
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridsum(tile: Column, resolution: Column): Column` — Sum of pixel values per H3 cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridsum"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
-### rst_h3_rastertogridvariance
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridvariance(tile: Column, resolution: Column): Column` — Population variance of pixel values per H3 cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridvariance"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
-### rst_h3_rastertogridstddev
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_h3_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per H3 cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_h3_rastertogridstddev"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
 ### gbx_h3_cell_bbox
 
 <Tier both/>
@@ -1735,6 +1567,174 @@ STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE,
 
 ---
 
+### rst_h3_rastertogridavg
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridavg(tile: Column, resolution: Column): Column`
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridavg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+### rst_h3_rastertogridcount
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridcount(tile: Column, resolution: Column): Column` — Pixel count per H3 cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridcount"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+### rst_h3_rastertogridmax
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridmax(tile: Column, resolution: Column): Column` — Max value per H3 cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridmax"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+### rst_h3_rastertogridmedian
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridmedian(tile: Column, resolution: Column): Column` — Median value per H3 cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridmedian"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+### rst_h3_rastertogridmin
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridmin(tile: Column, resolution: Column): Column` — Min value per H3 cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridmin"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+### rst_h3_rastertogridstddev
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per H3 cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridstddev"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+### rst_h3_rastertogridsum
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridsum(tile: Column, resolution: Column): Column` — Sum of pixel values per H3 cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridsum"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
+### rst_h3_rastertogridvariance
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_h3_rastertogridvariance(tile: Column, resolution: Column): Column` — Population variance of pixel values per H3 cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_h3_rastertogridvariance"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
 ## Grid Functions (quadbin)
 
 Aggregate raster values to CARTO quadbin v0 grid cells (8 reducers). Each reducer returns an array (one entry per band) of `struct<cellID: BIGINT, measure: DOUBLE>` rows; explode the array element you want to drive per-cell rows. Resolution is the quadbin zoom (0..26). See also [`rst_quadbin_tessellate`](#rst_quadbin_tessellate) (Generator Functions) and [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg) (Aggregator Functions) for the remaining quadbin raster-grid surface.
@@ -1802,6 +1802,27 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
+### rst_quadbin_rastertogridmedian
+
+<Tier both/> <Impl udtf/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+:::
+
+**Signature:** `rst_quadbin_rastertogridmedian(tile: Column, resolution: Column): Column` — Median pixel value per quadbin cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_quadbin_rastertogridmedian"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
 ### rst_quadbin_rastertogridmin
 
 <Tier both/> <Impl udtf/>
@@ -1823,26 +1844,28 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
-### rst_quadbin_rastertogridmedian
+### rst_quadbin_rastertogridstddev
 
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
 :::
 
-**Signature:** `rst_quadbin_rastertogridmedian(tile: Column, resolution: Column): Column` — Median pixel value per quadbin cell.
+**Signature:** `rst_quadbin_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per quadbin cell.
 
 **SQL:**
 
 <FunctionExamples
-  name="rst_quadbin_rastertogridmedian"
+  name="rst_quadbin_rastertogridstddev"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
+
+---
 
 ### rst_quadbin_rastertogridsum
 
@@ -1885,29 +1908,6 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
-
-### rst_quadbin_rastertogridstddev
-
-<Tier both/> <Impl udtf/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
-:::
-
-**Signature:** `rst_quadbin_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per quadbin cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_quadbin_rastertogridstddev"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
----
 
 ## Grid Functions (BNG) {#bng-grid}
 
@@ -1978,6 +1978,25 @@ Maximum pixel value per BNG cell.
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
+### rst_bng_rastertogridmedian
+
+<Tier both/> <Impl udtf/>
+
+Median pixel value per BNG cell.
+
+**Signature:** `rst_bng_rastertogridmedian(tile: Column, resolution: Column): Column` — Median pixel value per BNG cell.
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_bng_rastertogridmedian"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
 ### rst_bng_rastertogridmin
 
 <Tier both/> <Impl udtf/>
@@ -1997,24 +2016,26 @@ Minimum pixel value per BNG cell.
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
-### rst_bng_rastertogridmedian
+### rst_bng_rastertogridstddev
 
 <Tier both/> <Impl udtf/>
 
-Median pixel value per BNG cell.
+Population standard deviation (`sqrt` of the population variance) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
 
-**Signature:** `rst_bng_rastertogridmedian(tile: Column, resolution: Column): Column` — Median pixel value per BNG cell.
+**Signature:** `rst_bng_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per BNG cell.
 
 **SQL:**
 
 <FunctionExamples
-  name="rst_bng_rastertogridmedian"
+  name="rst_bng_rastertogridstddev"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
+
+---
 
 ### rst_bng_rastertogridsum
 
@@ -2053,27 +2074,6 @@ Population variance (`÷ n`, two-pass) of pixel values per BNG cell — a single
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
-
-### rst_bng_rastertogridstddev
-
-<Tier both/> <Impl udtf/>
-
-Population standard deviation (`sqrt` of the population variance) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
-
-**Signature:** `rst_bng_rastertogridstddev(tile: Column, resolution: Column): Column` — Population standard deviation of pixel values per BNG cell.
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_bng_rastertogridstddev"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
-/>
-
----
 
 ## Operations
 
@@ -2338,6 +2338,81 @@ Powered by **rasterio**.
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
+### rst_resample
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** (`rasterio.warp`).
+:::
+
+Resample a raster tile by a multiplicative factor via `gdal.Warp -r`, scaling pixel dimensions up or down relative to the source.
+
+**Signature:** `rst_resample(tile: Column, factor: Column, algorithm: Column): Column`
+
+**Parameters:** `factor` — multiplicative scale factor applied to both width and height (e.g. `2.0` doubles the pixel grid); `algorithm` — gdalwarp resampling method name (e.g. `bilinear`, `near`, `cubic`, `cubicspline`, `lanczos`, `average`)
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_resample"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
+### rst_resample_to_res
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** (`rasterio.warp`).
+:::
+
+Resample a raster tile to an explicit ground resolution in CRS units via `gdal.Warp -tr`.
+
+**Signature:** `rst_resample_to_res(tile: Column, xRes: Column, yRes: Column, algorithm: Column): Column`
+
+**Parameters:** `xRes` — target pixel width in CRS units (e.g. metres for a metric projection); `yRes` — target pixel height in CRS units; `algorithm` — gdalwarp resampling method name (e.g. `average`, `bilinear`, `near`)
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_resample_to_res"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
+### rst_resample_to_size
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** (`rasterio.warp`).
+:::
+
+Resample a raster tile to an explicit pixel grid size via `gdal.Warp -ts`.
+
+**Signature:** `rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column, algorithm: Column): Column`
+
+**Parameters:** `widthPx` — target output width in pixels; `heightPx` — target output height in pixels; `algorithm` — gdalwarp resampling method name (e.g. `near` for categorical rasters, `bilinear` for continuous)
+
+**SQL:**
+
+<FunctionExamples
+  name="rst_resample_to_size"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
 ### rst_transform
 
 <Tier both/>
@@ -2418,81 +2493,6 @@ Powered by **rasterio**. Output is re-encoded as GeoTIFF; a NoData value that is
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
-### rst_resample
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.warp`).
-:::
-
-Resample a raster tile by a multiplicative factor via `gdal.Warp -r`, scaling pixel dimensions up or down relative to the source.
-
-**Signature:** `rst_resample(tile: Column, factor: Column, algorithm: Column): Column`
-
-**Parameters:** `factor` — multiplicative scale factor applied to both width and height (e.g. `2.0` doubles the pixel grid); `algorithm` — gdalwarp resampling method name (e.g. `bilinear`, `near`, `cubic`, `cubicspline`, `lanczos`, `average`)
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_resample"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
-/>
-
-### rst_resample_to_res
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.warp`).
-:::
-
-Resample a raster tile to an explicit ground resolution in CRS units via `gdal.Warp -tr`.
-
-**Signature:** `rst_resample_to_res(tile: Column, xRes: Column, yRes: Column, algorithm: Column): Column`
-
-**Parameters:** `xRes` — target pixel width in CRS units (e.g. metres for a metric projection); `yRes` — target pixel height in CRS units; `algorithm` — gdalwarp resampling method name (e.g. `average`, `bilinear`, `near`)
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_resample_to_res"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
-/>
-
-### rst_resample_to_size
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.warp`).
-:::
-
-Resample a raster tile to an explicit pixel grid size via `gdal.Warp -ts`.
-
-**Signature:** `rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column, algorithm: Column): Column`
-
-**Parameters:** `widthPx` — target output width in pixels; `heightPx` — target output height in pixels; `algorithm` — gdalwarp resampling method name (e.g. `near` for categorical rasters, `bilinear` for continuous)
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_resample_to_size"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
-/>
-
 ### rst_worldtorastercoord
 
 <Tier both/>
@@ -2537,25 +2537,6 @@ Powered by **rasterio**.
 
 Reproject rasters to EPSG:3857 (Web Mercator) and emit slippy-map XYZ tiles. Pair with [`gbx_pmtiles_agg`](./pmtiles-functions#pmtiles_agg) or the [PMTiles writer](../writers/pmtiles) to publish a raster pyramid as a single `.pmtiles` archive. See the [Helios notebooks](../notebooks/helios) for a worked example: NAIP aerial scenes are reprojected and pyramided into a PMTiles archive in NB02.
 
-### rst_to_webmercator
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.warp`). Uses rasterio's bundled GDAL build, whose projection and driver coverage may be narrower than the heavyweight tier.
-:::
-
-**Signature:** `rst_to_webmercator(tile: Column): Column` — Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by default. The returned tile carries `srid = 3857`.
-
-<FunctionExamples
-  name="rst_to_webmercator"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
-/>
-
 ### rst_tilexyz
 
 <Tier both/>
@@ -2572,6 +2553,25 @@ The output is a display web-map tile, not the source's raw bands. **PNG and WebP
 
 <FunctionExamples
   name="rst_tilexyz"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
+
+### rst_to_webmercator
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** (`rasterio.warp`). Uses rasterio's bundled GDAL build, whose projection and driver coverage may be narrower than the heavyweight tier.
+:::
+
+**Signature:** `rst_to_webmercator(tile: Column): Column` — Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by default. The returned tile carries `srid = 3857`.
+
+<FunctionExamples
+  name="rst_to_webmercator"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
@@ -2604,27 +2604,6 @@ Powered by **rio-tiler** + **morecantile**. Streams one XYZ tile row per interse
 
 Move data between the raster (`tile`) and vector (`geom`) worlds.
 
-### rst_rasterize
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.features`).
-:::
-
-**Signature:** `rst_rasterize(geom: Column, burnValue: Column, xMin: Column, yMin: Column, xMax: Column, yMax: Column, width: Column, height: Column, [out_srid: Column = null, out_crs: Column = null]): Column` — Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData. Output CRS (`out_crs` string wins over the int `out_srid`; both → error; neither → the geometry's carried source CRS); the geometry is reprojected from its source CRS into the output CRS before burning. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
-
-**SQL:**
-
-<FunctionExamples
-  name="rst_rasterize"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
-/>
-
 ### rst_polygonize
 
 <Tier both/> <Impl udtf/>
@@ -2655,28 +2634,30 @@ FROM <table>, LATERAL gbx_rst_polygonize(tile, band, connectedness) t
 
 ---
 
-## Terrain Analysis {#terrain}
-
-Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) derivatives. Each function takes a single-band DEM tile and returns a derived tile of the same footprint. See the [Helios notebooks](../notebooks/helios) for a worked example: `gbx_rst_slope`, `gbx_rst_aspect`, and `gbx_rst_hillshade` are applied to 3DEP DEMs in NB03 to produce terrain layers and a per-H3-cell solar score.
-
-### rst_slope
+### rst_rasterize
 
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close but not bit-identical: edge pixels are filled by replicating the border (gdaldem leaves them NoData) and NoData cells are not excluded from the 3×3 window.
+Powered by **rasterio** (`rasterio.features`).
 :::
 
-**Signature:** `rst_slope(tile: Column, unit: Column, xscale: Column, yscale: Column): Column` — Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `yscale` are the elevation/horizontal unit ratio per axis (supply both or neither; when omitted, GDAL 3.11+ auto-derives from the raster CRS). For isotropic scaling pass the same value to both (e.g. `1.0, 1.0` for a projected CRS in metres).
+**Signature:** `rst_rasterize(geom: Column, burnValue: Column, xMin: Column, yMin: Column, xMax: Column, yMax: Column, width: Column, height: Column, [out_srid: Column = null, out_crs: Column = null]): Column` — Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData. Output CRS (`out_crs` string wins over the int `out_srid`; both → error; neither → the geometry's carried source CRS); the geometry is reprojected from its source CRS into the output CRS before burning. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+
+**SQL:**
 
 <FunctionExamples
-  name="rst_slope"
+  name="rst_rasterize"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
+
+## Terrain Analysis {#terrain}
+
+Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) derivatives. Each function takes a single-band DEM tile and returns a derived tile of the same footprint. See the [Helios notebooks](../notebooks/helios) for a worked example: `gbx_rst_slope`, `gbx_rst_aspect`, and `gbx_rst_hillshade` are applied to 3DEP DEMs in NB03 to produce terrain layers and a per-H3-cell solar score.
 
 ### rst_aspect
 
@@ -2690,82 +2671,6 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close
 
 <FunctionExamples
   name="rst_aspect"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
-/>
-
-### rst_hillshade
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
-:::
-
-**Signature:** `rst_hillshade(tile: Column, azimuth: Column, altitude: Column, zFactor: Column): Column` — 8-bit (0..255) shaded relief image. Common values: NW sun azimuth `315.0`, altitude `45.0`, `zFactor = 1.0`.
-
-<FunctionExamples
-  name="rst_hillshade"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
-/>
-
-### rst_tri
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
-:::
-
-**Signature:** `rst_tri(tile: Column): Column` — Terrain Ruggedness Index — mean absolute difference between a pixel and its 8 neighbours. Useful for landscape-ecology habitat scoring.
-
-<FunctionExamples
-  name="rst_tri"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
-/>
-
-### rst_tpi
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
-:::
-
-**Signature:** `rst_tpi(tile: Column): Column` — Topographic Position Index — pixel value minus the mean of its 8 neighbours. Positive values are ridges, negative values are valleys.
-
-<FunctionExamples
-  name="rst_tpi"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
-/>
-
-### rst_roughness
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
-:::
-
-**Signature:** `rst_roughness(tile: Column): Column` — Largest absolute difference between a pixel and any of its 8 neighbours in a 3×3 window.
-
-<FunctionExamples
-  name="rst_roughness"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
@@ -2794,6 +2699,101 @@ The two tiers use **different color interpolation engines**, so their pixel valu
 
 ---
 
+### rst_hillshade
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+:::
+
+**Signature:** `rst_hillshade(tile: Column, azimuth: Column, altitude: Column, zFactor: Column): Column` — 8-bit (0..255) shaded relief image. Common values: NW sun azimuth `315.0`, altitude `45.0`, `zFactor = 1.0`.
+
+<FunctionExamples
+  name="rst_hillshade"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
+### rst_roughness
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+:::
+
+**Signature:** `rst_roughness(tile: Column): Column` — Largest absolute difference between a pixel and any of its 8 neighbours in a 3×3 window.
+
+<FunctionExamples
+  name="rst_roughness"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
+### rst_slope
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close but not bit-identical: edge pixels are filled by replicating the border (gdaldem leaves them NoData) and NoData cells are not excluded from the 3×3 window.
+:::
+
+**Signature:** `rst_slope(tile: Column, unit: Column, xscale: Column, yscale: Column): Column` — Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `yscale` are the elevation/horizontal unit ratio per axis (supply both or neither; when omitted, GDAL 3.11+ auto-derives from the raster CRS). For isotropic scaling pass the same value to both (e.g. `1.0, 1.0` for a projected CRS in metres).
+
+<FunctionExamples
+  name="rst_slope"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
+### rst_tpi
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+:::
+
+**Signature:** `rst_tpi(tile: Column): Column` — Topographic Position Index — pixel value minus the mean of its 8 neighbours. Positive values are ridges, negative values are valleys.
+
+<FunctionExamples
+  name="rst_tpi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
+### rst_tri
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close but not bit-identical to the heavyweight tier (edge pixels are filled and NoData is not excluded from the 3×3 window).
+:::
+
+**Signature:** `rst_tri(tile: Column): Column` — Terrain Ruggedness Index — mean absolute difference between a pixel and its 8 neighbours. Useful for landscape-ecology habitat scoring.
+
+<FunctionExamples
+  name="rst_tri"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
 ## Spectral Indices
 
 Multi-band satellite math built on `gbx_rst_mapalgebra`. Band arguments are 1-based GDAL band indices; the output is always a single-band Float32 GeoTIFF tile. `gbx_rst_ndvi` is documented under [Operations](#rst_ndvi).
@@ -2810,63 +2810,6 @@ Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pi
 
 <FunctionExamples
   name="rst_evi"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
-/>
-
-### rst_savi
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
-:::
-
-**Signature:** `rst_savi(tile: Column, redBand: Column, nirBand: Column, l: Column): Column` — Soil-Adjusted Vegetation Index. Formula: `(NIR - Red) / (NIR + Red + L) * (1 + L)`. `L = 0.5` (the canonical default) is a balanced soil/vegetation tradeoff; `L = 0` reduces SAVI to NDVI.
-
-<FunctionExamples
-  name="rst_savi"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
-/>
-
-### rst_ndwi
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
-:::
-
-**Signature:** `rst_ndwi(tile: Column, greenBand: Column, nirBand: Column): Column` — Normalized Difference Water Index (McFeeters 1996). Formula: `(Green - NIR) / (Green + NIR)`. Positive values typically indicate open water.
-
-<FunctionExamples
-  name="rst_ndwi"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
-/>
-
-### rst_nbr
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
-:::
-
-**Signature:** `rst_nbr(tile: Column, nirBand: Column, swirBand: Column): Column` — Normalized Burn Ratio. Formula: `(NIR - SWIR) / (NIR + SWIR)`. The pre-/post-fire difference (`dNBR`) is the canonical burn-severity index.
-
-<FunctionExamples
-  name="rst_nbr"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
@@ -2894,6 +2837,63 @@ Powered by **rasterio** + **NumExpr**. Generic named-index dispatcher over a `ba
 />
 
 ---
+
+### rst_nbr
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+:::
+
+**Signature:** `rst_nbr(tile: Column, nirBand: Column, swirBand: Column): Column` — Normalized Burn Ratio. Formula: `(NIR - SWIR) / (NIR + SWIR)`. The pre-/post-fire difference (`dNBR`) is the canonical burn-severity index.
+
+<FunctionExamples
+  name="rst_nbr"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
+
+### rst_ndwi
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+:::
+
+**Signature:** `rst_ndwi(tile: Column, greenBand: Column, nirBand: Column): Column` — Normalized Difference Water Index (McFeeters 1996). Formula: `(Green - NIR) / (Green + NIR)`. Positive values typically indicate open water.
+
+<FunctionExamples
+  name="rst_ndwi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
+
+### rst_savi
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pixels with a zero denominator are set to NoData (-9999) rather than left as non-finite values.
+:::
+
+**Signature:** `rst_savi(tile: Column, redBand: Column, nirBand: Column, l: Column): Column` — Soil-Adjusted Vegetation Index. Formula: `(NIR - Red) / (NIR + Red + L) * (1 + L)`. `L = 0.5` (the canonical default) is a balanced soil/vegetation tradeoff; `L = 0` reduces SAVI to NDVI.
+
+<FunctionExamples
+  name="rst_savi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ## Pixel ops + extraction
 
@@ -2998,25 +2998,6 @@ Powered by **rasterio**. Point geometries only; the point is assumed to be in th
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
-### rst_setsrid
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **rasterio**. Stamps the CRS without reprojecting.
-:::
-
-**Signature:** `rst_setsrid(tile: Column, srid: Column): Column` — Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a wrong) spatial reference; `0` clears the CRS. Does NOT reproject — only rewrites the CRS metadata. A negative SRID is rejected, and a positive code that is neither EPSG nor ESRI raises when stamped. Use `rst_transform` when you need an actual reprojection, or `rst_setcrs` to stamp from a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
-
-<FunctionExamples
-  name="rst_setsrid"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
-/>
-
 ### rst_setcrs
 
 <Tier both/>
@@ -3031,6 +3012,25 @@ Distinct from `rst_setsrid` (integer EPSG only): `rst_setcrs` accepts any CRS st
 
 <FunctionExamples
   name="rst_setcrs"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
+### rst_setsrid
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio**. Stamps the CRS without reprojecting.
+:::
+
+**Signature:** `rst_setsrid(tile: Column, srid: Column): Column` — Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a wrong) spatial reference; `0` clears the CRS. Does NOT reproject — only rewrites the CRS metadata. A negative SRID is rejected, and a positive code that is neither EPSG nor ESRI raises when stamped. Use `rst_transform` when you need an actual reprojection, or `rst_setcrs` to stamp from a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
+
+<FunctionExamples
+  name="rst_setsrid"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
@@ -3080,25 +3080,6 @@ Re-encodes the tile as a Cloud Optimized GeoTIFF (validated with `cog_validate`)
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
-### rst_proximity
-
-<Tier both/>
-
-:::note Lightweight tier (pyrx)
-Powered by **SciPy** (`scipy.ndimage.distance_transform_edt`). Distance to the nearest source pixel (`target_values`, or any non-zero pixel by default), in `GEO` (CRS units) or `PIXEL` units; pixels beyond `max_distance` → NoData −1.0. Single-band Float32.
-:::
-
-**Signature:** `rst_proximity(tile: Column, [targetValues: Column = null, distUnits: Column = lit("GEO"), maxDistance: Column = null]): Column` — Compute a Float32 raster where each pixel holds the distance to the nearest source pixel via `gdal.ComputeProximity`. `targetValues` is a comma-separated list of source-pixel values (e.g. `"1,2,3"`); `null` means any non-NoData pixel is a target. `distUnits` is `"GEO"` (CRS ground units, default) or `"PIXEL"`. `maxDistance` caps the output; pixels beyond it get the NoData sentinel `-1.0`.
-
-<FunctionExamples
-  name="rst_proximity"
-  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
-/>
-
 ### rst_contour
 
 <Tier both/>
@@ -3111,6 +3092,25 @@ Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geo
 
 <FunctionExamples
   name="rst_contour"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
+### rst_proximity
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **SciPy** (`scipy.ndimage.distance_transform_edt`). Distance to the nearest source pixel (`target_values`, or any non-zero pixel by default), in `GEO` (CRS units) or `PIXEL` units; pixels beyond `max_distance` → NoData −1.0. Single-band Float32.
+:::
+
+**Signature:** `rst_proximity(tile: Column, [targetValues: Column = null, distUnits: Column = lit("GEO"), maxDistance: Column = null]): Column` — Compute a Float32 raster where each pixel holds the distance to the nearest source pixel via `gdal.ComputeProximity`. `targetValues` is a comma-separated list of source-pixel values (e.g. `"1,2,3"`); `null` means any non-NoData pixel is a target. `distUnits` is `"GEO"` (CRS ground units, default) or `"PIXEL"`. `maxDistance` caps the output; pixels beyond it get the NoData sentinel `-1.0`.
+
+<FunctionExamples
+  name="rst_proximity"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"

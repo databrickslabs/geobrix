@@ -21,6 +21,7 @@ import rasterxTileopsLightCode from '!!raw-loader!../../tests/python/api/rasterx
 import rasterxAggregatorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_aggregators_python_light.py';
 import rasterxBandmathLightCode from '!!raw-loader!../../tests/python/api/rasterx_bandmath_python_light.py';
 import rasterxTerrainLightCode from '!!raw-loader!../../tests/python/api/rasterx_terrain_python_light.py';
+import rasterxTransformsLightCode from '!!raw-loader!../../tests/python/api/rasterx_transforms_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -1382,9 +1383,14 @@ Powered by **rasterio** + **h3**. Clips the raster to each overlapping H3 cell a
 
 Covering mode uses a **positive-area overlap** rule (shared by all three grids — `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`): a cell is emitted **iff its geometry has greater-than-zero area overlap** with the raster. A cell that merely touches the raster along a boundary edge or corner (zero pixel overlap — common on grid-aligned tiles where the raster edges land on cell boundaries) is **excluded**. A within-extent cell whose pixels are all NoData **is** emitted — NoData renders in place, it does not punch a gap into the mosaic. This rule is identical on the lightweight and heavyweight tiers, so covering-mode cell sets match exactly across tiers.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_tessellate_sql_example" outputConstant="rst_h3_tessellate_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_tessellate"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_quadbin_tessellate
 
@@ -1400,7 +1406,14 @@ Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, 
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_tessellate_sql_example" outputConstant="rst_quadbin_tessellate_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_tessellate"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_bng_tessellate
 
@@ -1418,7 +1431,14 @@ Natural fit for CV image-tiling workflows that require Ordnance Survey–scale c
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_tessellate_sql_example" outputConstant="rst_bng_tessellate_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_tessellate"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_maketiles
 
@@ -2126,9 +2146,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_rastertoworldcoord(tile: Column, pixelX: Column, pixelY: Column): Column` — Pixel to world coordinates as a struct with `.x` and `.y` fields.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_rastertoworldcoord_sql_example" outputConstant="rst_rastertoworldcoord_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_rastertoworldcoord"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_rastertoworldcoordx / rst_rastertoworldcoordy
 
@@ -2140,9 +2165,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_rastertoworldcoordx(tile: Column, pixelX: Column, pixelY: Column): Column`, `rst_rastertoworldcoordy(tile: Column, pixelX: Column, pixelY: Column): Column` — World X / Y coordinate of a pixel.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_rastertoworldcoord_sql_example" outputConstant="rst_rastertoworldcoord_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_rastertoworldcoordx"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_transform
 
@@ -2309,13 +2339,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_worldtorastercoord(tile: Column, worldX: Column, worldY: Column): Column` — World to pixel coordinates as a struct with `.x` and `.y` fields.
 
-**rst_worldtorastercoord** — full struct (pixel with `.x` and `.y`):
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoord_sql_example" outputConstant="rst_worldtorastercoord_sql_example_output" code={rasterxSqlCode} />
-
-**rst_worldtorastercoord** — multiple points (e.g. from a locations table):
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoord_multi_sql_example" outputConstant="rst_worldtorastercoord_multi_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_worldtorastercoord"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_worldtorastercoordx / rst_worldtorastercoordy
 
@@ -2327,13 +2358,14 @@ Powered by **rasterio**.
 
 **Signature:** `rst_worldtorastercoordx(tile: Column, worldX: Column, worldY: Column): Column`, `rst_worldtorastercoordy(tile: Column, worldX: Column, worldY: Column): Column` — Pixel column / row for a world coordinate.
 
-**rst_worldtorastercoordx** — pixel column only:
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoordx_sql_example" outputConstant="rst_worldtorastercoordx_sql_example_output" code={rasterxSqlCode} />
-
-**rst_worldtorastercoordy** — pixel row only:
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_worldtorastercoordy_sql_example" outputConstant="rst_worldtorastercoordy_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_worldtorastercoordx"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ---
 
@@ -2351,9 +2383,14 @@ Powered by **rasterio** (`rasterio.warp`). Uses rasterio's bundled GDAL build, w
 
 **Signature:** `rst_to_webmercator(tile: Column): Column` — Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by default. The returned tile carries `srid = 3857`.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_to_webmercator_sql_example" outputConstant="rst_to_webmercator_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_to_webmercator"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_tilexyz
 
@@ -2369,9 +2406,14 @@ Powered by **rio-tiler** + **morecantile**. Out-of-extent tiles return a transpa
 The output is a display web-map tile, not the source's raw bands. **PNG and WebP** are **RGBA** (4-band); **JPEG** is **RGB** (3-band, no alpha). The alpha channel is a binary transparency mask derived from the source's valid-data footprint, so a pixel that is NoData — whether outside the raster or an internal hole — renders **transparent**, and both the lightweight and heavyweight tiers agree on which pixels are transparent. Band mapping matches the lightweight tier: a single-band source becomes greyscale RGB (`R=G=B`), a two-band source uses band 1 as greyscale RGB and band 2 as the alpha channel, three bands map to R, G, B, an existing fourth band is treated as alpha, and five-or-more-band sources use the first three bands as RGB. Non-8-bit sources are contrast-rescaled to 8-bit per the `rescale` argument (default `"auto"`; see the `rescale` note above). WebP alpha requires GDAL WebP-alpha support in the runtime; where absent, WebP falls back to RGB.
 :::
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tilexyz_sql_example" outputConstant="rst_tilexyz_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_tilexyz"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ### rst_xyzpyramid
 
@@ -2383,9 +2425,14 @@ Powered by **rio-tiler** + **morecantile**. Streams one XYZ tile row per interse
 
 **Signature:** `rst_xyzpyramid(tile: Column, minZoom: Column, maxZoom: Column): Column` — Generator: explode a raster into one row per intersecting `(z, x, y)` tile across a zoom range, producing PNG bytes per tile. Use `LATERAL VIEW` to materialize the rows; the output struct exposes `z`, `x`, `y`, and `bytes`. Each tile is rendered by `rst_tilexyz`, so the per-tile PNG is display **RGBA** with the same band mapping and binary NoData alpha described above.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_xyzpyramid_sql_example" outputConstant="rst_xyzpyramid_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_xyzpyramid"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
+/>
 
 ---
 

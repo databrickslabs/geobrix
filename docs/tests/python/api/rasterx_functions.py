@@ -3015,3 +3015,326 @@ rst_dtmfromgeoms_python_heavy_example_output = """
 +-----------------------------------------------------------+
 (TIN-interpolated DTM over specified extent and pixel count)
 """
+
+
+# ============================================================================
+# Coordinate Transforms & Tiling (Heavy Tier)
+# ============================================================================
+
+
+def rst_rastertoworldcoord_python_heavy_example(spark):
+    """Convert pixel coordinates (col, row) to world coordinates (x, y)."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Pixel (100, 80) → world struct {x: <easting>, y: <northing>}
+    result = df.select(
+        rx.rst_rastertoworldcoord("tile", f.lit(100), f.lit(80)).alias("world_coord")
+    ).first()
+    return result["world_coord"]
+
+
+rst_rastertoworldcoord_python_heavy_example_output = """
++-------------------+
+|world_coord        |
++-------------------+
+|{500980.0, ...}    |
++-------------------+
+(struct with x: DOUBLE, y: DOUBLE)
+"""
+
+
+def rst_rastertoworldcoordx_python_heavy_example(spark):
+    """Convert pixel column to world X coordinate (easting)."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Pixel col=100 → easting
+    result = df.select(
+        rx.rst_rastertoworldcoordx("tile", f.lit(100), f.lit(80)).alias("easting")
+    ).first()
+    return result["easting"]
+
+
+rst_rastertoworldcoordx_python_heavy_example_output = """
++-------+
+|easting|
++-------+
+|500980 |
++-------+
+"""
+
+
+def rst_rastertoworldcoordy_python_heavy_example(spark):
+    """Convert pixel row to world Y coordinate (northing)."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Pixel row=80 → northing
+    result = df.select(
+        rx.rst_rastertoworldcoordy("tile", f.lit(100), f.lit(80)).alias("northing")
+    ).first()
+    return result["northing"]
+
+
+rst_rastertoworldcoordy_python_heavy_example_output = """
++--------+
+|northing|
++--------+
+|4599220 |
++--------+
+"""
+
+
+def rst_worldtorastercoord_python_heavy_example(spark):
+    """Convert world coordinates (x, y) to pixel coordinates (col, row)."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # World (2122955, -10791275) in the raster CRS → pixel (100, 80)
+    result = df.select(
+        rx.rst_worldtorastercoord("tile", f.lit(2122955.0), f.lit(-10791275.0)).alias(
+            "pixel_coord"
+        )
+    ).first()
+    return result["pixel_coord"]
+
+
+rst_worldtorastercoord_python_heavy_example_output = """
++-----------+
+|pixel_coord|
++-----------+
+|{5490, ...}|
++-----------+
+(struct with x: INT, y: INT)
+"""
+
+
+def rst_worldtorastercoordx_python_heavy_example(spark):
+    """Convert world X coordinate to pixel column."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # World (2122955, -10791275) → pixel column 100
+    result = df.select(
+        rx.rst_worldtorastercoordx("tile", f.lit(2122955.0), f.lit(-10791275.0)).alias(
+            "pixel_col"
+        )
+    ).first()
+    return result["pixel_col"]
+
+
+rst_worldtorastercoordx_python_heavy_example_output = """
++---------+
+|pixel_col|
++---------+
+|5490     |
++---------+
+"""
+
+
+def rst_worldtorastercoordy_python_heavy_example(spark):
+    """Convert world Y coordinate to pixel row."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # World (2122955, -10791275) → pixel row 80
+    result = df.select(
+        rx.rst_worldtorastercoordy("tile", f.lit(2122955.0), f.lit(-10791275.0)).alias(
+            "pixel_row"
+        )
+    ).first()
+    return result["pixel_row"]
+
+
+rst_worldtorastercoordy_python_heavy_example_output = """
++---------+
+|pixel_row|
++---------+
+|5490     |
++---------+
+"""
+
+
+def rst_to_webmercator_python_heavy_example(spark):
+    """Transform raster from its native CRS to Web Mercator (EPSG:3857)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Reproject to Web Mercator (default bilinear resampling)
+    result = df.select(rx.rst_to_webmercator("tile").alias("tile")).first()
+    return result["tile"]
+
+
+rst_to_webmercator_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+"""
+
+
+def rst_tilexyz_python_heavy_example(spark):
+    """Render a single Web-Mercator XYZ tile (z, x, y) as PNG bytes."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Render z=12, x=1234, y=1523 as a 256x256 PNG (rescale='none' keeps the raw
+    # dtype mapping; an off-footprint slippy tile renders transparent, never null).
+    result = df.select(
+        rx.rst_tilexyz(
+            "tile",
+            f.lit(12),
+            f.lit(1234),
+            f.lit(1523),
+            f.lit("PNG"),
+            f.lit(256),
+            f.lit("bilinear"),
+            f.lit("none"),
+        ).alias("png_bytes")
+    ).first()
+    return result["png_bytes"]
+
+
+rst_tilexyz_python_heavy_example_output = """
++----------+
+|png_bytes |
++----------+
+|[BINARY]  |
++----------+
+(PNG image bytes, 256×256 pixels)
+"""
+
+
+def rst_xyzpyramid_python_heavy_example(spark):
+    """Generate XYZ tiles across a zoom range."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Explode raster into PNG tiles for z=10..12 (returns array via LATERAL VIEW)
+    result = df.select(
+        rx.rst_xyzpyramid("tile", f.lit(10), f.lit(12)).alias("tile_array")
+    ).first()
+    return result["tile_array"]
+
+
+rst_xyzpyramid_python_heavy_example_output = """
++----------+
+|tile_array|
++----------+
+|[tile, ...|
++----------+
+(array of tile structs: [{z, x, y, bytes}, ...])
+"""
+
+
+def rst_h3_tessellate_python_heavy_example(spark):
+    """Tessellate raster into H3 hexagonal grid cells (resolution=7, ~1km)."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Partition into H3 cells (covering mode, returns array of structs)
+    result = df.select(rx.rst_h3_tessellate("tile", f.lit(7)).alias("h3_cells")).first()
+    return result["h3_cells"]
+
+
+rst_h3_tessellate_python_heavy_example_output = """
++---+
+|h3_|
++---+
+|[{ |
++---+
+(array of structs: [{cellid: LONG, raster: BINARY}, ...])
+"""
+
+
+def rst_bng_tessellate_python_heavy_example(spark):
+    """Tessellate raster into British National Grid cells (1km resolution)."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # rst_bng_tessellate is a generator (one row per BNG cell). The raster is
+    # warped to EPSG:27700 first, so a raster outside Great Britain (like this
+    # NYC-area sample) yields no rows — an empty result, not an error.
+    return df.select(
+        rx.rst_bng_tessellate("tile", f.lit(3)).alias("bng_cells")
+    ).collect()
+
+
+rst_bng_tessellate_python_heavy_example_output = """
++---+
+|bng|
++---+
+|[{ |
++---+
+(array of tile structs per BNG cell; raster rewarped to EPSG:27700)
+"""
+
+
+def rst_quadbin_tessellate_python_heavy_example(spark):
+    """Tessellate raster into CARTO quadbin grid cells (zoom 12)."""
+    from pyspark.sql import functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    # Partition into quadbin cells at zoom 12 (covering mode)
+    result = df.select(
+        rx.rst_quadbin_tessellate("tile", f.lit(12)).alias("qb_cells")
+    ).first()
+    return result["qb_cells"]
+
+
+rst_quadbin_tessellate_python_heavy_example_output = """
++---+
+|qb_|
++---+
+|[{ |
++---+
+(array of tile structs per quadbin cell, zoom 12)
+"""

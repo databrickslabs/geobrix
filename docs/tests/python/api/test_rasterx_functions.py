@@ -772,3 +772,98 @@ def test_rst_dtmfromgeoms_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_dtmfromgeoms_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_dtmfromgeoms")
+
+
+# ============================================================================
+# Coordinate Transforms & Tiling (Heavy)
+# ============================================================================
+
+
+def test_rst_rastertoworldcoord_python_heavy_example(spark):
+    """rst_rastertoworldcoord returns struct with x, y DOUBLE."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_rastertoworldcoord_python_heavy_example(spark)
+    assert result is not None
+    assert hasattr(result, "x") and hasattr(result, "y")
+    assert isinstance(result.x, float) and isinstance(result.y, float)
+
+
+def test_rst_rastertoworldcoordx_python_heavy_example(spark):
+    """rst_rastertoworldcoordx returns DOUBLE (easting)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_rastertoworldcoordx_python_heavy_example(spark)
+    assert isinstance(result, (int, float))
+
+
+def test_rst_rastertoworldcoordy_python_heavy_example(spark):
+    """rst_rastertoworldcoordy returns DOUBLE (northing)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_rastertoworldcoordy_python_heavy_example(spark)
+    assert isinstance(result, (int, float))
+
+
+def test_rst_worldtorastercoord_python_heavy_example(spark):
+    """rst_worldtorastercoord returns struct with x, y INT."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_worldtorastercoord_python_heavy_example(spark)
+    assert result is not None
+    assert hasattr(result, "x") and hasattr(result, "y")
+    assert isinstance(result.x, int) and isinstance(result.y, int)
+
+
+def test_rst_worldtorastercoordx_python_heavy_example(spark):
+    """rst_worldtorastercoordx returns INT (pixel col)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_worldtorastercoordx_python_heavy_example(spark)
+    assert isinstance(result, int)
+
+
+def test_rst_worldtorastercoordy_python_heavy_example(spark):
+    """rst_worldtorastercoordy returns INT (pixel row)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_worldtorastercoordy_python_heavy_example(spark)
+    assert isinstance(result, int)
+
+
+def test_rst_to_webmercator_python_heavy_example(spark):
+    """rst_to_webmercator returns a tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_to_webmercator_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_to_webmercator")
+
+
+def test_rst_tilexyz_python_heavy_example(spark):
+    """rst_tilexyz returns PNG image bytes (never null)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_tilexyz_python_heavy_example(spark)
+    assert result is not None
+    assert len(bytes(result)) > 0
+
+
+def test_rst_xyzpyramid_python_heavy_example(spark):
+    """rst_xyzpyramid returns an array (LATERAL VIEW generator)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_xyzpyramid_python_heavy_example(spark)
+    assert result is not None
+
+
+def test_rst_h3_tessellate_python_heavy_example(spark):
+    """rst_h3_tessellate returns an array of structs."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_h3_tessellate_python_heavy_example(spark)
+    assert result is not None
+
+
+def test_rst_bng_tessellate_python_heavy_example(spark):
+    """rst_bng_tessellate (generator) yields no rows for a non-GB raster."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_bng_tessellate_python_heavy_example(spark)
+    # NYC-area sample lies outside Great Britain → empty after warp to EPSG:27700.
+    assert isinstance(result, list) and len(result) == 0
+
+
+def test_rst_quadbin_tessellate_python_heavy_example(spark):
+    """rst_quadbin_tessellate returns an array of tile structs."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_quadbin_tessellate_python_heavy_example(spark)
+    assert result is not None

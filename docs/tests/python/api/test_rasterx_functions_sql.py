@@ -126,39 +126,26 @@ def dem_rasters_view(spark):
     (rst_slope, rst_aspect, rst_hillshade, rst_tri, rst_tpi, rst_roughness,
     rst_contour, rst_viewshed).
     """
+    from pyspark.sql import functions as F  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    try:
-        from _fixtures import dem_path  # noqa: PLC0415
+    from _fixtures import dem_path  # noqa: PLC0415
 
-        path = dem_path()
-        rasters = spark.read.format("gdal").load(path)
-        view_df = (
-            rasters.withColumnRenamed("source", "path")
-            if "source" in rasters.columns
-            else rasters
-        )
-        view_df.createOrReplaceTempView("dem_rasters")
-        yield
-        spark.catalog.dropTempView("dem_rasters")
-    except Exception:  # noqa: BLE001
-        from pyspark.sql.types import (
-            BinaryType,
-            StringType,
-            StructField,  # noqa: PLC0415
-            StructType,
-        )
-
-        schema = StructType(
-            [
-                StructField("path", StringType(), True),
-                StructField("tile", BinaryType(), True),
-            ]
-        )
-        spark.createDataFrame([], schema).createOrReplaceTempView("dem_rasters")
-        yield
-        spark.catalog.dropTempView("dem_rasters")
+    # Build the tile column with binaryFile + rst_fromcontent (same robust path
+    # as the `rasters` view) rather than the heavy `gdal` reader, whose
+    # registration state across the full suite can intermittently yield an empty
+    # view — which silently degraded `tile` to raw BINARY and made terrain SQL
+    # fail with a misleading RST_*.eval "wrong argument types" error.
+    path = str(dem_path())
+    binary_df = spark.read.format("binaryFile").load(path)
+    view_df = binary_df.select(
+        binary_df["path"].alias("path"),
+        rx.rst_fromcontent(binary_df["content"], F.lit("GTiff")).alias("tile"),
+    )
+    view_df.createOrReplaceTempView("dem_rasters")
+    yield
+    spark.catalog.dropTempView("dem_rasters")
 
 
 @pytest.fixture(scope="module")
@@ -487,13 +474,6 @@ def test_rst_worldtorastercoord_sql_example(spark, rasters_view):
     assert result.count() >= 0
 
 
-def test_rst_worldtorastercoord_multi_sql_example(spark, rasters_view):
-    """Test SQL world to raster coordinate example (multiple points)"""
-    sql = rasterx_functions_sql.rst_worldtorastercoord_multi_sql_example()
-    result = spark.sql(sql.strip())
-    assert result.count() >= 0
-
-
 def test_rst_worldtorastercoordx_sql_example(spark, rasters_view):
     """Test SQL world to raster X coordinate example"""
     sql = """
@@ -759,7 +739,9 @@ def test_rst_color_relief_sql_example(spark, rasters_view, tmp_path):
         ),
         (
             "rst_sample_sql_example",
-            "SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS vals FROM rasters",
+            # Point inside the single-band `rasters` fixture extent, tagged with
+            # its own CRS so no reprojection moves it out of bounds.
+            "SELECT gbx_rst_sample(tile, 'SRID=32618;POINT(2122950 -10791270)') AS vals FROM rasters",
         ),
         (
             "rst_setsrid_sql_example",

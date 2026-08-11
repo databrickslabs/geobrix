@@ -2156,4 +2156,256 @@ result.show(truncate = false)
 (TIN-interpolated DTM over specified extent and pixel count)
 """.trim
 
+  // ========================================================================
+  // Coordinate Transforms & Tiling
+  // ========================================================================
+
+  val rst_rastertoworldcoord_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_rastertoworldcoord(col("tile"), lit(100), lit(80)).alias("world_coord"))
+result.show(truncate = false)
+""".trim
+
+  val rst_rastertoworldcoord_scala_example_output: String =
+    """
++-------------------+
+|world_coord        |
++-------------------+
+|{500980.0, ...}    |
++-------------------+
+(struct with x: DOUBLE, y: DOUBLE)
+""".trim
+
+  val rst_rastertoworldcoordx_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_rastertoworldcoordx(col("tile"), lit(100), lit(80)).alias("easting"))
+result.show(truncate = false)
+""".trim
+
+  val rst_rastertoworldcoordx_scala_example_output: String =
+    """
++-------+
+|easting|
++-------+
+|500980 |
++-------+
+"""
+
+  val rst_rastertoworldcoordy_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_rastertoworldcoordy(col("tile"), lit(100), lit(80)).alias("northing"))
+result.show(truncate = false)
+""".trim
+
+  val rst_rastertoworldcoordy_scala_example_output: String =
+    """
++--------+
+|northing|
++--------+
+|4599220 |
++--------+
+"""
+
+  val rst_worldtorastercoord_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_worldtorastercoord(col("tile"), lit(554880), lit(4545120)).alias("pixel_coord"))
+result.show(truncate = false)
+""".trim
+
+  val rst_worldtorastercoord_scala_example_output: String =
+    """
++-----------+
+|pixel_coord|
++-----------+
+|{5490, ...}|
++-----------+
+(struct with x: INT, y: INT)
+"""
+
+  val rst_worldtorastercoordx_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_worldtorastercoordx(col("tile"), lit(554880), lit(4545120)).alias("pixel_col"))
+result.show(truncate = false)
+""".trim
+
+  val rst_worldtorastercoordx_scala_example_output: String =
+    """
++---------+
+|pixel_col|
++---------+
+|5490     |
++---------+
+"""
+
+  val rst_worldtorastercoordy_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_worldtorastercoordy(col("tile"), lit(554880), lit(4545120)).alias("pixel_row"))
+result.show(truncate = false)
+""".trim
+
+  val rst_worldtorastercoordy_scala_example_output: String =
+    """
++---------+
+|pixel_row|
++---------+
+|5490     |
++---------+
+"""
+
+  val rst_to_webmercator_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_to_webmercator(col("tile")).alias("tile"))
+result.show(truncate = false)
+""".trim
+
+  val rst_to_webmercator_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(reprojected to Web Mercator, EPSG:3857)
+""".trim
+
+  val rst_tilexyz_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_tilexyz(col("tile"), lit(12), lit(1234), lit(1523)).alias("png_bytes"))
+result.show(truncate = false)
+""".trim
+
+  val rst_tilexyz_scala_example_output: String =
+    """
++----------+
+|png_bytes |
++----------+
+|[BINARY]  |
++----------+
+(PNG image bytes, 256×256 pixels)
+"""
+
+  val rst_xyzpyramid_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_xyzpyramid(col("tile"), lit(10), lit(12)).alias("tile_array"))
+result.show(truncate = false)
+""".trim
+
+  val rst_xyzpyramid_scala_example_output: String =
+    """
++----------+
+|tile_array|
++----------+
+|[tile, ...|
++----------+
+(array of tile structs: [{z, x, y, bytes}, ...])
+"""
+
+  val rst_h3_tessellate_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_h3_tessellate(col("tile"), lit(7)).alias("h3_cells"))
+result.show(truncate = false)
+""".trim
+
+  val rst_h3_tessellate_scala_example_output: String =
+    """
++---+
+|h3_|
++---+
+|[{ |
++---+
+(array of structs: [{cellid: LONG, raster: BINARY}, ...])
+"""
+
+  val rst_bng_tessellate_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_bng_tessellate(col("tile"), lit(3)).alias("bng_cells"))
+result.show(truncate = false)
+""".trim
+
+  val rst_bng_tessellate_scala_example_output: String =
+    """
++---+
+|bng|
++---+
+|[{ |
++---+
+(array of tile structs per BNG cell; raster rewarped to EPSG:27700)
+"""
+
+  val rst_quadbin_tessellate_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val result = raster.select(rx.rst_quadbin_tessellate(col("tile"), lit(12)).alias("qb_cells"))
+result.show(truncate = false)
+""".trim
+
+  val rst_quadbin_tessellate_scala_example_output: String =
+    """
++---+
+|qb_|
++---+
+|[{ |
++---+
+(array of tile structs per quadbin cell, zoom 12)
+"""
+
 }

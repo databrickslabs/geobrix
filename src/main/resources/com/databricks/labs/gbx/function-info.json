@@ -121,7 +121,10 @@
       "examples": "Examples:\n      > SELECT r.path, g.tile FROM rasters r LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'covering') g AS tile;",
       "usage_args": "tile, resolution, [mode]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_boundingbox": {
@@ -462,7 +465,10 @@
       "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;",
       "usage_args": "tile, resolution, [mode]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_height": {
@@ -769,7 +775,10 @@
       "examples": "Examples:\n      > SELECT r.path, g.tile FROM rasters r LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'covering') g AS tile;",
       "usage_args": "tile, resolution, [mode]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_rasterize": {
@@ -790,24 +799,33 @@
       ]
     },
     "gbx_rst_rastertoworldcoord": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_rastertoworldcoord(tile, 100, 200) as coords, gbx_rst_rastertoworldcoord(tile, 100, 200).x as longitude, gbx_rst_rastertoworldcoord(tile, 100, 200).y as latitude FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoord(tile, 100, 80) as world_coord, gbx_rst_rastertoworldcoord(tile, 100, 80).x as easting, gbx_rst_rastertoworldcoord(tile, 100, 80).y as northing FROM rasters;",
       "usage_args": "tile, x, y",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_rastertoworldcoordx": {
-      "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoordx(tile, 100, 200) as easting FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoordx(tile, 100, 80) as easting FROM rasters;",
       "usage_args": "tile, x, y",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_rastertoworldcoordy": {
-      "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoordy(tile, 100, 200) as northing FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_rastertoworldcoordy(tile, 100, 80) as northing FROM rasters;",
       "usage_args": "tile, x, y",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_resample": {
@@ -1008,14 +1026,20 @@
       "examples": "Examples:\n      > SELECT path, gbx_rst_tilexyz(tile, 10, 512, 512, 'PNG', 256, 'bilinear', 'auto') as tile_png FROM rasters;",
       "usage_args": "tile, z, x, y, [format], [size], [resampling], [rescale]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_to_webmercator": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_to_webmercator(tile) as web_tile, gbx_rst_srid(gbx_rst_to_webmercator(tile)) as new_srid FROM rasters;",
       "usage_args": "tile, [resampling]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_tooverlappingtiles": {
@@ -1136,31 +1160,43 @@
       ]
     },
     "gbx_rst_worldtorastercoord": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_worldtorastercoord(tile, -122.4194, 37.7749) as pixel, gbx_rst_worldtorastercoord(tile, -122.4194, 37.7749).x as col, gbx_rst_worldtorastercoord(tile, -122.4194, 37.7749).y as row FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0) as pixel_coord, gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0).x as pixel_col, gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0).y as pixel_row FROM rasters;",
       "usage_args": "tile, x, y",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_worldtorastercoordx": {
-      "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoordx(tile, -122.4194, 37.7749) as pixel_col FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoordx(tile, 2122955.0, -10791275.0) as pixel_col FROM rasters;",
       "usage_args": "tile, x, y",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_worldtorastercoordy": {
-      "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoordy(tile, -122.4194, 37.7749) as pixel_row FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_worldtorastercoordy(tile, 2122955.0, -10791275.0) as pixel_row FROM rasters;",
       "usage_args": "tile, x, y",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_xyzpyramid": {
       "examples": "Examples:\n      > SELECT path, t.tile.z as z, t.tile.x as x, t.tile.y as y, t.tile.bytes as png_bytes FROM rasters LATERAL VIEW gbx_rst_xyzpyramid(tile, 4, 6) AS t;",
       "usage_args": "tile, min_z, max_z, [format], [size], [resampling], [rescale]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "_package_rasterx_h3": "--- rasterx_h3 ---",

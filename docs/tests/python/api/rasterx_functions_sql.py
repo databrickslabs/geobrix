@@ -958,20 +958,19 @@ def rst_rastertoworldcoord_sql_example():
     """Convert pixel coordinates to world coordinates"""
     return """
 SELECT
-    path,
-    gbx_rst_rastertoworldcoord(tile, 100, 200) as coords,
-    gbx_rst_rastertoworldcoord(tile, 100, 200).x as longitude,
-    gbx_rst_rastertoworldcoord(tile, 100, 200).y as latitude
+    gbx_rst_rastertoworldcoord(tile, 100, 80) as world_coord,
+    gbx_rst_rastertoworldcoord(tile, 100, 80).x as easting,
+    gbx_rst_rastertoworldcoord(tile, 100, 80).y as northing
 FROM rasters;
 """
 
 
 rst_rastertoworldcoord_sql_example_output = """
-+----+----------+---------+--------+
-|path|coords    |longitude|latitude|
-+----+----------+---------+--------+
-|... |POINT(...)|-74.0    |40.5    |
-+----+----------+---------+--------+
++------------------+-------+--------+
+|world_coord       |easting|northing|
++------------------+-------+--------+
+|{500980.0, ...}   |500980 |4599220 |
++------------------+-------+--------+
 """
 
 
@@ -979,7 +978,7 @@ def rst_rastertoworldcoordx_sql_example():
     """Convert pixel X to world X coordinate"""
     return """
 SELECT
-    gbx_rst_rastertoworldcoordx(tile, 100, 200) as easting
+    gbx_rst_rastertoworldcoordx(tile, 100, 80) as easting
 FROM rasters;
 """
 
@@ -988,7 +987,7 @@ def rst_rastertoworldcoordy_sql_example():
     """Convert pixel Y to world Y coordinate"""
     return """
 SELECT
-    gbx_rst_rastertoworldcoordy(tile, 100, 200) as northing
+    gbx_rst_rastertoworldcoordy(tile, 100, 80) as northing
 FROM rasters;
 """
 
@@ -996,29 +995,12 @@ FROM rasters;
 def rst_worldtorastercoord_sql_example():
     """Convert world coordinates to pixel coordinates (single location)"""
     return """
--- Find pixel coordinates for a specific location
+-- Find pixel coordinates for a specific location (center of raster)
 SELECT
-    path,
-    gbx_rst_worldtorastercoord(tile, -122.4194, 37.7749) as pixel,
-    gbx_rst_worldtorastercoord(tile, -122.4194, 37.7749).x as col,
-    gbx_rst_worldtorastercoord(tile, -122.4194, 37.7749).y as row
+    gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0) as pixel_coord,
+    gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0).x as pixel_col,
+    gbx_rst_worldtorastercoord(tile, 2122955.0, -10791275.0).y as pixel_row
 FROM rasters;
-"""
-
-
-def rst_worldtorastercoord_multi_sql_example():
-    """Sample raster at multiple world coordinates"""
-    return """
--- Sample raster at multiple points
-WITH locations AS (
-    SELECT -122.4194 as lon, 37.7749 as lat UNION ALL
-    SELECT -122.4183, 37.7745
-)
-SELECT
-    l.lat,
-    l.lon,
-    gbx_rst_worldtorastercoord(r.tile, l.lon, l.lat) as pixel
-FROM rasters r, locations l;
 """
 
 
@@ -1026,7 +1008,7 @@ def rst_worldtorastercoordx_sql_example():
     """Convert world X to pixel X coordinate"""
     return """
 SELECT
-    gbx_rst_worldtorastercoordx(tile, -122.4194, 37.7749) as pixel_col
+    gbx_rst_worldtorastercoordx(tile, 2122955.0, -10791275.0) as pixel_col
 FROM rasters;
 """
 
@@ -1035,27 +1017,17 @@ def rst_worldtorastercoordy_sql_example():
     """Convert world Y to pixel Y coordinate"""
     return """
 SELECT
-    gbx_rst_worldtorastercoordy(tile, -122.4194, 37.7749) as pixel_row
+    gbx_rst_worldtorastercoordy(tile, 2122955.0, -10791275.0) as pixel_row
 FROM rasters;
 """
 
 
 rst_worldtorastercoord_sql_example_output = """
-+----+-----+---+---+
-|path|pixel|col|row|
-+----+-----+---+---+
-|... |...  |100|200|
-+----+-----+---+---+
-"""
-
-
-rst_worldtorastercoord_multi_sql_example_output = """
-+-------+---------+-----+
-|lat    |lon      |pixel|
-+-------+---------+-----+
-|37.7749|-122.4194|...  |
-|37.7745|-122.4183|...  |
-+-------+---------+-----+
++----------+---------+---------+
+|pixel_coord|pixel_col|pixel_row|
++----------+---------+---------+
+|{5490, ...}|5490     |5490     |
++----------+---------+---------+
 """
 
 
@@ -1063,7 +1035,7 @@ rst_worldtorastercoordx_sql_example_output = """
 +---------+
 |pixel_col|
 +---------+
-|100      |
+|5490     |
 +---------+
 """
 
@@ -1072,7 +1044,7 @@ rst_worldtorastercoordy_sql_example_output = """
 +---------+
 |pixel_row|
 +---------+
-|200      |
+|5490     |
 +---------+
 """
 

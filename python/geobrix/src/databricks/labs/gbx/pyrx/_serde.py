@@ -11,6 +11,11 @@ struct defined in ``pyrx.core.virtual_tile.V2_TILE_SCHEMA``:
 A materialized tile carries raster bytes (``raster`` is not null); the provenance
 fields (``path``, ``window``, ``clip_polygon``, ``clip_crs``, ``crs``) are null for
 a plain materialized tile. The ``build_tile`` helper now emits the full v2 struct.
+
+``TILE_SCHEMA`` below is the legacy 3-field struct, retained **only as a
+read/load INPUT schema** for the reader/writer v1 path (GeoBrix reads/loads v1 OR
+v2 tiles, and OUTPUTS only v2). No tile-returning function emits it — outputs are
+always ``V2_TILE_SCHEMA`` (enforced by G1, test_v2_tile_output_invariant.py).
 """
 
 from contextlib import contextmanager
@@ -27,6 +32,17 @@ from pyspark.sql.types import (
 from rasterio.io import DatasetReader, MemoryFile
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
+
+# Legacy 3-field tile struct — INPUT-ONLY (reader/writer v1 read/load path).
+# NEVER a function output schema: every tile-returning UDF/UDTF emits
+# V2_TILE_SCHEMA. See ds/raster.py::reader_schema (v1) vs reader_schema_v2.
+TILE_SCHEMA = StructType(
+    [
+        StructField("cellid", LongType(), nullable=False),
+        StructField("raster", BinaryType(), nullable=True),
+        StructField("metadata", MapType(StringType(), StringType()), nullable=True),
+    ]
+)
 
 
 @contextmanager

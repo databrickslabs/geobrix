@@ -1410,13 +1410,15 @@ def run_spark_path(
     # stable. Tiny dict (basename -> cellid), safe to capture in the UDF closure.
     _cellid_by_base = {Path(te.path).name: int(te.cellid) for te in tiles}
 
-    @F.udf(returnType=_serde.TILE_SCHEMA)
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    @F.udf(returnType=V2_TILE_SCHEMA)
     def _to_tile(path, content):
         import os
 
         cid = _cellid_by_base.get(os.path.basename(path), 0)
-        d = _serde.build_tile(bytes(content), "GTiff", cid)
-        return (d["cellid"], d["raster"], d["metadata"])
+        # build_tile emits the full 8-field v2 tile dict; return it directly.
+        return _serde.build_tile(bytes(content), "GTiff", cid)
 
     raw = spark.read.format("binaryFile").load(paths)
     # binaryFile partitions by maxPartitionBytes (packs many small tiles per partition);

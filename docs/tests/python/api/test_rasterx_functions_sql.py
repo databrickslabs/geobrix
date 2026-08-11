@@ -3,7 +3,9 @@ Tests for RasterX SQL examples.
 
 Ensures all SQL examples in documentation are executable and produce valid results.
 """
+
 import pytest
+
 # Sample data base path (must match conftest.SAMPLE_DATA_BASE for doc test env)
 from path_config import SAMPLE_DATA_BASE
 
@@ -31,6 +33,7 @@ def sample_rasters(spark):
     elevation = f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.tif"
 
     import os
+
     for path in [sentinel2, elevation]:
         if not os.path.exists(path):
             continue
@@ -48,12 +51,14 @@ def sample_rasters(spark):
             continue
 
     # Fallback: empty DataFrame (tests that need data will fail with a clear message)
-    from pyspark.sql.types import (BinaryType, StringType, StructField,
-                                   StructType)
-    schema = StructType([
-        StructField("path", StringType(), True),
-        StructField("tile", BinaryType(), True),
-    ])
+    from pyspark.sql.types import BinaryType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("path", StringType(), True),
+            StructField("tile", BinaryType(), True),
+        ]
+    )
     print("ℹ️  sample_rasters: no candidates available — using empty DataFrame")
     return spark.createDataFrame([], schema)
 
@@ -62,6 +67,7 @@ def sample_rasters(spark):
 def rasters_view(spark, sample_rasters):
     """Create 'rasters' temp view for SQL examples from the canonical single-band fixture."""
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     sample_rasters.createOrReplaceTempView("rasters")
     yield
@@ -81,6 +87,7 @@ def multiband_rasters_view(spark):
     rx.register(spark)
     try:
         from _fixtures import multiband_path  # noqa: PLC0415
+
         path = str(multiband_path())
         rasters = spark.read.format("gdal").load(path)
         view_df = (
@@ -93,15 +100,65 @@ def multiband_rasters_view(spark):
         spark.catalog.dropTempView("multiband_rasters")
     except Exception:  # noqa: BLE001
         # If fixture not available, create an empty DF so tests can skip
-        from pyspark.sql.types import (BinaryType, StringType, StructField,  # noqa: PLC0415
-                                       StructType)
-        schema = StructType([
-            StructField("path", StringType(), True),
-            StructField("tile", BinaryType(), True),
-        ])
+        from pyspark.sql.types import (
+            BinaryType,
+            StringType,
+            StructField,  # noqa: PLC0415
+            StructType,
+        )
+
+        schema = StructType(
+            [
+                StructField("path", StringType(), True),
+                StructField("tile", BinaryType(), True),
+            ]
+        )
         spark.createDataFrame([], schema).createOrReplaceTempView("multiband_rasters")
         yield
         spark.catalog.dropTempView("multiband_rasters")
+
+
+@pytest.fixture(scope="module")
+def dem_rasters_view(spark):
+    """Create dem_rasters temp view from the DEM (SRTM) fixture.
+
+    This view is used by SQL examples for terrain-analysis functions
+    (rst_slope, rst_aspect, rst_hillshade, rst_tri, rst_tpi, rst_roughness,
+    rst_contour, rst_viewshed).
+    """
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    rx.register(spark)
+    try:
+        from _fixtures import dem_path  # noqa: PLC0415
+
+        path = dem_path()
+        rasters = spark.read.format("gdal").load(path)
+        view_df = (
+            rasters.withColumnRenamed("source", "path")
+            if "source" in rasters.columns
+            else rasters
+        )
+        view_df.createOrReplaceTempView("dem_rasters")
+        yield
+        spark.catalog.dropTempView("dem_rasters")
+    except Exception:  # noqa: BLE001
+        from pyspark.sql.types import (
+            BinaryType,
+            StringType,
+            StructField,  # noqa: PLC0415
+            StructType,
+        )
+
+        schema = StructType(
+            [
+                StructField("path", StringType(), True),
+                StructField("tile", BinaryType(), True),
+            ]
+        )
+        spark.createDataFrame([], schema).createOrReplaceTempView("dem_rasters")
+        yield
+        spark.catalog.dropTempView("dem_rasters")
 
 
 @pytest.fixture(scope="module")
@@ -115,6 +172,7 @@ def netcdf_rasters_view(spark):
     rx.register(spark)
     try:
         from _fixtures import netcdf_path  # noqa: PLC0415
+
         path = str(netcdf_path())
         rasters = spark.read.format("netcdf_gdal").load(path)
         view_df = (
@@ -126,12 +184,19 @@ def netcdf_rasters_view(spark):
         yield
         spark.catalog.dropTempView("netcdf_rasters")
     except Exception:  # noqa: BLE001
-        from pyspark.sql.types import (BinaryType, StringType, StructField,  # noqa: PLC0415
-                                       StructType)
-        schema = StructType([
-            StructField("path", StringType(), True),
-            StructField("tile", BinaryType(), True),
-        ])
+        from pyspark.sql.types import (
+            BinaryType,
+            StringType,
+            StructField,  # noqa: PLC0415
+            StructType,
+        )
+
+        schema = StructType(
+            [
+                StructField("path", StringType(), True),
+                StructField("tile", BinaryType(), True),
+            ]
+        )
         spark.createDataFrame([], schema).createOrReplaceTempView("netcdf_rasters")
         yield
         spark.catalog.dropTempView("netcdf_rasters")
@@ -140,6 +205,7 @@ def netcdf_rasters_view(spark):
 # ============================================================================
 # Common setup (doc constant)
 # ============================================================================
+
 
 def test_rasterx_sql_setup_constant():
     """Doc constant RASTERX_SQL_SETUP exists and creates rasters view."""
@@ -152,6 +218,7 @@ def test_rasterx_sql_setup_constant():
 def test_rasterx_sql_setup_executable(spark, sample_rasters):
     """Running the SQL in RASTERX_SQL_SETUP creates view rasters (requires sample data path)."""
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     sql = rasterx_functions_sql.RASTERX_SQL_SETUP.strip()
     spark.sql(sql)
@@ -163,6 +230,7 @@ def test_rasterx_sql_setup_executable(spark, sample_rasters):
 # ============================================================================
 # Accessor Functions
 # ============================================================================
+
 
 def test_rst_boundingbox_sql_example(spark, sample_rasters, rasters_view):
     """Test SQL bounding box example"""
@@ -303,7 +371,9 @@ def test_rst_avg_sql_example(spark, multiband_rasters_view):
     assert result.count() > 0
     assert "band_averages" in result.columns
     averages = result.first()["band_averages"]
-    assert averages is not None, "band_averages should not be None for multiband fixture"
+    assert (
+        averages is not None
+    ), "band_averages should not be None for multiband fixture"
     assert len(averages) == 3, f"Expected 3 bands, got {len(averages)}"
 
 
@@ -318,7 +388,9 @@ def test_rst_min_max_sql_example(spark, multiband_rasters_view):
     """
     result = spark.sql(sql)
     assert result.count() > 0
-    assert all(col in result.columns for col in ["min_value", "max_value", "value_range"])
+    assert all(
+        col in result.columns for col in ["min_value", "max_value", "value_range"]
+    )
     first = result.first()
     assert first["min_value"] is not None, "min_value should not be None"
     assert first["max_value"] is not None, "max_value should not be None"
@@ -355,7 +427,11 @@ def test_rst_type_sql_example(spark, multiband_rasters_view):
     assert result.count() > 0
     assert "band_types" in result.columns
     first = result.first()["band_types"]
-    assert first == ["UInt16", "UInt16", "UInt16"], f"Expected all UInt16, got {first!r}"
+    assert first == [
+        "UInt16",
+        "UInt16",
+        "UInt16",
+    ], f"Expected all UInt16, got {first!r}"
 
 
 def test_rst_pixelsize_sql_example(spark, rasters_view):
@@ -376,6 +452,7 @@ def test_rst_getnodata_sql_example(spark, rasters_view):
 # ============================================================================
 # Coordinate Transformation
 # ============================================================================
+
 
 def test_rst_rastertoworldcoord_sql_example(spark, rasters_view):
     """Test SQL raster to world coordinate example"""
@@ -445,6 +522,7 @@ def test_rst_worldtorastercoordy_sql_example(spark, rasters_view):
 # Validation Functions
 # ============================================================================
 
+
 def test_rst_isempty_sql_example(spark, multiband_rasters_view):
     """Test SQL is empty example (uses multiband fixture — should return false)."""
     sql = rasterx_functions_sql.rst_isempty_sql_example().strip()
@@ -469,6 +547,7 @@ def test_rst_tryopen_sql_example(spark, multiband_rasters_view):
 # Advanced Operations
 # ============================================================================
 
+
 def test_rst_initnodata_sql_example(spark, rasters_view):
     """Test SQL init NoData example"""
     sql = rasterx_functions_sql.rst_initnodata_sql_example()
@@ -486,6 +565,7 @@ def test_rst_updatetype_sql_example(spark, rasters_view):
 # ============================================================================
 # Generator Functions
 # ============================================================================
+
 
 def test_rst_maketiles_sql_example(spark, rasters_view):
     """Test SQL make tiles example. Generator returns struct in SQL; use without explode."""
@@ -546,6 +626,7 @@ def test_rst_separatebands_sql_example(spark, rasters_view):
 def test_rst_rasterize_sql_example(spark):
     """rst_rasterize returns a non-null tile struct for the example burn."""
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     sql = rasterx_functions_sql.rst_rasterize_sql_example()
     result = spark.sql(sql).collect()
@@ -556,6 +637,7 @@ def test_rst_rasterize_sql_example(spark):
 def test_rst_polygonize_sql_example(spark):
     """Round-trip rasterize->polygonize returns >=1 feature with the burn value."""
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     sql = rasterx_functions_sql.rst_polygonize_sql_example()
     result = spark.sql(sql).collect()
@@ -570,20 +652,26 @@ def test_rst_polygonize_sql_example(spark):
 # ============================================================================
 
 
-@pytest.mark.parametrize("example_attr", [
-    "rst_slope_sql_example",
-    "rst_aspect_sql_example",
-    "rst_hillshade_sql_example",
-    "rst_tri_sql_example",
-    "rst_tpi_sql_example",
-    "rst_roughness_sql_example",
-])
-def test_dem_processing_sql_example(spark, rasters_view, example_attr):
-    """Each Wave 8a DEM-processing example returns a non-null tile."""
+@pytest.mark.parametrize(
+    "example_attr",
+    [
+        "rst_slope_sql_example",
+        "rst_aspect_sql_example",
+        "rst_hillshade_sql_example",
+        "rst_tri_sql_example",
+        "rst_tpi_sql_example",
+        "rst_roughness_sql_example",
+        "rst_color_relief_sql_example",
+        "rst_contour_sql_example",
+        "rst_viewshed_sql_example",
+    ],
+)
+def test_dem_processing_sql_example(spark, dem_rasters_view, example_attr):
+    """Each DEM-processing terrain example returns non-null result."""
     sql = getattr(rasterx_functions_sql, example_attr)()
     result = spark.sql(sql).collect()
     assert len(result) >= 1
-    # The output column varies (slope, aspect, hillshade, tri, tpi, roughness).
+    # The output column varies (slope, aspect, hillshade, tri, tpi, roughness, rgba, contours, vs).
     out_col = [c for c in result[0].asDict().keys()][0]
     assert result[0][out_col] is not None
 
@@ -593,27 +681,41 @@ def test_dem_processing_sql_example(spark, rasters_view, example_attr):
 # ============================================================================
 
 
-@pytest.mark.parametrize("example_attr,fallback_sql", [
-    # Each docs example references multi-band indices (1, 2, 3). The shared
-    # `rasters` view is single-band, so we run a fallback SQL with all band
-    # indices = 1 to exercise the JVM round-trip without needing a multi-band
-    # raster. The doc-example string is still validated for shape (asserted
-    # below).
-    ("rst_evi_sql_example", "SELECT gbx_rst_evi(tile, 1, 1, 1) AS evi FROM rasters"),
-    ("rst_savi_sql_example", "SELECT gbx_rst_savi(tile, 1, 1, 0.5) AS savi FROM rasters"),
-    ("rst_ndwi_sql_example", "SELECT gbx_rst_ndwi(tile, 1, 1) AS ndwi FROM rasters"),
-    ("rst_nbr_sql_example", "SELECT gbx_rst_nbr(tile, 1, 1) AS nbr FROM rasters"),
-    ("rst_index_sql_example",
-     "SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 1)) AS ndvi FROM rasters"),
-])
+@pytest.mark.parametrize(
+    "example_attr,fallback_sql",
+    [
+        # Each docs example references multi-band indices (1, 2, 3). The shared
+        # `rasters` view is single-band, so we run a fallback SQL with all band
+        # indices = 1 to exercise the JVM round-trip without needing a multi-band
+        # raster. The doc-example string is still validated for shape (asserted
+        # below).
+        (
+            "rst_evi_sql_example",
+            "SELECT gbx_rst_evi(tile, 1, 1, 1) AS evi FROM rasters",
+        ),
+        (
+            "rst_savi_sql_example",
+            "SELECT gbx_rst_savi(tile, 1, 1, 0.5) AS savi FROM rasters",
+        ),
+        (
+            "rst_ndwi_sql_example",
+            "SELECT gbx_rst_ndwi(tile, 1, 1) AS ndwi FROM rasters",
+        ),
+        ("rst_nbr_sql_example", "SELECT gbx_rst_nbr(tile, 1, 1) AS nbr FROM rasters"),
+        (
+            "rst_index_sql_example",
+            "SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 1)) AS ndvi FROM rasters",
+        ),
+    ],
+)
 def test_spectral_indices_sql_example(spark, rasters_view, example_attr, fallback_sql):
     """Each Wave 8b spectral-index example string exists & executes to non-null tile."""
     sql_template = getattr(rasterx_functions_sql, example_attr)()
     # The doc string should reference the SQL function name.
     expected_fn = example_attr.replace("_sql_example", "").replace("_", "_")
-    assert f"gbx_{expected_fn}" in sql_template, (
-        f"docs example {example_attr} should mention gbx_{expected_fn}"
-    )
+    assert (
+        f"gbx_{expected_fn}" in sql_template
+    ), f"docs example {example_attr} should mention gbx_{expected_fn}"
     result = spark.sql(fallback_sql).collect()
     assert len(result) >= 1
     out_col = [c for c in result[0].asDict().keys()][0]
@@ -644,37 +746,55 @@ def test_rst_color_relief_sql_example(spark, rasters_view, tmp_path):
 # ============================================================================
 
 
-@pytest.mark.parametrize("example_attr,fallback_sql", [
-    # fillnodata, threshold, buildoverviews, band, setsrid roundtrips on the
-    # shared single-band `rasters` view. histogram returns a MAP and sample
-    # returns an ARRAY<DOUBLE>; their fallback SQL pins types explicitly so
-    # the JVM bindings fire even if doc string formatting varies.
-    ("rst_fillnodata_sql_example",
-     "SELECT gbx_rst_fillnodata(tile, 100.0, 0) AS filled FROM rasters"),
-    ("rst_sample_sql_example",
-     "SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS vals FROM rasters"),
-    ("rst_setsrid_sql_example",
-     "SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters"),
-    ("rst_setcrs_sql_example",
-     "SELECT gbx_rst_setcrs(tile, 'EPSG:3857') AS tagged FROM rasters"),
-    ("rst_transformcrs_sql_example",
-     "SELECT gbx_rst_transformcrs(tile, 'EPSG:3857') AS reprojected FROM rasters"),
-    ("rst_histogram_sql_example",
-     "SELECT gbx_rst_histogram(tile, 16, cast(0 as double), cast(1000 as double), false) AS hist FROM rasters"),
-    ("rst_threshold_sql_example",
-     "SELECT gbx_rst_threshold(tile, '>', 100.0) AS mask FROM rasters"),
-    ("rst_buildoverviews_sql_example",
-     "SELECT gbx_rst_buildoverviews(tile, array(2, 4), 'average') AS withovr FROM rasters"),
-    ("rst_band_sql_example",
-     "SELECT gbx_rst_band(tile, 1) AS b1 FROM rasters"),
-])
+@pytest.mark.parametrize(
+    "example_attr,fallback_sql",
+    [
+        # fillnodata, threshold, buildoverviews, band, setsrid roundtrips on the
+        # shared single-band `rasters` view. histogram returns a MAP and sample
+        # returns an ARRAY<DOUBLE>; their fallback SQL pins types explicitly so
+        # the JVM bindings fire even if doc string formatting varies.
+        (
+            "rst_fillnodata_sql_example",
+            "SELECT gbx_rst_fillnodata(tile, 100.0, 0) AS filled FROM rasters",
+        ),
+        (
+            "rst_sample_sql_example",
+            "SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS vals FROM rasters",
+        ),
+        (
+            "rst_setsrid_sql_example",
+            "SELECT gbx_rst_setsrid(tile, 4326) AS tagged FROM rasters",
+        ),
+        (
+            "rst_setcrs_sql_example",
+            "SELECT gbx_rst_setcrs(tile, 'EPSG:3857') AS tagged FROM rasters",
+        ),
+        (
+            "rst_transformcrs_sql_example",
+            "SELECT gbx_rst_transformcrs(tile, 'EPSG:3857') AS reprojected FROM rasters",
+        ),
+        (
+            "rst_histogram_sql_example",
+            "SELECT gbx_rst_histogram(tile, 16, cast(0 as double), cast(1000 as double), false) AS hist FROM rasters",
+        ),
+        (
+            "rst_threshold_sql_example",
+            "SELECT gbx_rst_threshold(tile, '>', 100.0) AS mask FROM rasters",
+        ),
+        (
+            "rst_buildoverviews_sql_example",
+            "SELECT gbx_rst_buildoverviews(tile, array(2, 4), 'average') AS withovr FROM rasters",
+        ),
+        ("rst_band_sql_example", "SELECT gbx_rst_band(tile, 1) AS b1 FROM rasters"),
+    ],
+)
 def test_pixel_ops_sql_example(spark, rasters_view, example_attr, fallback_sql):
     """Each pixel-ops SQL example exists and executes to a non-null result."""
     sql_template = getattr(rasterx_functions_sql, example_attr)()
     expected_fn = example_attr.replace("_sql_example", "")
-    assert f"gbx_{expected_fn}" in sql_template, (
-        f"docs example {example_attr} should mention gbx_{expected_fn}"
-    )
+    assert (
+        f"gbx_{expected_fn}" in sql_template
+    ), f"docs example {example_attr} should mention gbx_{expected_fn}"
     result = spark.sql(fallback_sql).collect()
     assert len(result) >= 1
     out_col = [c for c in result[0].asDict().keys()][0]
@@ -686,28 +806,39 @@ def test_pixel_ops_sql_example(spark, rasters_view, example_attr, fallback_sql):
 # ============================================================================
 
 
-@pytest.mark.parametrize("example_attr,fallback_sql", [
-    # cog_convert returns a tile; proximity returns a tile (Float32 distance
-    # raster); contour returns ARRAY<struct(geom_wkb, value)>; viewshed
-    # returns a tile (Byte 0/255 visibility mask).
-    # Executed with an explicit codec (ZSTD, the baseline) so it runs on BOTH
-    # tiers — the light-only 'AUTO' sentinel is not understood by the heavy tier.
-    ("rst_cog_convert_sql_example",
-     "SELECT gbx_rst_cog_convert(tile, 'ZSTD', 256, 'AVERAGE') AS cog FROM rasters"),
-    ("rst_proximity_sql_example",
-     "SELECT gbx_rst_proximity(tile, '', 'PIXEL', cast(100.0 as double)) AS dist FROM rasters"),
-    ("rst_contour_sql_example",
-     "SELECT gbx_rst_contour(tile, array(), 100.0, 0.0, 'elev') AS contours FROM rasters"),
-    ("rst_viewshed_sql_example",
-     "SELECT gbx_rst_viewshed(tile, 'POINT(-73.5 40.5)', 100.0, 1.6, 5000.0) AS vs FROM rasters"),
-])
+@pytest.mark.parametrize(
+    "example_attr,fallback_sql",
+    [
+        # cog_convert returns a tile; proximity returns a tile (Float32 distance
+        # raster); contour returns ARRAY<struct(geom_wkb, value)>; viewshed
+        # returns a tile (Byte 0/255 visibility mask).
+        # Executed with an explicit codec (ZSTD, the baseline) so it runs on BOTH
+        # tiers — the light-only 'AUTO' sentinel is not understood by the heavy tier.
+        (
+            "rst_cog_convert_sql_example",
+            "SELECT gbx_rst_cog_convert(tile, 'ZSTD', 256, 'AVERAGE') AS cog FROM rasters",
+        ),
+        (
+            "rst_proximity_sql_example",
+            "SELECT gbx_rst_proximity(tile, '', 'PIXEL', cast(100.0 as double)) AS dist FROM rasters",
+        ),
+        (
+            "rst_contour_sql_example",
+            "SELECT gbx_rst_contour(tile, array(), 100.0, 0.0, 'elev') AS contours FROM rasters",
+        ),
+        (
+            "rst_viewshed_sql_example",
+            "SELECT gbx_rst_viewshed(tile, 'POINT(-73.5 40.5)', 100.0, 1.6, 5000.0) AS vs FROM rasters",
+        ),
+    ],
+)
 def test_analysis_sql_example(spark, rasters_view, example_attr, fallback_sql):
     """Each analysis SQL example exists and executes to a non-null result."""
     sql_template = getattr(rasterx_functions_sql, example_attr)()
     expected_fn = example_attr.replace("_sql_example", "")
-    assert f"gbx_{expected_fn}" in sql_template, (
-        f"docs example {example_attr} should mention gbx_{expected_fn}"
-    )
+    assert (
+        f"gbx_{expected_fn}" in sql_template
+    ), f"docs example {example_attr} should mention gbx_{expected_fn}"
     result = spark.sql(fallback_sql).collect()
     assert len(result) >= 1
     out_col = [c for c in result[0].asDict().keys()][0]
@@ -718,45 +849,52 @@ def test_analysis_sql_example(spark, rasters_view, example_attr, fallback_sql):
 # Structure Verification
 # ============================================================================
 
+
 def test_all_sql_functions_have_example():
     """Verify SQL example module has functions for all documented examples"""
     import inspect
 
     # Get all functions from the module
-    functions = [name for name, obj in inspect.getmembers(rasterx_functions_sql)
-                 if inspect.isfunction(obj) and not name.startswith('_')]
+    functions = [
+        name
+        for name, obj in inspect.getmembers(rasterx_functions_sql)
+        if inspect.isfunction(obj) and not name.startswith("_")
+    ]
 
     # Should have examples for major function categories
     assert len(functions) > 40, f"Expected 40+ SQL examples, got {len(functions)}"
 
     # Verify naming convention
     for func_name in functions:
-        assert func_name.endswith('_sql_example'), \
-            f"Function {func_name} should end with '_sql_example'"
+        assert func_name.endswith(
+            "_sql_example"
+        ), f"Function {func_name} should end with '_sql_example'"
 
         # Verify it returns a string
         func = getattr(rasterx_functions_sql, func_name)
         result = func()
-        assert isinstance(result, str), \
-            f"Function {func_name} should return SQL string"
-        assert len(result) > 0, \
-            f"Function {func_name} returned empty SQL"
+        assert isinstance(result, str), f"Function {func_name} should return SQL string"
+        assert len(result) > 0, f"Function {func_name} returned empty SQL"
 
 
 def test_all_sql_examples_are_valid_sql():
     """Verify all SQL examples have valid SQL syntax"""
     import inspect
 
-    functions = [name for name, obj in inspect.getmembers(rasterx_functions_sql)
-                 if inspect.isfunction(obj) and not name.startswith('_')]
+    functions = [
+        name
+        for name, obj in inspect.getmembers(rasterx_functions_sql)
+        if inspect.isfunction(obj) and not name.startswith("_")
+    ]
 
     for func_name in functions:
         func = getattr(rasterx_functions_sql, func_name)
         sql = func()
 
         # Basic checks
-        assert "SELECT" in sql.upper() or "WITH" in sql.upper(), \
-            f"{func_name}: SQL should contain SELECT or WITH"
+        assert (
+            "SELECT" in sql.upper() or "WITH" in sql.upper()
+        ), f"{func_name}: SQL should contain SELECT or WITH"
 
         # Check for GeoBrix functions (most should have gbx_)
         if "gbx_" not in sql.lower() and "from rasters" in sql.lower():
@@ -781,6 +919,7 @@ def test_rst_h3_rasterize_agg_sql_example():
 def test_h3_cell_bbox_sql_example(spark):
     """h3_cell_bbox example string exists and executes to non-null bbox structs."""
     from databricks.labs.gbx.pyrx import functions as prx
+
     prx.register(spark)
     sql = rasterx_functions_sql.h3_cell_bbox_sql_example()
     assert isinstance(sql, str) and len(sql) > 0
@@ -810,6 +949,7 @@ def london_rasters_view(spark):
     EPSG:4326). Skips the dependent test when the sample raster is absent.
     """
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
     try:
@@ -824,26 +964,25 @@ def london_rasters_view(spark):
     spark.catalog.dropTempView("london_rasters")
 
 
-@pytest.mark.parametrize("example_attr,sql_fn", [
-    ("rst_bng_rastertogridavg_sql_example",
-     "gbx_rst_bng_rastertogridavg"),
-    ("rst_bng_rastertogridcount_sql_example",
-     "gbx_rst_bng_rastertogridcount"),
-    ("rst_bng_rastertogridmax_sql_example",
-     "gbx_rst_bng_rastertogridmax"),
-    ("rst_bng_rastertogridmin_sql_example",
-     "gbx_rst_bng_rastertogridmin"),
-    ("rst_bng_rastertogridmedian_sql_example",
-     "gbx_rst_bng_rastertogridmedian"),
-    ("rst_bng_rastertogridsum_sql_example",
-     "gbx_rst_bng_rastertogridsum"),
-    ("rst_bng_rastertogridvariance_sql_example",
-     "gbx_rst_bng_rastertogridvariance"),
-    ("rst_bng_rastertogridstddev_sql_example",
-     "gbx_rst_bng_rastertogridstddev"),
-])
-def test_bng_rastertogrid_sql_example(spark, london_rasters, london_rasters_view,
-                                      example_attr, sql_fn):
+@pytest.mark.parametrize(
+    "example_attr,sql_fn",
+    [
+        ("rst_bng_rastertogridavg_sql_example", "gbx_rst_bng_rastertogridavg"),
+        ("rst_bng_rastertogridcount_sql_example", "gbx_rst_bng_rastertogridcount"),
+        ("rst_bng_rastertogridmax_sql_example", "gbx_rst_bng_rastertogridmax"),
+        ("rst_bng_rastertogridmin_sql_example", "gbx_rst_bng_rastertogridmin"),
+        ("rst_bng_rastertogridmedian_sql_example", "gbx_rst_bng_rastertogridmedian"),
+        ("rst_bng_rastertogridsum_sql_example", "gbx_rst_bng_rastertogridsum"),
+        (
+            "rst_bng_rastertogridvariance_sql_example",
+            "gbx_rst_bng_rastertogridvariance",
+        ),
+        ("rst_bng_rastertogridstddev_sql_example", "gbx_rst_bng_rastertogridstddev"),
+    ],
+)
+def test_bng_rastertogrid_sql_example(
+    spark, london_rasters, london_rasters_view, example_attr, sql_fn
+):
     """Each BNG rastertogrid reducer emits STRING cell ids over a real UK raster."""
     sql_template = getattr(rasterx_functions_sql, example_attr)()
     assert sql_fn in sql_template, f"{example_attr} should mention {sql_fn}"
@@ -857,12 +996,13 @@ def test_bng_rastertogrid_sql_example(spark, london_rasters, london_rasters_view
     result = spark.sql(sql).collect()
     assert len(result) > 0, f"{sql_fn} produced no cells over the London raster"
     import re
+
     bng_re = re.compile(r"^[A-Z]{2}\d*[A-Z]*$")
     for row in result:
         assert isinstance(row["bng_cell"], str), "BNG cell id must be a STRING"
-        assert bng_re.match(row["bng_cell"]), (
-            f"expected BNG string id, got '{row['bng_cell']}'"
-        )
+        assert bng_re.match(
+            row["bng_cell"]
+        ), f"expected BNG string id, got '{row['bng_cell']}'"
         assert row["measure"] is not None
 
 
@@ -870,6 +1010,7 @@ def test_bng_rastertogrid_sql_example(spark, london_rasters, london_rasters_view
 def london_rasters(spark):
     """Alias fixture: load the London raster DataFrame (skips if unavailable)."""
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     path = f"{SAMPLE_DATA_BASE}/london/elevation/srtm_n51w001.tif"
     try:
@@ -920,6 +1061,7 @@ def test_rst_quadbin_rasterize_agg_sql_example(spark):
     """quadbin rasterize_agg burns a group of quadbin cells into one non-null tile."""
     from databricks.labs.gbx.gridx.quadbin import functions as qbx
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     qbx.register(spark)
     sql = rasterx_functions_sql.rst_quadbin_rasterize_agg_sql_example()
@@ -941,13 +1083,16 @@ def test_rst_quadbin_rasterize_agg_sql_example(spark):
     assert len(result) == 1
     tile = result[0]["tile"]
     assert tile is not None, "quadbin rasterize_agg must produce a non-null tile"
-    assert hasattr(rasterx_functions_sql, "rst_quadbin_rasterize_agg_sql_example_output")
+    assert hasattr(
+        rasterx_functions_sql, "rst_quadbin_rasterize_agg_sql_example_output"
+    )
 
 
 def test_rst_bng_rasterize_agg_sql_example(spark):
     """bng rasterize_agg burns a group of STRING BNG cells into one non-null tile."""
     from databricks.labs.gbx.gridx.bng import functions as bngx
     from databricks.labs.gbx.rasterx import functions as rx
+
     rx.register(spark)
     bngx.register(spark)
     sql = rasterx_functions_sql.rst_bng_rasterize_agg_sql_example()

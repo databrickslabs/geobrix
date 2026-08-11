@@ -20,6 +20,7 @@ import rasterxAccessorsLightCode from '!!raw-loader!../../tests/python/api/raste
 import rasterxTileopsLightCode from '!!raw-loader!../../tests/python/api/rasterx_tileops_python_light.py';
 import rasterxAggregatorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_aggregators_python_light.py';
 import rasterxBandmathLightCode from '!!raw-loader!../../tests/python/api/rasterx_bandmath_python_light.py';
+import rasterxTerrainLightCode from '!!raw-loader!../../tests/python/api/rasterx_terrain_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -1304,9 +1305,14 @@ Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-value
 
 **Parameters:** `points_array` — Array of WKB point geometries with Z coordinates; `breaklines_array` — Array of WKB line/polygon geometries enforcing hard edges (pass `null` or empty array if unused); `merge_tolerance`/`snap_tolerance` — Delaunay triangulation tolerances (vertex-merge distance and snapping distance; small values such as `0.0` and `0.01` are typical); `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output raster dimensions in pixels (for N-metre cells set `width_px = round((xmax-xmin)/N)`); `out_srid` — EPSG code for the output CRS. An optional trailing `no_data` argument overrides the default fill for cells outside the triangulated hull.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_dtmfromgeoms_sql_example" outputConstant="rst_dtmfromgeoms_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_dtmfromgeoms"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ---
 
@@ -1349,9 +1355,14 @@ IDW-interpolate an array of Z-valued point geometries to a Float64 GeoTIFF tile 
 
 **Parameters:** `points_array` — `ARRAY<BINARY>` of WKB point geometries; `values_array` — `ARRAY<DOUBLE>` of scalar observations, one per point; `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output dimensions in pixels; `out_srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is the standard); `max_pts` — maximum nearest neighbours considered per output pixel
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_gridfrompoints_sql_example" outputConstant="rst_gridfrompoints_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_gridfrompoints"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ---
 
@@ -2433,9 +2444,14 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close
 
 **Signature:** `rst_slope(tile: Column, unit: Column, xscale: Column, yscale: Column): Column` — Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `yscale` are the elevation/horizontal unit ratio per axis (supply both or neither; when omitted, GDAL 3.11+ auto-derives from the raster CRS). For isotropic scaling pass the same value to both (e.g. `1.0, 1.0` for a projected CRS in metres).
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_slope_sql_example" outputConstant="rst_slope_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_slope"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_aspect
 
@@ -2447,9 +2463,14 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close
 
 **Signature:** `rst_aspect(tile: Column, trigonometric: Column, zeroForFlat: Column): Column` — Compass direction of steepest descent in degrees (0=N, 90=E, 180=S, 270=W). Flat areas return `-9999` unless `zeroForFlat = true`. Set `trigonometric = true` for mathematical convention (0=E, counter-clockwise).
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_aspect_sql_example" outputConstant="rst_aspect_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_aspect"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_hillshade
 
@@ -2461,9 +2482,14 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close
 
 **Signature:** `rst_hillshade(tile: Column, azimuth: Column, altitude: Column, zFactor: Column): Column` — 8-bit (0..255) shaded relief image. Common values: NW sun azimuth `315.0`, altitude `45.0`, `zFactor = 1.0`.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_hillshade_sql_example" outputConstant="rst_hillshade_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_hillshade"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_tri
 
@@ -2475,9 +2501,14 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close
 
 **Signature:** `rst_tri(tile: Column): Column` — Terrain Ruggedness Index — mean absolute difference between a pixel and its 8 neighbours. Useful for landscape-ecology habitat scoring.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tri_sql_example" outputConstant="rst_tri_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_tri"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_tpi
 
@@ -2489,9 +2520,14 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close
 
 **Signature:** `rst_tpi(tile: Column): Column` — Topographic Position Index — pixel value minus the mean of its 8 neighbours. Positive values are ridges, negative values are valleys.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tpi_sql_example" outputConstant="rst_tpi_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_tpi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_roughness
 
@@ -2503,9 +2539,14 @@ Powered by **NumPy** — a reimplementation of GDAL `gdaldem`; results are close
 
 **Signature:** `rst_roughness(tile: Column): Column` — Largest absolute difference between a pixel and any of its 8 neighbours in a 3×3 window.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_roughness_sql_example" outputConstant="rst_roughness_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_roughness"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_color_relief
 
@@ -2517,9 +2558,14 @@ The two tiers use **different color interpolation engines**, so their pixel valu
 
 **Signature:** `rst_color_relief(tile: Column, colorTablePath: Column): Column` — Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored on both tiers; the `default` keyword is honored only on the heavyweight tier (see the tier note above).
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_color_relief_sql_example" outputConstant="rst_color_relief_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_color_relief"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ---
 
@@ -2718,7 +2764,14 @@ Powered by **rasterio**. Point geometries only; the point is assumed to be in th
 
 **Signature:** `rst_sample(tile: Column, geom: Column, [crs: Column = null]): Column` — Sample the raster at the geometry's location(s). For a `POINT`, returns `ARRAY<DOUBLE>` of one value per band at the nearest pixel. The point is reprojected from its source CRS to the raster CRS: an EWKB/EWKT embedded SRID wins, else the optional `crs` (string, source role), else assumed already aligned. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_sample_sql_example" outputConstant="rst_sample_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_sample"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_setsrid
 
@@ -2812,7 +2865,14 @@ Powered by **SciPy** (`scipy.ndimage.distance_transform_edt`). Distance to the n
 
 **Signature:** `rst_proximity(tile: Column, [targetValues: Column = null, distUnits: Column = lit("GEO"), maxDistance: Column = null]): Column` — Compute a Float32 raster where each pixel holds the distance to the nearest source pixel via `gdal.ComputeProximity`. `targetValues` is a comma-separated list of source-pixel values (e.g. `"1,2,3"`); `null` means any non-NoData pixel is a target. `distUnits` is `"GEO"` (CRS ground units, default) or `"PIXEL"`. `maxDistance` caps the output; pixels beyond it get the NoData sentinel `-1.0`.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_proximity_sql_example" outputConstant="rst_proximity_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_proximity"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_contour
 
@@ -2824,7 +2884,14 @@ Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geo
 
 **Signature:** `rst_contour(tile: Column, levels: Column, [interval: Column = lit(0.0), base: Column = lit(0.0), attrField: Column = lit("elev")]): Column` — Generate contour LineString features via `gdal.ContourGenerateEx`. Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values, or pass `array()` and set `interval` (>0) for equal-step contours at `base + n*interval`. Returns `ARRAY<struct(geom_wkb BINARY, value DOUBLE)>` — one entry per contour line in the source raster's CRS.
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_contour_sql_example" outputConstant="rst_contour_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_contour"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ### rst_viewshed
 
@@ -2836,7 +2903,14 @@ Powered by **xarray-spatial** (`xrspatial.viewshed`). Returns a Byte tile (255 v
 
 **Signature:** `rst_viewshed(tile: Column, observerGeom: Column, observerHeight: Column, [targetHeight: Column = lit(1.6), maxDistance: Column = null]): Column` — Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is WKB / WKT POINT; it is reprojected from its source CRS to the raster CRS (an EWKB/EWKT embedded SRID wins, else the optional `crs` argument, else assumed already aligned). Non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_viewshed_sql_example" outputConstant="rst_viewshed_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_viewshed"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
 
 ---
 

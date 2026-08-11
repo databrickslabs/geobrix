@@ -1865,4 +1865,295 @@ result.show(truncate = false)
 (merged raster from aligned tiles)
 """.trim
 
+  // ============================================================================
+  // Terrain Analysis Functions
+  // ============================================================================
+
+  val rst_slope_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_slope(col("tile"), lit("degrees"), lit(1.0), lit(1.0)).alias("slope"))
+result.show(truncate = false)
+""".trim
+
+  val rst_slope_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|slope                                                      |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(slope in degrees; auto-scaled from CRS units)
+""".trim
+
+  val rst_aspect_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_aspect(col("tile"), lit(false), lit(false)).alias("aspect"))
+result.show(truncate = false)
+""".trim
+
+  val rst_aspect_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|aspect                                                     |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(aspect in compass degrees: 0=N, 90=E, 180=S, 270=W)
+""".trim
+
+  val rst_hillshade_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_hillshade(col("tile"), lit(315.0), lit(45.0), lit(1.0)).alias("shade"))
+result.show(truncate = false)
+""".trim
+
+  val rst_hillshade_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|shade                                                      |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(8-bit hillshade: NW azimuth, 45-degree altitude)
+""".trim
+
+  val rst_tri_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_tri(col("tile")).alias("tri"))
+result.show(truncate = false)
+""".trim
+
+  val rst_tri_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|tri                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(TRI: mean absolute neighbour difference)
+""".trim
+
+  val rst_tpi_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_tpi(col("tile")).alias("tpi"))
+result.show(truncate = false)
+""".trim
+
+  val rst_tpi_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|tpi                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(TPI: positive=ridge, negative=valley)
+""".trim
+
+  val rst_roughness_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_roughness(col("tile")).alias("roughness"))
+result.show(truncate = false)
+""".trim
+
+  val rst_roughness_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|roughness                                                  |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(roughness: max difference in 3x3 window)
+""".trim
+
+  val rst_color_relief_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_color_relief(col("tile"), lit("src/test/resources/binary/elevation/elevation.clr")).alias("rgba"))
+result.show(truncate = false)
+""".trim
+
+  val rst_color_relief_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|rgba                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(4-band RGBA tile mapped via gdaldem color table)
+""".trim
+
+  val rst_proximity_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_proximity(col("tile"), lit(""), lit("PIXEL"), lit(100.0)).alias("distance"))
+result.show(truncate = false)
+""".trim
+
+  val rst_proximity_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|distance                                                   |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(distance in pixels to nearest non-NoData, capped at 100)
+""".trim
+
+  val rst_contour_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_contour(col("tile"), array(), lit(50.0), lit(0.0), lit("elev")).alias("contours"))
+result.show(truncate = false)
+""".trim
+
+  val rst_contour_scala_example_output: String =
+    """
++--------------------------------------+
+|contours                              |
++--------------------------------------+
+|[{[BINARY], 100.0}, {[BINARY], 200.0}]|
++--------------------------------------+
+(array of contour features: LineString + elevation value)
+""".trim
+
+  val rst_viewshed_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(
+  rx.rst_viewshed(col("tile"), lit("POINT(-73.5 40.5)"), lit(100.0), lit(1.6), lit(5000.0)).alias("viewshed")
+)
+result.show(truncate = false)
+""".trim
+
+  val rst_viewshed_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|viewshed                                                   |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(binary visibility mask: 1=visible, 0=not visible)
+""".trim
+
+  val rst_sample_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val result = dem.select(rx.rst_sample(col("tile"), lit("SRID=4326;POINT(-73.97 40.75)")).alias("sampled"))
+result.show(truncate = false)
+""".trim
+
+  val rst_sample_scala_example_output: String =
+    """
++--------+
+|sampled |
++--------+
+|[1234.5]|
++--------+
+(array of sampled values, one per band)
+""".trim
+
+  val rst_gridfrompoints_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Create synthetic point cloud with WKB-encoded points and values
+val points = spark.createDataFrame(Seq(
+  (Array[Array[Byte]](/* WKB point 1 */, /* WKB point 2 */), Array[Double](100.0, 110.0))
+)).toDF("points_wkb", "values")
+val result = points.select(
+  rx.rst_gridfrompoints(col("points_wkb"), col("values"), lit(0.0), lit(0.0),
+    lit(1000.0), lit(1000.0), lit(256), lit(256), lit(32633)).alias("idw")
+)
+result.show(truncate = false)
+""".trim
+
+  val rst_gridfrompoints_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|idw                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(IDW-interpolated tile over specified extent)
+""".trim
+
+  val rst_dtmfromgeoms_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Create synthetic survey points with Z-valued WKB geometries
+val survey = spark.createDataFrame(Seq(
+  (Array[Array[Byte]](/* WKB point 1 */, /* WKB point 2 */), Array[Array[Byte]]())
+)).toDF("points_wkb", "breaklines_wkb")
+val result = survey.select(
+  rx.rst_dtmfromgeoms(col("points_wkb"), col("breaklines_wkb"), lit(0.0), lit(0.01),
+    lit(0.0), lit(0.0), lit(1000.0), lit(1000.0), lit(100), lit(100), lit(32633)).alias("tin")
+)
+result.show(truncate = false)
+""".trim
+
+  val rst_dtmfromgeoms_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|tin                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(TIN-interpolated DTM over specified extent and pixel count)
+""".trim
+
 }

@@ -13,24 +13,33 @@ from path_config import SAMPLE_DATA_BASE
 
 SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
-# Multiband fixture for band-math examples. Import under an underscore alias so
-# the imported function is not picked up by inspect.getmembers in the
+# Committed fixtures for band-math and terrain examples. Import under an underscore alias so
+# the imported functions are not picked up by inspect.getmembers in the
 # test_all_sql_* introspection guards (which require public names to be
 # *_sql_example functions).
-from _fixtures import multiband_path as _multiband_path
+from _fixtures import (
+    multiband_path as _multiband_path,
+    dem_path as _dem_path,
+    color_table_path as _color_table_path,
+)
 
 MULTIBAND_RASTER_PATH = str(_multiband_path())
+DEM_RASTER_PATH = str(_dem_path())
+COLOR_TABLE_PATH = str(_color_table_path())
 
-# Common setup: create temp views so SQL examples can use FROM rasters or FROM multiband_rasters
+# Common setup: create temp views so SQL examples can use FROM rasters, multiband_rasters, or dem_rasters
 RASTERX_SQL_SETUP = f"""-- After registering RasterX (Python: rx.register(spark)), create the views:
 CREATE OR REPLACE TEMP VIEW rasters AS
 SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;
 
 CREATE OR REPLACE TEMP VIEW multiband_rasters AS
-SELECT * FROM gdal.`{MULTIBAND_RASTER_PATH}`;"""
+SELECT * FROM gdal.`{MULTIBAND_RASTER_PATH}`;
+
+CREATE OR REPLACE TEMP VIEW dem_rasters AS
+SELECT * FROM gdal.`{DEM_RASTER_PATH}`;"""
 
 RASTERX_SQL_SETUP_output = """
-Views `rasters` and `multiband_rasters` created. You can now run SELECT ... FROM rasters or FROM multiband_rasters.
+Views `rasters`, `multiband_rasters`, and `dem_rasters` created.
 """
 
 # ============================================================================
@@ -2105,7 +2114,7 @@ def rst_slope_sql_example():
     return """
 -- Slope in degrees per pixel (auto-scale from CRS). Use unit='percent' for rise/run.
 -- Pass xscale and yscale together to override the horizontal scale per axis.
-SELECT gbx_rst_slope(tile, 'degrees', 1.0, 1.0) AS slope FROM rasters;
+SELECT gbx_rst_slope(tile, 'degrees', 1.0, 1.0) AS slope FROM dem_rasters;
 """
 
 
@@ -2123,7 +2132,7 @@ def rst_aspect_sql_example():
     return """
 -- Aspect in compass degrees (0=N, 90=E, 180=S, 270=W). Flat areas get -9999
 -- unless zero_for_flat=true.
-SELECT gbx_rst_aspect(tile, false, false) AS aspect FROM rasters;
+SELECT gbx_rst_aspect(tile, false, false) AS aspect FROM dem_rasters;
 """
 
 
@@ -2140,7 +2149,7 @@ def rst_hillshade_sql_example():
     """Compute a shaded relief image from a DEM tile."""
     return """
 -- 8-bit (0..255) hillshade: NW sun, 45-deg altitude, default z-factor.
-SELECT gbx_rst_hillshade(tile, 315.0, 45.0, 1.0) AS hillshade FROM rasters;
+SELECT gbx_rst_hillshade(tile, 315.0, 45.0, 1.0) AS hillshade FROM dem_rasters;
 """
 
 
@@ -2157,7 +2166,7 @@ def rst_tri_sql_example():
     """Compute Terrain Ruggedness Index (TRI) from a DEM tile."""
     return """
 -- TRI: mean absolute neighbour difference; useful for landscape ecology.
-SELECT gbx_rst_tri(tile) AS tri FROM rasters;
+SELECT gbx_rst_tri(tile) AS tri FROM dem_rasters;
 """
 
 
@@ -2174,7 +2183,7 @@ def rst_tpi_sql_example():
     """Compute Topographic Position Index (TPI) from a DEM tile."""
     return """
 -- TPI: difference from neighbour-mean; +ve = ridge, -ve = valley.
-SELECT gbx_rst_tpi(tile) AS tpi FROM rasters;
+SELECT gbx_rst_tpi(tile) AS tpi FROM dem_rasters;
 """
 
 
@@ -2191,7 +2200,7 @@ def rst_roughness_sql_example():
     """Compute Roughness (largest neighbour delta) from a DEM tile."""
     return """
 -- Roughness: max absolute neighbour difference in a 3x3 window.
-SELECT gbx_rst_roughness(tile) AS roughness FROM rasters;
+SELECT gbx_rst_roughness(tile) AS roughness FROM dem_rasters;
 """
 
 
@@ -2213,8 +2222,8 @@ def rst_color_relief_sql_example():
     """
     return f"""
 -- Map elevation values to RGBA colors via a gdaldem color table.
-SELECT gbx_rst_color_relief(tile, '{SAMPLE_DATA_BASE}/colortables/elevation.clr') AS rgba
-FROM rasters;
+SELECT gbx_rst_color_relief(tile, '{COLOR_TABLE_PATH}') AS rgba
+FROM dem_rasters;
 """
 
 
@@ -2540,20 +2549,18 @@ rst_fillnodata_sql_example_output = """
 def rst_sample_sql_example():
     """Sample raster pixel values at a POINT geometry (one Double per band)."""
     return """
--- Sample at a known lon/lat. Tagging the point with an SRID (EWKT
--- `SRID=4326;...`) makes gbx_rst_sample reproject it to each raster's CRS, so
--- this lon/lat over NYC lands correctly on the (UTM) Sentinel-2 raster.
-SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS values FROM rasters;
+-- Sample the DEM at a point in its native CRS (EPSG:32618). Tagging the point
+-- with an SRID (EWKT `SRID=32618;...`) lets gbx_rst_sample land it correctly.
+SELECT gbx_rst_sample(tile, 'SRID=32618;POINT(500320 4500320)') AS values FROM dem_rasters;
 """
 
 
 rst_sample_sql_example_output = """
-+--------+
-|values  |
-+--------+
-|[1894.0]|
-|NULL    |
-+--------+
++-------+
+|values |
++-------+
+|[302.0]|
++-------+
 """
 
 
@@ -2710,9 +2717,9 @@ rst_proximity_sql_example_output = """
 def rst_contour_sql_example():
     """Generate contour LineStrings at an equal interval from an elevation tile."""
     return """
--- Equal-interval contours every 10 m. Pass array() of fixed levels to override.
-SELECT gbx_rst_contour(tile, array(), 10.0, 0.0, 'elev') AS contours
-FROM rasters;
+-- Equal-interval contours every 50 m. Pass array() of fixed levels to override.
+SELECT gbx_rst_contour(tile, array(), 50.0, 0.0, 'elev') AS contours
+FROM dem_rasters;
 """
 
 
@@ -2720,7 +2727,7 @@ rst_contour_sql_example_output = """
 +--------------------------------------+
 |contours                              |
 +--------------------------------------+
-|[{[BINARY], 100.0}, {[BINARY], 200.0}]|
+|[{[BINARY], 50.0}, {[BINARY], 100.0}, {[BINARY], 150.0}, {[BINARY], 200.0}, {[BINARY], 250.0}, {[BINARY], 300.0}]|
 +--------------------------------------+
 """
 
@@ -2728,9 +2735,9 @@ rst_contour_sql_example_output = """
 def rst_viewshed_sql_example():
     """Binary viewshed mask from a DEM and an observer POINT (coords in raster CRS)."""
     return """
--- Visibility from observer at (-73.5, 40.5), eye 100 m, target 1.6 m, cap 5000 m.
+-- Visibility from observer at (-73.5 40.5), eye 100 m, target 1.6 m, cap 5000 m.
 SELECT gbx_rst_viewshed(tile, 'POINT(-73.5 40.5)', 100.0, 1.6, 5000.0) AS vs
-FROM rasters;
+FROM dem_rasters;
 """
 
 

@@ -12,10 +12,13 @@
       ]
     },
     "gbx_rst_aspect": {
-      "examples": "Examples:\n      > SELECT gbx_rst_aspect(tile, false, false) AS aspect FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_aspect(tile, false, false) AS aspect FROM dem_rasters;",
       "usage_args": "tile, [trigonometric], [zero_for_flat]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_avg": {
@@ -162,10 +165,13 @@
       ]
     },
     "gbx_rst_color_relief": {
-      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(tile, '/Volumes/main/default/test-data/geobrix-examples/colortables/elevation.clr') AS rgba FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(tile, '/root/geobrix/src/test/resources/binary/elevation/elevation.clr') AS rgba FROM dem_rasters;",
       "usage_args": "tile, color_table_path",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_combineavg": {
@@ -189,10 +195,13 @@
       ]
     },
     "gbx_rst_contour": {
-      "examples": "Examples:\n      > SELECT gbx_rst_contour(tile, array(), 10.0, 0.0, 'elev') AS contours FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_contour(tile, array(), 50.0, 0.0, 'elev') AS contours FROM dem_rasters;",
       "usage_args": "tile, levels, [interval], [base], [attr_field]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_convolve": {
@@ -239,7 +248,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_dtmfromgeoms( points_wkb_array, breaklines_wkb_array, 0.0, 0.01, 0.0, 0.0, 1000.0, 1000.0, 100, 100, 32633 ) AS dtm FROM survey_points;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_dtmfromgeoms_agg": {
@@ -364,7 +376,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_gridfrompoints( points_wkb_array, values_array, 0.0, 0.0, 1000.0, 1000.0, 256, 256, 32633 ) AS idw FROM point_clouds;",
       "usage_args": "points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power], [max_pts]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_gridfrompoints_agg": {
@@ -461,10 +476,13 @@
       ]
     },
     "gbx_rst_hillshade": {
-      "examples": "Examples:\n      > SELECT gbx_rst_hillshade(tile, 315.0, 45.0, 1.0) AS hillshade FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_hillshade(tile, 315.0, 45.0, 1.0) AS hillshade FROM dem_rasters;",
       "usage_args": "tile, [azimuth], [altitude], [z_factor]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_histogram": {
@@ -675,7 +693,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_proximity(tile, '', 'PIXEL', cast(100.0 as double)) AS dist FROM rasters;",
       "usage_args": "tile, [target_values], [dist_units], [max_distance]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rasterize_agg": {
@@ -837,17 +858,23 @@
       ]
     },
     "gbx_rst_roughness": {
-      "examples": "Examples:\n      > SELECT gbx_rst_roughness(tile) AS roughness FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_roughness(tile) AS roughness FROM dem_rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_sample": {
-      "examples": "Examples:\n      > SELECT gbx_rst_sample(tile, 'SRID=4326;POINT(-73.97 40.75)') AS values FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_sample(tile, 'SRID=32618;POINT(500320 4500320)') AS values FROM dem_rasters;",
       "usage_args": "tile, geom, [crs]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_savi": {
@@ -928,10 +955,13 @@
       ]
     },
     "gbx_rst_slope": {
-      "examples": "Examples:\n      > SELECT gbx_rst_slope(tile, 'degrees', 1.0, 1.0) AS slope FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_slope(tile, 'degrees', 1.0, 1.0) AS slope FROM dem_rasters;",
       "usage_args": "tile, [unit], [xscale], [yscale]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_srid": {
@@ -996,10 +1026,13 @@
       ]
     },
     "gbx_rst_tpi": {
-      "examples": "Examples:\n      > SELECT gbx_rst_tpi(tile) AS tpi FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_tpi(tile) AS tpi FROM dem_rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_transform": {
@@ -1023,10 +1056,13 @@
       ]
     },
     "gbx_rst_tri": {
-      "examples": "Examples:\n      > SELECT gbx_rst_tri(tile) AS tri FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_tri(tile) AS tri FROM dem_rasters;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_tryopen": {
@@ -1080,10 +1116,13 @@
       ]
     },
     "gbx_rst_viewshed": {
-      "examples": "Examples:\n      > SELECT gbx_rst_viewshed(tile, 'POINT(-73.5 40.5)', 100.0, 1.6, 5000.0) AS vs FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_viewshed(tile, 'POINT(-73.5 40.5)', 100.0, 1.6, 5000.0) AS vs FROM dem_rasters;",
       "usage_args": "tile, observer_geom, observer_height, [target_height], [max_distance], [crs]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_width": {

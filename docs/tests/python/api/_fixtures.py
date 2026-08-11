@@ -38,6 +38,8 @@ import os
 
 # Repo-root-relative paths for committed fixtures
 MULTIBAND = "src/test/resources/binary/geotiff-small/rgb_nir_small.tif"
+DEM = "src/test/resources/binary/elevation/dem_small.tif"
+COLOR_TABLE = "src/test/resources/binary/elevation/elevation.clr"
 
 # Long filename committed under netcdf-CMIP5/
 _NETCDF_FILENAME = (
@@ -46,18 +48,18 @@ _NETCDF_FILENAME = (
 )
 NETCDF = f"src/test/resources/binary/netcdf-CMIP5/{_NETCDF_FILENAME}"
 
-# Single-band and DEM are sourced from the /Volumes mount (available in the
+# Single-band is sourced from the /Volumes mount (available in the
 # geobrix-dev container when started with sample-data volumes).
-# We compute these lazily from path_config so tests that don't need them
+# We compute this lazily from path_config so tests that don't need it
 # don't import path_config at module load time.
 _SINGLE_BAND: str | None = None
-_DEM: str | None = None
 
 
 def _sample_data_base() -> str:
     """Return SAMPLE_DATA_BASE from path_config (lazy import)."""
     try:
         from path_config import SAMPLE_DATA_BASE  # noqa: PLC0415
+
         return SAMPLE_DATA_BASE
     except ImportError:
         # Fallback for environments where path_config is not on sys.path
@@ -70,9 +72,16 @@ def single_band_path() -> str:
     return f"{_sample_data_base()}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 
-def dem_path() -> str:
-    """Absolute path to the canonical DEM GeoTIFF."""
-    return f"{_sample_data_base()}/nyc/elevation/srtm_n40w073.tif"
+def dem_path() -> Path:
+    """Absolute path to the committed DEM GeoTIFF."""
+    repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
+    return repo_root / DEM
+
+
+def color_table_path() -> Path:
+    """Absolute path to the committed gdaldem color table."""
+    repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
+    return repo_root / COLOR_TABLE
 
 
 def multiband_path() -> Path:
@@ -131,15 +140,15 @@ def multiband_tile_df(spark):
 
 def dem_tile_df(spark):
     """
-    Light-tier (pyrx) one-row DataFrame with `tile` from srtm_n40w073.tif.
+    Light-tier (pyrx) one-row DataFrame with `tile` from dem_small.tif.
 
-    Single-band DEM raster (SRTM elevation, NYC area).
+    Single-band DEM raster with real elevation variation (0–311m, UTM 18N).
     Used by terrain function examples (slope, aspect, hillshade, …).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    path = dem_path()
+    path = str(dem_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
         rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
@@ -199,12 +208,12 @@ def multiband_tile_df_heavy(spark):
 
 def dem_tile_df_heavy(spark):
     """
-    Heavy-tier (rasterx) one-row DataFrame with `tile` from srtm_n40w073.tif.
+    Heavy-tier (rasterx) one-row DataFrame with `tile` from dem_small.tif.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
-    path = dem_path()
+    path = str(dem_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
         rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
@@ -295,6 +304,75 @@ def make_multiband_fixture(path: "str | Path | None" = None) -> Path:
         ds.update_tags(2, name="nir", wavelength_nm="865", band_index="2")
         ds.update_tags(3, name="green", wavelength_nm="560", band_index="3")
 
+    return dest
+
+
+def make_dem_fixture(path: "str | Path | None" = None) -> Path:
+    """(Re)generate the committed DEM fixture (dem_small.tif).
+
+    64x64 Float32 single-band elevation raster, EPSG:32618 (UTM 18N), ~10 m
+    pixels, extent 500000-500640 E / 4500000-4500640 N. The surface is a SW→NE
+    gradient (0-300 m) plus a central Gaussian hill (+150 m) plus small noise,
+    clipped to 0-500 m — real elevation variation so slope/aspect/hillshade/
+    contour/color_relief produce meaningful output (the /Volumes sample DEM is a
+    2x2 all-zero placeholder). The committed .tif is the artifact examples load.
+    """
+    import numpy as np  # noqa: PLC0415
+    import rasterio  # noqa: PLC0415
+    from rasterio.crs import CRS  # noqa: PLC0415
+    from rasterio.transform import from_bounds  # noqa: PLC0415
+
+    repo_root = Path(__file__).parents[4]
+    dest = Path(path) if path else repo_root / DEM
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    width, height = 64, 64
+    transform = from_bounds(500000.0, 4500000.0, 500640.0, 4500640.0, width, height)
+    x = np.linspace(0, 1, width)
+    y = np.linspace(0, 1, height)
+    xx, yy = np.meshgrid(x, y)
+    base = 300 * (xx + yy) / 2
+    hill = 150 * np.exp(-((xx - 0.5) ** 2 + (yy - 0.5) ** 2) / 0.05)
+    noise = np.random.RandomState(42).normal(0, 5, (height, width))
+    dem = np.clip((base + hill + noise).astype(np.float32), 0, 500)
+
+    profile = {
+        "driver": "GTiff",
+        "dtype": "float32",
+        "width": width,
+        "height": height,
+        "count": 1,
+        "crs": CRS.from_epsg(32618),
+        "transform": transform,
+        "nodata": -9999.0,
+    }
+    with rasterio.open(dest, "w", **profile) as ds:
+        ds.write(dem, 1)
+    return dest
+
+
+def make_color_table(path: "str | Path | None" = None) -> Path:
+    """(Re)generate the committed gdaldem color table (elevation.clr).
+
+    An elevation ramp spanning the DEM fixture's 0-311 m range, consumed by
+    rst_color_relief. gdaldem format: ``elevation R G B`` per line, ``nv`` for
+    the NoData color.
+    """
+    repo_root = Path(__file__).parents[4]
+    dest = Path(path) if path else repo_root / COLOR_TABLE
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    ramp = (
+        "0 34 139 34\n"
+        "50 50 205 50\n"
+        "100 34 139 34\n"
+        "150 144 238 144\n"
+        "200 255 255 0\n"
+        "250 255 200 0\n"
+        "300 210 105 30\n"
+        "311 255 255 255\n"
+        "nv 0 0 0"
+    )
+    dest.write_text(ramp)
     return dest
 
 

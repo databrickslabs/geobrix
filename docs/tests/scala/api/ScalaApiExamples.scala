@@ -1627,4 +1627,242 @@ result.show()
 +------+-----------------------------------------------------------+
 """.trim
 
+  // =========================================================================
+  // Band-math examples (tabbed docs: 10 functions)
+  // =========================================================================
+
+  val rst_ndvi_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Uses multiband fixture (rgb_nir_small.tif, 3 bands: red=1, NIR=2, green=3)
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = rasters.select(rx.rst_ndvi(col("tile"), lit(1), lit(2)).alias("ndvi"))
+result.show(truncate = false)
+""".trim
+
+  val rst_ndvi_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|ndvi                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band NDVI: (NIR-Red)/(NIR+Red))
+""".trim
+
+  val rst_evi_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Uses multiband fixture with red, NIR, and green (as blue)
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = rasters.select(rx.rst_evi(col("tile"), lit(1), lit(2), lit(3)).alias("evi"))
+result.show(truncate = false)
+""".trim
+
+  val rst_evi_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|evi                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band EVI: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
+""".trim
+
+  val rst_savi_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Soil-Adjusted Vegetation Index: uses red (band 1) and NIR (band 2)
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = rasters.select(rx.rst_savi(col("tile"), lit(1), lit(2)).alias("savi"))
+result.show(truncate = false)
+""".trim
+
+  val rst_savi_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|savi                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band SAVI: (NIR-Red)/(NIR+Red+L)*(1+L))
+""".trim
+
+  val rst_ndwi_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Normalized Difference Water Index: green (band 3) and NIR (band 2)
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = rasters.select(rx.rst_ndwi(col("tile"), lit(3), lit(2)).alias("ndwi"))
+result.show(truncate = false)
+""".trim
+
+  val rst_ndwi_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|ndwi                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band NDWI: (Green-NIR)/(Green+NIR))
+""".trim
+
+  val rst_nbr_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Normalized Burn Ratio: NIR (band 2) and green (band 3) as SWIR substitute
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = rasters.select(rx.rst_nbr(col("tile"), lit(2), lit(3)).alias("nbr"))
+result.show(truncate = false)
+""".trim
+
+  val rst_nbr_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|nbr                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band NBR: (NIR-SWIR)/(NIR+SWIR))
+""".trim
+
+  val rst_index_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Generic index dispatcher: computes NDVI via named formula with band map
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val bandMap = create_map(lit("red"), lit(1), lit("nir"), lit(2))
+val result = rasters.select(rx.rst_index(col("tile"), lit("ndvi"), bandMap).alias("index"))
+result.show(truncate = false)
+""".trim
+
+  val rst_index_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|index                                                      |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band index raster from named formula)
+""".trim
+
+  val rst_combineavg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+rx.register(spark)
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val schema = StructType(Seq(StructField("tile", BinaryType()), StructField("band_index", IntegerType()), StructField("region", StringType())))
+// Load multiband, extract 3 bands, collect into array, then average
+val multiband = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_combineavg(collect_list("tile")).alias("combined"))
+result.show(truncate = false)
+""".trim
+
+  val rst_combineavg_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|combined                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(averaged combined raster)
+""".trim
+
+  val rst_derivedband_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Apply a GDAL VRT Python pixel-function that doubles band 1
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val pythonFunc = "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n    out_ar[:] = in_ar[0] * 2\n"
+val result = rasters.select(rx.rst_derivedband(col("tile"), lit(pythonFunc), lit("double")).alias("derived"))
+result.show(truncate = false)
+""".trim
+
+  val rst_derivedband_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|derived                                                    |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(derived band raster from Python UDF)
+""".trim
+
+  val rst_mapalgebra_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Map algebra: scale band values by factor of 2
+val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = rasters.select(rx.rst_mapalgebra(array(col("tile")), lit("A * 2")).alias("scaled"))
+result.show(truncate = false)
+""".trim
+
+  val rst_mapalgebra_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|scaled                                                     |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(result raster from map algebra: A * 2)
+""".trim
+
+  val rst_merge_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+rx.register(spark)
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val multiband = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_merge(collect_list("tile")).alias("merged"))
+result.show(truncate = false)
+""".trim
+
+  val rst_merge_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|merged                                                     |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(merged raster from aligned tiles)
+""".trim
+
 }

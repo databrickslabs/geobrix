@@ -169,10 +169,13 @@
       ]
     },
     "gbx_rst_combineavg": {
-      "examples": "Examples:\n      > SELECT date_trunc('week', date) as week, gbx_rst_fromfile(path, 'GTiff') as tile FROM daily_rasters WHERE date >= '2024-01-01' ) SELECT week, gbx_rst_combineavg(collect_list(tile)) as weekly_composite FROM loaded_tiles GROUP BY week;",
+      "examples": "Examples:\n      > SELECT gbx_rst_combineavg(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_combineavg_agg": {
@@ -213,10 +216,13 @@
       ]
     },
     "gbx_rst_derivedband": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_derivedband(tile, 'def my_func(arr): return arr * 2', 'my_func') as derived FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_derivedband(tile, 'def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\\n    out_ar[:] = in_ar[0] * 2\\n', 'double') AS result FROM multiband_rasters;",
       "usage_args": "tile, python_func, func_name",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_derivedband_agg": {
@@ -247,10 +253,13 @@
       ]
     },
     "gbx_rst_evi": {
-      "examples": "Examples:\n      > SELECT gbx_rst_evi(tile, 1, 2, 3) AS evi FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_evi(tile, 1, 2, 3) AS evi FROM multiband_rasters;",
       "usage_args": "tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_fillnodata": {
@@ -469,10 +478,13 @@
       ]
     },
     "gbx_rst_index": {
-      "examples": "Examples:\n      > SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 2)) AS ndvi FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 2)) AS ndvi FROM multiband_rasters;",
       "usage_args": "tile, formula_name, band_map",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_initnodata": {
@@ -503,10 +515,13 @@
       ]
     },
     "gbx_rst_mapalgebra": {
-      "examples": "Examples:\n      > SELECT gbx_rst_mapalgebra( tiles, '{\"calc\": \"A-B\", \"A_index\": 0, \"B_index\": 1}' ) as difference FROM raster_arrays;",
+      "examples": "Examples:\n      > SELECT gbx_rst_mapalgebra(array(tile), 'A * 2') AS result FROM multiband_rasters;",
       "usage_args": "tiles, json_spec",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_max": {
@@ -540,10 +555,13 @@
       ]
     },
     "gbx_rst_merge": {
-      "examples": "Examples:\n      > SELECT id, gbx_rst_fromfile(path, 'GTiff') as tile FROM raster_paths ) SELECT gbx_rst_merge(collect_list(tile)) as merged_mosaic FROM loaded_tiles;",
+      "examples": "Examples:\n      > SELECT gbx_rst_merge(array(tile)) AS merged FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_merge_agg": {
@@ -577,24 +595,33 @@
       ]
     },
     "gbx_rst_nbr": {
-      "examples": "Examples:\n      > SELECT gbx_rst_nbr(tile, 2, 3) AS nbr FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_nbr(tile, 2, 3) AS nbr FROM multiband_rasters;",
       "usage_args": "tile, nir_idx, swir_idx",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_ndvi": {
-      "examples": "Examples:\n      > SELECT path, date, gbx_rst_ndvi(tile, 4, 8) as ndvi_tile, gbx_rst_avg(gbx_rst_ndvi(tile, 4, 8))[0] as mean_ndvi FROM sentinel2_images;",
+      "examples": "Examples:\n      > SELECT gbx_rst_ndvi(tile, 1, 2) AS ndvi FROM multiband_rasters;",
       "usage_args": "tile, red_idx, nir_idx",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_ndwi": {
-      "examples": "Examples:\n      > SELECT gbx_rst_ndwi(tile, 1, 2) AS ndwi FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_ndwi(tile, 3, 2) AS ndwi FROM multiband_rasters;",
       "usage_args": "tile, green_idx, nir_idx",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_numbands": {
@@ -824,10 +851,13 @@
       ]
     },
     "gbx_rst_savi": {
-      "examples": "Examples:\n      > SELECT gbx_rst_savi(tile, 1, 2, 0.5) AS savi FROM rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_savi(tile, 1, 2, 0.5) AS savi FROM multiband_rasters;",
       "usage_args": "tile, red_idx, nir_idx, [l]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_scalex": {

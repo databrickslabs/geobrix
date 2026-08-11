@@ -2321,3 +2321,314 @@ rst_bng_rasterize_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 (returns a v2 Tile)
 """
+
+
+# ---------------------------------------------------------------------------
+# rst_ndvi -- compute NDVI from red and NIR bands
+# Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
+# Output: tile struct (single-band raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_ndvi_python_heavy_example(spark):
+    """Compute NDVI from multiband tile using red (band 1) and NIR (band 2)."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    result = df.select(rx.rst_ndvi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
+    return result["tile"]
+
+
+rst_ndvi_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band NDVI raster: (NIR-Red)/(NIR+Red))
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_evi -- Enhanced Vegetation Index from red, NIR, blue
+# Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
+# Output: tile struct (single-band raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_evi_python_heavy_example(spark):
+    """Compute EVI using red (band 1), NIR (band 2), and green (band 3) as blue."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    result = df.select(
+        rx.rst_evi("tile", f.lit(1), f.lit(2), f.lit(3)).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_evi_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band EVI raster: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_savi -- Soil-Adjusted Vegetation Index
+# Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
+# Output: tile struct (single-band raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_savi_python_heavy_example(spark):
+    """Compute SAVI from red (band 1) and NIR (band 2) bands."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    result = df.select(rx.rst_savi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
+    return result["tile"]
+
+
+rst_savi_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band SAVI raster: (NIR-Red)/(NIR+Red+L)*(1+L))
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_ndwi -- Normalized Difference Water Index
+# Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
+# Output: tile struct (single-band raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_ndwi_python_heavy_example(spark):
+    """Compute NDWI from green (band 3) and NIR (band 2) bands."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    result = df.select(rx.rst_ndwi("tile", f.lit(3), f.lit(2)).alias("tile")).first()
+    return result["tile"]
+
+
+rst_ndwi_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band NDWI raster: (Green-NIR)/(Green+NIR))
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_nbr -- Normalized Burn Ratio (NIR - SWIR)
+# Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
+# Note: fixture has no SWIR; using green (band 3) as substitute for demo
+# Output: tile struct (single-band raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_nbr_python_heavy_example(spark):
+    """Compute NBR using NIR (band 2) and green (band 3) as SWIR substitute."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    result = df.select(rx.rst_nbr("tile", f.lit(2), f.lit(3)).alias("tile")).first()
+    return result["tile"]
+
+
+rst_nbr_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band NBR raster: (NIR-SWIR)/(NIR+SWIR))
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_index -- generic dispatcher for named spectral indices
+# Fixture: multiband_tile_df_heavy(spark) (3 bands: red=1, NIR=2, green=3)
+# Output: tile struct (single-band raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_index_python_heavy_example(spark):
+    """Compute NDVI via the generic rst_index dispatcher with band map."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    band_map = f.create_map(f.lit("red"), f.lit(1), f.lit("nir"), f.lit(2))
+    result = df.select(
+        rx.rst_index("tile", f.lit("ndvi"), band_map).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_index_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band index raster computed from named formula)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combineavg -- combine multiple tiles by averaging
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combineavg_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by averaging."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from _fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combineavg(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combineavg_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(averaged combined raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_derivedband -- apply Python UDF to produce derived band
+# Fixture: multiband_tile_df_heavy(spark) (3 bands)
+# Output: tile struct (raster with derived band)
+# ---------------------------------------------------------------------------
+
+
+def rst_derivedband_python_heavy_example(spark):
+    """Apply a Python pixel-function to derive a band (doubles band 1).
+
+    ``python_func`` follows GDAL's VRT pixel-function signature; ``func_name``
+    names the callable within it.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    python_func = (
+        "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, "
+        "raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n"
+        "    out_ar[:] = in_ar[0] * 2\n"
+    )
+    result = df.select(
+        rx.rst_derivedband("tile", f.lit(python_func), f.lit("double")).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_derivedband_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(raster with derived band from Python UDF)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_mapalgebra -- apply map algebra expression
+# Fixture: multiband_tile_df_heavy(spark) (3 bands)
+# Output: tile struct (result raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_mapalgebra_python_heavy_example(spark):
+    """Apply map algebra expression 'A * 2' to scale band values."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    result = df.select(
+        rx.rst_mapalgebra(f.array("tile"), f.lit("A * 2")).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_mapalgebra_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(result raster from map algebra expression A * 2)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_merge -- merge/mosaic multiple raster tiles
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_merge_python_heavy_example(spark):
+    """Merge 3 aligned band tiles into a single raster."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from _fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_merge(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_merge_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(merged raster from co-registered input tiles)
+"""

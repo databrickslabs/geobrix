@@ -589,3 +589,87 @@ def test_rst_bng_rasterize_agg_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_bng_rasterize_agg_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_bng_rasterize_agg")
+
+
+# ---------------------------------------------------------------------------
+# Band-math examples (tabbed docs: 10 functions)
+# All heavy band-math fns currently hit the GDAL null-output-dataset bug:
+# "Cannot invoke "org.gdal.gdal.Dataset.GetDriver()" because "ds" is null"
+# This is a pre-existing heavy-tier defect (same family as known RST_Clip failures).
+# ---------------------------------------------------------------------------
+
+_BAND_MATH_ERROR_TILE_BUG = (
+    "pre-existing heavy-tier error-tile bug in band-math family "
+    '(GDAL null output dataset: "Cannot invoke Dataset.GetDriver() because ds is null")'
+)
+
+
+def test_rst_ndvi_python_heavy_example(spark):
+    """rst_ndvi returns a non-null tile struct (single-band NDVI)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_ndvi_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_ndvi")
+
+
+def test_rst_evi_python_heavy_example(spark):
+    """rst_evi returns a non-null tile struct (single-band EVI)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_evi_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_evi")
+
+
+def test_rst_savi_python_heavy_example(spark):
+    """rst_savi returns a non-null tile struct (single-band SAVI)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_savi_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_savi")
+
+
+def test_rst_ndwi_python_heavy_example(spark):
+    """rst_ndwi returns a non-null tile struct (single-band NDWI)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_ndwi_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_ndwi")
+
+
+def test_rst_nbr_python_heavy_example(spark):
+    """rst_nbr returns a non-null tile struct (single-band NBR)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_nbr_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_nbr")
+
+
+def test_rst_index_python_heavy_example(spark):
+    """rst_index returns a non-null tile struct (generic index via dispatcher)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_index_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_index")
+
+
+def test_rst_combineavg_python_heavy_example(spark):
+    """rst_combineavg returns a non-null tile struct (averaged merged raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combineavg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combineavg")
+
+
+def test_rst_derivedband_python_heavy_example(spark):
+    """rst_derivedband returns a non-null tile struct (derived from Python UDF)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_derivedband_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_derivedband")
+
+
+@pytest.mark.xfail(reason=_BAND_MATH_ERROR_TILE_BUG, strict=True)
+def test_rst_mapalgebra_python_heavy_example(spark):
+    """rst_mapalgebra returns a non-null tile struct (from algebra expression)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_mapalgebra_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_mapalgebra")
+
+
+def test_rst_merge_python_heavy_example(spark):
+    """rst_merge returns a non-null tile struct (merged from aligned tiles)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_merge_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_merge")

@@ -5,21 +5,32 @@ All SQL examples are executable and tested. These are imported into the
 documentation via CodeFromTest components to ensure single-copy pattern.
 
 Run Common setup first (Python/Scala) to register RasterX; then create the
-view below so SQL examples can use FROM rasters.
+views below so SQL examples can use FROM rasters or FROM multiband_rasters.
 """
 
-# Sample path at runtime (path_config)
+# Sample paths at runtime (path_config)
 from path_config import SAMPLE_DATA_BASE
 
 SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
-# Common setup: create temp view so SQL examples can use FROM rasters
-RASTERX_SQL_SETUP = f"""-- After registering RasterX (Python: rx.register(spark)), create the view:
+# Multiband fixture for band-math examples. Import under an underscore alias so
+# the imported function is not picked up by inspect.getmembers in the
+# test_all_sql_* introspection guards (which require public names to be
+# *_sql_example functions).
+from _fixtures import multiband_path as _multiband_path
+
+MULTIBAND_RASTER_PATH = str(_multiband_path())
+
+# Common setup: create temp views so SQL examples can use FROM rasters or FROM multiband_rasters
+RASTERX_SQL_SETUP = f"""-- After registering RasterX (Python: rx.register(spark)), create the views:
 CREATE OR REPLACE TEMP VIEW rasters AS
-SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;"""
+SELECT * FROM gdal.`{SAMPLE_RASTER_PATH}`;
+
+CREATE OR REPLACE TEMP VIEW multiband_rasters AS
+SELECT * FROM gdal.`{MULTIBAND_RASTER_PATH}`;"""
 
 RASTERX_SQL_SETUP_output = """
-View `rasters` created. You can now run SELECT ... FROM rasters; for each example.
+Views `rasters` and `multiband_rasters` created. You can now run SELECT ... FROM rasters or FROM multiband_rasters.
 """
 
 # ============================================================================
@@ -867,32 +878,22 @@ rst_asformat_sql_example_output = """
 
 
 def rst_ndvi_sql_example():
-    """Calculate NDVI from multi-band imagery"""
-    return """
--- Calculate NDVI for Sentinel-2 imagery
-SELECT
-    path,
-    date,
-    gbx_rst_ndvi(tile, 4, 8) as ndvi_tile,
-    gbx_rst_avg(gbx_rst_ndvi(tile, 4, 8))[0] as mean_ndvi
-FROM sentinel2_images;
+    """Compute Normalized Difference Vegetation Index (NDVI).
 
--- Monthly vegetation trends
-SELECT
-    date_trunc('month', date) as month,
-    AVG(gbx_rst_avg(gbx_rst_ndvi(tile, 4, 8))[0]) as avg_monthly_ndvi
-FROM sentinel2_images
-GROUP BY date_trunc('month', date)
-ORDER BY month;
+    NDVI = (NIR - Red) / (NIR + Red). Input: multiband tile with red (band 1) and NIR (band 2).
+    Output: single-band Float32 tile.
+    """
+    return """
+SELECT gbx_rst_ndvi(tile, 1, 2) AS ndvi FROM multiband_rasters;
 """
 
 
 rst_ndvi_sql_example_output = """
-+----+----------+-----------------------------------------------------------+---------+
-|path|date      |ndvi_tile                                                  |mean_ndvi|
-+----+----------+-----------------------------------------------------------+---------+
-|... |2024-01-15|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|0.42     |
-+----+----------+-----------------------------------------------------------+---------+
++-----------------------------------------------------------+
+|ndvi                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """
 
 
@@ -1117,45 +1118,6 @@ rst_tryopen_sql_example_output = """
 # ============================================================================
 
 
-def rst_mapalgebra_sql_example():
-    """Apply map algebra expression"""
-    return """
--- Calculate difference between two rasters
-SELECT
-    gbx_rst_mapalgebra(
-        tiles,
-        '{"calc": "A-B", "A_index": 0, "B_index": 1}'
-    ) as difference
-FROM raster_arrays;
-"""
-
-
-rst_mapalgebra_sql_example_output = """
-+-----------------------------------------------------------+
-|difference                                                 |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-"""
-
-
-def rst_derivedband_sql_example():
-    """Apply Python UDF to derive a new band from tile (pyfunc and funcName are string literals)"""
-    return """
--- Apply custom Python function to raster band; requires registered UDF
-SELECT path, gbx_rst_derivedband(tile, 'def my_func(arr): return arr * 2', 'my_func') as derived FROM rasters;
-"""
-
-
-rst_derivedband_sql_example_output = """
-+----+-----------------------------------------------------------+
-|path|derived                                                    |
-+----+-----------------------------------------------------------+
-|... |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+----+-----------------------------------------------------------+
-"""
-
-
 def rst_derivedband_agg_sql_example():
     """Aggregator: apply Python UDF to tiles in group by"""
     return """
@@ -1198,30 +1160,6 @@ SELECT gbx_rst_updatetype(tile, 'Float32') as float_tile FROM rasters;
 rst_updatetype_sql_example_output = """
 +-----------------------------------------------------------+
 |float_tile                                                 |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-"""
-
-
-def rst_merge_sql_example():
-    """Merge multiple rasters into mosaic"""
-    return """
--- Merge rasters from a table
-WITH loaded_tiles AS (
-  SELECT
-    id,
-    gbx_rst_fromfile(path, 'GTiff') as tile
-  FROM raster_paths
-)
-SELECT gbx_rst_merge(collect_list(tile)) as merged_mosaic
-FROM loaded_tiles;
-"""
-
-
-rst_merge_sql_example_output = """
-+-----------------------------------------------------------+
-|merged_mosaic                                              |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
@@ -1962,34 +1900,6 @@ rst_separatebands_sql_example_output = """
 # ============================================================================
 
 
-def rst_combineavg_sql_example():
-    """Average multiple rasters for temporal composite"""
-    return """
--- Average rasters for temporal composite
-WITH loaded_tiles AS (
-  SELECT
-    date_trunc('week', date) as week,
-    gbx_rst_fromfile(path, 'GTiff') as tile
-  FROM daily_rasters
-  WHERE date >= '2024-01-01'
-)
-SELECT
-    week,
-    gbx_rst_combineavg(collect_list(tile)) as weekly_composite
-FROM loaded_tiles
-GROUP BY week;
-"""
-
-
-rst_combineavg_sql_example_output = """
-+-------------------+-----------------------------------------------------------+
-|week               |weekly_composite                                           |
-+-------------------+-----------------------------------------------------------+
-|2024-01-01 00:00:00|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-------------------+-----------------------------------------------------------+
-"""
-
-
 def rst_combineavg_agg_sql_example():
     """Aggregator for averaging rasters in group by"""
     return """
@@ -2327,11 +2237,14 @@ rst_color_relief_sql_example_output = """
 
 
 def rst_evi_sql_example():
-    """Enhanced Vegetation Index from red / NIR / blue bands."""
+    """Enhanced Vegetation Index from red / NIR / blue bands.
+
+    EVI = G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L). Defaults follow the
+    MODIS canonical coefficients: L=1.0, C1=6.0, C2=7.5, G=2.5.
+    Output: single-band Float32 tile.
+    """
     return """
--- EVI = G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L). Defaults follow the
--- MODIS canonical coefficients: L=1.0, C1=6.0, C2=7.5, G=2.5.
-SELECT gbx_rst_evi(tile, 1, 2, 3) AS evi FROM rasters;
+SELECT gbx_rst_evi(tile, 1, 2, 3) AS evi FROM multiband_rasters;
 """
 
 
@@ -2345,11 +2258,14 @@ rst_evi_sql_example_output = """
 
 
 def rst_savi_sql_example():
-    """Soil-Adjusted Vegetation Index from red / NIR bands."""
+    """Soil-Adjusted Vegetation Index from red / NIR bands.
+
+    SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L). L=0.5 (default) is a
+    balanced soil-vegetation tradeoff; L=0 reduces to NDVI.
+    Output: single-band Float32 tile.
+    """
     return """
--- SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L). L=0.5 (default) is a
--- balanced soil-vegetation tradeoff; L=0 reduces to NDVI.
-SELECT gbx_rst_savi(tile, 1, 2, 0.5) AS savi FROM rasters;
+SELECT gbx_rst_savi(tile, 1, 2, 0.5) AS savi FROM multiband_rasters;
 """
 
 
@@ -2363,11 +2279,14 @@ rst_savi_sql_example_output = """
 
 
 def rst_ndwi_sql_example():
-    """Normalized Difference Water Index from green / NIR bands."""
+    """Normalized Difference Water Index from green / NIR bands.
+
+    NDWI (McFeeters 1996) = (Green - NIR) / (Green + NIR). Positive values
+    typically indicate open water. Uses band 3 (green) and band 2 (NIR).
+    Output: single-band Float32 tile.
+    """
     return """
--- NDWI (McFeeters 1996) = (Green - NIR) / (Green + NIR). Positive values
--- typically indicate open water.
-SELECT gbx_rst_ndwi(tile, 1, 2) AS ndwi FROM rasters;
+SELECT gbx_rst_ndwi(tile, 3, 2) AS ndwi FROM multiband_rasters;
 """
 
 
@@ -2381,11 +2300,14 @@ rst_ndwi_sql_example_output = """
 
 
 def rst_nbr_sql_example():
-    """Normalized Burn Ratio from NIR / SWIR bands."""
+    """Normalized Burn Ratio from NIR / SWIR bands.
+
+    NBR = (NIR - SWIR) / (NIR + SWIR). Difference of pre-fire and post-fire
+    NBR (dNBR) is the canonical burn-severity index. Uses band 2 (NIR) and band 3 (SWIR proxy).
+    Output: single-band Float32 tile.
+    """
     return """
--- NBR = (NIR - SWIR) / (NIR + SWIR). Difference of pre-fire and post-fire
--- NBR (dNBR) is the canonical burn-severity index.
-SELECT gbx_rst_nbr(tile, 2, 3) AS nbr FROM rasters;
+SELECT gbx_rst_nbr(tile, 2, 3) AS nbr FROM multiband_rasters;
 """
 
 
@@ -2399,18 +2321,100 @@ rst_nbr_sql_example_output = """
 
 
 def rst_index_sql_example():
-    """Generic dispatcher for named spectral indices (NDVI shown)."""
+    """Generic dispatcher for named spectral indices (NDVI shown).
+
+    Pick a built-in formula by name and wire bands via a MAP<STRING, INT>.
+    Built-ins: ndvi, gndvi, msavi, ndvi_re, ndmi, ndsi.
+    Output: single-band Float32 tile.
+    """
     return """
--- Generic dispatcher - pick a built-in formula by name and wire bands by a
--- MAP<STRING, INT>. Built-ins: ndvi, gndvi, msavi, ndvi_re, ndmi, ndsi.
-SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 2)) AS ndvi
-FROM rasters;
+SELECT gbx_rst_index(tile, 'ndvi', map('red', 1, 'nir', 2)) AS ndvi FROM multiband_rasters;
 """
 
 
 rst_index_sql_example_output = """
 +-----------------------------------------------------------+
 |ndvi                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+"""
+
+
+def rst_combineavg_sql_example():
+    """Combine multiple aligned tiles via per-pixel NoData-aware mean.
+
+    Input: ARRAY of aligned tiles. Output: single-band Float32 tile.
+    """
+    return """
+SELECT gbx_rst_combineavg(array(tile)) AS combined FROM multiband_rasters;
+"""
+
+
+rst_combineavg_sql_example_output = """
++-----------------------------------------------------------+
+|combined                                                  |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+"""
+
+
+def rst_derivedband_sql_example():
+    """Apply a user-provided Python pixel-function to the tile's bands.
+
+    The function source (a string literal following GDAL's VRT pixel-function
+    signature) and its callable name are passed inline. Output: single-band tile.
+    """
+    return """
+SELECT gbx_rst_derivedband(tile, 'def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\\n    out_ar[:] = in_ar[0] * 2\\n', 'double') AS result FROM multiband_rasters;
+"""
+
+
+rst_derivedband_sql_example_output = """
++-----------------------------------------------------------+
+|result                                                    |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+"""
+
+
+def rst_mapalgebra_sql_example():
+    """Apply a map-algebra expression across an array of tiles.
+
+    Band 1 of each tile (in array order) binds to A, B, C, …; the expression is
+    evaluated with numexpr (safe math only). With one tile, A = band 1 and
+    'A * 2' doubles it. Output: single-band Float32 tile.
+    """
+    return """
+SELECT gbx_rst_mapalgebra(array(tile), 'A * 2') AS result FROM multiband_rasters;
+"""
+
+
+rst_mapalgebra_sql_example_output = """
++-----------------------------------------------------------+
+|result                                                    |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+"""
+
+
+def rst_merge_sql_example():
+    """Mosaic (merge) multiple aligned tiles into one spanning their union.
+
+    Input: ARRAY of aligned tiles (same grid / CRS).
+    Output: single merged tile covering the union extent.
+    """
+    return """
+SELECT gbx_rst_merge(array(tile)) AS merged FROM multiband_rasters;
+"""
+
+
+rst_merge_sql_example_output = """
++-----------------------------------------------------------+
+|merged                                                    |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+

@@ -19,6 +19,7 @@ import rasterxLightCode from '!!raw-loader!../../tests/python/api/rasterx_functi
 import rasterxAccessorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_accessors_python_light.py';
 import rasterxTileopsLightCode from '!!raw-loader!../../tests/python/api/rasterx_tileops_python_light.py';
 import rasterxAggregatorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_aggregators_python_light.py';
+import rasterxBandmathLightCode from '!!raw-loader!../../tests/python/api/rasterx_bandmath_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -1937,9 +1938,14 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 
 **Signature:** `rst_combineavg(tiles: Column): Column` — Average multiple tiles (e.g. temporal composite).
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_combineavg_sql_example" outputConstant="rst_combineavg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_combineavg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_convolve
 
@@ -1972,9 +1978,14 @@ Powered by **rasterio** with GDAL VRT Python pixel functions. A pixel function a
 
 **Signature:** `rst_derivedband(tile: Column, pyfunc: String, funcName: String): Column` — Apply Python UDF to derive band.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_derivedband_sql_example" outputConstant="rst_derivedband_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_derivedband"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_filter
 
@@ -2047,9 +2058,14 @@ Powered by **NumExpr**. Bands map to `A`, `B`, `C`, … and the expression is ev
 
 **Signature:** `rst_mapalgebra(tiles: Column, expression: Column): Column` — Map algebra expression (e.g. A-B).
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_mapalgebra_sql_example" outputConstant="rst_mapalgebra_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_mapalgebra"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_merge
 
@@ -2061,9 +2077,14 @@ Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) 
 
 **Signature:** `rst_merge(tiles: Column): Column` — Merge tiles into mosaic.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_merge_sql_example" outputConstant="rst_merge_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_merge"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_ndvi
 
@@ -2075,9 +2096,14 @@ Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pi
 
 **Signature:** `rst_ndvi(tile: Column, redBand: Column, nirBand: Column): Column` — NDVI from band indices.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_ndvi_sql_example" outputConstant="rst_ndvi_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_ndvi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_rastertoworldcoord
 
@@ -2511,9 +2537,14 @@ Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pi
 
 **Signature:** `rst_evi(tile: Column, redBand: Column, nirBand: Column, blueBand: Column): Column` — Enhanced Vegetation Index. Formula: `G * (NIR - Red) / (NIR + C1*Red - C2*Blue + L)` with MODIS canonical coefficients `G=2.5, L=1.0, C1=6.0, C2=7.5`.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_evi_sql_example" outputConstant="rst_evi_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_evi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_savi
 
@@ -2525,9 +2556,14 @@ Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pi
 
 **Signature:** `rst_savi(tile: Column, redBand: Column, nirBand: Column, l: Column): Column` — Soil-Adjusted Vegetation Index. Formula: `(NIR - Red) / (NIR + Red + L) * (1 + L)`. `L = 0.5` (the canonical default) is a balanced soil/vegetation tradeoff; `L = 0` reduces SAVI to NDVI.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_savi_sql_example" outputConstant="rst_savi_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_savi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_ndwi
 
@@ -2539,9 +2575,14 @@ Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pi
 
 **Signature:** `rst_ndwi(tile: Column, greenBand: Column, nirBand: Column): Column` — Normalized Difference Water Index (McFeeters 1996). Formula: `(Green - NIR) / (Green + NIR)`. Positive values typically indicate open water.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_ndwi_sql_example" outputConstant="rst_ndwi_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_ndwi"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_nbr
 
@@ -2553,9 +2594,14 @@ Powered by **rasterio** + **NumPy**. Valid pixels match the heavyweight tier; pi
 
 **Signature:** `rst_nbr(tile: Column, nirBand: Column, swirBand: Column): Column` — Normalized Burn Ratio. Formula: `(NIR - SWIR) / (NIR + SWIR)`. The pre-/post-fire difference (`dNBR`) is the canonical burn-severity index.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_nbr_sql_example" outputConstant="rst_nbr_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_nbr"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ### rst_index
 
@@ -2567,9 +2613,14 @@ Powered by **rasterio** + **NumExpr**. Generic named-index dispatcher over a `ba
 
 **Signature:** `rst_index(tile: Column, indexName: Column, bandMap: Column): Column` — Generic dispatcher that picks a built-in formula by name and wires bands via a `MAP<STRING, INT>` (e.g. `map('red', 1, 'nir', 2)`). Built-in names: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi`, `ndsi`.
 
-**SQL:**
-
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_index_sql_example" outputConstant="rst_index_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_index"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxBandmathLightCode} pythonLightSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
+/>
 
 ---
 

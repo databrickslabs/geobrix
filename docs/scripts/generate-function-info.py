@@ -257,6 +257,8 @@ def discover_and_collect(registered: Optional[List[str]] = None) -> dict:
     sys.path.insert(0, DOCS_ROOT)
     # Examples in rasterx_functions_sql.py import `path_config` from docs/tests/python/
     sys.path.insert(0, os.path.join(DOCS_ROOT, "tests", "python"))
+    # ...and `_fixtures` (e.g. multiband_path) from docs/tests/python/api/
+    sys.path.insert(0, os.path.join(DOCS_ROOT, "tests", "python", "api"))
     result = {}
     try:
         for module_path, local_prefix, spark_prefix in MODULES:

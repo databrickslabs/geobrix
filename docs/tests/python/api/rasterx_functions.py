@@ -2562,11 +2562,8 @@ def rst_mapalgebra_python_heavy_example(spark):
     from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
-    # calc is written space-free: the heavy tier's gdal_calc invocation splits the
-    # command on spaces, so a spaced expression would be mangled. numexpr (light)
-    # accepts either form, so the space-free calc is portable across both tiers.
     ndvi_spec = (
-        '{"calc": "(A-B)/(A+B)", '
+        '{"calc": "(A - B) / (A + B)", '
         '"A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
     )
     result = df.select(

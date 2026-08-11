@@ -118,6 +118,41 @@ class GDALCalcTest extends AnyFunSuite with BeforeAndAfterAll {
         Try(Files.deleteIfExists(Paths.get(outputPath)))
     }
 
+    test("tokenizeCommand keeps a quoted spaced --calc as ONE token, quotes stripped") {
+        val cmd = """gdal_calc -A in.tif --A_band=2 --calc="(A - B) / (A + B)" --outfile=out.tif"""
+        val toks = GDALCalc.tokenizeCommand(cmd)
+        toks should contain("--calc=(A - B) / (A + B)")
+        // the spaced expression must NOT be shattered across tokens
+        toks should not contain "--calc=(A"
+        toks should contain("-A")
+        toks should contain("in.tif")
+        toks should contain("--outfile=out.tif")
+    }
+
+    test("tokenizeCommand is byte-identical to split for an UNQUOTED command") {
+        // Back-compat guard: no quotes => same tokens the old split(\" \") produced.
+        val cmd = "gdal_calc -A in.tif --A_band=1 --calc=A*2 --co TILED=YES --outfile=out.tif"
+        GDALCalc.tokenizeCommand(cmd) shouldBe cmd.split(" ").filterNot(_.isEmpty).toSeq
+    }
+
+    test("GDALCalc should handle a calc expression containing SPACES") {
+        // Regression: executeCalc used to split the whole command on " ", shattering a
+        // spaced --calc value into broken argv tokens so gdal_calc produced empty output.
+        // A quoted, spaced expression must now survive as a single argument.
+        val outputPath = s"/tmp/gdal_calc_spaced_${UUID.randomUUID()}.tif"
+        val command =
+            s"""gdal_calc -A $multiBandPath --A_band=1 -B $multiBandPath --B_band=2 --calc="(B - A) / (B + A)" --outfile=$outputPath"""
+        val (resultDs, metadata) = GDALCalc.executeCalc(command, outputPath, Map.empty, multiBandDs)
+
+        resultDs should not be null
+        resultDs.GetRasterCount shouldBe 1
+        // A real (non-empty) output file must have been produced.
+        Files.size(Paths.get(outputPath)) should be > 0L
+
+        resultDs.delete()
+        Try(Files.deleteIfExists(Paths.get(outputPath)))
+    }
+
     test("GDALCalc should support conditional operations") {
         val outputPath = s"/tmp/gdal_calc_conditional_${UUID.randomUUID()}.tif"
         // Mask values: only keep pixels > 100 from band 1

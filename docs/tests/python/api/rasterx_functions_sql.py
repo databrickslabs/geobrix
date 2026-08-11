@@ -2296,7 +2296,7 @@ def rst_mapalgebra_sql_example():
     return """
 SELECT gbx_rst_mapalgebra(
            array(tile),
-           '{"calc": "(A-B)/(A+B)", "A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
+           '{"calc": "(A - B) / (A + B)", "A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
        ) AS ndvi
 FROM multiband_rasters;
 """

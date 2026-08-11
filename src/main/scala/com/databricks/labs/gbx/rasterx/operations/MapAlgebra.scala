@@ -48,7 +48,9 @@ object MapAlgebra {
         "gdal_calc" + paramRasters +
             namedBands +
             s" --outfile=$resultPath" +
-            s" --calc=$calc" + s" $extraOptions"
+            // Quote the calc value so an expression containing spaces (e.g. "(A - B) / (A + B)")
+            // survives command tokenization as a single argument (see GDALCalc.tokenizeCommand).
+            s""" --calc="$calc"""" + s" $extraOptions"
     }
 
 }

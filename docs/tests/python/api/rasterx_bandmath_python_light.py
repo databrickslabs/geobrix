@@ -248,7 +248,7 @@ def rst_mapalgebra_python_light_example(spark):
     df = spark.table("multiband_rasters")
 
     ndvi_spec = (
-        '{"calc": "(A-B)/(A+B)", '
+        '{"calc": "(A - B) / (A + B)", '
         '"A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
     )
     result = df.select(

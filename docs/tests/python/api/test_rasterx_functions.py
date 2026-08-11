@@ -932,3 +932,116 @@ def test_rst_rasterize_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_rasterize_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_rasterize")
+
+
+# ============================================================================
+# H3 Rastertogrid Functions — Heavy Tier Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "example_fn,aggregator",
+    [
+        ("rst_h3_rastertogridavg_python_heavy_example", "avg"),
+        ("rst_h3_rastertogridcount_python_heavy_example", "count"),
+        ("rst_h3_rastertogridmax_python_heavy_example", "max"),
+        ("rst_h3_rastertogridmin_python_heavy_example", "min"),
+        ("rst_h3_rastertogridmedian_python_heavy_example", "median"),
+        ("rst_h3_rastertogridsum_python_heavy_example", "sum"),
+        ("rst_h3_rastertogridvariance_python_heavy_example", "variance"),
+        ("rst_h3_rastertogridstddev_python_heavy_example", "stddev"),
+    ],
+)
+def test_h3_rastertogrid_python_heavy_example(spark, example_fn, aggregator):
+    """Each H3 rastertogrid function returns ARRAY<ARRAY<struct(cellID, measure)>>."""
+    assert rasterx_functions is not None
+    example_func = getattr(rasterx_functions, example_fn)
+    result = example_func(spark)
+
+    # Result is ARRAY<ARRAY<struct>>: outer array = bands, inner array = cells
+    assert isinstance(result, list), f"{example_fn} should return a list"
+    assert len(result) == 3, f"{example_fn} should have 3 bands (multiband fixture)"
+
+    # Each band should have at least some cells
+    for band_idx, band_cells in enumerate(result):
+        assert isinstance(band_cells, list), f"band {band_idx} cells should be a list"
+        assert (
+            len(band_cells) > 0
+        ), f"band {band_idx} should have >0 cells for {aggregator}"
+
+
+# ============================================================================
+# Quadbin Rastertogrid Functions — Heavy Tier Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "example_fn,aggregator",
+    [
+        ("rst_quadbin_rastertogridavg_python_heavy_example", "avg"),
+        ("rst_quadbin_rastertogridcount_python_heavy_example", "count"),
+        ("rst_quadbin_rastertogridmax_python_heavy_example", "max"),
+        ("rst_quadbin_rastertogridmin_python_heavy_example", "min"),
+        ("rst_quadbin_rastertogridmedian_python_heavy_example", "median"),
+        ("rst_quadbin_rastertogridsum_python_heavy_example", "sum"),
+        ("rst_quadbin_rastertogridvariance_python_heavy_example", "variance"),
+        ("rst_quadbin_rastertogridstddev_python_heavy_example", "stddev"),
+    ],
+)
+def test_quadbin_rastertogrid_python_heavy_example(spark, example_fn, aggregator):
+    """Each Quadbin rastertogrid function returns ARRAY<ARRAY<struct(cellID, measure)>>."""
+    assert rasterx_functions is not None
+    example_func = getattr(rasterx_functions, example_fn)
+    result = example_func(spark)
+
+    assert isinstance(result, list), f"{example_fn} should return a list"
+    assert len(result) == 3, f"{example_fn} should have 3 bands (multiband fixture)"
+
+    # Each band should have at least some cells
+    for band_idx, band_cells in enumerate(result):
+        assert isinstance(band_cells, list), f"band {band_idx} cells should be a list"
+        assert (
+            len(band_cells) > 0
+        ), f"band {band_idx} should have >0 cells for {aggregator}"
+
+
+# ============================================================================
+# BNG Rastertogrid Functions — Heavy Tier Tests
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "example_fn,aggregator",
+    [
+        ("rst_bng_rastertogridavg_python_heavy_example", "avg"),
+        ("rst_bng_rastertogridcount_python_heavy_example", "count"),
+        ("rst_bng_rastertogridmax_python_heavy_example", "max"),
+        ("rst_bng_rastertogridmin_python_heavy_example", "min"),
+        ("rst_bng_rastertogridmedian_python_heavy_example", "median"),
+        ("rst_bng_rastertogridsum_python_heavy_example", "sum"),
+        ("rst_bng_rastertogridvariance_python_heavy_example", "variance"),
+        ("rst_bng_rastertogridstddev_python_heavy_example", "stddev"),
+    ],
+)
+def test_bng_rastertogrid_python_heavy_example(spark, example_fn, aggregator):
+    """Each BNG rastertogrid function returns ARRAY<ARRAY<struct(cellID, measure)>>.
+
+    BNG reprojects the raster to EPSG:27700 before binning; cell ids are STRINGs.
+    Cell count depends on the raster's extent, so the per-band count is tolerant
+    (>= 0) rather than fixed.
+    """
+    assert rasterx_functions is not None
+    example_func = getattr(rasterx_functions, example_fn)
+    result = example_func(spark)
+
+    # Result is ARRAY<ARRAY<struct>>: outer array = bands, inner array = cells
+    assert isinstance(result, list), f"{example_fn} should return a list"
+    assert len(result) == 3, f"{example_fn} should have 3 bands (multiband fixture)"
+
+    for band_idx, band_cells in enumerate(result):
+        assert isinstance(band_cells, list), f"band {band_idx} cells should be a list"
+        # When cells are present, cell ids are BNG grid-square STRINGs.
+        for cell in band_cells:
+            assert isinstance(
+                cell["cellID"], str
+            ), f"band {band_idx} BNG cellID must be a STRING"

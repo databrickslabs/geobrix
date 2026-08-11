@@ -62,59 +62,83 @@
       ]
     },
     "gbx_rst_bng_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_bng_rastertogridavg(tile, '1km') as bng_grid FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridcount(tile, 2) as pixel_counts FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as max_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridmax(tile, '1km')[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as median_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridmedian(tile, '1km')[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridmin(tile, '1km')[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as stddev_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridstddev(tile, '1km')[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridsum(tile, '1km')[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT cell.cellID as bng_cell, cell.measure as variance_value FROM rasters LATERAL VIEW explode(gbx_rst_bng_rastertogridvariance(tile, '1km')[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_bng_tessellate": {
@@ -406,59 +430,83 @@
       ]
     },
     "gbx_rst_h3_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_h3_rastertogridavg(tile, 6) as h3_grid FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridcount(tile, 5) as pixel_counts FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as max_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridmax(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as median_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridmedian(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridmin(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as stddev_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridstddev(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridsum(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT cell.cellID as h3_cell, cell.measure as variance_value FROM rasters LATERAL VIEW explode(gbx_rst_h3_rastertogridvariance(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_h3_tessellate": {
@@ -722,59 +770,83 @@
       ]
     },
     "gbx_rst_quadbin_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT path, gbx_rst_quadbin_rastertogridavg(tile, 6) as quadbin_grid FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridcount(tile, 5) as pixel_counts FROM rasters;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as max_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmax(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as median_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmedian(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as min_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmin(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as stddev_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridstddev(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as sum_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridsum(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT cell.cellID as quadbin_cell, cell.measure as variance_value FROM rasters LATERAL VIEW explode(gbx_rst_quadbin_rastertogridvariance(tile, 7)[0]) AS cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t;",
       "usage_args": "tile, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_quadbin_tessellate": {

@@ -3493,3 +3493,545 @@ rst_rasterize_python_heavy_example_output = """
 +-----------------------------------------------------------+
 (rasterized tile: pixels inside the polygon carry the burn value)
 """
+
+
+# ============================================================================
+# H3 Rastertogrid Functions — Heavy Tier
+# ============================================================================
+
+
+def rst_h3_rastertogridavg_python_heavy_example(spark):
+    """Aggregate raster values to H3 grid using average (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    # Heavy tier returns ARRAY<ARRAY<struct(cellID, measure)>> per band
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridavg("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridavg_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 123.45}, {cellID: 599686042433355776, measure: 124.20}], ...]
+(ARRAY<ARRAY<struct(cellID, measure)>>: one inner array per band, one struct per cell)
+"""
+
+
+def rst_h3_rastertogridcount_python_heavy_example(spark):
+    """Count pixels per H3 cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridcount("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridcount_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 256}, ...], ...]
+(pixel count per band × H3 cell)
+"""
+
+
+def rst_h3_rastertogridmax_python_heavy_example(spark):
+    """Get maximum values per H3 cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridmax("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridmax_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 255.0}, ...], ...]
+(max value per band × H3 cell)
+"""
+
+
+def rst_h3_rastertogridmin_python_heavy_example(spark):
+    """Get minimum values per H3 cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridmin("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridmin_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 0.0}, ...], ...]
+(min value per band × H3 cell)
+"""
+
+
+def rst_h3_rastertogridmedian_python_heavy_example(spark):
+    """Get median values per H3 cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridmedian("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridmedian_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 120.5}, ...], ...]
+(median value per band × H3 cell)
+"""
+
+
+def rst_h3_rastertogridsum_python_heavy_example(spark):
+    """Sum pixel values per H3 cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridsum("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridsum_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 31563.0}, ...], ...]
+(sum of pixel values per band × H3 cell)
+"""
+
+
+def rst_h3_rastertogridvariance_python_heavy_example(spark):
+    """Get variance per H3 cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridvariance("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridvariance_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 1245.5}, ...], ...]
+(variance per band × H3 cell)
+"""
+
+
+def rst_h3_rastertogridstddev_python_heavy_example(spark):
+    """Get standard deviation per H3 cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_h3_rastertogridstddev("tile", f.lit(4)).alias("h3_grid")
+    ).first()["h3_grid"]
+    return result
+
+
+rst_h3_rastertogridstddev_python_heavy_example_output = """
+[[{cellID: 599686042433355775, measure: 35.29}, ...], ...]
+(standard deviation per band × H3 cell)
+"""
+
+
+# ============================================================================
+# Quadbin Rastertogrid Functions — Heavy Tier
+# ============================================================================
+
+
+def rst_quadbin_rastertogridavg_python_heavy_example(spark):
+    """Aggregate raster values to Quadbin grid using average (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridavg("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridavg_python_heavy_example_output = """
+[[{cellID: 12345, measure: 123.45}, ...], ...]
+(ARRAY<ARRAY<struct(cellID, measure)>> per band × Quadbin cell)
+"""
+
+
+def rst_quadbin_rastertogridcount_python_heavy_example(spark):
+    """Count pixels per Quadbin cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridcount("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridcount_python_heavy_example_output = """
+[[{cellID: 12345, measure: 256}, ...], ...]
+(pixel count per band × Quadbin cell)
+"""
+
+
+def rst_quadbin_rastertogridmax_python_heavy_example(spark):
+    """Get maximum values per Quadbin cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridmax("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridmax_python_heavy_example_output = """
+[[{cellID: 12345, measure: 255.0}, ...], ...]
+(max value per band × Quadbin cell)
+"""
+
+
+def rst_quadbin_rastertogridmin_python_heavy_example(spark):
+    """Get minimum values per Quadbin cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridmin("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridmin_python_heavy_example_output = """
+[[{cellID: 12345, measure: 0.0}, ...], ...]
+(min value per band × Quadbin cell)
+"""
+
+
+def rst_quadbin_rastertogridmedian_python_heavy_example(spark):
+    """Get median values per Quadbin cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridmedian("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridmedian_python_heavy_example_output = """
+[[{cellID: 12345, measure: 120.5}, ...], ...]
+(median value per band × Quadbin cell)
+"""
+
+
+def rst_quadbin_rastertogridsum_python_heavy_example(spark):
+    """Sum pixel values per Quadbin cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridsum("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridsum_python_heavy_example_output = """
+[[{cellID: 12345, measure: 31563.0}, ...], ...]
+(sum of pixel values per band × Quadbin cell)
+"""
+
+
+def rst_quadbin_rastertogridvariance_python_heavy_example(spark):
+    """Get variance per Quadbin cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridvariance("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridvariance_python_heavy_example_output = """
+[[{cellID: 12345, measure: 1245.5}, ...], ...]
+(variance per band × Quadbin cell)
+"""
+
+
+def rst_quadbin_rastertogridstddev_python_heavy_example(spark):
+    """Get standard deviation per Quadbin cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_quadbin_rastertogridstddev("tile", f.lit(4)).alias("quadbin_grid")
+    ).first()["quadbin_grid"]
+    return result
+
+
+rst_quadbin_rastertogridstddev_python_heavy_example_output = """
+[[{cellID: 12345, measure: 35.29}, ...], ...]
+(standard deviation per band × Quadbin cell)
+"""
+
+
+# ============================================================================
+# BNG Rastertogrid Functions — Heavy Tier
+# NOTE: BNG requires coordinates over Britain (EPSG:27700).
+# The multiband fixture (EPSG:4326) yields zero cells (expected).
+# ============================================================================
+
+
+def rst_bng_rastertogridavg_python_heavy_example(spark):
+    """Aggregate raster values to BNG grid using average (heavy tier).
+
+    NOTE: BNG reprojects the raster to EPSG:27700 before binning. Use a
+    raster whose extent lies over Britain for geographically meaningful cell ids.
+    """
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridavg("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridavg_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def rst_bng_rastertogridcount_python_heavy_example(spark):
+    """Count pixels per BNG cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridcount("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridcount_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def rst_bng_rastertogridmax_python_heavy_example(spark):
+    """Get maximum values per BNG cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridmax("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridmax_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def rst_bng_rastertogridmin_python_heavy_example(spark):
+    """Get minimum values per BNG cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridmin("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridmin_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def rst_bng_rastertogridmedian_python_heavy_example(spark):
+    """Get median values per BNG cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridmedian("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridmedian_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def rst_bng_rastertogridsum_python_heavy_example(spark):
+    """Sum pixel values per BNG cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridsum("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridsum_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def rst_bng_rastertogridvariance_python_heavy_example(spark):
+    """Get variance per BNG cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridvariance("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridvariance_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def rst_bng_rastertogridstddev_python_heavy_example(spark):
+    """Get standard deviation per BNG cell (heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    from pyspark.sql import functions as f
+
+    result = df.select(
+        rx.rst_bng_rastertogridstddev("tile", f.lit(3)).alias("bng_grid")
+    ).first()["bng_grid"]
+    return result
+
+
+rst_bng_rastertogridstddev_python_heavy_example_output = """
+[[Row(cellID='OW5575', measure=...), Row(cellID='OW5574', measure=...), ...],  # band 1
+ [...],  # band 2
+ [...]]  # band 3
+(ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""

@@ -1246,344 +1246,304 @@ rst_bng_tessellate_sql_example_output = """
 def rst_h3_rastertogridavg_sql_example():
     """Aggregate raster values to H3 grid using average"""
     return """
--- Aggregate raster to H3 grid
-SELECT
-    path,
-    gbx_rst_h3_rastertogridavg(tile, 6) as h3_grid
-FROM rasters;
-
--- Get cells from first band
-SELECT
-    path,
-    cell.cellID as h3_cell,
-    cell.measure as avg_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_h3_rastertogridavg(tile, 6)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t
 """
 
 
 rst_h3_rastertogridavg_sql_example_output = """
-+----+------------------------------+
-|path|h3_grid                       |
-+----+------------------------------+
-|... |[[{599686042433355775, 0.42}]]|
-+----+------------------------------+
-
-+----+--------+---------+
-|path|h3_cell |avg_value|
-+----+--------+---------+
-|... |8f283...|0.45     |
-+----+--------+---------+
++----+---------------------+-------+
+|band|cellID               |measure|
++----+---------------------+-------+
+|1   |599686042433355775   |123.45|
+|1   |599686043374559743   |98.12 |
+|2   |599686042433355775   |210.67|
++----+---------------------+-------+
+(one row per band×cell; LATERAL output yields [band, cellID, measure] columns)
 """
 
 
 def rst_h3_rastertogridcount_sql_example():
     """Count pixels per H3 cell"""
     return """
-SELECT
-    gbx_rst_h3_rastertogridcount(tile, 5) as pixel_counts
-FROM rasters;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t
 """
 
 
 rst_h3_rastertogridcount_sql_example_output = """
-+------------------------------+
-|pixel_counts                  |
-+------------------------------+
-|[[{599686042433355775, 1024}]]|
-+------------------------------+
++----+---------------------+-------+
+|band|cellID               |measure|
++----+---------------------+-------+
+|1   |599686042433355775   |256    |
+|1   |599686043374559743   |240    |
+|2   |599686042433355775   |256    |
++----+---------------------+-------+
+(pixel count per band×cell)
 """
 
 
 def rst_h3_rastertogridmax_sql_example():
     """Get maximum values per H3 cell"""
     return """
-SELECT
-    cell.cellID as h3_cell,
-    cell.measure as max_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_h3_rastertogridmax(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t
 """
 
 
 rst_h3_rastertogridmax_sql_example_output = """
-+--------+---------+
-|h3_cell |max_value|
-+--------+---------+
-|8f283...|255.0    |
-+--------+---------+
++----+---------------------+-------+
+|band|cellID               |measure|
++----+---------------------+-------+
+|1   |599686042433355775   |255.0  |
+|1   |599686043374559743   |254.0  |
+|2   |599686042433355775   |240.0  |
++----+---------------------+-------+
+(max value per band×cell)
 """
 
 
 def rst_h3_rastertogridmin_sql_example():
     """Get minimum values per H3 cell"""
     return """
-SELECT
-    cell.cellID as h3_cell,
-    cell.measure as min_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_h3_rastertogridmin(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t
 """
 
 
 rst_h3_rastertogridmin_sql_example_output = """
-+--------+---------+
-|h3_cell |min_value|
-+--------+---------+
-|8f283...|0.0      |
-+--------+---------+
++----+---------------------+-------+
+|band|cellID               |measure|
++----+---------------------+-------+
+|1   |599686042433355775   |0.0    |
+|1   |599686043374559743   |10.0   |
+|2   |599686042433355775   |5.0    |
++----+---------------------+-------+
+(min value per band×cell)
 """
 
 
 def rst_h3_rastertogridmedian_sql_example():
     """Get median values per H3 cell"""
     return """
-SELECT
-    cell.cellID as h3_cell,
-    cell.measure as median_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_h3_rastertogridmedian(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t
 """
 
 
 rst_h3_rastertogridmedian_sql_example_output = """
-+--------+------------+
-|h3_cell |median_value|
-+--------+------------+
-|8f283...|128.0       |
-+--------+------------+
++----+---------------------+-------+
+|band|cellID               |measure|
++----+---------------------+-------+
+|1   |599686042433355775   |120.5  |
+|1   |599686043374559743   |122.0  |
+|2   |599686042433355775   |115.0  |
++----+---------------------+-------+
+(median value per band×cell)
 """
 
 
 def rst_h3_rastertogridsum_sql_example():
     """Get the sum of pixel values per H3 cell"""
     return """
-SELECT
-    cell.cellID as h3_cell,
-    cell.measure as sum_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_h3_rastertogridsum(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t
 """
 
 
 rst_h3_rastertogridsum_sql_example_output = """
-+--------+---------+
-|h3_cell |sum_value|
-+--------+---------+
-|8f283...|4096.0   |
-+--------+---------+
++----+---------------------+--------+
+|band|cellID               |measure |
++----+---------------------+--------+
+|1   |599686042433355775   |31563.0 |
+|1   |599686043374559743   |29488.0 |
+|2   |599686042433355775   |28672.0 |
++----+---------------------+--------+
+(sum of pixel values per band×cell)
 """
 
 
 def rst_h3_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per H3 cell"""
     return """
-SELECT
-    cell.cellID as h3_cell,
-    cell.measure as variance_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_h3_rastertogridvariance(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t
 """
 
 
 rst_h3_rastertogridvariance_sql_example_output = """
-+--------+--------------+
-|h3_cell |variance_value|
-+--------+--------------+
-|8f283...|152.0         |
-+--------+--------------+
++----+---------------------+-------+
+|band|cellID               |measure|
++----+---------------------+-------+
+|1   |599686042433355775   |1245.5 |
+|1   |599686043374559743   |1389.2 |
+|2   |599686042433355775   |1156.0 |
++----+---------------------+-------+
+(variance per band×cell)
 """
 
 
 def rst_h3_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per H3 cell"""
     return """
-SELECT
-    cell.cellID as h3_cell,
-    cell.measure as stddev_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_h3_rastertogridstddev(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t
 """
 
 
 rst_h3_rastertogridstddev_sql_example_output = """
-+--------+------------+
-|h3_cell |stddev_value|
-+--------+------------+
-|8f283...|12.33       |
-+--------+------------+
++----+---------------------+------+
+|band|cellID               |measure|
++----+---------------------+------+
+|1   |599686042433355775   |35.29 |
+|1   |599686043374559743   |37.27 |
+|2   |599686042433355775   |34.01 |
++----+---------------------+------+
+(standard deviation per band×cell)
 """
 
 
 def rst_quadbin_rastertogridavg_sql_example():
     """Aggregate raster values to CARTO quadbin v0 cells using average"""
     return """
--- Aggregate raster to quadbin grid
-SELECT
-    path,
-    gbx_rst_quadbin_rastertogridavg(tile, 6) as quadbin_grid
-FROM rasters;
-
--- Get cells from the first band
-SELECT
-    path,
-    cell.cellID as quadbin_cell,
-    cell.measure as avg_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_quadbin_rastertogridavg(tile, 6)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridavg_sql_example_output = """
-+----+-------------------------------+
-|path|quadbin_grid                   |
-+----+-------------------------------+
-|... |[[{5188146770730811391, 0.42}]]|
-+----+-------------------------------+
-
-+----+------------+---------+
-|path|quadbin_cell|avg_value|
-+----+------------+---------+
-|... |5188146...  |0.45     |
-+----+------------+---------+
++----+-----+-------+
+|band|cellID|measure|
++----+-----+-------+
+|1   |12345|123.45 |
+|1   |12346|124.20 |
+|2   |12345|210.67 |
++----+-----+-------+
+(one row per band×Quadbin cell)
 """
 
 
 def rst_quadbin_rastertogridcount_sql_example():
     """Count pixels per CARTO quadbin v0 cell"""
     return """
-SELECT
-    gbx_rst_quadbin_rastertogridcount(tile, 5) as pixel_counts
-FROM rasters;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridcount_sql_example_output = """
-+-------------------------------+
-|pixel_counts                   |
-+-------------------------------+
-|[[{5188146770730811391, 1024}]]|
-+-------------------------------+
++----+-----+-------+
+|band|cellID|measure|
++----+-----+-------+
+|1   |12345|256    |
+|1   |12346|240    |
+|2   |12345|256    |
++----+-----+-------+
+(pixel count per band×Quadbin cell)
 """
 
 
 def rst_quadbin_rastertogridmax_sql_example():
     """Get maximum values per CARTO quadbin v0 cell"""
     return """
-SELECT
-    cell.cellID as quadbin_cell,
-    cell.measure as max_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmax(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridmax_sql_example_output = """
-+------------+---------+
-|quadbin_cell|max_value|
-+------------+---------+
-|5188146...  |255.0    |
-+------------+---------+
++----+-----+-------+
+|band|cellID|measure|
++----+-----+-------+
+|1   |12345|255.0  |
+|1   |12346|254.0  |
+|2   |12345|240.0  |
++----+-----+-------+
+(max value per band×Quadbin cell)
 """
 
 
 def rst_quadbin_rastertogridmin_sql_example():
     """Get minimum values per CARTO quadbin v0 cell"""
     return """
-SELECT
-    cell.cellID as quadbin_cell,
-    cell.measure as min_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmin(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridmin_sql_example_output = """
-+------------+---------+
-|quadbin_cell|min_value|
-+------------+---------+
-|5188146...  |0.0      |
-+------------+---------+
++----+-----+-------+
+|band|cellID|measure|
++----+-----+-------+
+|1   |12345|0.0    |
+|1   |12346|10.0   |
+|2   |12345|5.0    |
++----+-----+-------+
+(min value per band×Quadbin cell)
 """
 
 
 def rst_quadbin_rastertogridmedian_sql_example():
     """Get median values per CARTO quadbin v0 cell"""
     return """
-SELECT
-    cell.cellID as quadbin_cell,
-    cell.measure as median_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_quadbin_rastertogridmedian(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridmedian_sql_example_output = """
-+------------+------------+
-|quadbin_cell|median_value|
-+------------+------------+
-|5188146...  |128.0       |
-+------------+------------+
++----+-----+-------+
+|band|cellID|measure|
++----+-----+-------+
+|1   |12345|120.5  |
+|1   |12346|122.0  |
+|2   |12345|115.0  |
++----+-----+-------+
+(median value per band×Quadbin cell)
 """
 
 
 def rst_quadbin_rastertogridsum_sql_example():
     """Get the sum of pixel values per CARTO quadbin v0 cell"""
     return """
-SELECT
-    cell.cellID as quadbin_cell,
-    cell.measure as sum_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_quadbin_rastertogridsum(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridsum_sql_example_output = """
-+------------+---------+
-|quadbin_cell|sum_value|
-+------------+---------+
-|5188146...  |4096.0   |
-+------------+---------+
++----+-----+--------+
+|band|cellID|measure |
++----+-----+--------+
+|1   |12345|31563.0 |
+|1   |12346|29488.0 |
+|2   |12345|28672.0 |
++----+-----+--------+
+(sum of pixel values per band×Quadbin cell)
 """
 
 
 def rst_quadbin_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per CARTO quadbin v0 cell"""
     return """
-SELECT
-    cell.cellID as quadbin_cell,
-    cell.measure as variance_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_quadbin_rastertogridvariance(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridvariance_sql_example_output = """
-+------------+--------------+
-|quadbin_cell|variance_value|
-+------------+--------------+
-|5188146...  |152.0         |
-+------------+--------------+
++----+-----+-------+
+|band|cellID|measure|
++----+-----+-------+
+|1   |12345|1245.5 |
+|1   |12346|1389.2 |
+|2   |12345|1156.0 |
++----+-----+-------+
+(variance per band×Quadbin cell)
 """
 
 
 def rst_quadbin_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per CARTO quadbin v0 cell"""
     return """
-SELECT
-    cell.cellID as quadbin_cell,
-    cell.measure as stddev_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_quadbin_rastertogridstddev(tile, 7)[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t
 """
 
 
 rst_quadbin_rastertogridstddev_sql_example_output = """
-+------------+------------+
-|quadbin_cell|stddev_value|
-+------------+------------+
-|5188146...  |12.33       |
-+------------+------------+
++----+-----+------+
+|band|cellID|measure|
++----+-----+------+
+|1   |12345|35.29 |
+|1   |12346|37.27 |
+|2   |12345|34.01 |
++----+-----+------+
+(standard deviation per band×Quadbin cell)
 """
 
 
@@ -1603,172 +1563,152 @@ rst_quadbin_rastertogridstddev_sql_example_output = """
 def rst_bng_rastertogridavg_sql_example():
     """Aggregate raster values to British National Grid cells using average"""
     return """
--- Aggregate raster to a 1km BNG grid ('1km' == integer resolution 3).
-SELECT
-    path,
-    gbx_rst_bng_rastertogridavg(tile, '1km') as bng_grid
-FROM rasters;
-
--- Explode the first band into (BNG string cell id, average) rows.
-SELECT
-    path,
-    cell.cellID as bng_cell,
-    cell.measure as avg_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_bng_rastertogridavg(tile, '1km')[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t
 """
 
 
 rst_bng_rastertogridavg_sql_example_output = """
-+----+------------------+
-|path|bng_grid          |
-+----+------------------+
-|... |[[{TQ38SW, 0.42}]]|
-+----+------------------+
-
-+----+--------+---------+
-|path|bng_cell|avg_value|
-+----+--------+---------+
-|... |TQ38SW  |0.45     |
-+----+--------+---------+
++----+------+------------------+
+|band|cellID|measure           |
++----+------+------------------+
+|1   |OW5574|77.22222222222223 |
+|1   |OW5575|80.66666666666667 |
+|2   |OW5574|144.33333333333334|
++----+------+------------------+
+(one row per band × BNG cell; cellID is a STRING grid-square label)
 """
 
 
 def rst_bng_rastertogridcount_sql_example():
     """Count pixels per British National Grid cell"""
     return """
-SELECT
-    gbx_rst_bng_rastertogridcount(tile, 2) as pixel_counts
-FROM rasters;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t
 """
 
 
 rst_bng_rastertogridcount_sql_example_output = """
-+----------------+
-|pixel_counts    |
-+----------------+
-|[[{TQ38, 1024}]]|
-+----------------+
++----+------+-------+
+|band|cellID|measure|
++----+------+-------+
+|1   |OW5574|9      |
+|1   |OW5575|21     |
+|2   |OW5574|9      |
++----+------+-------+
+(pixel count per band × BNG cell)
 """
 
 
 def rst_bng_rastertogridmax_sql_example():
     """Get maximum values per British National Grid cell"""
     return """
-SELECT
-    cell.cellID as bng_cell,
-    cell.measure as max_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_bng_rastertogridmax(tile, '1km')[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t
 """
 
 
 rst_bng_rastertogridmax_sql_example_output = """
-+--------+---------+
-|bng_cell|max_value|
-+--------+---------+
-|TQ38SW  |255.0    |
-+--------+---------+
++----+------+-------+
+|band|cellID|measure|
++----+------+-------+
+|1   |OW5574|106.0  |
+|1   |OW5575|118.0  |
+|1   |OW5674|107.0  |
++----+------+-------+
+(max value per band × BNG cell)
 """
 
 
 def rst_bng_rastertogridmin_sql_example():
     """Get minimum values per British National Grid cell"""
     return """
-SELECT
-    cell.cellID as bng_cell,
-    cell.measure as min_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_bng_rastertogridmin(tile, '1km')[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t
 """
 
 
 rst_bng_rastertogridmin_sql_example_output = """
-+--------+---------+
-|bng_cell|min_value|
-+--------+---------+
-|TQ38SW  |0.0      |
-+--------+---------+
++----+------+-------+
+|band|cellID|measure|
++----+------+-------+
+|1   |OW5574|0.0    |
+|1   |OW5575|54.0   |
+|1   |OW5674|65.0   |
++----+------+-------+
+(min value per band × BNG cell)
 """
 
 
 def rst_bng_rastertogridmedian_sql_example():
     """Get median values per British National Grid cell"""
     return """
-SELECT
-    cell.cellID as bng_cell,
-    cell.measure as median_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_bng_rastertogridmedian(tile, '1km')[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t
 """
 
 
 rst_bng_rastertogridmedian_sql_example_output = """
-+--------+------------+
-|bng_cell|median_value|
-+--------+------------+
-|TQ38SW  |128.0       |
-+--------+------------+
++----+------+-------+
+|band|cellID|measure|
++----+------+-------+
+|1   |OW5574|88.0   |
+|1   |OW5575|80.0   |
+|1   |OW5674|81.0   |
++----+------+-------+
+(median value per band × BNG cell)
 """
 
 
 def rst_bng_rastertogridsum_sql_example():
     """Get the sum of pixel values per British National Grid cell"""
     return """
-SELECT
-    cell.cellID as bng_cell,
-    cell.measure as sum_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_bng_rastertogridsum(tile, '1km')[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t
 """
 
 
 rst_bng_rastertogridsum_sql_example_output = """
-+--------+---------+
-|bng_cell|sum_value|
-+--------+---------+
-|TQ38SW  |32896.0  |
-+--------+---------+
++----+------+-------+
+|band|cellID|measure|
++----+------+-------+
+|1   |OW5574|695.0  |
+|1   |OW5575|1694.0 |
+|1   |OW5674|774.0  |
++----+------+-------+
+(sum of pixel values per band × BNG cell)
 """
 
 
 def rst_bng_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per British National Grid cell"""
     return """
-SELECT
-    cell.cellID as bng_cell,
-    cell.measure as variance_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_bng_rastertogridvariance(tile, '1km')[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t
 """
 
 
 rst_bng_rastertogridvariance_sql_example_output = """
-+--------+--------------+
-|bng_cell|variance_value|
-+--------+--------------+
-|TQ38SW  |152.0         |
-+--------+--------------+
++----+------+------------------+
+|band|cellID|measure           |
++----+------+------------------+
+|1   |OW5574|963.7283950617285 |
+|1   |OW5575|464.126984126984  |
+|1   |OW5674|196.66666666666666|
++----+------+------------------+
+(population variance per band × BNG cell)
 """
 
 
 def rst_bng_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per British National Grid cell"""
     return """
-SELECT
-    cell.cellID as bng_cell,
-    cell.measure as stddev_value
-FROM rasters
-LATERAL VIEW explode(gbx_rst_bng_rastertogridstddev(tile, '1km')[0]) AS cell;
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t
 """
 
 
 rst_bng_rastertogridstddev_sql_example_output = """
-+--------+------------+
-|bng_cell|stddev_value|
-+--------+------------+
-|TQ38SW  |12.33       |
-+--------+------------+
++----+------+------------------+
+|band|cellID|measure           |
++----+------+------------------+
+|1   |OW5574|31.043975181373415|
+|1   |OW5575|21.543606571950388|
+|1   |OW5674|14.023789311975086|
++----+------+------------------+
+(population standard deviation per band × BNG cell)
 """
 
 

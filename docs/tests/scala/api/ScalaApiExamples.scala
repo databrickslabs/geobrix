@@ -2547,4 +2547,376 @@ result.show(truncate = false)
 (rasterized tile: pixels inside the polygon carry the burn value)
 """
 
+  // ============================================================================
+  // H3 Rastertogrid Functions — Scala
+  // ============================================================================
+
+  val rst_h3_rastertogridavg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridavg(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridavg_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 123.45), ...), ...)
+(Seq[Seq[Row]]: outer seq = bands, inner seq = cells per band)"""
+
+  val rst_h3_rastertogridcount_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridcount(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridcount_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 256), ...), ...)
+(pixel count per band×cell)"""
+
+  val rst_h3_rastertogridmax_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridmax(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridmax_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 255.0), ...), ...)
+(max value per band×cell)"""
+
+  val rst_h3_rastertogridmin_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridmin(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridmin_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 0.0), ...), ...)
+(min value per band×cell)"""
+
+  val rst_h3_rastertogridmedian_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridmedian(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridmedian_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 120.5), ...), ...)
+(median value per band×cell)"""
+
+  val rst_h3_rastertogridsum_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridsum(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridsum_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 31563.0), ...), ...)
+(sum of pixel values per band×cell)"""
+
+  val rst_h3_rastertogridvariance_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridvariance(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridvariance_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 1245.5), ...), ...)
+(variance per band×cell)"""
+
+  val rst_h3_rastertogridstddev_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_h3_rastertogridstddev(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
+  val rst_h3_rastertogridstddev_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 599686042433355775, measure: 35.29), ...), ...)
+(standard deviation per band×cell)"""
+
+  // ============================================================================
+  // Quadbin Rastertogrid Functions — Scala
+  // ============================================================================
+
+  val rst_quadbin_rastertogridavg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridavg(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridavg_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 123.45), ...), ...)
+(Seq[Seq[Row]]: outer seq = bands, inner seq = cells per band)"""
+
+  val rst_quadbin_rastertogridcount_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridcount(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridcount_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 256), ...), ...)
+(pixel count per band×cell)"""
+
+  val rst_quadbin_rastertogridmax_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridmax(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridmax_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 255.0), ...), ...)
+(max value per band×cell)"""
+
+  val rst_quadbin_rastertogridmin_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridmin(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridmin_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 0.0), ...), ...)
+(min value per band×cell)"""
+
+  val rst_quadbin_rastertogridmedian_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridmedian(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridmedian_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 120.5), ...), ...)
+(median value per band×cell)"""
+
+  val rst_quadbin_rastertogridsum_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridsum(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridsum_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 31563.0), ...), ...)
+(sum of pixel values per band×cell)"""
+
+  val rst_quadbin_rastertogridvariance_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridvariance(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridvariance_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 1245.5), ...), ...)
+(variance per band×cell)"""
+
+  val rst_quadbin_rastertogridstddev_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_quadbin_rastertogridstddev(col("tile"), lit(4)).alias("quadbin_grid")).first()
+result.getAs[Seq[Seq[Row]]]("quadbin_grid")
+""".trim
+
+  val rst_quadbin_rastertogridstddev_scala_example_output: String =
+    """Vector(Vector(Row(cellID: 12345, measure: 35.29), ...), ...)
+(standard deviation per band×cell)"""
+
+  // ============================================================================
+  // BNG Rastertogrid Functions — Scala (reprojects to EPSG:27700; STRING cell ids)
+  // ============================================================================
+
+  val rst_bng_rastertogridavg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridavg(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridavg_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
+  val rst_bng_rastertogridcount_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridcount(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridcount_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
+  val rst_bng_rastertogridmax_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridmax(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridmax_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
+  val rst_bng_rastertogridmin_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridmin(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridmin_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
+  val rst_bng_rastertogridmedian_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridmedian(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridmedian_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
+  val rst_bng_rastertogridsum_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridsum(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridsum_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
+  val rst_bng_rastertogridvariance_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridvariance(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridvariance_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
+  val rst_bng_rastertogridstddev_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_bng_rastertogridstddev(col("tile"), lit(3)).alias("bng_grid")).first()
+result.getAs[Seq[Seq[Row]]]("bng_grid")
+""".trim
+
+  val rst_bng_rastertogridstddev_scala_example_output: String =
+    """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
+(Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
+
 }

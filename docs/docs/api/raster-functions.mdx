@@ -23,6 +23,7 @@ import rasterxBandmathLightCode from '!!raw-loader!../../tests/python/api/raster
 import rasterxTerrainLightCode from '!!raw-loader!../../tests/python/api/rasterx_terrain_python_light.py';
 import rasterxTransformsLightCode from '!!raw-loader!../../tests/python/api/rasterx_transforms_python_light.py';
 import rasterxGeneratorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_generators_python_light.py';
+import rasterxGridaggLightCode from '!!raw-loader!../../tests/python/api/rasterx_gridagg_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -1543,7 +1544,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridavg_sql_example" outputConstant="rst_h3_rastertogridavg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridavg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_h3_rastertogridcount
 
@@ -1557,7 +1565,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridcount_sql_example" outputConstant="rst_h3_rastertogridcount_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridcount"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_h3_rastertogridmax
 
@@ -1571,7 +1586,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridmax_sql_example" outputConstant="rst_h3_rastertogridmax_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridmax"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_h3_rastertogridmin
 
@@ -1585,7 +1607,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridmin_sql_example" outputConstant="rst_h3_rastertogridmin_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridmin"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_h3_rastertogridmedian
 
@@ -1599,7 +1628,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridmedian_sql_example" outputConstant="rst_h3_rastertogridmedian_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridmedian"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_h3_rastertogridsum
 
@@ -1613,7 +1649,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridsum_sql_example" outputConstant="rst_h3_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridsum"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_h3_rastertogridvariance
 
@@ -1627,7 +1670,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridvariance_sql_example" outputConstant="rst_h3_rastertogridvariance_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridvariance"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_h3_rastertogridstddev
 
@@ -1641,7 +1691,14 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_h3_rastertogridstddev_sql_example" outputConstant="rst_h3_rastertogridstddev_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_h3_rastertogridstddev"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### gbx_h3_cell_bbox
 
@@ -1728,7 +1785,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridavg_sql_example" outputConstant="rst_quadbin_rastertogridavg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridavg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_quadbin_rastertogridcount
 
@@ -1742,7 +1806,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridcount_sql_example" outputConstant="rst_quadbin_rastertogridcount_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridcount"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_quadbin_rastertogridmax
 
@@ -1756,7 +1827,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridmax_sql_example" outputConstant="rst_quadbin_rastertogridmax_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridmax"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_quadbin_rastertogridmin
 
@@ -1770,7 +1848,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridmin_sql_example" outputConstant="rst_quadbin_rastertogridmin_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridmin"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_quadbin_rastertogridmedian
 
@@ -1784,7 +1869,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridmedian_sql_example" outputConstant="rst_quadbin_rastertogridmedian_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridmedian"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_quadbin_rastertogridsum
 
@@ -1798,7 +1890,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridsum_sql_example" outputConstant="rst_quadbin_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridsum"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_quadbin_rastertogridvariance
 
@@ -1812,7 +1911,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridvariance_sql_example" outputConstant="rst_quadbin_rastertogridvariance_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridvariance"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_quadbin_rastertogridstddev
 
@@ -1826,7 +1932,14 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_quadbin_rastertogridstddev_sql_example" outputConstant="rst_quadbin_rastertogridstddev_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_quadbin_rastertogridstddev"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ---
 
@@ -1852,7 +1965,14 @@ Mean pixel value per BNG cell. The raster is reprojected to EPSG:27700 internall
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridavg_sql_example" outputConstant="rst_bng_rastertogridavg_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridavg"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_bng_rastertogridcount
 
@@ -1864,7 +1984,14 @@ Valid (non-NoData) pixel count per BNG cell.
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridcount_sql_example" outputConstant="rst_bng_rastertogridcount_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridcount"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_bng_rastertogridmax
 
@@ -1876,7 +2003,14 @@ Maximum pixel value per BNG cell.
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridmax_sql_example" outputConstant="rst_bng_rastertogridmax_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridmax"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_bng_rastertogridmin
 
@@ -1888,7 +2022,14 @@ Minimum pixel value per BNG cell.
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridmin_sql_example" outputConstant="rst_bng_rastertogridmin_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridmin"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_bng_rastertogridmedian
 
@@ -1900,7 +2041,14 @@ Median pixel value per BNG cell.
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridmedian_sql_example" outputConstant="rst_bng_rastertogridmedian_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridmedian"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_bng_rastertogridsum
 
@@ -1912,7 +2060,14 @@ Sum of pixel values per BNG cell.
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridsum_sql_example" outputConstant="rst_bng_rastertogridsum_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridsum"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_bng_rastertogridvariance
 
@@ -1924,7 +2079,14 @@ Population variance (`÷ n`, two-pass) of pixel values per BNG cell — a single
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridvariance_sql_example" outputConstant="rst_bng_rastertogridvariance_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridvariance"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ### rst_bng_rastertogridstddev
 
@@ -1936,7 +2098,14 @@ Population standard deviation (`sqrt` of the population variance) of pixel value
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_bng_rastertogridstddev_sql_example" outputConstant="rst_bng_rastertogridstddev_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_bng_rastertogridstddev"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGridaggLightCode} pythonLightSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ---
 

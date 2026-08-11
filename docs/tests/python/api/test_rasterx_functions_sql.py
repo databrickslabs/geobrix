@@ -930,46 +930,40 @@ def london_rasters_view(spark):
     spark.catalog.dropTempView("london_rasters")
 
 
-@pytest.mark.parametrize(
-    "example_attr,sql_fn",
-    [
-        ("rst_bng_rastertogridavg_sql_example", "gbx_rst_bng_rastertogridavg"),
-        ("rst_bng_rastertogridcount_sql_example", "gbx_rst_bng_rastertogridcount"),
-        ("rst_bng_rastertogridmax_sql_example", "gbx_rst_bng_rastertogridmax"),
-        ("rst_bng_rastertogridmin_sql_example", "gbx_rst_bng_rastertogridmin"),
-        ("rst_bng_rastertogridmedian_sql_example", "gbx_rst_bng_rastertogridmedian"),
-        ("rst_bng_rastertogridsum_sql_example", "gbx_rst_bng_rastertogridsum"),
-        (
-            "rst_bng_rastertogridvariance_sql_example",
-            "gbx_rst_bng_rastertogridvariance",
-        ),
-        ("rst_bng_rastertogridstddev_sql_example", "gbx_rst_bng_rastertogridstddev"),
-    ],
-)
-def test_bng_rastertogrid_sql_example(
-    spark, london_rasters, london_rasters_view, example_attr, sql_fn
-):
-    """Each BNG rastertogrid reducer emits STRING cell ids over a real UK raster."""
-    sql_template = getattr(rasterx_functions_sql, example_attr)()
-    assert sql_fn in sql_template, f"{example_attr} should mention {sql_fn}"
-    # Reducer returns ARRAY<ARRAY<STRUCT<cellID:STRING, measure>>>; explode band 0
-    # and assert the cell ids are BNG strings (e.g. TQ38SW), never numeric.
-    sql = f"""
-    SELECT cell.cellID AS bng_cell, cell.measure AS measure
-    FROM london_rasters
-    LATERAL VIEW explode({sql_fn}(tile, '1km')[0]) AS cell
-    """
-    result = spark.sql(sql).collect()
-    assert len(result) > 0, f"{sql_fn} produced no cells over the London raster"
-    import re
+# The rastertogrid SQL examples use the light-tier UDTF LATERAL form
+#   SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_<grid>_rastertogrid<agg>(tile, res) t
+# which resolves only under the light (pyrx) registration — the heavy tier
+# registers these names as scalar ARRAY-returning functions, so the TVF form is
+# UNRESOLVABLE_TABLE_VALUED_FUNCTION under `rx.register` (rasterx). This module
+# registers the heavy tier, so here we validate the example STRING shape only;
+# the executable round-trip lives in
+# test_rasterx_gridagg_python_light.py::test_rastertogrid_sql_example_executes,
+# which registers pyrx and runs each example against the multiband fixture.
+_RASTERTOGRID_SQL_EXAMPLES = [
+    (f"rst_{grid}_rastertogrid{agg}_sql_example", f"gbx_rst_{grid}_rastertogrid{agg}")
+    for grid in ("h3", "quadbin", "bng")
+    for agg in ("avg", "count", "max", "min", "median", "sum", "variance", "stddev")
+]
 
-    bng_re = re.compile(r"^[A-Z]{2}\d*[A-Z]*$")
-    for row in result:
-        assert isinstance(row["bng_cell"], str), "BNG cell id must be a STRING"
-        assert bng_re.match(
-            row["bng_cell"]
-        ), f"expected BNG string id, got '{row['bng_cell']}'"
-        assert row["measure"] is not None
+
+@pytest.mark.parametrize("example_attr,sql_fn", _RASTERTOGRID_SQL_EXAMPLES)
+def test_rastertogrid_sql_example_shape(example_attr, sql_fn):
+    """Each rastertogrid SQL example is a non-empty light-tier LATERAL UDTF query.
+
+    The example uses the modern `LATERAL gbx_rst_...(tile, res) t` table-function
+    form (superseding the old `LATERAL VIEW explode(...)` syntax). Execution is
+    covered in the light-tier test module; here we assert the string surface.
+    """
+    sql = getattr(rasterx_functions_sql, example_attr)()
+    assert isinstance(sql, str) and sql.strip(), f"{example_attr} must be non-empty"
+    assert sql_fn in sql, f"{example_attr} should mention {sql_fn}"
+    assert "LATERAL" in sql, f"{example_attr} should use the LATERAL UDTF form"
+    assert (
+        "LATERAL VIEW explode" not in sql
+    ), f"{example_attr} still uses the retired LATERAL VIEW explode syntax"
+    assert hasattr(
+        rasterx_functions_sql, f"{example_attr}_output"
+    ), f"{example_attr}_output constant missing"
 
 
 @pytest.fixture(scope="module")

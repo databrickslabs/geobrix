@@ -68,14 +68,13 @@ def test_schema_has_v2_fields():
 def test_build_tile_returns_v2_materialized_shape():
     """build_tile emits the 8-field v2 struct: raster set, provenance NULL,
     metadata carries driver/width/height/count (computed by opening the raster)."""
-    import rasterio
     import numpy as np
-    from io import BytesIO
+    import rasterio
+
     from databricks.labs.gbx.pyrx import _serde
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
     # a tiny in-memory 4x3 single-band GeoTIFF
-    buf = BytesIO()
     profile = dict(driver="GTiff", height=3, width=4, count=1, dtype="uint8")
     with rasterio.io.MemoryFile() as mf:
         with mf.open(**profile) as ds:

@@ -2,14 +2,11 @@ from databricks.labs.gbx.pyrx import _serde
 
 from .conftest import make_geotiff_bytes
 
-
-def test_tile_schema_matches_heavyweight():
-    names = [f.name for f in _serde.TILE_SCHEMA.fields]
-    assert names == ["cellid", "raster", "metadata"]
-    types = {f.name: f.dataType.typeName() for f in _serde.TILE_SCHEMA.fields}
-    assert types["cellid"] == "long"
-    assert types["raster"] == "binary"
-    assert types["metadata"] == "map"
+# NOTE: the tile-output schema contract is asserted by G1
+# (test_v2_tile_output_invariant.py::test_v2_schema_field_contract) and the
+# light≡heavy parity guard (G2, test_rasterx/test_tile_schema_parity.py). The
+# former per-function 3-field assertion here was removed when build_tile moved
+# to the 8-field v2 struct.
 
 
 def test_build_tile_populates_metadata():

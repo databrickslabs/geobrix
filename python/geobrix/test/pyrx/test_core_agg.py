@@ -3,6 +3,14 @@
 import numpy as np
 import pytest
 import shapely.wkb
+from pyspark.sql.types import (
+    BinaryType,
+    LongType,
+    MapType,
+    StringType,
+    StructField,
+    StructType,
+)
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from shapely.geometry import box
@@ -269,7 +277,7 @@ def test_derivedband_tiles_sum_across_group():
 
 
 def _tile_struct(raster_bytes, cellid=0):
-    """Minimal materialized tile dict matching TILE_SCHEMA."""
+    """Minimal materialized v1 tile input dict (cellid, raster, metadata)."""
     return {"cellid": cellid, "raster": raster_bytes, "metadata": {}}
 
 
@@ -409,23 +417,35 @@ def _corrupt_raster():
     return b"not a valid geotiff"
 
 
+# A 3-field (v1) tile input schema, defined locally to inject raw/corrupt bytes.
+# These tests deliberately feed a v1 tile to the aggregators: the light-tier
+# `_open` front-door accepts v1 tiles on INPUT indefinitely (the aggregators emit
+# v2), so a v1 input row is a realistic corrupt-skip scenario. Defined here rather
+# than importing a production constant so the test owns its fixture shape.
+_V1_TILE_INPUT_SCHEMA = StructType(
+    [
+        StructField("cellid", LongType(), nullable=False),
+        StructField("raster", BinaryType(), nullable=True),
+        StructField("metadata", MapType(StringType(), StringType()), nullable=True),
+    ]
+)
+
+
 def _spark_tile_df_raw(spark, raster_bytes_seq):
     """Create a one-group DataFrame of tile structs by injecting raw raster bytes.
 
-    Uses a schematized createDataFrame (TILE_SCHEMA rows) instead of
+    Uses a schematized createDataFrame (v1 tile input rows) instead of
     rst_fromcontent so that corrupt bytes can be injected without rst_fromcontent
     raising on open_tile during fromcontent. This matches how the heavy Scala tests
     inject corrupt bytes: they use rst_fromcontent on the heavy tier where build_tile
     is a GDAL open (which tolerates the inject path differently), but the light tier's
-    rst_fromcontent raises on corrupt bytes before the agg_udf is ever called.
+    rst_fromcontent raises on corrupt bytes before the agg_udf is ever called. The
+    aggregators accept a v1 tile on input (front-door contract) and emit v2.
     """
     from pyspark.sql import functions as sf
 
-    from databricks.labs.gbx.pyrx import _serde
-
-    schema = _serde.TILE_SCHEMA
     rows = [{"cellid": 0, "raster": rb, "metadata": {}} for rb in raster_bytes_seq]
-    df = spark.createDataFrame(rows, schema=schema)
+    df = spark.createDataFrame(rows, schema=_V1_TILE_INPUT_SCHEMA)
     return df.select(sf.lit(1).alias("g"), sf.struct("*").alias("tile"))
 
 
@@ -446,9 +466,7 @@ class TestGroupedAggUdfSkipsCorrupt:
         from pyspark.sql import functions as sf
 
         df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
-        result = df.groupBy("g").agg(
-            _combineavg_agg_udf(sf.col("tile")).alias("agg_bytes")
-        )
+        result = df.groupBy("g").agg(_combineavg_agg_udf(sf.col("tile")).alias("agg_bytes"))
         rows = result.collect()
         assert rows, "no rows returned"
         # combineavg prepends 8-byte cellid envelope; total > 8 bytes for a real tile.
@@ -472,14 +490,12 @@ class TestGroupedAggUdfSkipsCorrupt:
 
     def test_frombands_agg_udf_no_raise(self, spark):
         from pyspark.sql import functions as sf
-        from pyspark.sql.types import IntegerType, StructField, StructType
-
-        from databricks.labs.gbx.pyrx import _serde
+        from pyspark.sql.types import IntegerType
 
         # Build a two-row group: valid tile → band 1, corrupt bytes → band 2.
+        # Reuses the local v1 tile input schema (aggregators accept v1 on input).
         schema_with_band = StructType(
-            list(_serde.TILE_SCHEMA.fields)
-            + [StructField("band_idx", IntegerType(), True)]
+            list(_V1_TILE_INPUT_SCHEMA.fields) + [StructField("band_idx", IntegerType(), True)]
         )
         rows_data = [
             {"cellid": 0, "raster": _valid_raster(), "metadata": {}, "band_idx": 1},
@@ -507,9 +523,7 @@ class TestGroupedAggUdfSkipsCorrupt:
         from pyspark.sql import functions as sf
 
         df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
-        result = df.groupBy("g").agg(
-            _combineavg_agg_sql_udf(sf.col("tile")).alias("agg_bytes")
-        )
+        result = df.groupBy("g").agg(_combineavg_agg_sql_udf(sf.col("tile")).alias("agg_bytes"))
         rows = result.collect()
         assert rows, "no rows returned"
         agg_b = rows[0]["agg_bytes"]

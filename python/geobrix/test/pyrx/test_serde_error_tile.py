@@ -8,6 +8,6 @@ def test_build_error_tile_shape():
     assert t["metadata"]["last_error"] == "RST_ReTile: unreadable raster"
 
 
-def test_tile_schema_raster_is_nullable():
-    field = [f for f in _serde.TILE_SCHEMA.fields if f.name == "raster"][0]
-    assert field.nullable is True
+# The `raster`-nullable assertion formerly here targeted the removed legacy
+# TILE_SCHEMA constant. The v2 schema's field contract (raster nullable) is now
+# asserted by G1 (test_v2_tile_output_invariant.py) against V2_TILE_SCHEMA.

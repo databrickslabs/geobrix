@@ -23,6 +23,8 @@ Fixture assignments:
   rst_frombands (returns tile struct)
 """
 
+import pytest
+
 try:
     from . import rasterx_tileops_python_light as tileops_examples
 except (ModuleNotFoundError, ImportError):
@@ -30,6 +32,17 @@ except (ModuleNotFoundError, ImportError):
         import rasterx_tileops_python_light as tileops_examples
     except ModuleNotFoundError:
         tileops_examples = None
+
+
+@pytest.fixture(autouse=True)
+def _light_setup_views(spark):
+    """Register pyrx + create the four light-tier Setup views once per test, so
+    single-tile examples can read `spark.table("rasters")` etc."""
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from ._fixtures import create_setup_views_light  # noqa: PLC0415
+
+    rx.register(spark)
+    create_setup_views_light(spark)
 
 
 def _assert_materialized_tile(result, name):

@@ -14,6 +14,8 @@ Synthesized rows for: rst_rasterize_agg, rst_gridfrompoints_agg, rst_dtmfromgeom
   rst_h3_rasterize_agg, rst_quadbin_rasterize_agg, rst_bng_rasterize_agg.
 """
 
+import pytest
+
 try:
     from . import rasterx_aggregators_python_light as agg_examples
 except (ModuleNotFoundError, ImportError):
@@ -21,6 +23,18 @@ except (ModuleNotFoundError, ImportError):
         import rasterx_aggregators_python_light as agg_examples
     except ModuleNotFoundError:
         agg_examples = None
+
+
+@pytest.fixture(autouse=True)
+def _light_setup_views(spark):
+    """Register pyrx + create the four light-tier Setup views once per test.
+    Aggregator examples build their own multi-row input, but registration is now
+    the fixture's job (examples no longer call rx.register)."""
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from ._fixtures import create_setup_views_light  # noqa: PLC0415
+
+    rx.register(spark)
+    create_setup_views_light(spark)
 
 
 def _assert_tile(result, name):

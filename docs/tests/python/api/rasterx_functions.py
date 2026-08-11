@@ -23,25 +23,25 @@ SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 
 def _get_single_band_df_heavy(spark):
-    from _fixtures import single_band_tile_df_heavy  # noqa: PLC0415
+    from ._fixtures import single_band_tile_df_heavy  # noqa: PLC0415
 
     return single_band_tile_df_heavy(spark)
 
 
 def _get_multiband_df_heavy(spark):
-    from _fixtures import multiband_tile_df_heavy  # noqa: PLC0415
+    from ._fixtures import multiband_tile_df_heavy  # noqa: PLC0415
 
     return multiband_tile_df_heavy(spark)
 
 
 def _get_netcdf_df_heavy(spark):
-    from _fixtures import netcdf_tile_df_heavy  # noqa: PLC0415
+    from ._fixtures import netcdf_tile_df_heavy  # noqa: PLC0415
 
     return netcdf_tile_df_heavy(spark)
 
 
 def _get_dem_df_heavy(spark):
-    from _fixtures import dem_tile_df_heavy  # noqa: PLC0415
+    from ._fixtures import dem_tile_df_heavy  # noqa: PLC0415
 
     return dem_tile_df_heavy(spark)
 
@@ -53,7 +53,7 @@ def rasterx_setup_example(spark):
     The examples on this page read from four temp views; this builds all of them.
     """
     from databricks.labs.gbx.rasterx import functions as rx
-    from _fixtures import single_band_path, multiband_path, dem_path, netcdf_path
+    from ._fixtures import single_band_path, multiband_path, dem_path, netcdf_path
 
     rx.register(spark)
 
@@ -208,14 +208,14 @@ def _heavy_tile_df(spark, **kw):
 def rst_avg_python_heavy_example(spark):
     """Get per-band average pixel values via the heavy rasterx tier.
 
-    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) because the
-    canonical single-band sentinel2 tile is all-NoData (rst_avg returns [None]).
+    Reads the `multiband_rasters` Setup view (rgb_nir_small.tif, 3 bands)
+    because the canonical single-band sentinel2 tile is all-NoData (rst_avg
+    returns [None]).
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
-    result = tile_df.select(rx.rst_avg("tile").alias("band_averages")).first()
+    df = spark.table("multiband_rasters")
+    result = df.select(rx.rst_avg("tile").alias("band_averages")).first()
     return result["band_averages"]
 
 
@@ -238,8 +238,7 @@ def rst_boundingbox_python_heavy_example(spark):
     """Get the bounding box of a raster tile as WKB binary via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_boundingbox("tile").alias("bbox")).first()
     return result["bbox"]
 
@@ -268,8 +267,7 @@ def rst_numbands_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_numbands("tile").alias("num_bands")).first()
     return result["num_bands"]
 
@@ -293,8 +291,7 @@ def rst_width_python_heavy_example(spark):
     """Get the pixel width of a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_width("tile").alias("width")).first()
     return result["width"]
 
@@ -368,8 +365,7 @@ def rst_bandmetadata_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(
         rx.rst_bandmetadata("tile", f.lit(1)).alias("band_meta")
     ).first()
@@ -395,8 +391,7 @@ def rst_format_python_heavy_example(spark):
     """Get the GDAL driver/format name of a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_format("tile").alias("format")).first()
     return result["format"]
 
@@ -420,8 +415,7 @@ def rst_georeference_python_heavy_example(spark):
     """Get georeference parameters (scale, skew, origin) via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_georeference("tile").alias("georeference")).first()
     return result["georeference"]
 
@@ -445,8 +439,7 @@ def rst_getnodata_python_heavy_example(spark):
     """Get the NoData values for each band via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_getnodata("tile").alias("nodata")).first()
     return result["nodata"]
 
@@ -476,8 +469,7 @@ def rst_getsubdataset_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    nc_df = _get_netcdf_df_heavy(spark)
+    nc_df = spark.table("netcdf_rasters")
     result = nc_df.select(
         rx.rst_getsubdataset("tile", f.lit("prAdjust")).alias("tile")
     ).first()
@@ -504,8 +496,7 @@ def rst_height_python_heavy_example(spark):
     """Get the height in pixels of a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_height("tile").alias("height")).first()
     return result["height"]
 
@@ -533,8 +524,7 @@ def rst_max_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_max("tile").alias("band_max")).first()
     return result["band_max"]
 
@@ -562,8 +552,7 @@ def rst_median_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_median("tile").alias("band_median")).first()
     return result["band_median"]
 
@@ -587,8 +576,7 @@ def rst_memsize_python_heavy_example(spark):
     """Get the in-memory size of a raster tile in bytes via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_memsize("tile").alias("memsize")).first()
     return result["memsize"]
 
@@ -612,8 +600,7 @@ def rst_metadata_python_heavy_example(spark):
     """Get the metadata map for a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_metadata("tile").alias("metadata")).first()
     return result["metadata"]
 
@@ -641,8 +628,7 @@ def rst_min_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_min("tile").alias("band_min")).first()
     return result["band_min"]
 
@@ -671,8 +657,7 @@ def rst_pixelcount_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_pixelcount("tile").alias("pixel_count")).first()
     return result["pixel_count"]
 
@@ -696,8 +681,7 @@ def rst_pixelheight_python_heavy_example(spark):
     """Get the pixel height in ground units via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_pixelheight("tile").alias("pixel_height")).first()
     return result["pixel_height"]
 
@@ -721,8 +705,7 @@ def rst_pixelwidth_python_heavy_example(spark):
     """Get the pixel width in ground units via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_pixelwidth("tile").alias("pixel_width")).first()
     return result["pixel_width"]
 
@@ -746,8 +729,7 @@ def rst_rotation_python_heavy_example(spark):
     """Get the rotation angle of a raster tile in radians via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_rotation("tile").alias("rotation")).first()
     return result["rotation"]
 
@@ -771,8 +753,7 @@ def rst_scalex_python_heavy_example(spark):
     """Get the pixel scale in the X direction via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_scalex("tile").alias("scale_x")).first()
     return result["scale_x"]
 
@@ -799,8 +780,7 @@ def rst_scaley_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_scaley("tile").alias("scale_y")).first()
     return result["scale_y"]
 
@@ -824,8 +804,7 @@ def rst_skewx_python_heavy_example(spark):
     """Get the skew coefficient in the X direction via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_skewx("tile").alias("skew_x")).first()
     return result["skew_x"]
 
@@ -849,8 +828,7 @@ def rst_skewy_python_heavy_example(spark):
     """Get the skew coefficient in the Y direction via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_skewy("tile").alias("skew_y")).first()
     return result["skew_y"]
 
@@ -874,8 +852,7 @@ def rst_srid_python_heavy_example(spark):
     """Get the EPSG SRID integer for a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_srid("tile").alias("srid")).first()
     return result["srid"]
 
@@ -899,8 +876,7 @@ def rst_crs_python_heavy_example(spark):
     """Get the CRS string for a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_crs("tile").alias("crs")).first()
     return result["crs"]
 
@@ -928,8 +904,7 @@ def rst_subdatasets_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_netcdf_df_heavy(spark)
+    tile_df = spark.table("netcdf_rasters")
     result = tile_df.select(rx.rst_subdatasets("tile").alias("subdatasets")).first()
     return result["subdatasets"]
 
@@ -957,8 +932,7 @@ def rst_summary_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_summary("tile").alias("summary")).first()
     return result["summary"]
 
@@ -985,8 +959,7 @@ def rst_type_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_type("tile").alias("band_types")).first()
     return result["band_types"]
 
@@ -1010,8 +983,7 @@ def rst_upperleftx_python_heavy_example(spark):
     """Get the X coordinate of the upper-left corner of a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_upperleftx("tile").alias("upper_left_x")).first()
     return result["upper_left_x"]
 
@@ -1035,8 +1007,7 @@ def rst_upperlefty_python_heavy_example(spark):
     """Get the Y coordinate of the upper-left corner of a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_upperlefty("tile").alias("upper_left_y")).first()
     return result["upper_left_y"]
 
@@ -1065,8 +1036,7 @@ def rst_isempty_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_isempty("tile").alias("is_empty")).first()
     return result["is_empty"]
 
@@ -1090,8 +1060,7 @@ def rst_tryopen_python_heavy_example(spark):
     """Validate that a raster tile can be opened successfully via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_tryopen("tile").alias("try_open")).first()
     return result["try_open"]
 
@@ -1123,8 +1092,7 @@ def rst_histogram_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(
         rx.rst_histogram("tile", f.lit(256), f.lit(0.0), f.lit(255.0)).alias(
             "histogram"
@@ -1158,8 +1126,7 @@ def rst_asformat_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_asformat("tile", f.lit("GTiff")).alias("tile")
     ).first()
@@ -1191,8 +1158,7 @@ def rst_band_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     result = tile_df.select(rx.rst_band("tile", f.lit(1)).alias("tile")).first()
     return result["tile"]
 
@@ -1218,8 +1184,7 @@ def rst_buildoverviews_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
     ).first()
@@ -1253,8 +1218,7 @@ def rst_clip_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     clip_geom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
     result = tile_df.select(
         rx.rst_clip("tile", f.lit(clip_geom), f.lit(True)).alias("tile")
@@ -1282,8 +1246,7 @@ def rst_cog_convert_python_heavy_example(spark):
     """Re-layout a raster tile as a Cloud Optimized GeoTIFF via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_cog_convert("tile").alias("tile")).first()
     return result["tile"]
 
@@ -1310,8 +1273,7 @@ def rst_convolve_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     kernel = f.array(
         f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
         f.array(f.lit(0.0), f.lit(1.0), f.lit(0.0)),
@@ -1342,8 +1304,7 @@ def rst_fillnodata_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_fillnodata("tile", f.lit(100.0), f.lit(0)).alias("tile")
     ).first()
@@ -1371,8 +1332,7 @@ def rst_filter_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_filter("tile", f.lit(3), f.lit("median")).alias("tile")
     ).first()
@@ -1442,8 +1402,7 @@ def rst_frombands_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_multiband_df_heavy(spark)
+    tile_df = spark.table("multiband_rasters")
     with_bands = tile_df.select(
         f.array(
             rx.rst_band("tile", f.lit(1)),
@@ -1475,8 +1434,7 @@ def rst_initnodata_python_heavy_example(spark):
     """Initialize NoData values on a raster tile via the heavy rasterx tier."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_initnodata("tile").alias("tile")).first()
     return result["tile"]
 
@@ -1503,8 +1461,7 @@ def rst_resample_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_resample("tile", f.lit(2.0), f.lit("bilinear")).alias("tile")
     ).first()
@@ -1533,8 +1490,7 @@ def rst_resample_to_res_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_resample_to_res(
             "tile", f.lit(20.0), f.lit(20.0), f.lit("average")
@@ -1565,8 +1521,7 @@ def rst_resample_to_size_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_resample_to_size("tile", f.lit(100), f.lit(100), f.lit("near")).alias(
             "tile"
@@ -1596,8 +1551,7 @@ def rst_setcrs_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_crs(rx.rst_setcrs("tile", f.lit("EPSG:32618"))).alias("crs")
     ).first()
@@ -1625,8 +1579,7 @@ def rst_setsrid_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_setsrid("tile", f.lit(32618)).alias("tile")).first()
     return result["tile"]
 
@@ -1652,8 +1605,7 @@ def rst_threshold_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_threshold("tile", f.lit(">"), f.lit(0.0)).alias("tile")
     ).first()
@@ -1682,8 +1634,7 @@ def rst_transform_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(rx.rst_transform("tile", f.lit(4326)).alias("tile")).first()
     return result["tile"]
 
@@ -1710,8 +1661,7 @@ def rst_transformcrs_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_crs(rx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("crs")
     ).first()
@@ -1739,8 +1689,7 @@ def rst_updatetype_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    tile_df = _get_single_band_df_heavy(spark)
+    tile_df = spark.table("rasters")
     result = tile_df.select(
         rx.rst_updatetype("tile", f.lit("Float32")).alias("tile")
     ).first()
@@ -1763,7 +1712,7 @@ rst_updatetype_python_heavy_example_output = """
 
 
 def _get_multi_band_tiles_df_heavy(spark):
-    from _fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
 
     return multi_band_tiles_df_heavy(spark)
 
@@ -2364,8 +2313,7 @@ def rst_ndvi_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(rx.rst_ndvi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
     return result["tile"]
 
@@ -2392,8 +2340,7 @@ def rst_evi_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(
         rx.rst_evi("tile", f.lit(1), f.lit(2), f.lit(3)).alias("tile")
     ).first()
@@ -2422,8 +2369,7 @@ def rst_savi_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(rx.rst_savi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
     return result["tile"]
 
@@ -2450,8 +2396,7 @@ def rst_ndwi_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(rx.rst_ndwi("tile", f.lit(3), f.lit(2)).alias("tile")).first()
     return result["tile"]
 
@@ -2479,8 +2424,7 @@ def rst_nbr_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(rx.rst_nbr("tile", f.lit(2), f.lit(3)).alias("tile")).first()
     return result["tile"]
 
@@ -2507,8 +2451,7 @@ def rst_index_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     band_map = f.create_map(f.lit("red"), f.lit(1), f.lit("nir"), f.lit(2))
     result = df.select(
         rx.rst_index("tile", f.lit("ndvi"), band_map).alias("tile")
@@ -2539,7 +2482,7 @@ def rst_combineavg_python_heavy_example(spark):
     from pyspark.sql import functions as f
 
     rx.register(spark)
-    from _fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
 
     df = multi_band_tiles_df_heavy(spark)
     result = (
@@ -2576,8 +2519,7 @@ def rst_derivedband_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     python_func = (
         "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, "
         "raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n"
@@ -2607,19 +2549,28 @@ rst_derivedband_python_heavy_example_output = """
 
 
 def rst_mapalgebra_python_heavy_example(spark):
-    """Double band A via map algebra. The heavy tier takes a gdal_calc JSON spec.
+    """NDVI from two bands of a SINGLE multiband raster — no need to decompose it.
 
-    The heavy spec is a JSON object with a `calc` expression (gdal_calc syntax;
-    rasters bind to A, B, C, … in array order). The lightweight tier instead
-    takes a bare numexpr string (`"A * 2"`).
+    The spec is a gdal_calc JSON envelope (the same shape on both tiers). The
+    per-variable keys select a raster (`*_index`, 0-based into the tiles array)
+    and a 1-based band (`*_band`): here A and B both read raster 0 (the one
+    tile), A = band 2 (NIR), B = band 1 (Red), giving NDVI = (NIR-Red)/(NIR+Red).
+    Direct equivalent of `gdal_calc -A in --A_band=2 -B in --B_band=1
+    --calc="(A-B)/(A+B)"`. Output: single-band Float32 tile.
     """
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
+    # calc is written space-free: the heavy tier's gdal_calc invocation splits the
+    # command on spaces, so a spaced expression would be mangled. numexpr (light)
+    # accepts either form, so the space-free calc is portable across both tiers.
+    ndvi_spec = (
+        '{"calc": "(A-B)/(A+B)", '
+        '"A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
+    )
     result = df.select(
-        rx.rst_mapalgebra(f.array("tile"), f.lit('{"calc": "A*2"}')).alias("tile")
+        rx.rst_mapalgebra(f.array("tile"), f.lit(ndvi_spec)).alias("tile")
     ).first()
     return result["tile"]
 
@@ -2647,7 +2598,7 @@ def rst_merge_python_heavy_example(spark):
     from pyspark.sql import functions as f
 
     rx.register(spark)
-    from _fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
 
     df = multi_band_tiles_df_heavy(spark)
     result = (
@@ -2680,8 +2631,7 @@ def rst_slope_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(
         rx.rst_slope("tile", f.lit("degrees"), f.lit(1.0), f.lit(1.0)).alias("tile")
     ).first()
@@ -2703,8 +2653,7 @@ def rst_aspect_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(
         rx.rst_aspect("tile", f.lit(False), f.lit(False)).alias("tile")
     ).first()
@@ -2726,8 +2675,7 @@ def rst_hillshade_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(
         rx.rst_hillshade("tile", f.lit(315.0), f.lit(45.0), f.lit(1.0)).alias("tile")
     ).first()
@@ -2748,8 +2696,7 @@ def rst_tri_python_heavy_example(spark):
     """Compute Terrain Ruggedness Index (TRI) from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(rx.rst_tri("tile").alias("tile")).first()
     return result["tile"]
 
@@ -2768,8 +2715,7 @@ def rst_tpi_python_heavy_example(spark):
     """Compute Topographic Position Index (TPI) from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(rx.rst_tpi("tile").alias("tile")).first()
     return result["tile"]
 
@@ -2788,8 +2734,7 @@ def rst_roughness_python_heavy_example(spark):
     """Compute Roughness (max neighbour delta in 3x3 window) from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(rx.rst_roughness("tile").alias("tile")).first()
     return result["tile"]
 
@@ -2808,10 +2753,9 @@ def rst_color_relief_python_heavy_example(spark):
     """Apply a color relief mapping (elevation → RGBA) from a DEM tile."""
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
-    from _fixtures import color_table_path  # noqa: PLC0415
+    from ._fixtures import color_table_path  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     clr_path = str(color_table_path())
     result = df.select(
         rx.rst_color_relief("tile", f.lit(clr_path)).alias("tile")
@@ -2834,8 +2778,7 @@ def rst_proximity_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(
         rx.rst_proximity("tile", f.lit(""), f.lit("PIXEL"), f.lit(100.0)).alias("tile")
     ).first()
@@ -2857,8 +2800,7 @@ def rst_contour_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(
         rx.rst_contour("tile", f.lit([]), f.lit(50.0), f.lit(0.0), f.lit("elev")).alias(
             "contours"
@@ -2882,8 +2824,7 @@ def rst_viewshed_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(
         rx.rst_viewshed(
             "tile",
@@ -2911,8 +2852,7 @@ def rst_sample_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_dem_df_heavy(spark)
+    df = spark.table("dem_rasters")
     result = df.select(
         rx.rst_sample("tile", f.lit("SRID=32618;POINT(500320 4500320)")).alias("values")
     ).first()
@@ -3057,8 +2997,7 @@ def rst_rastertoworldcoord_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Pixel (100, 80) → world struct {x: <easting>, y: <northing>}
     result = df.select(
         rx.rst_rastertoworldcoord("tile", f.lit(100), f.lit(80)).alias("world_coord")
@@ -3083,8 +3022,7 @@ def rst_rastertoworldcoordx_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Pixel col=100 → easting
     result = df.select(
         rx.rst_rastertoworldcoordx("tile", f.lit(100), f.lit(80)).alias("easting")
@@ -3108,8 +3046,7 @@ def rst_rastertoworldcoordy_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Pixel row=80 → northing
     result = df.select(
         rx.rst_rastertoworldcoordy("tile", f.lit(100), f.lit(80)).alias("northing")
@@ -3133,8 +3070,7 @@ def rst_worldtorastercoord_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # World (2122955, -10791275) in the raster CRS → pixel (100, 80)
     result = df.select(
         rx.rst_worldtorastercoord("tile", f.lit(2122955.0), f.lit(-10791275.0)).alias(
@@ -3161,8 +3097,7 @@ def rst_worldtorastercoordx_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # World (2122955, -10791275) → pixel column 100
     result = df.select(
         rx.rst_worldtorastercoordx("tile", f.lit(2122955.0), f.lit(-10791275.0)).alias(
@@ -3188,8 +3123,7 @@ def rst_worldtorastercoordy_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # World (2122955, -10791275) → pixel row 80
     result = df.select(
         rx.rst_worldtorastercoordy("tile", f.lit(2122955.0), f.lit(-10791275.0)).alias(
@@ -3213,8 +3147,7 @@ def rst_to_webmercator_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Reproject to Web Mercator (default bilinear resampling)
     result = df.select(rx.rst_to_webmercator("tile").alias("tile")).first()
     return result["tile"]
@@ -3236,8 +3169,7 @@ def rst_tilexyz_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Render z=12, x=1234, y=1523 as a 256x256 PNG (rescale='none' keeps the raw
     # dtype mapping; an off-footprint slippy tile renders transparent, never null).
     result = df.select(
@@ -3272,8 +3204,7 @@ def rst_xyzpyramid_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Explode raster into PNG tiles for z=10..12 (returns array via LATERAL VIEW)
     result = df.select(
         rx.rst_xyzpyramid("tile", f.lit(10), f.lit(12)).alias("tile_array")
@@ -3298,8 +3229,7 @@ def rst_h3_tessellate_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Partition into H3 cells (covering mode, returns array of structs)
     result = df.select(rx.rst_h3_tessellate("tile", f.lit(7)).alias("h3_cells")).first()
     return result["h3_cells"]
@@ -3322,8 +3252,7 @@ def rst_bng_tessellate_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # rst_bng_tessellate is a generator (one row per BNG cell). The raster is
     # warped to EPSG:27700 first, so a raster outside Great Britain (like this
     # NYC-area sample) yields no rows — an empty result, not an error.
@@ -3349,8 +3278,7 @@ def rst_quadbin_tessellate_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     # Partition into quadbin cells at zoom 12 (covering mode)
     result = df.select(
         rx.rst_quadbin_tessellate("tile", f.lit(12)).alias("qb_cells")
@@ -3378,10 +3306,7 @@ def rst_retile_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
-    df.createOrReplaceTempView("rasters")
-    # Retile into 64x64-pixel sub-tiles using SQL LATERAL
+    # The `rasters` view is created in Setup; retile it into 64x64 sub-tiles via SQL LATERAL.
     return spark.sql(
         "SELECT t.* FROM rasters, " "LATERAL gbx_rst_retile(tile, 64, 64) t"
     ).take(3)
@@ -3400,10 +3325,7 @@ def rst_tooverlappingtiles_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
-    df.createOrReplaceTempView("rasters")
-    # 64x64 tiles with 8% overlap using SQL LATERAL
+    # The `rasters` view is created in Setup; 64x64 tiles with 8% overlap via SQL LATERAL.
     return spark.sql(
         "SELECT t.* FROM rasters, "
         "LATERAL gbx_rst_tooverlappingtiles(tile, 64, 64, 8) t"
@@ -3423,10 +3345,7 @@ def rst_separatebands_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
-    df.createOrReplaceTempView("multiband_rasters")
-    # Separate 3-band raster into individual band tiles using SQL LATERAL
+    # The `multiband_rasters` view is created in Setup; separate its bands via SQL LATERAL.
     return spark.sql(
         "SELECT t.* FROM multiband_rasters, " "LATERAL gbx_rst_separatebands(tile) t"
     ).collect()
@@ -3451,8 +3370,7 @@ def rst_polygonize_python_heavy_example(spark):
         raise ImportError("rasterx not installed")
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
+    df = spark.table("rasters")
     return df.select(
         rx.rst_polygonize("tile", f.lit(1), f.lit(4)).alias("features")
     ).first()["features"]
@@ -3469,10 +3387,7 @@ def rst_maketiles_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_single_band_df_heavy(spark)
-    df.createOrReplaceTempView("rasters")
-    # Subdivide into ~1.0 MB tiles (this crashes in heavy tier; see xfail in test)
+    # The `rasters` view is created in Setup; subdivide into ~1.0 MB tiles via SQL LATERAL.
     return spark.sql(
         "SELECT t.* FROM rasters, " "LATERAL gbx_rst_maketiles(tile, 1.0) t"
     ).collect()
@@ -3533,8 +3448,7 @@ def rst_h3_rastertogridavg_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     # Heavy tier returns ARRAY<ARRAY<struct(cellID, measure)>> per band
     from pyspark.sql import functions as f
 
@@ -3555,8 +3469,7 @@ def rst_h3_rastertogridcount_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3576,8 +3489,7 @@ def rst_h3_rastertogridmax_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3597,8 +3509,7 @@ def rst_h3_rastertogridmin_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3618,8 +3529,7 @@ def rst_h3_rastertogridmedian_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3639,8 +3549,7 @@ def rst_h3_rastertogridsum_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3660,8 +3569,7 @@ def rst_h3_rastertogridvariance_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3681,8 +3589,7 @@ def rst_h3_rastertogridstddev_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3707,8 +3614,7 @@ def rst_quadbin_rastertogridavg_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3728,8 +3634,7 @@ def rst_quadbin_rastertogridcount_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3749,8 +3654,7 @@ def rst_quadbin_rastertogridmax_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3770,8 +3674,7 @@ def rst_quadbin_rastertogridmin_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3791,8 +3694,7 @@ def rst_quadbin_rastertogridmedian_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3812,8 +3714,7 @@ def rst_quadbin_rastertogridsum_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3833,8 +3734,7 @@ def rst_quadbin_rastertogridvariance_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3854,8 +3754,7 @@ def rst_quadbin_rastertogridstddev_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3886,8 +3785,7 @@ def rst_bng_rastertogridavg_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3909,8 +3807,7 @@ def rst_bng_rastertogridcount_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3932,8 +3829,7 @@ def rst_bng_rastertogridmax_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3955,8 +3851,7 @@ def rst_bng_rastertogridmin_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -3978,8 +3873,7 @@ def rst_bng_rastertogridmedian_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -4001,8 +3895,7 @@ def rst_bng_rastertogridsum_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -4024,8 +3917,7 @@ def rst_bng_rastertogridvariance_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(
@@ -4047,8 +3939,7 @@ def rst_bng_rastertogridstddev_python_heavy_example(spark):
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    rx.register(spark)
-    df = _get_multiband_df_heavy(spark)
+    df = spark.table("multiband_rasters")
     from pyspark.sql import functions as f
 
     result = df.select(

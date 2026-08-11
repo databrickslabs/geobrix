@@ -17,6 +17,8 @@ Fixture assignments:
   rst_subdatasets, rst_getsubdataset
 """
 
+import pytest
+
 try:
     from . import rasterx_accessors_python_light as light_examples
 except (ModuleNotFoundError, ImportError):
@@ -24,6 +26,18 @@ except (ModuleNotFoundError, ImportError):
         import rasterx_accessors_python_light as light_examples
     except ModuleNotFoundError:
         light_examples = None
+
+
+@pytest.fixture(autouse=True)
+def _light_setup_views(spark):
+    """Create the four light-tier Setup views + register pyrx so every example
+    can read `spark.table("rasters")` etc. — mirroring the page's Setup section.
+    Autouse: each test in this module runs against the light-tier views."""
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from ._fixtures import create_setup_views_light  # noqa: PLC0415
+
+    rx.register(spark)
+    create_setup_views_light(spark)
 
 
 # ---------------------------------------------------------------------------

@@ -5,9 +5,11 @@ All 10 examples use the multiband fixture (3 bands: red=1, NIR=2, green=3; 8x8, 
 Loaded via rst_fromcontent (no JAR required).
 
 The light tier returns materialized v2 tiles (raster bytes populated, path null).
-"""
 
-from _fixtures import multiband_tile_df
+Single-tile examples read the `multiband_rasters` Setup view via spark.table();
+the two multi-tile aggregating examples (rst_combineavg, rst_merge) build their
+own multi-row input from the _fixtures helper.
+"""
 
 # ============================================================================
 # Spectral Indices
@@ -23,8 +25,7 @@ def rst_ndvi_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(rx.rst_ndvi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
     return result["tile"]
 
@@ -47,8 +48,7 @@ def rst_evi_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
     # EVI requires red (band 1), NIR (band 2), blue (band 3 as proxy)
     result = df.select(
         rx.rst_evi("tile", f.lit(1), f.lit(2), f.lit(3)).alias("tile")
@@ -74,8 +74,7 @@ def rst_savi_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(rx.rst_savi("tile", f.lit(1), f.lit(2)).alias("tile")).first()
     return result["tile"]
 
@@ -98,8 +97,7 @@ def rst_ndwi_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
     # Use green (band 3) and NIR (band 2)
     result = df.select(rx.rst_ndwi("tile", f.lit(3), f.lit(2)).alias("tile")).first()
     return result["tile"]
@@ -124,8 +122,7 @@ def rst_nbr_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
     # Band 2 (NIR), band 3 (SWIR proxy)
     result = df.select(rx.rst_nbr("tile", f.lit(2), f.lit(3)).alias("tile")).first()
     return result["tile"]
@@ -150,8 +147,7 @@ def rst_index_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
     # Compute NDVI via the generic index dispatcher with a red/NIR band map.
     band_map = f.create_map(f.lit("red"), f.lit(1), f.lit("nir"), f.lit(2))
     result = df.select(
@@ -183,7 +179,6 @@ def rst_combineavg_python_light_example(spark):
     from pyspark.sql import functions as f
     from _fixtures import multi_band_tiles_df
 
-    rx.register(spark)
     df = multi_band_tiles_df(spark)
     # Aggregate the 3 per-band tiles into one array, then average per-pixel.
     result = (
@@ -213,8 +208,7 @@ def rst_derivedband_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
 
     # GDAL VRT pixel-function that doubles band 1's pixel values in place.
     python_func = (
@@ -238,21 +232,27 @@ rst_derivedband_python_light_example_output = """
 
 
 def rst_mapalgebra_python_light_example(spark):
-    """Apply a map-algebra expression across an array of tiles.
+    """NDVI from two bands of a SINGLE multiband raster — no need to decompose it.
 
-    Band 1 of each tile (in array order) binds to A, B, C, …; the expression is
-    evaluated with numexpr (safe math only — no arbitrary code). Here a single
-    tile is passed, so A = band 1 (red), and ``"A * 2"`` doubles it. Output:
-    single-band Float32 tile. Uses the multiband fixture (non-default; 3 bands).
+    The spec is the same gdal_calc JSON envelope both tiers accept. The per-
+    variable keys map each variable to a raster (``*_index``, 0-based into the
+    tiles array) and a 1-based band (``*_band``): here A and B both read raster 0
+    (the one tile), A = band 2 (NIR), B = band 1 (Red), giving the classic
+    NDVI = (NIR - Red) / (NIR + Red). Direct equivalent of
+    ``gdal_calc -A in --A_band=2 -B in --B_band=1 --calc="(A-B)/(A+B)"``.
+    Output: single-band Float32 tile. Uses the multiband fixture (rgb_nir_small).
     """
     from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
-    df = multiband_tile_df(spark)
+    df = spark.table("multiband_rasters")
 
+    ndvi_spec = (
+        '{"calc": "(A-B)/(A+B)", '
+        '"A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
+    )
     result = df.select(
-        rx.rst_mapalgebra(f.array("tile"), f.lit("A * 2")).alias("tile")
+        rx.rst_mapalgebra(f.array("tile"), f.lit(ndvi_spec)).alias("tile")
     ).first()
     return result["tile"]
 
@@ -263,6 +263,7 @@ rst_mapalgebra_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band Float32 NDVI tile; per-pixel (NIR-Red)/(NIR+Red) in [-1, 1])
 """
 
 
@@ -276,7 +277,6 @@ def rst_merge_python_light_example(spark):
     from pyspark.sql import functions as f
     from _fixtures import multi_band_tiles_df
 
-    rx.register(spark)
     df = multi_band_tiles_df(spark)
 
     result = (

@@ -14,6 +14,18 @@ except (ModuleNotFoundError, ImportError):
         rasterx_functions = None
 
 
+@pytest.fixture(autouse=True)
+def _heavy_setup_views(spark):
+    """Create the four heavy-tier Setup views + register rasterx so every example
+    can read `spark.table("rasters")` etc. — mirroring the page's Setup section.
+    Autouse: each test in this module runs against the heavy-tier views."""
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from ._fixtures import create_setup_views_heavy  # noqa: PLC0415
+
+    rx.register(spark)
+    create_setup_views_heavy(spark)
+
+
 def test_rasterx_setup_example():
     """Common setup example is used in RasterX Function Reference doc."""
     assert rasterx_functions is not None

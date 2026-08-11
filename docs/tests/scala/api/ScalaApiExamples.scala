@@ -251,10 +251,10 @@ Table converted_features: feature_id, wkb_geom, geometry columns
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands); single-band sentinel2 is all-NoData.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
-val result = rasters.select(rx.rst_avg(col("tile")).alias("band_averages"))
+// Reads the multiband_rasters Setup view (rgb_nir_small.tif, 3 bands);
+// the single-band sentinel2 tile is all-NoData for this function.
+val df = spark.table("multiband_rasters")
+val result = df.select(rx.rst_avg(col("tile")).alias("band_averages"))
 result.show()
 """.trim
 
@@ -272,8 +272,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_boundingbox(col("tile")).alias("bbox"))
 result.show(truncate = false)
 """.trim
@@ -293,9 +292,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands: red, NIR, green).
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_numbands(col("tile")).alias("num_bands"))
 result.show()
 """.trim
@@ -314,8 +312,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_width(col("tile")).alias("width"))
 result.show()
 """.trim
@@ -334,9 +331,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif) which carries per-band GDAL metadata tags.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_bandmetadata(col("tile"), lit(1)).alias("band_meta"))
 result.show(truncate = false)
 """.trim
@@ -355,8 +351,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_format(col("tile")).alias("format"))
 result.show()
 """.trim
@@ -375,8 +370,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_georeference(col("tile")).alias("georeference"))
 result.show(truncate = false)
 """.trim
@@ -395,8 +389,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_getnodata(col("tile")).alias("nodata"))
 result.show()
 """.trim
@@ -415,11 +408,10 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses committed CMIP5 NetCDF fixture (has time_bnds and prAdjust subdatasets).
 // Subdatasets require a multi-layer format such as NetCDF.
 // rst_width wraps the result to return a real scalar proving extraction.
-val rasters = spark.read.format("netcdf_gdal").load("src/test/resources/binary/netcdf-CMIP5/prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc_rcp45_r1i1p1_20201201-20201231.nc")
+val rasters = spark.table("netcdf_rasters")
 val result = rasters.select(
   rx.rst_width(rx.rst_getsubdataset(col("tile"), lit("prAdjust"))).alias("width")
 )
@@ -440,8 +432,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_height(col("tile")).alias("height"))
 result.show()
 """.trim
@@ -460,9 +451,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands); single-band sentinel2 is all-NoData.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_max(col("tile")).alias("band_max"))
 result.show()
 """.trim
@@ -481,9 +471,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands); single-band sentinel2 is all-NoData.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_median(col("tile")).alias("band_median"))
 result.show()
 """.trim
@@ -502,8 +491,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_memsize(col("tile")).alias("memsize"))
 result.show()
 """.trim
@@ -522,8 +510,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_metadata(col("tile")).alias("metadata"))
 result.show(truncate = false)
 """.trim
@@ -542,9 +529,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands); single-band sentinel2 is all-NoData.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_min(col("tile")).alias("band_min"))
 result.show()
 """.trim
@@ -563,9 +549,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 8x8, no NoData); single-band sentinel2 returns [0].
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_pixelcount(col("tile")).alias("pixel_count"))
 result.show()
 """.trim
@@ -584,8 +569,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_pixelheight(col("tile")).alias("pixel_height"))
 result.show()
 """.trim
@@ -604,8 +588,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_pixelwidth(col("tile")).alias("pixel_width"))
 result.show()
 """.trim
@@ -624,8 +607,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_rotation(col("tile")).alias("rotation"))
 result.show()
 """.trim
@@ -644,8 +626,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_scalex(col("tile")).alias("scale_x"))
 result.show()
 """.trim
@@ -664,8 +645,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_scaley(col("tile")).alias("scale_y"))
 result.show()
 """.trim
@@ -684,8 +664,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_skewx(col("tile")).alias("skew_x"))
 result.show()
 """.trim
@@ -704,8 +683,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_skewy(col("tile")).alias("skew_y"))
 result.show()
 """.trim
@@ -724,8 +702,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_srid(col("tile")).alias("srid"))
 result.show()
 """.trim
@@ -744,8 +721,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_crs(col("tile")).alias("crs"))
 result.show(truncate = false)
 """.trim
@@ -764,9 +740,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses committed CMIP5 NetCDF fixture (has time_bnds and prAdjust subdatasets).
-val rasters = spark.read.format("netcdf_gdal").load("src/test/resources/binary/netcdf-CMIP5/prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc_rcp45_r1i1p1_20201201-20201231.nc")
+val rasters = spark.table("netcdf_rasters")
 val result = rasters.select(rx.rst_subdatasets(col("tile")).alias("subdatasets"))
 result.show(truncate = false)
 """.trim
@@ -785,9 +760,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_summary(col("tile")).alias("summary"))
 result.show(truncate = false)
 """.trim
@@ -806,9 +780,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands, UInt16).
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_type(col("tile")).alias("band_types"))
 result.show()
 """.trim
@@ -827,8 +800,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_upperleftx(col("tile")).alias("upper_left_x"))
 result.show()
 """.trim
@@ -847,8 +819,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_upperlefty(col("tile")).alias("upper_left_y"))
 result.show()
 """.trim
@@ -867,10 +838,9 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif) which carries real pixel data.
 // The single-band sentinel2 tile has NoData=0 with all pixels equal zero (isempty=true).
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_isempty(col("tile")).alias("is_empty"))
 result.show()
 """.trim
@@ -889,9 +859,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif — committed, always openable).
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_tryopen(col("tile")).alias("try_open"))
 result.show()
 """.trim
@@ -910,9 +879,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands) so histogram has entries per band.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_histogram(col("tile")).alias("histogram"))
 result.show(truncate = false)
 """.trim
@@ -935,8 +903,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_asformat(col("tile"), lit("GTiff")).alias("tile"))
 result.show()
 """.trim
@@ -955,9 +922,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands) to demonstrate band extraction.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_band(col("tile"), lit(1)).alias("tile"))
 result.show()
 """.trim
@@ -976,8 +942,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_buildoverviews(col("tile"), array(lit(2), lit(4))).alias("tile"))
 result.show()
 """.trim
@@ -996,10 +961,9 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // WKT polygon in raster's native CRS (EPSG:32618); no SRID prefix = no reprojection.
 // To clip with a WGS84 geometry use EWKT: "SRID=4326;POLYGON(...)".
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val clipGeom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
 val result = rasters.select(rx.rst_clip(col("tile"), lit(clipGeom), lit(true)).alias("tile"))
 result.show()
@@ -1019,8 +983,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_cog_convert(col("tile")).alias("tile"))
 result.show()
 """.trim
@@ -1039,8 +1002,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val kernel = array(
   array(lit(0.0), lit(0.0), lit(0.0)),
   array(lit(0.0), lit(1.0), lit(0.0)),
@@ -1064,8 +1026,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_fillnodata(col("tile"), lit(100.0), lit(0)).alias("tile"))
 result.show()
 """.trim
@@ -1084,8 +1045,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_filter(col("tile"), lit(3), lit("median")).alias("tile"))
 result.show()
 """.trim
@@ -1129,9 +1089,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Constructor: extract per-band tiles from the multiband fixture, then stack them back.
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val withBands = rasters.select(
   array(
     rx.rst_band(col("tile"), lit(1)),
@@ -1157,8 +1116,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_initnodata(col("tile")).alias("tile"))
 result.show()
 """.trim
@@ -1177,8 +1135,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_resample(col("tile"), lit(2.0), lit("bilinear")).alias("tile"))
 result.show()
 """.trim
@@ -1197,8 +1154,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_resample_to_res(col("tile"), lit(20.0), lit(20.0), lit("average")).alias("tile"))
 result.show()
 """.trim
@@ -1217,8 +1173,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_resample_to_size(col("tile"), lit(100), lit(100), lit("near")).alias("tile"))
 result.show()
 """.trim
@@ -1237,8 +1192,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_crs(rx.rst_setcrs(col("tile"), lit("EPSG:32618"))).alias("crs"))
 result.show()
 """.trim
@@ -1258,8 +1212,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_setsrid(col("tile"), lit(32618)).alias("tile"))
 result.show()
 """.trim
@@ -1278,8 +1231,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_threshold(col("tile"), lit(">"), lit(0.0)).alias("tile"))
 result.show()
 """.trim
@@ -1298,8 +1250,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_transform(col("tile"), lit(4326)).alias("tile"))
 result.show()
 """.trim
@@ -1318,8 +1269,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_crs(rx.rst_transformcrs(col("tile"), lit("EPSG:3857"))).alias("crs"))
 result.show()
 """.trim
@@ -1339,8 +1289,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
+val rasters = spark.table("rasters")
 val result = rasters.select(rx.rst_updatetype(col("tile"), lit("Float32")).alias("tile"))
 result.show()
 """.trim
@@ -1636,9 +1585,8 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands: red=1, NIR=2, green=3)
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_ndvi(col("tile"), lit(1), lit(2)).alias("ndvi"))
 result.show(truncate = false)
 """.trim
@@ -1658,9 +1606,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Uses multiband fixture with red, NIR, and green (as blue)
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_evi(col("tile"), lit(1), lit(2), lit(3)).alias("evi"))
 result.show(truncate = false)
 """.trim
@@ -1680,9 +1627,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Soil-Adjusted Vegetation Index: uses red (band 1) and NIR (band 2)
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_savi(col("tile"), lit(1), lit(2)).alias("savi"))
 result.show(truncate = false)
 """.trim
@@ -1702,9 +1648,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Normalized Difference Water Index: green (band 3) and NIR (band 2)
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_ndwi(col("tile"), lit(3), lit(2)).alias("ndwi"))
 result.show(truncate = false)
 """.trim
@@ -1724,9 +1669,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Normalized Burn Ratio: NIR (band 2) and green (band 3) as SWIR substitute
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_nbr(col("tile"), lit(2), lit(3)).alias("nbr"))
 result.show(truncate = false)
 """.trim
@@ -1746,9 +1690,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Generic index dispatcher: computes NDVI via named formula with band map
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val bandMap = create_map(lit("red"), lit(1), lit("nir"), lit(2))
 val result = rasters.select(rx.rst_index(col("tile"), lit("ndvi"), bandMap).alias("index"))
 result.show(truncate = false)
@@ -1770,11 +1713,10 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
 // Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
 val schema = StructType(Seq(StructField("tile", BinaryType()), StructField("band_index", IntegerType()), StructField("region", StringType())))
 // Load multiband, extract 3 bands, collect into array, then average
-val multiband = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val multiband = spark.table("multiband_rasters")
 val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
 val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
 val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
@@ -1798,9 +1740,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Apply a GDAL VRT Python pixel-function that doubles band 1
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val pythonFunc = "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n    out_ar[:] = in_ar[0] * 2\n"
 val result = rasters.select(rx.rst_derivedband(col("tile"), lit(pythonFunc), lit("double")).alias("derived"))
 result.show(truncate = false)
@@ -1821,9 +1762,8 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
 // Map algebra: scale band values by factor of 2
-val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val rasters = spark.table("multiband_rasters")
 val result = rasters.select(rx.rst_mapalgebra(array(col("tile")), lit("A * 2")).alias("scaled"))
 result.show(truncate = false)
 """.trim
@@ -1844,9 +1784,8 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
 // Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
-val multiband = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val multiband = spark.table("multiband_rasters")
 val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
 val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
 val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
@@ -1874,8 +1813,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_slope(col("tile"), lit("degrees"), lit(1.0), lit(1.0)).alias("slope"))
 result.show(truncate = false)
 """.trim
@@ -1895,8 +1833,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_aspect(col("tile"), lit(false), lit(false)).alias("aspect"))
 result.show(truncate = false)
 """.trim
@@ -1916,8 +1853,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_hillshade(col("tile"), lit(315.0), lit(45.0), lit(1.0)).alias("shade"))
 result.show(truncate = false)
 """.trim
@@ -1937,8 +1873,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_tri(col("tile")).alias("tri"))
 result.show(truncate = false)
 """.trim
@@ -1958,8 +1893,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_tpi(col("tile")).alias("tpi"))
 result.show(truncate = false)
 """.trim
@@ -1979,8 +1913,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_roughness(col("tile")).alias("roughness"))
 result.show(truncate = false)
 """.trim
@@ -2000,8 +1933,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_color_relief(col("tile"), lit("src/test/resources/binary/elevation/elevation.clr")).alias("rgba"))
 result.show(truncate = false)
 """.trim
@@ -2021,8 +1953,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_proximity(col("tile"), lit(""), lit("PIXEL"), lit(100.0)).alias("distance"))
 result.show(truncate = false)
 """.trim
@@ -2042,8 +1973,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_contour(col("tile"), array(), lit(50.0), lit(0.0), lit("elev")).alias("contours"))
 result.show(truncate = false)
 """.trim
@@ -2063,8 +1993,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(
   rx.rst_viewshed(col("tile"), lit("POINT(-73.5 40.5)"), lit(100.0), lit(1.6), lit(5000.0)).alias("viewshed")
 )
@@ -2086,8 +2015,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val dem = spark.read.format("gdal").load("src/test/resources/binary/elevation/dem_small.tif")
+val dem = spark.table("dem_rasters")
 val result = dem.select(rx.rst_sample(col("tile"), lit("SRID=4326;POINT(-73.97 40.75)")).alias("sampled"))
 result.show(truncate = false)
 """.trim
@@ -2165,8 +2093,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_rastertoworldcoord(col("tile"), lit(100), lit(80)).alias("world_coord"))
 result.show(truncate = false)
 """.trim
@@ -2186,8 +2113,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_rastertoworldcoordx(col("tile"), lit(100), lit(80)).alias("easting"))
 result.show(truncate = false)
 """.trim
@@ -2206,8 +2132,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_rastertoworldcoordy(col("tile"), lit(100), lit(80)).alias("northing"))
 result.show(truncate = false)
 """.trim
@@ -2226,8 +2151,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_worldtorastercoord(col("tile"), lit(554880), lit(4545120)).alias("pixel_coord"))
 result.show(truncate = false)
 """.trim
@@ -2247,8 +2171,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_worldtorastercoordx(col("tile"), lit(554880), lit(4545120)).alias("pixel_col"))
 result.show(truncate = false)
 """.trim
@@ -2267,8 +2190,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_worldtorastercoordy(col("tile"), lit(554880), lit(4545120)).alias("pixel_row"))
 result.show(truncate = false)
 """.trim
@@ -2287,8 +2209,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_to_webmercator(col("tile")).alias("tile"))
 result.show(truncate = false)
 """.trim
@@ -2308,8 +2229,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_tilexyz(col("tile"), lit(12), lit(1234), lit(1523)).alias("png_bytes"))
 result.show(truncate = false)
 """.trim
@@ -2329,8 +2249,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_xyzpyramid(col("tile"), lit(10), lit(12)).alias("tile_array"))
 result.show(truncate = false)
 """.trim
@@ -2350,8 +2269,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_h3_tessellate(col("tile"), lit(7)).alias("h3_cells"))
 result.show(truncate = false)
 """.trim
@@ -2371,8 +2289,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_bng_tessellate(col("tile"), lit(3)).alias("bng_cells"))
 result.show(truncate = false)
 """.trim
@@ -2392,8 +2309,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/sentinel2/nyc_sentinel2_red.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_quadbin_tessellate(col("tile"), lit(12)).alias("qb_cells"))
 result.show(truncate = false)
 """.trim
@@ -2417,8 +2333,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_retile(col("tile"), lit(64), lit(64)).alias("tiles"))
 result.show(truncate = false)
 """.trim
@@ -2438,8 +2353,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_tooverlappingtiles(col("tile"), lit(64), lit(64), lit(8)).alias("tiles"))
 result.show(truncate = false)
 """.trim
@@ -2459,8 +2373,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_separatebands(col("tile")).alias("bands"))
 result.show(truncate = false)
 """.trim
@@ -2480,8 +2393,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_polygonize(col("tile")).alias("features"))
 result.show(truncate = false)
 """.trim
@@ -2501,8 +2413,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val raster = spark.table("rasters")
 val result = raster.select(rx.rst_maketiles(col("tile"), lit(1.0)).alias("tiles"))
 result.show(truncate = false)
 """.trim
@@ -2556,8 +2467,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridavg(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2571,8 +2481,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridcount(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2586,8 +2495,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridmax(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2601,8 +2509,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridmin(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2616,8 +2523,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridmedian(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2631,8 +2537,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridsum(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2646,8 +2551,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridvariance(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2661,8 +2565,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_h3_rastertogridstddev(col("tile"), lit(4)).alias("h3_grid")).first()
 result.getAs[Seq[Seq[Row]]]("h3_grid")
 """.trim
@@ -2680,8 +2583,7 @@ result.getAs[Seq[Seq[Row]]]("h3_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridavg(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2695,8 +2597,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridcount(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2710,8 +2611,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridmax(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2725,8 +2625,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridmin(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2740,8 +2639,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridmedian(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2755,8 +2653,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridsum(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2770,8 +2667,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridvariance(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2785,8 +2681,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_quadbin_rastertogridstddev(col("tile"), lit(4)).alias("quadbin_grid")).first()
 result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 """.trim
@@ -2804,8 +2699,7 @@ result.getAs[Seq[Seq[Row]]]("quadbin_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridavg(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim
@@ -2819,8 +2713,7 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridcount(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim
@@ -2834,8 +2727,7 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridmax(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim
@@ -2849,8 +2741,7 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridmin(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim
@@ -2864,8 +2755,7 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridmedian(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim
@@ -2879,8 +2769,7 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridsum(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim
@@ -2894,8 +2783,7 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridvariance(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim
@@ -2909,8 +2797,7 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
-val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val raster = spark.table("multiband_rasters")
 val result = raster.select(rx.rst_bng_rastertogridstddev(col("tile"), lit(3)).alias("bng_grid")).first()
 result.getAs[Seq[Seq[Row]]]("bng_grid")
 """.trim

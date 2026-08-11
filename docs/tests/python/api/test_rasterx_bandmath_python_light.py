@@ -8,6 +8,8 @@ All band-math functions return tile structs. The light tier materializes via
 rst_fromcontent, so tiles have raster bytes populated and path null.
 """
 
+import pytest
+
 try:
     from . import rasterx_bandmath_python_light as bandmath_examples
 except (ModuleNotFoundError, ImportError):
@@ -15,6 +17,17 @@ except (ModuleNotFoundError, ImportError):
         import rasterx_bandmath_python_light as bandmath_examples
     except ModuleNotFoundError:
         bandmath_examples = None
+
+
+@pytest.fixture(autouse=True)
+def _light_setup_views(spark):
+    """Register pyrx + create the four light-tier Setup views once per test, so
+    single-tile band-math examples can read `spark.table("multiband_rasters")`."""
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from ._fixtures import create_setup_views_light  # noqa: PLC0415
+
+    rx.register(spark)
+    create_setup_views_light(spark)
 
 
 def _assert_materialized_tile(result, name):

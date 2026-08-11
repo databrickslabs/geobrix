@@ -129,6 +129,8 @@ The setup below loads `GTIFF_SAMPLE_DIR` into `rasters` and then loads the other
   code={rasterxCode}
 />
 
+**Scala** uses this same heavyweight (`rasterx`) setup: create the four views with `spark.read.format("gtiff_gdal").load(...).createOrReplaceTempView("rasters")` (and `netcdf_gdal` for the NetCDF view), then each Scala example reads `val df = spark.table("multiband_rasters")`. Registration is only needed for the SQL functions — the Scala `rx.*` Column API works without it.
+
 Prefer pure SQL? Register RasterX (Python: `rx.register(spark)`), then create the same four views directly so the SQL examples can use `FROM rasters`, `FROM multiband_rasters`, and so on:
 
 <CodeFromTest
@@ -2252,10 +2254,35 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **NumExpr**. Bands map to `A`, `B`, `C`, … and the expression is evaluated with NumExpr (no `gdal_calc` NumPy builtins); single-band Float32 output.
+Powered by **NumExpr**. Bands map to `A`, `B`, `C`, … and the `calc` expression is evaluated with NumExpr (no `gdal_calc` NumPy builtins); single-band Float32 output.
 :::
 
-**Signature:** `rst_mapalgebra(tiles: Column, expression: Column): Column` — Map algebra expression (e.g. A-B).
+**Signature:** `rst_mapalgebra(tiles: Column, expression: Column): Column` — Map algebra expression (e.g. `A - B`).
+
+**How the inputs bind.** `tiles` is an `ARRAY<tile>`. By default, band 1 of each tile, **in array order**, binds to the variables `A`, `B`, `C`, … (`A` = first tile, `B` = second, …). The result is a single-band Float32 tile on the first input's georeference.
+
+**Spec format (same on both tiers).** The expression is accepted in **either** of two forms — identical across SQL, Scala, and both Python tiers:
+
+- **JSON envelope** (recommended; the `gdal_calc` spec shape): a JSON object with a `calc` expression — `'{"calc": "A*2"}'`.
+- **Bare expression string**: the calc expression on its own — `"A*2"`.
+
+:::note Write `calc` without spaces
+On the heavy tier the `calc` expression must contain **no spaces** (`(A-B)/(A+B)`, not `(A - B) / (A + B)`) — the `gdal_calc` invocation is whitespace-delimited. The lightweight (NumExpr) tier accepts either, so a space-free `calc` is the portable form across both tiers.
+:::
+
+**Selecting a specific band or raster per variable (`A_index` / `A_band`).** You do **not** need to decompose a multiband raster to do band math. The JSON envelope's per-variable keys — `A_index` / `A_band` (and `B_`, `C_`, …) — map each variable to a chosen **raster** (0-based, into the `tiles` array) and a chosen **1-based band**, mirroring `gdal_calc`. For example, **NDVI from bands 4 (NIR) and 3 (Red) of a single raster**:
+
+```json
+{"calc": "(A-B)/(A+B)", "A_index": 0, "B_index": 0, "A_band": 4, "B_band": 3}
+```
+
+Both `A` and `B` read raster `0` (the one tile in the array), with `A` = band 4 and `B` = band 3 — the direct equivalent of `gdal_calc -A in.tif --A_band=4 -B in.tif --B_band=3 --calc="(A-B)/(A+B)"`. A variable with no `*_index`/`*_band` keeps the default (its ordinal raster, band 1). **This works on both tiers.**
+
+The only `gdal_calc` envelope key the lightweight tier does **not** support is `extra_options` (raw CLI flags with no NumExpr equivalent); it raises a clear error rather than dropping it silently. The heavy tier honors `extra_options` as well.
+
+:::caution Expression language differs by engine
+The **envelope** is portable, but the **calc expression language is not fully portable** because each tier uses a different evaluator: the heavy tier shells out to GDAL's `gdal_calc` (NumPy expression syntax); the lightweight tier evaluates with [NumExpr](https://numexpr.readthedocs.io/). They agree on ordinary arithmetic and comparisons (`A*2`, `(A-B)/(A+B)`, `A>0`), so those expressions run **unchanged on both tiers**. They diverge on function spellings — e.g. `gdal_calc` accepts NumPy calls like `numpy.where(A>0,A,0)`, whereas NumExpr wants `where(A>0,A,0)`. Keep expressions to basic, space-free arithmetic for cross-tier portability. For the heavy tier's full syntax and options, see the GDAL raster calculator reference: [gdal_raster_calc](https://gdal.org/en/stable/programs/gdal_raster_calc.html#gdal-raster-calc).
+:::
 
 <FunctionExamples
   name="rst_mapalgebra"

@@ -56,8 +56,7 @@ def rst_asformat_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(rx.rst_asformat("tile", f.lit("GTiff")).alias("tile")).first()
     return result["tile"]
 
@@ -88,8 +87,7 @@ def rst_band_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_multiband_df(spark)
+    df = spark.table("multiband_rasters")
     result = df.select(rx.rst_band("tile", f.lit(1)).alias("tile")).first()
     return result["tile"]
 
@@ -116,8 +114,7 @@ def rst_buildoverviews_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
     ).first()
@@ -153,8 +150,7 @@ def rst_clip_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     # WKT polygon in raster's native CRS (upper-left quadrant of the tile extent)
     clip_geom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
     result = df.select(
@@ -184,8 +180,7 @@ def rst_cog_convert_python_light_example(spark):
     """Re-layout a raster tile as a Cloud Optimized GeoTIFF using the light pyrx tier."""
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(rx.rst_cog_convert("tile").alias("tile")).first()
     return result["tile"]
 
@@ -213,8 +208,7 @@ def rst_convolve_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     kernel = f.array(
         f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
         f.array(f.lit(0.0), f.lit(1.0), f.lit(0.0)),
@@ -246,8 +240,7 @@ def rst_fillnodata_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_fillnodata("tile", f.lit(100.0), f.lit(0)).alias("tile")
     ).first()
@@ -276,8 +269,7 @@ def rst_filter_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_filter("tile", f.lit(3), f.lit("median")).alias("tile")
     ).first()
@@ -351,8 +343,7 @@ def rst_frombands_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_multiband_df(spark)
+    df = spark.table("multiband_rasters")
     # Build an array of per-band tiles (band 1, band 2, band 3) then stack
     with_bands = df.select(
         f.array(
@@ -423,8 +414,7 @@ def rst_initnodata_python_light_example(spark):
     """Initialize NoData values on a raster tile using the light pyrx tier."""
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(rx.rst_initnodata("tile").alias("tile")).first()
     return result["tile"]
 
@@ -452,8 +442,7 @@ def rst_resample_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_resample("tile", f.lit(2.0), f.lit("bilinear")).alias("tile")
     ).first()
@@ -483,8 +472,7 @@ def rst_resample_to_res_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_resample_to_res(
             "tile", f.lit(20.0), f.lit(20.0), f.lit("average")
@@ -516,8 +504,7 @@ def rst_resample_to_size_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_resample_to_size("tile", f.lit(100), f.lit(100), f.lit("near")).alias(
             "tile"
@@ -549,8 +536,7 @@ def rst_setcrs_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_crs(rx.rst_setcrs("tile", f.lit("EPSG:32618"))).alias("crs")
     ).first()
@@ -579,8 +565,7 @@ def rst_setsrid_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(rx.rst_setsrid("tile", f.lit(32618)).alias("tile")).first()
     return result["tile"]
 
@@ -607,8 +592,7 @@ def rst_threshold_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_threshold("tile", f.lit(">"), f.lit(0.0)).alias("tile")
     ).first()
@@ -638,8 +622,7 @@ def rst_transform_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(rx.rst_transform("tile", f.lit(4326)).alias("tile")).first()
     return result["tile"]
 
@@ -667,8 +650,7 @@ def rst_transformcrs_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_crs(rx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("crs")
     ).first()
@@ -698,8 +680,7 @@ def rst_updatetype_python_light_example(spark):
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    df = _get_single_band_df(spark)
+    df = spark.table("rasters")
     result = df.select(
         rx.rst_updatetype("tile", f.lit("Float32")).alias("tile")
     ).first()

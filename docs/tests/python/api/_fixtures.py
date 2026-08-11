@@ -236,6 +236,51 @@ def netcdf_tile_df_heavy(spark):
 
 
 # ---------------------------------------------------------------------------
+# Setup views (rasters / multiband_rasters / dem_rasters / netcdf_rasters)
+#
+# Every per-function doc example on the raster-functions page starts from one of
+# these four temp views (mirroring the page's Setup section). The rendered tabs
+# read `spark.table("<view>")`; these helpers create the tier-appropriate views
+# in the test session so those examples execute. A test module registers the
+# views once via an autouse fixture (see the per-tier setup functions below).
+# ---------------------------------------------------------------------------
+
+# view name -> tile-df builder, one mapping per tier. The builder loads the same
+# committed fixture the documented named reader would (gtiff_gbx/gtiff_gdal etc.).
+_SETUP_VIEWS_LIGHT = {
+    "rasters": single_band_tile_df,
+    "multiband_rasters": multiband_tile_df,
+    "dem_rasters": dem_tile_df,
+    "netcdf_rasters": netcdf_tile_df,
+}
+_SETUP_VIEWS_HEAVY = {
+    "rasters": single_band_tile_df_heavy,
+    "multiband_rasters": multiband_tile_df_heavy,
+    "dem_rasters": dem_tile_df_heavy,
+    "netcdf_rasters": netcdf_tile_df_heavy,
+}
+
+
+def create_setup_views_light(spark):
+    """Create the four light-tier Setup views (rasters, multiband_rasters,
+    dem_rasters, netcdf_rasters) in `spark`. Idempotent (createOrReplace)."""
+    for view, builder in _SETUP_VIEWS_LIGHT.items():
+        builder(spark).createOrReplaceTempView(view)
+
+
+def create_setup_views_heavy(spark):
+    """Create the four heavy-tier Setup views in `spark`. Idempotent.
+
+    Note: the light and heavy Setup views share names; a single Spark session
+    can hold only one tier's views at a time. pytest runs a test module to
+    completion before the next, so an autouse module fixture that calls the
+    matching tier's creator keeps each file's examples reading the right tier.
+    """
+    for view, builder in _SETUP_VIEWS_HEAVY.items():
+        builder(spark).createOrReplaceTempView(view)
+
+
+# ---------------------------------------------------------------------------
 # Multiband GeoTIFF fixture generator
 # ---------------------------------------------------------------------------
 

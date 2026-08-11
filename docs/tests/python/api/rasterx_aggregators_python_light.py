@@ -53,7 +53,6 @@ def rst_combineavg_agg_python_light_example(spark):
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     df = _get_multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
@@ -89,7 +88,6 @@ def rst_derivedband_agg_python_light_example(spark):
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     pyfunc = (
         "def fn(in_ar, out_ar, xoff, yoff, xsize, ysize, "
         "raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n"
@@ -130,7 +128,6 @@ def rst_frombands_agg_python_light_example(spark):
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     df = _get_multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
@@ -165,7 +162,6 @@ def rst_merge_agg_python_light_example(spark):
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     df = _get_multi_band_tiles_df(spark)
     result = df.groupBy("region").agg(rx.rst_merge_agg("tile").alias("mosaic")).first()
     return result["mosaic"]
@@ -204,7 +200,6 @@ def rst_rasterize_agg_python_light_example(spark):
         StructType,
     )  # noqa: PLC0415
 
-    rx.register(spark)
     # WKB POLYGON((0 0, 4 0, 4 4, 0 4, 0 0)) in EPSG:4326
     poly = bytes.fromhex(
         "0103000000010000000500000000000000000000000000000000000000"
@@ -272,8 +267,6 @@ def rst_gridfrompoints_agg_python_light_example(spark):
         StructField,
         StructType,
     )  # noqa: PLC0415
-
-    rx.register(spark)
 
     def _wkb_point(x, y):
         """Build a WKB POINT from (x, y) as bytes."""
@@ -347,8 +340,6 @@ def rst_dtmfromgeoms_agg_python_light_example(spark):
         StructType,
     )  # noqa: PLC0415
 
-    rx.register(spark)
-
     def _wkb_point_z(x, y, z):
         """Build a WKB POINT Z (ISO wkbType 1001) as bytes."""
         import struct  # noqa: PLC0415
@@ -415,7 +406,6 @@ def rst_h3_rasterize_agg_python_light_example(spark):
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     import h3  # noqa: PLC0415
 
     res = 9
@@ -478,7 +468,6 @@ def rst_quadbin_rasterize_agg_python_light_example(spark):
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     from databricks.labs.gbx.gridx.quadbin import functions as qbx  # noqa: PLC0415
 
     qbx.register(spark)
@@ -529,7 +518,6 @@ def rst_bng_rasterize_agg_python_light_example(spark):
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     from databricks.labs.gbx.gridx.bng import functions as bngx  # noqa: PLC0415
 
     bngx.register(spark)

@@ -2284,21 +2284,27 @@ rst_derivedband_sql_example_output = """
 
 
 def rst_mapalgebra_sql_example():
-    """Apply a map-algebra expression across an array of tiles (heavy/SQL tier).
+    """NDVI from two bands of a SINGLE multiband raster — no need to decompose it.
 
-    Band 1 of each tile (in array order) binds to A, B, C, …. The SQL/heavy tier
-    takes a gdal_calc JSON spec: a JSON object with a `calc` expression. With one
-    tile, A = band 1 and `{"calc": "A*2"}` doubles it → single-band tile. (The
-    lightweight Python tier instead takes a bare numexpr string, `"A * 2"`.)
+    The spec is a gdal_calc JSON envelope (the same shape on both tiers). The
+    per-variable keys select a raster (`*_index`, 0-based into the array) and a
+    1-based band (`*_band`): A and B both read raster 0 (the one tile), A = band
+    2 (NIR), B = band 1 (Red), giving NDVI = (NIR-Red)/(NIR+Red). Direct
+    equivalent of `gdal_calc -A in --A_band=2 -B in --B_band=1
+    --calc="(A-B)/(A+B)"`.
     """
     return """
-SELECT gbx_rst_mapalgebra(array(tile), '{"calc": "A*2"}') AS result FROM multiband_rasters;
+SELECT gbx_rst_mapalgebra(
+           array(tile),
+           '{"calc": "(A-B)/(A+B)", "A_index": 0, "B_index": 0, "A_band": 2, "B_band": 1}'
+       ) AS ndvi
+FROM multiband_rasters;
 """
 
 
 rst_mapalgebra_sql_example_output = """
 +-----------------------------------------------------------+
-|result                                                    |
+|ndvi                                                       |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+

@@ -1043,7 +1043,9 @@ def test_m_only_geometry_becomes_2d_without_fabricating_z():
     # st_transformcrs with SRID=4326 and (15,51) inside EPSG:32633 -> 2D, M dropped, 25 bytes.
     for geom in ("SRID=4326;POINT M (15 51 99)", _zm_ewkb("POINT M (15 51 99)")):
         out = _crs._udf_st_transformcrs(geom, "EPSG:32633")
-        assert out is not None, "SRID=4326 M-only at (15,51) should project, not degrade"
+        assert (
+            out is not None
+        ), "SRID=4326 M-only at (15,51) should project, not degrade"
         g = from_wkb(bytes(out))
         assert not shapely.has_m(g), "the measure is dropped"
         assert not g.has_z, "no Z is invented to replace it"
@@ -1207,6 +1209,7 @@ def test_st_transformcrs_nonfinite_does_not_break_nan_z_handling():
 
 import numpy as np
 import pyproj
+
 from databricks.labs.gbx.core.crs import in_target_domain
 
 
@@ -1230,9 +1233,13 @@ def test_in_target_domain_straddling_is_false():
 
 def test_in_target_domain_bounds_absent_returns_none():
     # A CRS with no area_of_use (raw PROJ4 with no bounds) -> None (skip).
-    tgt = pyproj.CRS.from_proj4("+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs")
+    tgt = pyproj.CRS.from_proj4(
+        "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+    )
     result = in_target_domain(np.array([[0.0, 0.0]]), tgt)
-    assert result is None or result is True  # None if no area_of_use; helper must not raise
+    assert (
+        result is None or result is True
+    )  # None if no area_of_use; helper must not raise
 
 
 # ---------------------------------------------------------------------------

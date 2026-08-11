@@ -659,9 +659,7 @@ def test_transformcrs_parity_bad_target_both_raise(heavy, light):
     with pytest.raises(Exception):
         light._udf_st_transformcrs(g, "EPSG:99999")
     with pytest.raises(Exception):
-        heavy.sql(
-            f"SELECT gbx_st_transformcrs({_sql_lit(g)}, 'EPSG:99999')"
-        ).first()
+        heavy.sql(f"SELECT gbx_st_transformcrs({_sql_lit(g)}, 'EPSG:99999')").first()
 
 
 def test_transformcrs_parity_bad_source_arg_both_raise(heavy, light):

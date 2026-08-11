@@ -584,7 +584,9 @@ def st_transformcrs(
     lonlat = (
         get_coordinates(g)
         if src.is_geographic
-        else get_coordinates(transform(get_transformer(src, resolve_crs(4326)).transform, g))
+        else get_coordinates(
+            transform(get_transformer(src, resolve_crs(4326)).transform, g)
+        )
     )
     dom = in_target_domain(lonlat, _tgt_pyproj)
     if dom is False:

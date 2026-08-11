@@ -860,3 +860,75 @@ def test_rst_quadbin_tessellate_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_quadbin_tessellate_python_heavy_example(spark)
     assert result is not None
+
+
+# ============================================================================
+# Generator Functions (Heavy Tier)
+# ============================================================================
+
+_RETILE_ERROR_TILE_BUG = "rst_retile works correctly; returns array of tile structs"
+
+_TOOVERLAPPINGTILES_ERROR_TILE_BUG = (
+    "rst_tooverlappingtiles works correctly; returns array of overlapping tiles"
+)
+
+_SEPARATEBANDS_ERROR_TILE_BUG = (
+    "rst_separatebands works correctly; returns array of band tiles"
+)
+
+_POLYGONIZE_ERROR_TILE_BUG = (
+    "rst_polygonize works correctly; returns array of feature structs"
+)
+
+
+def test_rst_retile_python_heavy_example(spark):
+    """rst_retile returns list of rows (via LATERAL)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_retile_python_heavy_example(spark)
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) > 0
+
+
+def test_rst_tooverlappingtiles_python_heavy_example(spark):
+    """rst_tooverlappingtiles returns list of rows (via LATERAL)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_tooverlappingtiles_python_heavy_example(spark)
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) > 0
+
+
+def test_rst_separatebands_python_heavy_example(spark):
+    """rst_separatebands returns list of rows (one per band, via LATERAL)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_separatebands_python_heavy_example(spark)
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) == 3  # multiband fixture has 3 bands
+
+
+def test_rst_polygonize_python_heavy_example(spark):
+    """rst_polygonize returns an ARRAY<struct(geom_wkb, value)> of regions."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_polygonize_python_heavy_example(spark)
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) > 0
+    assert "geom_wkb" in result[0].asDict() and "value" in result[0].asDict()
+
+
+def test_rst_maketiles_python_heavy_example(spark):
+    """rst_maketiles returns one row per sub-tile (via LATERAL)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_maketiles_python_heavy_example(spark)
+    assert result is not None
+    assert isinstance(result, list)
+    assert len(result) > 0
+
+
+def test_rst_rasterize_python_heavy_example(spark):
+    """rst_rasterize returns a materialized tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_rasterize_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_rasterize")

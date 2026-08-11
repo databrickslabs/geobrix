@@ -1780,46 +1780,30 @@ rst_bng_rastertogridstddev_sql_example_output = """
 def rst_maketiles_sql_example():
     """Subdivide rasters into tiles by approximate size in MB"""
     return """
--- Subdivide and explode tiles. The second argument is a target size in MB,
--- not pixel dimensions: the tile grid is derived from the MB budget.
-SELECT
-    path,
-    tile_subtile as tile
-FROM rasters
-LATERAL VIEW explode(gbx_rst_maketiles(tile, 4)) AS tile_subtile;
-
--- Count tiles per raster. Splits are powers of four (1, 4, 16, ...), so a
--- smaller budget yields more tiles. Use -1 for a single tile, 0 for 64 MB.
-SELECT
-    path,
-    SIZE(gbx_rst_maketiles(tile, 4)) as num_tiles
-FROM rasters;
+-- Subdivide into MB-sized tiles using LATERAL. The second argument is a target
+-- size in MB, not pixel dimensions; the tile grid is derived from the MB budget.
+SELECT t.*
+FROM rasters,
+LATERAL gbx_rst_maketiles(tile, 4) t;
 """
 
 
 rst_maketiles_sql_example_output = """
-+----+-----------------------------------------------------------+
-|path|tile                                                       |
-+----+-----------------------------------------------------------+
-|... |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+----+-----------------------------------------------------------+
-
-+----+---------+
-|path|num_tiles|
-+----+---------+
-|... |4        |
-+----+---------+
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
 
 def rst_retile_sql_example():
     """Retile rasters to uniform dimensions"""
     return """
-SELECT
-    path,
-    tile
-FROM rasters
-LATERAL VIEW explode(gbx_rst_retile(tile, 256, 256)) AS tile;
+SELECT t.*
+FROM rasters,
+LATERAL gbx_rst_retile(tile, 256, 256) t;
 """
 
 
@@ -1835,11 +1819,9 @@ rst_retile_sql_example_output = """
 def rst_tooverlappingtiles_sql_example():
     """Create overlapping tiles for edge-aware processing"""
     return """
-SELECT
-    path,
-    tile
-FROM rasters
-LATERAL VIEW explode(gbx_rst_tooverlappingtiles(tile, 256, 256, 10)) AS tile;
+SELECT t.*
+FROM rasters,
+LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 10) t;
 """
 
 
@@ -1855,15 +1837,9 @@ rst_tooverlappingtiles_sql_example_output = """
 def rst_separatebands_sql_example():
     """Separate multi-band raster into individual bands"""
     return """
-SELECT
-    path,
-    bands[0] as red_band,
-    bands[1] as green_band,
-    bands[2] as blue_band
-FROM (
-    SELECT path, gbx_rst_separatebands(tile) as bands
-    FROM rgb_rasters
-);
+SELECT t.*
+FROM multiband_rasters,
+LATERAL gbx_rst_separatebands(tile) t;
 """
 
 

@@ -22,6 +22,7 @@ import rasterxAggregatorsLightCode from '!!raw-loader!../../tests/python/api/ras
 import rasterxBandmathLightCode from '!!raw-loader!../../tests/python/api/rasterx_bandmath_python_light.py';
 import rasterxTerrainLightCode from '!!raw-loader!../../tests/python/api/rasterx_terrain_python_light.py';
 import rasterxTransformsLightCode from '!!raw-loader!../../tests/python/api/rasterx_transforms_python_light.py';
+import rasterxGeneratorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_generators_python_light.py';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
@@ -1452,7 +1453,14 @@ Powered by **rasterio**. Streams one tile row per subdivided region via streamin
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_maketiles_sql_example" outputConstant="rst_maketiles_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_maketiles"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+/>
 
 ### rst_retile
 
@@ -1466,7 +1474,14 @@ Powered by **rasterio**. Streams one tile row per retiled region via streaming U
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_retile_sql_example" outputConstant="rst_retile_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_retile"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+/>
 
 ### rst_separatebands
 
@@ -1480,7 +1495,14 @@ Powered by **rasterio**. Streams one band-tile row per band via streaming UDTF â
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_separatebands_sql_example" outputConstant="rst_separatebands_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_separatebands"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+/>
 
 ### rst_tooverlappingtiles
 
@@ -1494,7 +1516,14 @@ Powered by **rasterio**. Streams one tile row per overlapping region via streami
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_tooverlappingtiles_sql_example" outputConstant="rst_tooverlappingtiles_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_tooverlappingtiles"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+/>
 
 ---
 
@@ -2452,7 +2481,14 @@ Powered by **rasterio** (`rasterio.features`).
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_rasterize_sql_example" outputConstant="rst_rasterize_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_rasterize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+/>
 
 ### rst_polygonize
 
@@ -2473,7 +2509,14 @@ FROM <table>, LATERAL gbx_rst_polygonize(tile, band, connectedness) t
 
 **SQL:**
 
-<CodeFromTest language="sql" source="docs/tests/python/api/rasterx_functions_sql.py" testFile="docs/tests/python/api/test_rasterx_functions_sql.py" functionName="rst_polygonize_sql_example" outputConstant="rst_polygonize_sql_example_output" code={rasterxSqlCode} />
+<FunctionExamples
+  name="rst_polygonize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+/>
 
 ---
 

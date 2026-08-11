@@ -552,59 +552,39 @@ def test_rst_updatetype_sql_example(spark, rasters_view):
 
 
 def test_rst_maketiles_sql_example(spark, rasters_view):
-    """Test SQL make tiles example. Generator returns struct in SQL; use without explode."""
-    sql = """
-    SELECT
-        path,
-        gbx_rst_maketiles(tile, 4) as tile_result
-    FROM rasters
-    LIMIT 10
-    """
+    """Test SQL make tiles example using LATERAL TVF syntax."""
+    sql = rasterx_functions_sql.rst_maketiles_sql_example()
     result = spark.sql(sql)
     assert result.count() > 0
-    assert "tile_result" in result.columns
+    # SELECT t.* expands the v2-Tile struct fields (cellid, raster, path, ...)
+    assert "raster" in result.columns
 
 
 def test_rst_retile_sql_example(spark, rasters_view):
-    """Test SQL retile example. Generator returns struct in SQL; use without explode."""
-    sql = """
-    SELECT
-        path,
-        gbx_rst_retile(tile, 256, 256) as tile_result
-    FROM rasters
-    LIMIT 10
-    """
+    """Test SQL retile example using LATERAL TVF syntax."""
+    sql = rasterx_functions_sql.rst_retile_sql_example()
     result = spark.sql(sql)
     assert result.count() > 0
-    assert "tile_result" in result.columns
+    # SELECT t.* expands the v2-Tile struct fields (cellid, raster, path, ...)
+    assert "raster" in result.columns
 
 
 def test_rst_tooverlappingtiles_sql_example(spark, rasters_view):
-    """Test SQL overlapping tiles example. Generator returns struct in SQL; use without explode."""
-    sql = """
-    SELECT
-        path,
-        gbx_rst_tooverlappingtiles(tile, 256, 256, 10) as tile_result
-    FROM rasters
-    LIMIT 10
-    """
+    """Test SQL overlapping tiles example using LATERAL TVF syntax."""
+    sql = rasterx_functions_sql.rst_tooverlappingtiles_sql_example()
     result = spark.sql(sql)
     assert result.count() > 0
-    assert "tile_result" in result.columns
+    # SELECT t.* expands the v2-Tile struct fields (cellid, raster, path, ...)
+    assert "raster" in result.columns
 
 
-def test_rst_separatebands_sql_example(spark, rasters_view):
-    """Test SQL separate bands example. Generator returns struct in SQL."""
-    sql = """
-    SELECT
-        path,
-        gbx_rst_separatebands(tile) as bands
-    FROM rasters
-    LIMIT 1
-    """
+def test_rst_separatebands_sql_example(spark, multiband_rasters_view):
+    """Test SQL separate bands example using LATERAL TVF syntax."""
+    sql = rasterx_functions_sql.rst_separatebands_sql_example()
     result = spark.sql(sql)
     assert result.count() > 0
-    assert "bands" in result.columns
+    # SELECT t.* expands the v2-Tile struct fields (cellid, raster, path, ...)
+    assert "raster" in result.columns
 
 
 def test_rst_rasterize_sql_example(spark):

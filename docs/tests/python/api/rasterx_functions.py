@@ -3338,3 +3338,158 @@ rst_quadbin_tessellate_python_heavy_example_output = """
 +---+
 (array of tile structs per quadbin cell, zoom 12)
 """
+
+
+# ============================================================================
+# Generator Functions (Heavy Tier)
+# ============================================================================
+
+
+def rst_retile_python_heavy_example(spark):
+    """Retile a raster into uniform dimensions (UDTF via SQL LATERAL)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    df.createOrReplaceTempView("rasters")
+    # Retile into 64x64-pixel sub-tiles using SQL LATERAL
+    return spark.sql(
+        "SELECT t.* FROM rasters, " "LATERAL gbx_rst_retile(tile, 64, 64) t"
+    ).take(3)
+
+
+rst_retile_python_heavy_example_output = """
++---+---+---+
+|z  |x  |y  |
++---+---+---+
+(one row per sub-tile: each sub-tile is a v2-Tile struct)
+"""
+
+
+def rst_tooverlappingtiles_python_heavy_example(spark):
+    """Create overlapping tiles for edge-aware processing (UDTF via SQL LATERAL)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    df.createOrReplaceTempView("rasters")
+    # 64x64 tiles with 8% overlap using SQL LATERAL
+    return spark.sql(
+        "SELECT t.* FROM rasters, "
+        "LATERAL gbx_rst_tooverlappingtiles(tile, 64, 64, 8) t"
+    ).take(3)
+
+
+rst_tooverlappingtiles_python_heavy_example_output = """
++---+---+---+
+|z  |x  |y  |
++---+---+---+
+(one row per overlapping tile: each is a v2-Tile struct)
+"""
+
+
+def rst_separatebands_python_heavy_example(spark):
+    """Separate multi-band raster into individual bands (UDTF via SQL LATERAL)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_multiband_df_heavy(spark)
+    df.createOrReplaceTempView("multiband_rasters")
+    # Separate 3-band raster into individual band tiles using SQL LATERAL
+    return spark.sql(
+        "SELECT t.* FROM multiband_rasters, " "LATERAL gbx_rst_separatebands(tile) t"
+    ).collect()
+
+
+rst_separatebands_python_heavy_example_output = """
++---+
+|z  |
++---+
+(one row per band: each is a v2-Tile struct)
+"""
+
+
+def rst_polygonize_python_heavy_example(spark):
+    """Extract polygons from raster regions (heavy tier).
+
+    Heavy rst_polygonize is a scalar returning an ARRAY<struct(geom_wkb, value)>
+    (one element per contiguous-value region) — not a generator; call it in a
+    plain select and explode the array if you want one row per feature.
+    """
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    return df.select(
+        rx.rst_polygonize("tile", f.lit(1), f.lit(4)).alias("features")
+    ).first()["features"]
+
+
+rst_polygonize_python_heavy_example_output = """
+[{geom_wkb: ..., value: 365.0}, {geom_wkb: ..., value: 366.0}, ...]
+(ARRAY<struct(geom_wkb BINARY (WKB), value DOUBLE)> — one element per region)
+"""
+
+
+def rst_maketiles_python_heavy_example(spark):
+    """Subdivide raster into tiles by approximate size (UDTF, BROKEN in heavy tier)."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    df = _get_single_band_df_heavy(spark)
+    df.createOrReplaceTempView("rasters")
+    # Subdivide into ~1.0 MB tiles (this crashes in heavy tier; see xfail in test)
+    return spark.sql(
+        "SELECT t.* FROM rasters, " "LATERAL gbx_rst_maketiles(tile, 1.0) t"
+    ).collect()
+
+
+rst_maketiles_python_heavy_example_output = """
++---+---+---+
+|z  |x  |y  |
++---+---+---+
+(one row per sub-tile; NOT WORKING IN HEAVY TIER)
+"""
+
+
+def rst_rasterize_python_heavy_example(spark):
+    """Burn geometry into a raster tile (column-returning, not a generator)."""
+    from pyspark.sql import Row, functions as f
+
+    if rx is None:
+        raise ImportError("rasterx not installed")
+
+    rx.register(spark)
+    # Create a synthetic geometry DataFrame with WKT polygon
+    df = spark.createDataFrame([Row(geom="POLYGON((2 2, 8 2, 8 8, 2 8, 2 2))")])
+    # Rasterize a square polygon (value=1.0, extent=(0,0,10,10), 10x10 pixels, EPSG:4326)
+    result = df.select(
+        rx.rst_rasterize(
+            f.col("geom"),
+            f.lit(1.0),
+            f.lit(0.0),
+            f.lit(0.0),
+            f.lit(10.0),
+            f.lit(10.0),
+            f.lit(10),
+            f.lit(10),
+            f.lit(4326),
+        ).alias("tile")
+    ).collect()
+    return result[0]["tile"]
+
+
+rst_rasterize_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(rasterized tile: pixels inside the polygon carry the burn value)
+"""

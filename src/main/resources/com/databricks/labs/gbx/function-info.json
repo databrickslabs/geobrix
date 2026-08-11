@@ -532,10 +532,13 @@
       ]
     },
     "gbx_rst_maketiles": {
-      "examples": "Examples:\n      > SELECT path, tile_subtile as tile FROM rasters LATERAL VIEW explode(gbx_rst_maketiles(tile, 4)) AS tile_subtile;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_maketiles(tile, 4) t;",
       "usage_args": "tile, size_in_mb",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_mapalgebra": {
@@ -692,7 +695,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_polygonize( gbx_rst_rasterize( unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'), 42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326 ) ) AS features;",
       "usage_args": "tile, [band], [connectedness]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_proximity": {
@@ -785,7 +791,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_rasterize( unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'), 42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326 ) AS tile;",
       "usage_args": "geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_rasterize_agg": {
@@ -859,10 +868,13 @@
       ]
     },
     "gbx_rst_retile": {
-      "examples": "Examples:\n      > SELECT path, tile FROM rasters LATERAL VIEW explode(gbx_rst_retile(tile, 256, 256)) AS tile;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_retile(tile, 256, 256) t;",
       "usage_args": "tile, tile_width, tile_height",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_rotation": {
@@ -926,10 +938,13 @@
       ]
     },
     "gbx_rst_separatebands": {
-      "examples": "Examples:\n      > SELECT path, bands[0] as red_band, bands[1] as green_band, bands[2] as blue_band FROM ( SELECT path, gbx_rst_separatebands(tile) as bands FROM rgb_rasters );",
+      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_separatebands(tile) t;",
       "usage_args": "tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_setcrs": {
@@ -1043,10 +1058,13 @@
       ]
     },
     "gbx_rst_tooverlappingtiles": {
-      "examples": "Examples:\n      > SELECT path, tile FROM rasters LATERAL VIEW explode(gbx_rst_tooverlappingtiles(tile, 256, 256, 10)) AS tile;",
+      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 10) t;",
       "usage_args": "tile, tile_width, tile_height, overlap",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_rst_tpi": {

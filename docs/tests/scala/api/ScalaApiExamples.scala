@@ -2408,4 +2408,143 @@ result.show(truncate = false)
 (array of tile structs per quadbin cell, zoom 12)
 """
 
+  // =========================================================================
+  // Generator Functions (Scala)
+  // =========================================================================
+
+  val rst_retile_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val result = raster.select(rx.rst_retile(col("tile"), lit(64), lit(64)).alias("tiles"))
+result.show(truncate = false)
+""".trim
+
+  val rst_retile_scala_example_output: String =
+    """
++-----+
+|tiles|
++-----+
+|[{0, |
++-----+
+(array of tile structs: [{0, raster, path, metadata}, ...])
+"""
+
+  val rst_tooverlappingtiles_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val result = raster.select(rx.rst_tooverlappingtiles(col("tile"), lit(64), lit(64), lit(8)).alias("tiles"))
+result.show(truncate = false)
+""".trim
+
+  val rst_tooverlappingtiles_scala_example_output: String =
+    """
++-----+
+|tiles|
++-----+
+|[{0, |
++-----+
+(array of overlapping tile structs with 8% overlap)
+"""
+
+  val rst_separatebands_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
+val result = raster.select(rx.rst_separatebands(col("tile")).alias("bands"))
+result.show(truncate = false)
+""".trim
+
+  val rst_separatebands_scala_example_output: String =
+    """
++-----+
+|bands|
++-----+
+|[{0, |
++-----+
+(array of tile structs: one per band from the multiband raster)
+"""
+
+  val rst_polygonize_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val result = raster.select(rx.rst_polygonize(col("tile")).alias("features"))
+result.show(truncate = false)
+""".trim
+
+  val rst_polygonize_scala_example_output: String =
+    """
++--------+
+|features|
++--------+
+|[{...}] |
++--------+
+(array of {geom_wkb: binary (WKB), value: double})
+"""
+
+  val rst_maketiles_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val raster = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif")
+val result = raster.select(rx.rst_maketiles(col("tile"), lit(1.0)).alias("tiles"))
+result.show(truncate = false)
+""".trim
+
+  val rst_maketiles_scala_example_output: String =
+    """
++-----+
+|tiles|
++-----+
+|[{0, |
++-----+
+(array of tile structs per MB subdivision; NOT WORKING IN HEAVY TIER)
+"""
+
+  val rst_rasterize_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+val wkt = "POLYGON((2 2, 8 2, 8 8, 2 8, 2 2))"
+val result = spark.createDataFrame(Seq(
+  (wkt,)
+)).toDF("geom")
+  .select(rx.rst_rasterize(
+    col("geom"),
+    lit(1.0),
+    lit(0.0), lit(0.0), lit(10.0), lit(10.0),
+    lit(10), lit(10),
+    lit(4326)
+  ).alias("tile"))
+result.show(truncate = false)
+""".trim
+
+  val rst_rasterize_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(rasterized tile: pixels inside the polygon carry the burn value)
+"""
+
 }

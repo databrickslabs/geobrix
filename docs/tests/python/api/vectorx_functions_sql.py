@@ -196,13 +196,17 @@ def st_transformcrs_sql_example():
     or PROJ4) reprojects the coordinates and clears the now-stale SRID — so
     ``gbx_st_crs`` returns NULL for that column. When no source CRS is resolvable
     at all the geometry is returned unchanged rather than erroring.
+
+    The point is at 13°E, 42°N (central Italy) — inside UTM zone 33N's area of
+    use (12°E–18°E). Reprojecting a point outside the target CRS's valid domain
+    returns NULL (see the reprojection error contract).
     """
     return """
-SELECT gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633'))
+SELECT gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (13 42)', 'EPSG:32633'))
            AS to_utm33n,
-       gbx_st_crs(gbx_st_transformcrs('POINT (11 42)', 'ESRI:54008', 'EPSG:4326'))
+       gbx_st_crs(gbx_st_transformcrs('POINT (13 42)', 'ESRI:54008', 'EPSG:4326'))
            AS to_sinusoidal,
-       gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (11 42)',
+       gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (13 42)',
            '+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs')) AS to_proj4;
 """
 

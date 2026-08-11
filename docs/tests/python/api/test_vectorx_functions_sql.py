@@ -107,7 +107,7 @@ def test_st_transformcrs_sql_returns_binary_for_text_input(vectorx_registered):
 
     spark = vectorx_registered
     df = spark.sql(
-        "SELECT gbx_st_transformcrs('SRID=4326;POINT (11 42)', 'EPSG:32633') AS g"
+        "SELECT gbx_st_transformcrs('SRID=4326;POINT (13 42)', 'EPSG:32633') AS g"
     )
     assert isinstance(df.schema["g"].dataType, BinaryType)
     assert df.first()["g"] is not None

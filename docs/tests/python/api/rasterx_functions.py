@@ -442,7 +442,7 @@ def rst_getsubdataset_python_heavy_example(spark):
 
     Uses the committed CMIP5 NetCDF fixture which has two subdatasets: time_bnds
     and prAdjust. Subdatasets require a multi-layer format such as NetCDF.
-    Returns the width of the extracted subdataset to prove extraction.
+    Returns the extracted subdataset tile directly.
     """
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
@@ -450,18 +450,18 @@ def rst_getsubdataset_python_heavy_example(spark):
     rx.register(spark)
     nc_df = _get_netcdf_df_heavy(spark)
     result = nc_df.select(
-        rx.rst_width(rx.rst_getsubdataset("tile", f.lit("prAdjust"))).alias("width")
+        rx.rst_getsubdataset("tile", f.lit("prAdjust")).alias("tile")
     ).first()
-    return result["width"]
+    return result["tile"]
 
 
 rst_getsubdataset_python_heavy_example_output = """
-+-----+
-|width|
-+-----+
-|  720|
-+-----+
-(width of the extracted prAdjust subdataset — 720 pixels, 31 bands, 360 rows)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(extracted prAdjust subdataset — 720 pixels wide, 31 bands, 360 rows)
 """
 
 
@@ -1132,18 +1132,18 @@ def rst_asformat_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_format(rx.rst_asformat("tile", f.lit("GTiff"))).alias("format")
+        rx.rst_asformat("tile", f.lit("GTiff")).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_asformat_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(GDAL format name of the re-encoded tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(re-encoded tile in the requested GDAL format)
 """
 
 
@@ -1164,19 +1164,17 @@ def rst_band_python_heavy_example(spark):
 
     rx.register(spark)
     tile_df = _get_multiband_df_heavy(spark)
-    result = tile_df.select(
-        rx.rst_numbands(rx.rst_band("tile", f.lit(1))).alias("num_bands")
-    ).first()
-    return result["num_bands"]
+    result = tile_df.select(rx.rst_band("tile", f.lit(1)).alias("tile")).first()
+    return result["tile"]
 
 
 rst_band_python_heavy_example_output = """
-+---------+
-|num_bands|
-+---------+
-|1        |
-+---------+
-(band count of the extracted single-band tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single band extracted from the 3-band multiband fixture)
 """
 
 
@@ -1194,20 +1192,18 @@ def rst_buildoverviews_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_format(rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4)))).alias(
-            "format"
-        )
+        rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_buildoverviews_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile with internal overviews at levels [2, 4])
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(tile with internal overviews at levels [2, 4] embedded)
 """
 
 
@@ -1232,20 +1228,18 @@ def rst_clip_python_heavy_example(spark):
     tile_df = _get_single_band_df_heavy(spark)
     clip_geom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
     result = tile_df.select(
-        rx.rst_format(rx.rst_clip("tile", f.lit(clip_geom), f.lit(True))).alias(
-            "format"
-        )
+        rx.rst_clip("tile", f.lit(clip_geom), f.lit(True)).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_clip_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
 """
 
 
@@ -1261,19 +1255,17 @@ def rst_cog_convert_python_heavy_example(spark):
 
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
-    result = tile_df.select(
-        rx.rst_format(rx.rst_cog_convert("tile")).alias("format")
-    ).first()
-    return result["format"]
+    result = tile_df.select(rx.rst_cog_convert("tile").alias("tile")).first()
+    return result["tile"]
 
 
 rst_cog_convert_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(a COG is a valid GeoTIFF; use rst_memsize to confirm the tiled internal layout)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(COG tile; a COG is a valid GeoTIFF with tiled internal layout)
 """
 
 
@@ -1296,19 +1288,17 @@ def rst_convolve_python_heavy_example(spark):
         f.array(f.lit(0.0), f.lit(1.0), f.lit(0.0)),
         f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
     )
-    result = tile_df.select(
-        rx.rst_format(rx.rst_convolve("tile", kernel)).alias("format")
-    ).first()
-    return result["format"]
+    result = tile_df.select(rx.rst_convolve("tile", kernel).alias("tile")).first()
+    return result["tile"]
 
 
 rst_convolve_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the convolved tile; kernel is a 3x3 identity)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(convolved tile; kernel is a 3x3 identity)
 """
 
 
@@ -1326,18 +1316,18 @@ def rst_fillnodata_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_format(rx.rst_fillnodata("tile", f.lit(100.0), f.lit(0))).alias("format")
+        rx.rst_fillnodata("tile", f.lit(100.0), f.lit(0)).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_fillnodata_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the filled tile; NoData holes searched within 100 pixels)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(filled tile; NoData holes searched within 100 pixels)
 """
 
 
@@ -1355,18 +1345,18 @@ def rst_filter_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_format(rx.rst_filter("tile", f.lit(3), f.lit("median"))).alias("format")
+        rx.rst_filter("tile", f.lit(3), f.lit("median")).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_filter_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the filtered tile; 3x3 median filter applied)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(filtered tile; 3x3 median filter applied)
 """
 
 
@@ -1432,19 +1422,17 @@ def rst_frombands_python_heavy_example(spark):
             rx.rst_band("tile", f.lit(3)),
         ).alias("bands")
     )
-    result = with_bands.select(
-        rx.rst_numbands(rx.rst_frombands("bands")).alias("num_bands")
-    ).first()
-    return result["num_bands"]
+    result = with_bands.select(rx.rst_frombands("bands").alias("tile")).first()
+    return result["tile"]
 
 
 rst_frombands_python_heavy_example_output = """
-+---------+
-|num_bands|
-+---------+
-|3        |
-+---------+
-(band count of the re-stacked 3-band tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(3 per-band tiles stacked back into a 3-band tile)
 """
 
 
@@ -1460,19 +1448,17 @@ def rst_initnodata_python_heavy_example(spark):
 
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
-    result = tile_df.select(
-        rx.rst_format(rx.rst_initnodata("tile")).alias("format")
-    ).first()
-    return result["format"]
+    result = tile_df.select(rx.rst_initnodata("tile").alias("tile")).first()
+    return result["tile"]
 
 
 rst_initnodata_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile with NoData initialized)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(tile with NoData initialized)
 """
 
 
@@ -1491,20 +1477,18 @@ def rst_resample_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_width(rx.rst_resample("tile", f.lit(2.0), f.lit("bilinear"))).alias(
-            "width"
-        )
+        rx.rst_resample("tile", f.lit(2.0), f.lit("bilinear")).alias("tile")
     ).first()
-    return result["width"]
+    return result["tile"]
 
 
 rst_resample_python_heavy_example_output = """
-+-----+
-|width|
-+-----+
-|472  |
-+-----+
-(width in pixels of the 2x upsampled tile; source is 236 px wide)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(2x bilinear upsampled tile; source is 236x161 px)
 """
 
 
@@ -1523,20 +1507,20 @@ def rst_resample_to_res_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_width(
-            rx.rst_resample_to_res("tile", f.lit(20.0), f.lit(20.0), f.lit("average"))
-        ).alias("width")
+        rx.rst_resample_to_res(
+            "tile", f.lit(20.0), f.lit(20.0), f.lit("average")
+        ).alias("tile")
     ).first()
-    return result["width"]
+    return result["tile"]
 
 
 rst_resample_to_res_python_heavy_example_output = """
-+-----+
-|width|
-+-----+
-|118  |
-+-----+
-(width in pixels after downsampling from 10 m to 20 m resolution)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(downsampled tile; 10 m to 20 m resolution)
 """
 
 
@@ -1555,20 +1539,20 @@ def rst_resample_to_size_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_width(
-            rx.rst_resample_to_size("tile", f.lit(100), f.lit(100), f.lit("near"))
-        ).alias("width")
+        rx.rst_resample_to_size("tile", f.lit(100), f.lit(100), f.lit("near")).alias(
+            "tile"
+        )
     ).first()
-    return result["width"]
+    return result["tile"]
 
 
 rst_resample_to_size_python_heavy_example_output = """
-+-----+
-|width|
-+-----+
-|100  |
-+-----+
-(width in pixels of the resampled tile forced to 100x100)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(resampled tile forced to 100x100 pixels)
 """
 
 
@@ -1614,19 +1598,17 @@ def rst_setsrid_python_heavy_example(spark):
 
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
-    result = tile_df.select(
-        rx.rst_srid(rx.rst_setsrid("tile", f.lit(32618))).alias("srid")
-    ).first()
-    return result["srid"]
+    result = tile_df.select(rx.rst_setsrid("tile", f.lit(32618)).alias("tile")).first()
+    return result["tile"]
 
 
 rst_setsrid_python_heavy_example_output = """
-+-----+
-|srid |
-+-----+
-|32618|
-+-----+
-(EPSG SRID after stamping; does NOT reproject — use rst_transform to reproject)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject)
 """
 
 
@@ -1644,18 +1626,18 @@ def rst_threshold_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_format(rx.rst_threshold("tile", f.lit(">"), f.lit(0.0))).alias("format")
+        rx.rst_threshold("tile", f.lit(">"), f.lit(0.0)).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_threshold_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the binary mask tile; pixels > 0.0 → 1, others → 0)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(binary mask tile; pixels > 0.0 → 1, others → 0)
 """
 
 
@@ -1673,19 +1655,17 @@ def rst_transform_python_heavy_example(spark):
 
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
-    result = tile_df.select(
-        rx.rst_srid(rx.rst_transform("tile", f.lit(4326))).alias("srid")
-    ).first()
-    return result["srid"]
+    result = tile_df.select(rx.rst_transform("tile", f.lit(4326)).alias("tile")).first()
+    return result["tile"]
 
 
 rst_transform_python_heavy_example_output = """
-+----+
-|srid|
-+----+
-|4326|
-+----+
-(EPSG SRID of the reprojected tile; source is EPSG:32618 (UTM Zone 18N))
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(reprojected tile; source EPSG:32618 (UTM Zone 18N) to EPSG:4326)
 """
 
 
@@ -1733,18 +1713,18 @@ def rst_updatetype_python_heavy_example(spark):
     rx.register(spark)
     tile_df = _get_single_band_df_heavy(spark)
     result = tile_df.select(
-        rx.rst_format(rx.rst_updatetype("tile", f.lit("Float32"))).alias("format")
+        rx.rst_updatetype("tile", f.lit("Float32")).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_updatetype_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the type-converted tile; use rst_type to confirm the new data type)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(type-converted tile; use rst_type to confirm the new data type)
 """
 
 
@@ -1786,12 +1766,12 @@ def rst_combineavg_agg_python_heavy_example(spark):
 
 
 rst_combineavg_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|avg_tile                                           |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|avg_tile                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -1811,7 +1791,6 @@ def rst_derivedband_agg_python_heavy_example(spark):
     Grouped by region, producing 1 derived tile row.
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     rx.register(spark)
@@ -1832,12 +1811,12 @@ def rst_derivedband_agg_python_heavy_example(spark):
 
 
 rst_derivedband_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|derived                                            |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|derived                                                    |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -1868,12 +1847,12 @@ def rst_frombands_agg_python_heavy_example(spark):
 
 
 rst_frombands_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|stacked                                            |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|stacked                                                    |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -1900,12 +1879,12 @@ def rst_merge_agg_python_heavy_example(spark):
 
 
 rst_merge_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|mosaic                                             |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|mosaic                                                     |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -1926,11 +1905,11 @@ def rst_rasterize_agg_python_heavy_example(spark):
     from pyspark.sql import functions as f  # noqa: PLC0415
     from pyspark.sql.types import (
         BinaryType,
-        DoubleType,
+        DoubleType,  # noqa: PLC0415
         StringType,
         StructField,
         StructType,
-    )  # noqa: PLC0415
+    )
 
     rx.register(spark)
     # WKB POLYGON((0 0, 4 0, 4 4, 0 4, 0 0)) in EPSG:4326
@@ -1970,12 +1949,12 @@ def rst_rasterize_agg_python_heavy_example(spark):
 
 
 rst_rasterize_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|burned                                             |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|burned                                                     |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -1996,11 +1975,11 @@ def rst_gridfrompoints_agg_python_heavy_example(spark):
     from pyspark.sql import functions as f  # noqa: PLC0415
     from pyspark.sql.types import (
         BinaryType,
-        DoubleType,
+        DoubleType,  # noqa: PLC0415
         StringType,
         StructField,
         StructType,
-    )  # noqa: PLC0415
+    )
 
     rx.register(spark)
 
@@ -2044,12 +2023,12 @@ def rst_gridfrompoints_agg_python_heavy_example(spark):
 
 
 rst_gridfrompoints_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|idw                                               |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|idw                                                        |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -2070,10 +2049,10 @@ def rst_dtmfromgeoms_agg_python_heavy_example(spark):
     from pyspark.sql import functions as f  # noqa: PLC0415
     from pyspark.sql.types import (
         BinaryType,
-        StringType,
+        StringType,  # noqa: PLC0415
         StructField,
         StructType,
-    )  # noqa: PLC0415
+    )
 
     rx.register(spark)
 
@@ -2118,12 +2097,12 @@ def rst_dtmfromgeoms_agg_python_heavy_example(spark):
 
 
 rst_dtmfromgeoms_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|dtm                                               |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|dtm                                                        |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -2159,11 +2138,11 @@ def rst_h3_rasterize_agg_python_heavy_example(spark):
     ]
     from pyspark.sql.types import (
         DoubleType,
-        LongType,
+        LongType,  # noqa: PLC0415
         StringType,
         StructField,
         StructType,
-    )  # noqa: PLC0415
+    )
 
     schema = StructType(
         [
@@ -2199,12 +2178,12 @@ def rst_h3_rasterize_agg_python_heavy_example(spark):
 
 
 rst_h3_rasterize_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|tile                                              |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -2267,12 +2246,12 @@ def rst_quadbin_rasterize_agg_python_heavy_example(spark):
 
 
 rst_quadbin_rasterize_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|tile                                              |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """
 
 
@@ -2335,10 +2314,10 @@ def rst_bng_rasterize_agg_python_heavy_example(spark):
 
 
 rst_bng_rasterize_agg_python_heavy_example_output = """
-+------+---------------------------------------------------+
-|region|tile                                              |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(returns a v2 Tile)
 """

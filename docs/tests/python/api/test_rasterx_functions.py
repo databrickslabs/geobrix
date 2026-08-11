@@ -3,6 +3,18 @@ Test structure of RasterX functions documentation examples.
 Only tests for code that is used in docs/docs/api/rasterx-functions.mdx.
 """
 
+import pytest
+
+# Heavy-tier copy-then-mutate ops (buildoverviews, cog_convert, convolve,
+# fillnodata, filter, setsrid, threshold) currently return an error tile:
+# GDALTranslate/gdal.Open yields a null output dataset (e.g. Cannot invoke
+# Dataset.FlushCache()/SetProjection because the copy is null; COG Translate
+# fails in VSI_TIFFOpen). Pre-existing heavy-tier defect, same family as the
+# known RST_Clip/RST_V2RoundTrip heavy failures — not a docs-example bug.
+# The example (unwrapped invocation) is correct; the tier does not yet produce
+# a valid tile. xfail until the heavy op is fixed.
+_HEAVY_ERROR_TILE_BUG = "pre-existing heavy-tier error-tile bug (null output dataset in copy-then-mutate GDAL path)"
+
 try:
     from . import rasterx_functions
 except (ModuleNotFoundError, ImportError):
@@ -31,7 +43,9 @@ def test_rst_avg_python_heavy_example(spark):
     result = rasterx_functions.rst_avg_python_heavy_example(spark)
     assert isinstance(result, list), f"Expected list, got {type(result)}"
     assert len(result) >= 1
-    assert isinstance(result[0], float), f"Expected float in list, got {type(result[0])}"
+    assert isinstance(
+        result[0], float
+    ), f"Expected float in list, got {type(result[0])}"
 
 
 def test_rst_boundingbox_python_heavy_example(spark):
@@ -98,7 +112,9 @@ def test_rst_format_python_heavy_example(spark):
     """rst_format returns a non-empty format string."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_format_python_heavy_example(spark)
-    assert isinstance(result, str) and len(result) > 0, f"Expected non-empty string, got {result!r}"
+    assert (
+        isinstance(result, str) and len(result) > 0
+    ), f"Expected non-empty string, got {result!r}"
 
 
 def test_rst_georeference_python_heavy_example(spark):
@@ -112,14 +128,16 @@ def test_rst_getnodata_python_heavy_example(spark):
     """rst_getnodata returns a list of NoData values."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_getnodata_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) >= 1, f"Expected non-empty list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) >= 1
+    ), f"Expected non-empty list, got {result!r}"
 
 
 def test_rst_getsubdataset_python_heavy_example(spark):
-    """rst_getsubdataset extracts the prAdjust subdataset; width of result is 720."""
+    """rst_getsubdataset extracts the prAdjust subdataset and returns a tile struct."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_getsubdataset_python_heavy_example(spark)
-    assert result == 720, f"Expected width 720 for prAdjust subdataset, got {result!r}"
+    _assert_heavy_tile(result, "rst_getsubdataset")
 
 
 def test_rst_height_python_heavy_example(spark):
@@ -133,7 +151,9 @@ def test_rst_max_python_heavy_example(spark):
     """rst_max returns [119.0, 197.0, 148.0] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_max_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert result[0] is not None, "band_max[0] should not be None"
 
 
@@ -141,7 +161,9 @@ def test_rst_median_python_heavy_example(spark):
     """rst_median returns [85.0, 157.5, 111.5] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_median_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert result[0] is not None, "band_median[0] should not be None"
 
 
@@ -149,7 +171,9 @@ def test_rst_memsize_python_heavy_example(spark):
     """rst_memsize returns a positive integer."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_memsize_python_heavy_example(spark)
-    assert isinstance(result, int) and result > 0, f"Expected positive int, got {result!r}"
+    assert (
+        isinstance(result, int) and result > 0
+    ), f"Expected positive int, got {result!r}"
 
 
 def test_rst_metadata_python_heavy_example(spark):
@@ -163,7 +187,9 @@ def test_rst_min_python_heavy_example(spark):
     """rst_min returns [50.0, 102.0, 82.0] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_min_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert result[0] is not None, "band_min[0] should not be None"
 
 
@@ -171,7 +197,9 @@ def test_rst_pixelcount_python_heavy_example(spark):
     """rst_pixelcount returns [64, 64, 64] for the multiband fixture (8x8, no NoData)."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_pixelcount_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert all(v == 64 for v in result), f"Expected [64, 64, 64], got {result!r}"
 
 
@@ -235,7 +263,9 @@ def test_rst_crs_python_heavy_example(spark):
     """rst_crs returns 'EPSG:32618' for the single-band fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_crs_python_heavy_example(spark)
-    assert isinstance(result, str) and len(result) > 0, f"Expected non-empty string, got {result!r}"
+    assert (
+        isinstance(result, str) and len(result) > 0
+    ), f"Expected non-empty string, got {result!r}"
     assert "32618" in result, f"Expected EPSG:32618, got {result!r}"
 
 
@@ -244,21 +274,27 @@ def test_rst_subdatasets_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_subdatasets_python_heavy_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    assert len(result) > 0, f"Expected non-empty subdatasets dict (NetCDF fixture), got {result!r}"
+    assert (
+        len(result) > 0
+    ), f"Expected non-empty subdatasets dict (NetCDF fixture), got {result!r}"
 
 
 def test_rst_summary_python_heavy_example(spark):
     """rst_summary returns a non-empty JSON string."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_summary_python_heavy_example(spark)
-    assert isinstance(result, str) and len(result) > 0, f"Expected non-empty string, got {result!r}"
+    assert (
+        isinstance(result, str) and len(result) > 0
+    ), f"Expected non-empty string, got {result!r}"
 
 
 def test_rst_type_python_heavy_example(spark):
     """rst_type returns ['UInt16', 'UInt16', 'UInt16'] for the 3-band multiband fixture."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_type_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert all(t == "UInt16" for t in result), f"Expected all UInt16, got {result!r}"
 
 
@@ -297,7 +333,9 @@ def test_rst_histogram_python_heavy_example(spark):
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
     assert len(result) == 3, f"Expected 3 bands in histogram, got {len(result)}"
     for v in result.values():
-        assert isinstance(v, list), f"Expected list values in histogram dict, got {type(v)}"
+        assert isinstance(
+            v, list
+        ), f"Expected list values in histogram dict, got {type(v)}"
 
 
 def test_accessor_heavy_output_constants_exist():
@@ -350,6 +388,137 @@ def _assert_heavy_tile(result, name):
     assert result is not None, f"{name}: result Row is None"
     assert result["raster"] is not None, f"{name}: raster bytes is None"
     assert len(bytes(result["raster"])) > 0, f"{name}: raster bytes is empty"
+
+
+# ---------------------------------------------------------------------------
+# Tile-ops family heavy-Python tests (unwrapped — return tile directly)
+# ---------------------------------------------------------------------------
+
+
+def test_rst_asformat_python_heavy_example(spark):
+    """rst_asformat returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_asformat_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_asformat")
+
+
+def test_rst_band_python_heavy_example(spark):
+    """rst_band returns a non-null tile struct (single band from multiband fixture)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_band_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_band")
+
+
+@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
+def test_rst_buildoverviews_python_heavy_example(spark):
+    """rst_buildoverviews returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_buildoverviews_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_buildoverviews")
+
+
+def test_rst_clip_python_heavy_example(spark):
+    """rst_clip returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_clip_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_clip")
+
+
+@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
+def test_rst_cog_convert_python_heavy_example(spark):
+    """rst_cog_convert returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_cog_convert_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_cog_convert")
+
+
+@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
+def test_rst_convolve_python_heavy_example(spark):
+    """rst_convolve returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_convolve_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_convolve")
+
+
+@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
+def test_rst_fillnodata_python_heavy_example(spark):
+    """rst_fillnodata returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_fillnodata_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_fillnodata")
+
+
+@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
+def test_rst_filter_python_heavy_example(spark):
+    """rst_filter returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_filter_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_filter")
+
+
+def test_rst_frombands_python_heavy_example(spark):
+    """rst_frombands returns a non-null tile struct (3 bands re-stacked)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_frombands_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_frombands")
+
+
+def test_rst_initnodata_python_heavy_example(spark):
+    """rst_initnodata returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_initnodata_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_initnodata")
+
+
+def test_rst_resample_python_heavy_example(spark):
+    """rst_resample returns a non-null tile struct (2x upsampled)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_resample_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_resample")
+
+
+def test_rst_resample_to_res_python_heavy_example(spark):
+    """rst_resample_to_res returns a non-null tile struct (downsampled to 20m)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_resample_to_res_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_resample_to_res")
+
+
+def test_rst_resample_to_size_python_heavy_example(spark):
+    """rst_resample_to_size returns a non-null tile struct (forced to 100x100)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_resample_to_size_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_resample_to_size")
+
+
+@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
+def test_rst_setsrid_python_heavy_example(spark):
+    """rst_setsrid returns a non-null tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_setsrid_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_setsrid")
+
+
+@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
+def test_rst_threshold_python_heavy_example(spark):
+    """rst_threshold returns a non-null tile struct (binary mask)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_threshold_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_threshold")
+
+
+def test_rst_transform_python_heavy_example(spark):
+    """rst_transform returns a non-null tile struct (reprojected to EPSG:4326)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_transform_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_transform")
+
+
+def test_rst_updatetype_python_heavy_example(spark):
+    """rst_updatetype returns a non-null tile struct (data type changed to Float32)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_updatetype_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_updatetype")
 
 
 def test_rst_combineavg_agg_python_heavy_example(spark):

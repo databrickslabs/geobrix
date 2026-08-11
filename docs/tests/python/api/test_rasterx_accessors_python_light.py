@@ -57,7 +57,9 @@ def test_rst_histogram_python_light_example(spark):
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
     assert len(result) == 3, f"Expected 3 bands in histogram, got {len(result)}"
     for v in result.values():
-        assert isinstance(v, list), f"Expected list values in histogram dict, got {type(v)}"
+        assert isinstance(
+            v, list
+        ), f"Expected list values in histogram dict, got {type(v)}"
 
 
 def test_rst_isempty_python_light_example(spark):
@@ -71,7 +73,9 @@ def test_rst_max_python_light_example(spark):
     """rst_max returns [119.0, 197.0, 148.0] for the 3-band multiband fixture."""
     assert light_examples is not None
     result = light_examples.rst_max_python_light_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert result[0] is not None, "band_max[0] should not be None"
 
 
@@ -79,7 +83,9 @@ def test_rst_median_python_light_example(spark):
     """rst_median returns [85.0, 157.5, 111.5] for the 3-band multiband fixture."""
     assert light_examples is not None
     result = light_examples.rst_median_python_light_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert result[0] is not None, "band_median[0] should not be None"
 
 
@@ -87,7 +93,9 @@ def test_rst_min_python_light_example(spark):
     """rst_min returns [50.0, 102.0, 82.0] for the 3-band multiband fixture."""
     assert light_examples is not None
     result = light_examples.rst_min_python_light_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert result[0] is not None, "band_min[0] should not be None"
 
 
@@ -102,7 +110,9 @@ def test_rst_pixelcount_python_light_example(spark):
     """rst_pixelcount returns [64, 64, 64] for the multiband fixture (8x8, no NoData)."""
     assert light_examples is not None
     result = light_examples.rst_pixelcount_python_light_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert all(v == 64 for v in result), f"Expected [64, 64, 64], got {result!r}"
 
 
@@ -110,8 +120,12 @@ def test_rst_summary_python_light_example(spark):
     """rst_summary returns a non-empty JSON string for the multiband fixture."""
     assert light_examples is not None
     result = light_examples.rst_summary_python_light_example(spark)
-    assert isinstance(result, str) and len(result) > 0, f"Expected non-empty string, got {result!r}"
-    assert "GTiff" in result or "driverShortName" in result, f"Summary missing driver info: {result[:200]}"
+    assert (
+        isinstance(result, str) and len(result) > 0
+    ), f"Expected non-empty string, got {result!r}"
+    assert (
+        "GTiff" in result or "driverShortName" in result
+    ), f"Summary missing driver info: {result[:200]}"
 
 
 def test_rst_tryopen_python_light_example(spark):
@@ -125,7 +139,9 @@ def test_rst_type_python_light_example(spark):
     """rst_type returns ['UInt16', 'UInt16', 'UInt16'] for the 3-band multiband fixture."""
     assert light_examples is not None
     result = light_examples.rst_type_python_light_example(spark)
-    assert isinstance(result, list) and len(result) == 3, f"Expected 3-band list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) == 3
+    ), f"Expected 3-band list, got {result!r}"
     assert all(t == "UInt16" for t in result), f"Expected all UInt16, got {result!r}"
 
 
@@ -147,7 +163,9 @@ def test_rst_crs_python_light_example(spark):
     """rst_crs returns 'EPSG:32618' for the single-band fixture."""
     assert light_examples is not None
     result = light_examples.rst_crs_python_light_example(spark)
-    assert isinstance(result, str) and len(result) > 0, f"Expected non-empty string, got {result!r}"
+    assert (
+        isinstance(result, str) and len(result) > 0
+    ), f"Expected non-empty string, got {result!r}"
     assert "32618" in result, f"Expected EPSG:32618, got {result!r}"
 
 
@@ -155,7 +173,9 @@ def test_rst_format_python_light_example(spark):
     """rst_format returns 'GTiff' for the single-band GeoTIFF fixture."""
     assert light_examples is not None
     result = light_examples.rst_format_python_light_example(spark)
-    assert isinstance(result, str) and result == "GTiff", f"Expected 'GTiff', got {result!r}"
+    assert (
+        isinstance(result, str) and result == "GTiff"
+    ), f"Expected 'GTiff', got {result!r}"
 
 
 def test_rst_georeference_python_light_example(spark):
@@ -163,7 +183,9 @@ def test_rst_georeference_python_light_example(spark):
     assert light_examples is not None
     result = light_examples.rst_georeference_python_light_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    assert "scaleX" in result, f"Expected 'scaleX' key in georeference, got {result.keys()}"
+    assert (
+        "scaleX" in result
+    ), f"Expected 'scaleX' key in georeference, got {result.keys()}"
     assert result["scaleX"] == 10.0, f"Expected scaleX=10.0, got {result.get('scaleX')}"
 
 
@@ -171,7 +193,9 @@ def test_rst_getnodata_python_light_example(spark):
     """rst_getnodata returns [0.0] for the single-band fixture (nodata=0.0)."""
     assert light_examples is not None
     result = light_examples.rst_getnodata_python_light_example(spark)
-    assert isinstance(result, list) and len(result) >= 1, f"Expected non-empty list, got {result!r}"
+    assert (
+        isinstance(result, list) and len(result) >= 1
+    ), f"Expected non-empty list, got {result!r}"
     assert result[0] == 0.0, f"Expected nodata=0.0, got {result[0]}"
 
 
@@ -186,7 +210,9 @@ def test_rst_memsize_python_light_example(spark):
     """rst_memsize returns a positive integer for the single-band fixture."""
     assert light_examples is not None
     result = light_examples.rst_memsize_python_light_example(spark)
-    assert isinstance(result, int) and result > 0, f"Expected positive int, got {result!r}"
+    assert (
+        isinstance(result, int) and result > 0
+    ), f"Expected positive int, got {result!r}"
 
 
 def test_rst_metadata_python_light_example(spark):
@@ -195,7 +221,9 @@ def test_rst_metadata_python_light_example(spark):
     result = light_examples.rst_metadata_python_light_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
     assert "driver" in result, "Expected 'driver' key in metadata"
-    assert result.get("driver") == "GTiff", f"Expected GTiff driver, got {result.get('driver')}"
+    assert (
+        result.get("driver") == "GTiff"
+    ), f"Expected GTiff driver, got {result.get('driver')}"
 
 
 def test_rst_pixelheight_python_light_example(spark):
@@ -290,10 +318,17 @@ def test_rst_width_python_light_example(spark):
 
 
 def test_rst_getsubdataset_python_light_example(spark):
-    """rst_getsubdataset extracts the prAdjust subdataset; width of result is 720."""
+    """rst_getsubdataset extracts the prAdjust subdataset and returns a materialized tile."""
     assert light_examples is not None
     result = light_examples.rst_getsubdataset_python_light_example(spark)
-    assert result == 720, f"Expected width 720 for prAdjust subdataset, got {result!r}"
+    # Light tier materializes the extracted subdataset: raster bytes populated, path null.
+    assert result is not None, "rst_getsubdataset: result Row is None"
+    assert (
+        result["raster"] is not None
+    ), "rst_getsubdataset: raster bytes should be populated"
+    assert (
+        len(bytes(result["raster"])) > 0
+    ), "rst_getsubdataset: raster bytes should be non-empty"
 
 
 def test_rst_subdatasets_python_light_example(spark):
@@ -301,9 +336,13 @@ def test_rst_subdatasets_python_light_example(spark):
     assert light_examples is not None
     result = light_examples.rst_subdatasets_python_light_example(spark)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    assert len(result) > 0, f"Expected non-empty subdatasets dict (NetCDF fixture), got {result!r}"
+    assert (
+        len(result) > 0
+    ), f"Expected non-empty subdatasets dict (NetCDF fixture), got {result!r}"
     # Should contain SUBDATASET_1_NAME and SUBDATASET_2_NAME
-    assert any("SUBDATASET" in k for k in result.keys()), f"Expected SUBDATASET keys, got {list(result.keys())}"
+    assert any(
+        "SUBDATASET" in k for k in result.keys()
+    ), f"Expected SUBDATASET keys, got {list(result.keys())}"
 
 
 # ---------------------------------------------------------------------------

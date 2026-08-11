@@ -47,7 +47,7 @@ def _get_multiband_df(spark):
 # ---------------------------------------------------------------------------
 # rst_asformat — convert a raster to another GDAL format
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
-# Output verify: rst_format of result = "GTiff" (re-encoded)
+# Output: tile struct (returns a raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -58,26 +58,24 @@ def rst_asformat_python_light_example(spark):
 
     rx.register(spark)
     df = _get_single_band_df(spark)
-    result = df.select(
-        rx.rst_format(rx.rst_asformat("tile", f.lit("GTiff"))).alias("format")
-    ).first()
-    return result["format"]
+    result = df.select(rx.rst_asformat("tile", f.lit("GTiff")).alias("tile")).first()
+    return result["tile"]
 
 
 rst_asformat_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(GDAL format name of the re-encoded tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; raster bytes populated, path null)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_band — extract a single band from a multi-band raster
 # Fixture: MULTIBAND (rgb_nir_small.tif — 3 bands; extract band 1)
-# Output verify: rst_numbands of result = 1
+# Output: tile struct (returns a single-band raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -92,26 +90,24 @@ def rst_band_python_light_example(spark):
 
     rx.register(spark)
     df = _get_multiband_df(spark)
-    result = df.select(
-        rx.rst_numbands(rx.rst_band("tile", f.lit(1))).alias("num_bands")
-    ).first()
-    return result["num_bands"]
+    result = df.select(rx.rst_band("tile", f.lit(1)).alias("tile")).first()
+    return result["tile"]
 
 
 rst_band_python_light_example_output = """
-+---------+
-|num_bands|
-+---------+
-|1        |
-+---------+
-(band count of the extracted single-band tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; single band extracted from the 3-band multiband fixture)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_buildoverviews — add internal overview pyramid to a raster tile
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
-# Output verify: rst_format of result = "GTiff"
+# Output: tile struct (returns a raster tile with embedded overviews)
 # ---------------------------------------------------------------------------
 
 
@@ -123,28 +119,26 @@ def rst_buildoverviews_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_format(rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4)))).alias(
-            "format"
-        )
+        rx.rst_buildoverviews("tile", f.array(f.lit(2), f.lit(4))).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_buildoverviews_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile with internal overviews at levels [2, 4])
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; overviews at levels [2, 4] embedded in the tile)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_clip — clip a raster to a geometry cutline
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif, EPSG:32618)
-# Clip geometry: EWKT with EPSG:4326 lon/lat over NYC area (auto-reprojected)
-# Output verify: rst_format of clipped tile = "GTiff"
+# Clip geometry: WKT polygon in raster's native CRS (upper-left quadrant)
+# Output: tile struct (returns the clipped raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -164,27 +158,25 @@ def rst_clip_python_light_example(spark):
     # WKT polygon in raster's native CRS (upper-left quadrant of the tile extent)
     clip_geom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
     result = df.select(
-        rx.rst_format(rx.rst_clip("tile", f.lit(clip_geom), f.lit(True))).alias(
-            "format"
-        )
+        rx.rst_clip("tile", f.lit(clip_geom), f.lit(True)).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_clip_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; polygon is in the raster's native CRS (no SRID = no reprojection))
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_cog_convert — re-layout tile as Cloud Optimized GeoTIFF
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
-# Output verify: rst_format of result = "GTiff" (COG is a valid GeoTIFF)
+# Output: tile struct (returns the COG raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -194,19 +186,17 @@ def rst_cog_convert_python_light_example(spark):
 
     rx.register(spark)
     df = _get_single_band_df(spark)
-    result = df.select(
-        rx.rst_format(rx.rst_cog_convert("tile")).alias("format")
-    ).first()
-    return result["format"]
+    result = df.select(rx.rst_cog_convert("tile").alias("tile")).first()
+    return result["tile"]
 
 
 rst_cog_convert_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(a COG is a valid GeoTIFF; use rst_memsize to confirm the tiled internal layout)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; a COG is a valid GeoTIFF with tiled internal layout)
 """
 
 
@@ -214,7 +204,7 @@ rst_cog_convert_python_light_example_output = """
 # rst_convolve — apply a convolution kernel to a raster tile
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # Kernel: 3x3 identity (pass-through)
-# Output verify: rst_format of result = "GTiff"
+# Output: tile struct (returns the convolved raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -230,26 +220,24 @@ def rst_convolve_python_light_example(spark):
         f.array(f.lit(0.0), f.lit(1.0), f.lit(0.0)),
         f.array(f.lit(0.0), f.lit(0.0), f.lit(0.0)),
     )
-    result = df.select(
-        rx.rst_format(rx.rst_convolve("tile", kernel)).alias("format")
-    ).first()
-    return result["format"]
+    result = df.select(rx.rst_convolve("tile", kernel).alias("tile")).first()
+    return result["tile"]
 
 
 rst_convolve_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the convolved tile; kernel is a 3x3 identity)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; kernel is a 3x3 identity)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_fillnodata — fill NoData pixels via inverse-distance interpolation
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0)
-# Output verify: rst_format of result = "GTiff"
+# Output: tile struct (returns the filled raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -261,25 +249,25 @@ def rst_fillnodata_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_format(rx.rst_fillnodata("tile", f.lit(100.0), f.lit(0))).alias("format")
+        rx.rst_fillnodata("tile", f.lit(100.0), f.lit(0)).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_fillnodata_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the filled tile; NoData holes searched within 100 pixels)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; NoData holes searched within 100 pixels)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_filter — spatial filter (median / mean / mode)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
-# Output verify: rst_format of result = "GTiff"
+# Output: tile struct (returns the filtered raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -291,18 +279,18 @@ def rst_filter_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_format(rx.rst_filter("tile", f.lit(3), f.lit("median"))).alias("format")
+        rx.rst_filter("tile", f.lit(3), f.lit("median")).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_filter_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the filtered tile; 3x3 median filter applied)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; 3x3 median filter applied)
 """
 
 
@@ -321,8 +309,8 @@ def rst_fromcontent_python_light_example(spark):
     binaryFile runs in Spark (holds the Volume credential) and works on any
     compute — both lightweight and heavyweight tiers.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from _fixtures import single_band_path  # noqa: PLC0415
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     rx.register(spark)
@@ -349,6 +337,7 @@ rst_fromcontent_python_light_example_output = """
 # rst_frombands — stack band tiles into a multi-band tile (constructor)
 # Fuller example: split a tile to its single bands, stack them back.
 # Note: constructor producing a tile — example shows the full build round-trip.
+# Output: tile struct (returns a multi-band raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -372,19 +361,17 @@ def rst_frombands_python_light_example(spark):
             rx.rst_band("tile", f.lit(3)),
         ).alias("bands")
     )
-    result = with_bands.select(
-        rx.rst_numbands(rx.rst_frombands("bands")).alias("num_bands")
-    ).first()
-    return result["num_bands"]
+    result = with_bands.select(rx.rst_frombands("bands").alias("tile")).first()
+    return result["tile"]
 
 
 rst_frombands_python_light_example_output = """
-+---------+
-|num_bands|
-+---------+
-|3        |
-+---------+
-(band count of the re-stacked 3-band tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; 3 per-band tiles stacked back into a 3-band tile)
 """
 
 
@@ -403,8 +390,8 @@ def rst_fromfile_python_light_example(spark):
     cannot read UC Volume FUSE paths). For a tier-agnostic alternative use
     binaryFile + rst_fromcontent.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from _fixtures import single_band_path  # noqa: PLC0415
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     rx.register(spark)
@@ -428,7 +415,7 @@ rst_fromfile_python_light_example_output = """
 # ---------------------------------------------------------------------------
 # rst_initnodata — initialize NoData values on a raster tile
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
-# Output verify: rst_format of result = "GTiff"
+# Output: tile struct (returns the raster tile with NoData initialized)
 # ---------------------------------------------------------------------------
 
 
@@ -438,17 +425,17 @@ def rst_initnodata_python_light_example(spark):
 
     rx.register(spark)
     df = _get_single_band_df(spark)
-    result = df.select(rx.rst_format(rx.rst_initnodata("tile")).alias("format")).first()
-    return result["format"]
+    result = df.select(rx.rst_initnodata("tile").alias("tile")).first()
+    return result["tile"]
 
 
 rst_initnodata_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile with NoData initialized; lightweight tier assigns -9999.0 when absent)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; NoData initialized to -9999.0 when absent)
 """
 
 
@@ -456,7 +443,7 @@ rst_initnodata_python_light_example_output = """
 # rst_resample — resample by a multiplicative factor
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 236x161 px)
 # factor=2.0 bilinear → 472x322 px
-# Output verify: rst_width of result = 472
+# Output: tile struct (returns the resampled raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -468,20 +455,18 @@ def rst_resample_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_width(rx.rst_resample("tile", f.lit(2.0), f.lit("bilinear"))).alias(
-            "width"
-        )
+        rx.rst_resample("tile", f.lit(2.0), f.lit("bilinear")).alias("tile")
     ).first()
-    return result["width"]
+    return result["tile"]
 
 
 rst_resample_python_light_example_output = """
-+-----+
-|width|
-+-----+
-|472  |
-+-----+
-(width in pixels of the 2x upsampled tile; source is 236 px wide)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; 2x bilinear upsampled from the 236x161 source)
 """
 
 
@@ -489,7 +474,7 @@ rst_resample_python_light_example_output = """
 # rst_resample_to_res — resample to an explicit ground resolution
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 10 m pixels, EPSG:32618)
 # target res=20.0 m → width = ceil(236*10/20) = 118 px
-# Output verify: rst_width of result = 118
+# Output: tile struct (returns the resampled raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -501,20 +486,20 @@ def rst_resample_to_res_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_width(
-            rx.rst_resample_to_res("tile", f.lit(20.0), f.lit(20.0), f.lit("average"))
-        ).alias("width")
+        rx.rst_resample_to_res(
+            "tile", f.lit(20.0), f.lit(20.0), f.lit("average")
+        ).alias("tile")
     ).first()
-    return result["width"]
+    return result["tile"]
 
 
 rst_resample_to_res_python_light_example_output = """
-+-----+
-|width|
-+-----+
-|118  |
-+-----+
-(width in pixels after downsampling from 10 m to 20 m resolution)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; downsampled from 10 m to 20 m resolution)
 """
 
 
@@ -522,7 +507,7 @@ rst_resample_to_res_python_light_example_output = """
 # rst_resample_to_size — resample to an explicit pixel grid size
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # target 100x100 px
-# Output verify: rst_width of result = 100
+# Output: tile struct (returns the resampled raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -534,20 +519,20 @@ def rst_resample_to_size_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_width(
-            rx.rst_resample_to_size("tile", f.lit(100), f.lit(100), f.lit("near"))
-        ).alias("width")
+        rx.rst_resample_to_size("tile", f.lit(100), f.lit(100), f.lit("near")).alias(
+            "tile"
+        )
     ).first()
-    return result["width"]
+    return result["tile"]
 
 
 rst_resample_to_size_python_light_example_output = """
-+-----+
-|width|
-+-----+
-|100  |
-+-----+
-(width in pixels of the resampled tile forced to 100x100)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; resampled to 100x100 pixels)
 """
 
 
@@ -585,7 +570,7 @@ rst_setcrs_python_light_example_output = """
 # ---------------------------------------------------------------------------
 # rst_setsrid — stamp an EPSG SRID integer onto a raster without reprojecting
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — SRID=32618)
-# Output verify: rst_srid of result = 32618
+# Output: tile struct (returns the raster tile with updated SRID)
 # ---------------------------------------------------------------------------
 
 
@@ -596,27 +581,24 @@ def rst_setsrid_python_light_example(spark):
 
     rx.register(spark)
     df = _get_single_band_df(spark)
-    result = df.select(
-        rx.rst_srid(rx.rst_setsrid("tile", f.lit(32618))).alias("srid")
-    ).first()
-    return result["srid"]
+    result = df.select(rx.rst_setsrid("tile", f.lit(32618)).alias("tile")).first()
+    return result["tile"]
 
 
 rst_setsrid_python_light_example_output = """
-+-----+
-|srid |
-+-----+
-|32618|
-+-----+
-(EPSG SRID after stamping; does NOT reproject — use rst_transform to reproject)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; SRID stamped to 32618 without reprojecting)
 """
 
 
 # ---------------------------------------------------------------------------
 # rst_threshold — binarize a raster: pixels matching op/value → 1, others → 0
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0, all pixels are 0)
-# threshold > 0 → all pixels become 0 (no pixels pass the threshold)
-# Output verify: rst_format of result = "GTiff"
+# Output: tile struct (returns the binary mask tile)
 # ---------------------------------------------------------------------------
 
 
@@ -628,18 +610,18 @@ def rst_threshold_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_format(rx.rst_threshold("tile", f.lit(">"), f.lit(0.0))).alias("format")
+        rx.rst_threshold("tile", f.lit(">"), f.lit(0.0)).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_threshold_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the binary mask tile; pixels > 0.0 → 1, others → 0)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; pixels > 0.0 → 1, others → 0)
 """
 
 
@@ -647,7 +629,7 @@ rst_threshold_python_light_example_output = """
 # rst_transform — reproject a raster to a target EPSG SRID
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
 # Reproject to EPSG:4326 (WGS84)
-# Output verify: rst_srid of result = 4326
+# Output: tile struct (returns the reprojected raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -658,19 +640,17 @@ def rst_transform_python_light_example(spark):
 
     rx.register(spark)
     df = _get_single_band_df(spark)
-    result = df.select(
-        rx.rst_srid(rx.rst_transform("tile", f.lit(4326))).alias("srid")
-    ).first()
-    return result["srid"]
+    result = df.select(rx.rst_transform("tile", f.lit(4326)).alias("tile")).first()
+    return result["tile"]
 
 
 rst_transform_python_light_example_output = """
-+----+
-|srid|
-+----+
-|4326|
-+----+
-(EPSG SRID of the reprojected tile; source is EPSG:32618 (UTM Zone 18N))
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; source EPSG:32618 (UTM Zone 18N) reprojected to EPSG:4326)
 """
 
 
@@ -709,7 +689,7 @@ rst_transformcrs_python_light_example_output = """
 # rst_updatetype — convert the raster data type
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # Convert to Float32
-# Output verify: rst_format of result = "GTiff"
+# Output: tile struct (returns the type-converted raster tile)
 # ---------------------------------------------------------------------------
 
 
@@ -721,16 +701,16 @@ def rst_updatetype_python_light_example(spark):
     rx.register(spark)
     df = _get_single_band_df(spark)
     result = df.select(
-        rx.rst_format(rx.rst_updatetype("tile", f.lit("Float32"))).alias("format")
+        rx.rst_updatetype("tile", f.lit("Float32")).alias("tile")
     ).first()
-    return result["format"]
+    return result["tile"]
 
 
 rst_updatetype_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the type-converted tile; use rst_type to confirm the new data type)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(light tier returns a materialized v2 Tile; use rst_type to confirm the new data type)
 """

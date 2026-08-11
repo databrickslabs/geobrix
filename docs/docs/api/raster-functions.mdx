@@ -217,6 +217,8 @@ All four tabs show the **same operation** on the **same file**. Where a tier's o
 
 Scalar values are **identical across all tabs** — same fixture, same function, same result.
 
+Tile-returning functions (`rst_clip`, `rst_resample`, `rst_transform`, the aggregators, the constructors, …) return a **[v2 Tile](./tile-structure)**. Their output is shown as a representative struct — `{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}` — rather than a literal byte dump. The lightweight tier defaults to [**virtual tiles**](./virtual-tiles): the tile carries a `path` and reads its raster bytes lazily, so a populated `path` in the output is expected.
+
 ### Per-function notes
 
 Functions that use a non-default fixture (multiband GeoTIFF, DEM, or NetCDF) carry a one-line note immediately before their code example flagging the file. Functions that produce a tile rather than consuming one (constructors: `rst_fromfile`, `rst_fromcontent`, `rst_frombands`, …) show a fuller load/build example with a note — the bare-invocation model does not apply when there is no input `tile` yet.

@@ -937,18 +937,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_asformat(col("tile"), lit("GTiff"))).alias("format"))
+val result = rasters.select(rx.rst_asformat(col("tile"), lit("GTiff")).alias("tile"))
 result.show()
 """.trim
 
   val rst_asformat_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(GDAL format name of the re-encoded tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_band_scala_example: String =
@@ -959,18 +958,17 @@ import org.apache.spark.sql.functions._
 rx.register(spark)
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands) to demonstrate band extraction.
 val rasters = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
-val result = rasters.select(rx.rst_numbands(rx.rst_band(col("tile"), lit(1))).alias("num_bands"))
+val result = rasters.select(rx.rst_band(col("tile"), lit(1)).alias("tile"))
 result.show()
 """.trim
 
   val rst_band_scala_example_output: String =
     """
-+---------+
-|num_bands|
-+---------+
-|1        |
-+---------+
-(band count of the extracted single-band tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_buildoverviews_scala_example: String =
@@ -980,18 +978,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_buildoverviews(col("tile"), array(lit(2), lit(4)))).alias("format"))
+val result = rasters.select(rx.rst_buildoverviews(col("tile"), array(lit(2), lit(4))).alias("tile"))
 result.show()
 """.trim
 
   val rst_buildoverviews_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile with internal overviews at levels [2, 4])
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_clip_scala_example: String =
@@ -1004,18 +1001,17 @@ rx.register(spark)
 // To clip with a WGS84 geometry use EWKT: "SRID=4326;POLYGON(...)".
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
 val clipGeom = "POLYGON((2121950 -10791280, 2123140 -10791280, 2123140 -10790470, 2121950 -10790470, 2121950 -10791280))"
-val result = rasters.select(rx.rst_format(rx.rst_clip(col("tile"), lit(clipGeom), lit(true))).alias("format"))
+val result = rasters.select(rx.rst_clip(col("tile"), lit(clipGeom), lit(true)).alias("tile"))
 result.show()
 """.trim
 
   val rst_clip_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_cog_convert_scala_example: String =
@@ -1025,18 +1021,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_cog_convert(col("tile"))).alias("format"))
+val result = rasters.select(rx.rst_cog_convert(col("tile")).alias("tile"))
 result.show()
 """.trim
 
   val rst_cog_convert_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(a COG is a valid GeoTIFF; use rst_memsize to confirm the tiled internal layout)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_convolve_scala_example: String =
@@ -1051,18 +1046,17 @@ val kernel = array(
   array(lit(0.0), lit(1.0), lit(0.0)),
   array(lit(0.0), lit(0.0), lit(0.0))
 )
-val result = rasters.select(rx.rst_format(rx.rst_convolve(col("tile"), kernel)).alias("format"))
+val result = rasters.select(rx.rst_convolve(col("tile"), kernel).alias("tile"))
 result.show()
 """.trim
 
   val rst_convolve_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the convolved tile; kernel is a 3x3 identity)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_fillnodata_scala_example: String =
@@ -1072,18 +1066,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_fillnodata(col("tile"), lit(100.0), lit(0))).alias("format"))
+val result = rasters.select(rx.rst_fillnodata(col("tile"), lit(100.0), lit(0)).alias("tile"))
 result.show()
 """.trim
 
   val rst_fillnodata_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the filled tile; NoData holes searched within 100 pixels)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_filter_scala_example: String =
@@ -1093,18 +1086,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_filter(col("tile"), lit(3), lit("median"))).alias("format"))
+val result = rasters.select(rx.rst_filter(col("tile"), lit(3), lit("median")).alias("tile"))
 result.show()
 """.trim
 
   val rst_filter_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the filtered tile; 3x3 median filter applied)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_fromcontent_scala_example: String =
@@ -1147,18 +1139,17 @@ val withBands = rasters.select(
     rx.rst_band(col("tile"), lit(3))
   ).alias("bands")
 )
-val result = withBands.select(rx.rst_numbands(rx.rst_frombands(col("bands"))).alias("num_bands"))
+val result = withBands.select(rx.rst_frombands(col("bands")).alias("tile"))
 result.show()
 """.trim
 
   val rst_frombands_scala_example_output: String =
     """
-+---------+
-|num_bands|
-+---------+
-|3        |
-+---------+
-(band count of the re-stacked 3-band tile)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_initnodata_scala_example: String =
@@ -1168,18 +1159,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_initnodata(col("tile"))).alias("format"))
+val result = rasters.select(rx.rst_initnodata(col("tile")).alias("tile"))
 result.show()
 """.trim
 
   val rst_initnodata_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile with NoData initialized)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_resample_scala_example: String =
@@ -1189,18 +1179,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_width(rx.rst_resample(col("tile"), lit(2.0), lit("bilinear"))).alias("width"))
+val result = rasters.select(rx.rst_resample(col("tile"), lit(2.0), lit("bilinear")).alias("tile"))
 result.show()
 """.trim
 
   val rst_resample_scala_example_output: String =
     """
-+-----+
-|width|
-+-----+
-|472  |
-+-----+
-(width in pixels of the 2x upsampled tile; source is 236 px wide)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_resample_to_res_scala_example: String =
@@ -1210,18 +1199,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_width(rx.rst_resample_to_res(col("tile"), lit(20.0), lit(20.0), lit("average"))).alias("width"))
+val result = rasters.select(rx.rst_resample_to_res(col("tile"), lit(20.0), lit(20.0), lit("average")).alias("tile"))
 result.show()
 """.trim
 
   val rst_resample_to_res_scala_example_output: String =
     """
-+-----+
-|width|
-+-----+
-|118  |
-+-----+
-(width in pixels after downsampling from 10 m to 20 m resolution)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_resample_to_size_scala_example: String =
@@ -1231,18 +1219,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_width(rx.rst_resample_to_size(col("tile"), lit(100), lit(100), lit("near"))).alias("width"))
+val result = rasters.select(rx.rst_resample_to_size(col("tile"), lit(100), lit(100), lit("near")).alias("tile"))
 result.show()
 """.trim
 
   val rst_resample_to_size_scala_example_output: String =
     """
-+-----+
-|width|
-+-----+
-|100  |
-+-----+
-(width in pixels of the resampled tile forced to 100x100)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_setcrs_scala_example: String =
@@ -1273,18 +1260,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_srid(rx.rst_setsrid(col("tile"), lit(32618))).alias("srid"))
+val result = rasters.select(rx.rst_setsrid(col("tile"), lit(32618)).alias("tile"))
 result.show()
 """.trim
 
   val rst_setsrid_scala_example_output: String =
     """
-+-----+
-|srid |
-+-----+
-|32618|
-+-----+
-(EPSG SRID after stamping; does NOT reproject — use rst_transform to reproject)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_threshold_scala_example: String =
@@ -1294,18 +1280,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_threshold(col("tile"), lit(">"), lit(0.0))).alias("format"))
+val result = rasters.select(rx.rst_threshold(col("tile"), lit(">"), lit(0.0)).alias("tile"))
 result.show()
 """.trim
 
   val rst_threshold_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the binary mask tile; pixels > 0.0 → 1, others → 0)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_transform_scala_example: String =
@@ -1315,18 +1300,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_srid(rx.rst_transform(col("tile"), lit(4326))).alias("srid"))
+val result = rasters.select(rx.rst_transform(col("tile"), lit(4326)).alias("tile"))
 result.show()
 """.trim
 
   val rst_transform_scala_example_output: String =
     """
-+----+
-|srid|
-+----+
-|4326|
-+----+
-(EPSG SRID of the reprojected tile; source is EPSG:32618 (UTM Zone 18N))
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   val rst_transformcrs_scala_example: String =
@@ -1357,18 +1341,17 @@ import org.apache.spark.sql.functions._
 
 rx.register(spark)
 val rasters = spark.read.format("gdal").load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-val result = rasters.select(rx.rst_format(rx.rst_updatetype(col("tile"), lit("Float32"))).alias("format"))
+val result = rasters.select(rx.rst_updatetype(col("tile"), lit("Float32")).alias("tile"))
 result.show()
 """.trim
 
   val rst_updatetype_scala_example_output: String =
     """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the type-converted tile; use rst_type to confirm the new data type)
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
 """.trim
 
   // ===========================================================================
@@ -1393,12 +1376,11 @@ result.show()
 
   val rst_combineavg_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|avg                                                |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|avg                                                        |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_derivedband_agg_scala_example: String =
@@ -1420,12 +1402,11 @@ result.show()
 
   val rst_derivedband_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|derived                                            |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|derived                                                    |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_frombands_agg_scala_example: String =
@@ -1446,12 +1427,11 @@ result.show()
 
   val rst_frombands_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|stacked                                            |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|stacked                                                    |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_merge_agg_scala_example: String =
@@ -1472,12 +1452,11 @@ result.show()
 
   val rst_merge_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|mosaic                                             |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|mosaic                                                     |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_rasterize_agg_scala_example: String =
@@ -1497,12 +1476,11 @@ result.show()
 
   val rst_rasterize_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|burned                                             |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|burned                                                     |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_gridfrompoints_agg_scala_example: String =
@@ -1529,12 +1507,11 @@ result.show()
 
   val rst_gridfrompoints_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|idw                                               |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|idw                                                        |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_dtmfromgeoms_agg_scala_example: String =
@@ -1561,12 +1538,11 @@ result.show()
 
   val rst_dtmfromgeoms_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|dtm                                               |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|dtm                                                        |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_h3_rasterize_agg_scala_example: String =
@@ -1588,12 +1564,11 @@ result.show()
 
   val rst_h3_rasterize_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|tile                                              |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_quadbin_rasterize_agg_scala_example: String =
@@ -1617,12 +1592,11 @@ result.show()
 
   val rst_quadbin_rasterize_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|tile                                              |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
   val rst_bng_rasterize_agg_scala_example: String =
@@ -1646,12 +1620,11 @@ result.show()
 
   val rst_bng_rasterize_agg_scala_example_output: String =
     """
-+------+---------------------------------------------------+
-|region|tile                                              |
-+------+---------------------------------------------------+
-|R1    |{0, <raster bytes>, {driver -> GTiff, ...}}        |
-+------+---------------------------------------------------+
-(returns a v2 Tile — see [Tile structure](./tile-structure))
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
 """.trim
 
 }

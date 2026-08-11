@@ -130,6 +130,12 @@ object GDALManager extends Logging {
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
         gdal.SetConfigOption("CPL_TMPDIR", CPL_TMPDIR)
         gdal.SetConfigOption("GDAL_PAM_PROXY_DIR", GDAL_PAM_PROXY_DIR)
+        // GDAL writes intermediate files (e.g. the COG driver's .ovr.tmp overview
+        // sidecar) into CPL_TMPDIR and PAM sidecars into GDAL_PAM_PROXY_DIR. GDAL
+        // does not create these dirs itself — a missing dir makes VSI_TIFFOpen()
+        // fail and gdal.Translate return null (see rst_cog_convert). Create them.
+        Try(Files.createDirectories(Paths.get(CPL_TMPDIR)))
+        Try(Files.createDirectories(Paths.get(GDAL_PAM_PROXY_DIR)))
         gdal.SetConfigOption("GDAL_PAM_ENABLED", "YES")
         gdal.SetConfigOption("CPL_VSIL_USE_TEMP_FILE_FOR_RANDOM_WRITE", "NO")
         gdal.SetConfigOption("GDAL_CACHEMAX", "512")

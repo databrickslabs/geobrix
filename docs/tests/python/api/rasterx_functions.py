@@ -57,24 +57,22 @@ def rasterx_setup_example(spark):
 
     rx.register(spark)
 
-    # Point these at your own rasters. The examples on this page use four samples:
-    GTIFF_SAMPLE_DIR = str(single_band_path())  # single-band GeoTIFF
-    GTIFF_MULTI_DIR = str(multiband_path())  # multi-band GeoTIFF (red/NIR/green)
-    DTM_DIR = str(dem_path())  # digital elevation model
-    NETCDF_DIR = str(netcdf_path())  # NetCDF with subdatasets
+    GTIFF_SAMPLE_DIR = str(single_band_path())
+    GTIFF_MULTI_DIR = str(multiband_path())
+    DTM_DIR = str(dem_path())
+    NETCDF_DIR = str(netcdf_path())
 
     def load_tiles(path, reader, view):
-        # The gdal / netcdf_gdal readers yield a `tile` column directly.
         df = spark.read.format(reader).load(path)
         df.createOrReplaceTempView(view)
         return df
 
     # Load the default single-band raster into the `rasters` view:
-    rasters = load_tiles(GTIFF_SAMPLE_DIR, "gdal", "rasters")
+    rasters = load_tiles(GTIFF_SAMPLE_DIR, "gtiff_gdal", "rasters")
 
-    # The other three views load the same way (the netcdf_gdal reader for NetCDF):
-    load_tiles(GTIFF_MULTI_DIR, "gdal", "multiband_rasters")
-    load_tiles(DTM_DIR, "gdal", "dem_rasters")
+    # The other three load the same way — GeoTIFFs use "gtiff_gdal", NetCDF uses "netcdf_gdal":
+    load_tiles(GTIFF_MULTI_DIR, "gtiff_gdal", "multiband_rasters")
+    load_tiles(DTM_DIR, "gtiff_gdal", "dem_rasters")
     load_tiles(NETCDF_DIR, "netcdf_gdal", "netcdf_rasters")
     return rasters
 
@@ -2609,14 +2607,19 @@ rst_derivedband_python_heavy_example_output = """
 
 
 def rst_mapalgebra_python_heavy_example(spark):
-    """Apply map algebra expression 'A * 2' to scale band values."""
+    """Double band A via map algebra. The heavy tier takes a gdal_calc JSON spec.
+
+    The heavy spec is a JSON object with a `calc` expression (gdal_calc syntax;
+    rasters bind to A, B, C, … in array order). The lightweight tier instead
+    takes a bare numexpr string (`"A * 2"`).
+    """
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
     df = _get_multiband_df_heavy(spark)
     result = df.select(
-        rx.rst_mapalgebra(f.array("tile"), f.lit("A * 2")).alias("tile")
+        rx.rst_mapalgebra(f.array("tile"), f.lit('{"calc": "A*2"}')).alias("tile")
     ).first()
     return result["tile"]
 

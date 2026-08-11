@@ -5,15 +5,6 @@ Only tests for code that is used in docs/docs/api/rasterx-functions.mdx.
 
 import pytest
 
-# rst_cog_convert's heavy path fails in COG Translate (VSI_TIFFOpen on the
-# .ovr.tmp sidecar) — a real heavy-tier defect, not a docs-example bug: the
-# example (unwrapped invocation) is correct, the tier does not yet produce a
-# valid tile. (The other copy-then-mutate ops — buildoverviews, convolve,
-# fillnodata, filter, setsrid, threshold — turned out to be fine; their earlier
-# failures were the all-NoData placeholder fixture, resolved by the committed
-# real single-band fixture.) xfail until the COG path is fixed.
-_HEAVY_ERROR_TILE_BUG = "pre-existing heavy-tier error-tile bug (rst_cog_convert COG Translate fails in VSI_TIFFOpen)"
-
 try:
     from . import rasterx_functions
 except (ModuleNotFoundError, ImportError):
@@ -422,7 +413,6 @@ def test_rst_clip_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_clip")
 
 
-@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
 def test_rst_cog_convert_python_heavy_example(spark):
     """rst_cog_convert returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -653,7 +643,6 @@ def test_rst_derivedband_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_derivedband")
 
 
-@pytest.mark.xfail(reason=_BAND_MATH_ERROR_TILE_BUG, strict=True)
 def test_rst_mapalgebra_python_heavy_example(spark):
     """rst_mapalgebra returns a non-null tile struct (from algebra expression)."""
     assert rasterx_functions is not None

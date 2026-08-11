@@ -90,12 +90,16 @@ With the geobrix library already installed ([Installation](../installation)), pi
 
 The examples on this page read from **four temp views**, each a raster loaded as a `tile` column. Point the four path placeholders at your own rasters:
 
-| Placeholder | Sample file | Temp view | Backs |
+| Placeholder | Sample file | Reader (light&nbsp;/&nbsp;heavy) — Temp view | Backs |
 |---|---|---|---|
-| `GTIFF_SAMPLE_DIR` | single-band GeoTIFF | `rasters` | **Default** — most accessor, tile-ops, transform, and generator examples |
-| `GTIFF_MULTI_DIR` | multi-band GeoTIFF (red/NIR/green) | `multiband_rasters` | band-math and spectral-index examples, `rst_numbands`, `rst_bandmetadata` |
-| `DTM_DIR` | digital elevation model | `dem_rasters` | terrain examples (`rst_slope`, `rst_aspect`, …) |
-| `NETCDF_DIR` | NetCDF with subdatasets | `netcdf_rasters` | `rst_subdatasets`, `rst_getsubdataset` |
+| `GTIFF_SAMPLE_DIR` | single-band GeoTIFF | `gtiff_gbx` / `gtiff_gdal` — `rasters` | **Default** — most accessor, tile-ops, transform, and generator examples |
+| `GTIFF_MULTI_DIR` | multi-band GeoTIFF (red/NIR/green) | `gtiff_gbx` / `gtiff_gdal` — `multiband_rasters` | band-math and spectral-index examples, `rst_numbands`, `rst_bandmetadata` |
+| `DTM_DIR` | digital elevation model | `gtiff_gbx` / `gtiff_gdal` — `dem_rasters` | terrain examples (`rst_slope`, `rst_aspect`, …) |
+| `NETCDF_DIR` | NetCDF with subdatasets | `netcdf_gbx` / `netcdf_gdal` — `netcdf_rasters` | `rst_subdatasets`, `rst_getsubdataset` |
+
+Each format has a named reader in **both** tiers (light `*_gbx` / heavy `*_gdal`); the setup for each tier below uses its own. The generic readers (`raster_gbx` light, `gdal` heavy) also read any raster their tier's engine supports.
+
+The four `*_DIR` placeholders in the code below are wired to small sample rasters **committed in the GeoBrix repo** under [`src/test/resources/binary/`](https://github.com/databrickslabs/geobrix/tree/main/src/test/resources/binary) (resolved by the `_SAMPLE_PATHS[...]` / `*_path()` helpers you'll see in the snippet). To run the examples yourself, stage those sample files — or your own rasters — in a Unity Catalog Volume directory and set each placeholder to its Volume path.
 
 The setup below loads `GTIFF_SAMPLE_DIR` into `rasters` and then loads the other three the same way — swap the path and view name (and, for NetCDF, the reader). Every example on the page assumes these four views exist.
 

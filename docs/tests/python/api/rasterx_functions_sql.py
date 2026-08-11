@@ -2284,14 +2284,15 @@ rst_derivedband_sql_example_output = """
 
 
 def rst_mapalgebra_sql_example():
-    """Apply a map-algebra expression across an array of tiles.
+    """Apply a map-algebra expression across an array of tiles (heavy/SQL tier).
 
-    Band 1 of each tile (in array order) binds to A, B, C, …; the expression is
-    evaluated with numexpr (safe math only). With one tile, A = band 1 and
-    'A * 2' doubles it. Output: single-band Float32 tile.
+    Band 1 of each tile (in array order) binds to A, B, C, …. The SQL/heavy tier
+    takes a gdal_calc JSON spec: a JSON object with a `calc` expression. With one
+    tile, A = band 1 and `{"calc": "A*2"}` doubles it → single-band tile. (The
+    lightweight Python tier instead takes a bare numexpr string, `"A * 2"`.)
     """
     return """
-SELECT gbx_rst_mapalgebra(array(tile), 'A * 2') AS result FROM multiband_rasters;
+SELECT gbx_rst_mapalgebra(array(tile), '{"calc": "A*2"}') AS result FROM multiband_rasters;
 """
 
 

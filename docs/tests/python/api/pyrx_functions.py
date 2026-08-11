@@ -83,31 +83,32 @@ def pyrx_setup_example(spark):
     Assumes the geobrix wheel is already installed (see the Installation guide).
     The examples on this page read from four temp views; this builds all of them.
     """
-    from pyspark.sql import functions as f
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.ds.register import register as register_readers
 
-    # Point these at your own rasters. The examples on this page use four samples:
-    GTIFF_SAMPLE_DIR = _SAMPLE_PATHS["gtiff"]  # single-band GeoTIFF
-    GTIFF_MULTI_DIR = _SAMPLE_PATHS["gtiff_multi"]  # multi-band GeoTIFF (red/NIR/green)
-    DTM_DIR = _SAMPLE_PATHS["dtm"]  # digital elevation model
-    NETCDF_DIR = _SAMPLE_PATHS["netcdf"]  # NetCDF with subdatasets
+    rx.register(spark)
+    # Register the lightweight Python DataSource readers (raster_gbx / gtiff_gbx /
+    # netcdf_gbx / cog_gbx). Pure-Python, no JAR — the light-tier counterpart of the
+    # heavy gdal / gtiff_gdal / netcdf_gdal readers.
+    register_readers(spark)
 
-    def load_tiles(path, driver, view):
-        # binaryFile reads the bytes; rst_fromcontent wraps them into a `tile` column.
-        binary_df = spark.read.format("binaryFile").load(path)
-        tile_df = binary_df.select(
-            rx.rst_fromcontent("content", f.lit(driver)).alias("tile")
-        )
-        tile_df.createOrReplaceTempView(view)
-        return tile_df
+    GTIFF_SAMPLE_DIR = _SAMPLE_PATHS["gtiff"]
+    GTIFF_MULTI_DIR = _SAMPLE_PATHS["gtiff_multi"]
+    DTM_DIR = _SAMPLE_PATHS["dtm"]
+    NETCDF_DIR = _SAMPLE_PATHS["netcdf"]
+
+    def load_tiles(path, reader, view):
+        df = spark.read.format(reader).load(path)
+        df.createOrReplaceTempView(view)
+        return df
 
     # Load the default single-band raster into the `rasters` view:
-    rasters = load_tiles(GTIFF_SAMPLE_DIR, "GTiff", "rasters")
+    rasters = load_tiles(GTIFF_SAMPLE_DIR, "gtiff_gbx", "rasters")
 
-    # The other three views load exactly the same way (driver "GTiff", or "netCDF"):
-    load_tiles(GTIFF_MULTI_DIR, "GTiff", "multiband_rasters")
-    load_tiles(DTM_DIR, "GTiff", "dem_rasters")
-    load_tiles(NETCDF_DIR, "netCDF", "netcdf_rasters")
+    # The other three load the same way — GeoTIFFs use "gtiff_gbx", NetCDF uses "netcdf_gbx":
+    load_tiles(GTIFF_MULTI_DIR, "gtiff_gbx", "multiband_rasters")
+    load_tiles(DTM_DIR, "gtiff_gbx", "dem_rasters")
+    load_tiles(NETCDF_DIR, "netcdf_gbx", "netcdf_rasters")
     return rasters
 
 

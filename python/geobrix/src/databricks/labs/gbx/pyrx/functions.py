@@ -2593,13 +2593,23 @@ def rst_mapalgebra(
 ) -> Column:
     """Apply a map-algebra expression across an array of tiles.
 
-    Band 1 of each tile (in array order) binds to A, B, C, …; the expression is
-    evaluated with numexpr (safe math only — no arbitrary code execution).
-    Output is a single-band Float32 tile on the first input's georeference.
+    By default band 1 of each tile (in array order) binds to A, B, C, …; the
+    expression is evaluated with numexpr (safe math only — no arbitrary code
+    execution). Output is a single-band Float32 tile on the first input's
+    georeference.
 
     Args:
         tiles:     Column of ARRAY<tile struct> (e.g. ``f.array("ta", "tb")``).
-        json_spec: Math expression string, e.g. ``"(A - B) / (A + B)"``.
+        json_spec: the map-algebra expression. Accepts either the gdal_calc JSON
+            envelope the heavy/SQL tier uses (e.g. ``'{"calc": "(A - B)/(A + B)"}'``)
+            or a bare numexpr string (e.g. ``"(A - B) / (A + B)"``). The envelope's
+            per-variable keys ``A_index`` / ``A_band`` (and ``B_``, ``C_``, …)
+            select the raster (0-based, into ``tiles``) and 1-based band each
+            variable reads — so NDVI from bands 4 (NIR) and 3 (Red) of ONE
+            multiband tile is ``'{"calc": "(A-B)/(A+B)", "A_index": 0,
+            "B_index": 0, "A_band": 4, "B_band": 3}'`` (no need to decompose the
+            raster). Only ``extra_options`` (gdal_calc CLI flags) is unsupported
+            here and raises.
         virtualize_dir:    Force-output (light-tier, Python API only): write the
             result to a durable path and return a light virtual tile.
         virtualize_prefix: Optional filename prefix for ``virtualize_dir``.

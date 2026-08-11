@@ -405,7 +405,6 @@ def rst_h3_rasterize_agg_python_light_example(spark):
     The extent is auto-derived from the cell set; kring_pad=1 (default).
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-
     import h3  # noqa: PLC0415
 
     res = 9
@@ -467,7 +466,6 @@ def rst_quadbin_rasterize_agg_python_light_example(spark):
     near central London (lon/lat).  Grouped by region, producing 1 rasterized tile.
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-
     from databricks.labs.gbx.gridx.quadbin import functions as qbx  # noqa: PLC0415
 
     qbx.register(spark)
@@ -517,7 +515,6 @@ def rst_bng_rasterize_agg_python_light_example(spark):
     producing 1 rasterized tile in EPSG:27700.
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-
     from databricks.labs.gbx.gridx.bng import functions as bngx  # noqa: PLC0415
 
     bngx.register(spark)

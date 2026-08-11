@@ -1733,7 +1733,6 @@ def rst_combineavg_agg_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     df = _get_multi_band_tiles_df_heavy(spark)
     result = (
         df.groupBy("region")
@@ -1771,7 +1770,6 @@ def rst_derivedband_agg_python_heavy_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
     pyfunc = (
         "def fn(in_ar, out_ar, xoff, yoff, xsize, ysize, "
         "raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n"
@@ -1814,7 +1812,6 @@ def rst_frombands_agg_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     df = _get_multi_band_tiles_df_heavy(spark)
     result = (
         df.groupBy("region")
@@ -1850,7 +1847,6 @@ def rst_merge_agg_python_heavy_example(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
     df = _get_multi_band_tiles_df_heavy(spark)
     result = df.groupBy("region").agg(rx.rst_merge_agg("tile").alias("mosaic")).first()
     return result["mosaic"]
@@ -1889,7 +1885,6 @@ def rst_rasterize_agg_python_heavy_example(spark):
         StructType,
     )
 
-    rx.register(spark)
     # WKB POLYGON((0 0, 4 0, 4 4, 0 4, 0 0)) in EPSG:4326
     poly = bytes.fromhex(
         "0103000000010000000500000000000000000000000000000000000000"
@@ -1958,8 +1953,6 @@ def rst_gridfrompoints_agg_python_heavy_example(spark):
         StructField,
         StructType,
     )
-
-    rx.register(spark)
 
     def _wkb_point(x, y):
         import struct  # noqa: PLC0415
@@ -2032,8 +2025,6 @@ def rst_dtmfromgeoms_agg_python_heavy_example(spark):
         StructType,
     )
 
-    rx.register(spark)
-
     def _wkb_point_z(x, y, z):
         import struct  # noqa: PLC0415
 
@@ -2098,8 +2089,6 @@ def rst_h3_rasterize_agg_python_heavy_example(spark):
     near lon/lat (0.01, 0.01).  Grouped by region, producing 1 rasterized tile.
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-
-    rx.register(spark)
     import h3  # noqa: PLC0415
 
     res = 9
@@ -2129,27 +2118,12 @@ def rst_h3_rasterize_agg_python_heavy_example(spark):
             StructField("region", StringType()),
         ]
     )
-    from pyspark.sql import functions as f  # noqa: PLC0415
-
     df = spark.createDataFrame(rows, schema)
+    # cellid + value are the only required args; extent/size/mode/kring and the
+    # EPSG:4326 out_srid all take their defaults (same as the lightweight tier).
     result = (
         df.groupBy("region")
-        .agg(
-            rx.rst_h3_rasterize_agg(
-                df["cellid"],
-                df["value"],
-                f.lit(4326),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("int"),
-                f.lit(None).cast("int"),
-                f.lit("centroids"),
-                f.lit(1),
-            ).alias("tile")
-        )
+        .agg(rx.rst_h3_rasterize_agg(df["cellid"], df["value"]).alias("tile"))
         .first()
     )
     return result["tile"]
@@ -2179,8 +2153,6 @@ def rst_quadbin_rasterize_agg_python_heavy_example(spark):
     near central London.  Grouped by region, producing 1 rasterized tile.
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-
-    rx.register(spark)
     from databricks.labs.gbx.gridx.quadbin import functions as qbx  # noqa: PLC0415
 
     qbx.register(spark)
@@ -2196,27 +2168,12 @@ def rst_quadbin_rasterize_agg_python_heavy_example(spark):
             ('R1', -0.09, 51.49, 3.0)
         ) AS t(region, lon, lat, val)
     """)
-    from pyspark.sql import functions as f  # noqa: PLC0415
-
     df = spark.table("_qb_cells_heavy")
+    # cellid + value are the only required args; extent/size/mode/kring and the
+    # EPSG:4326 out_srid all take their defaults (same as the lightweight tier).
     result = (
         df.groupBy("region")
-        .agg(
-            rx.rst_quadbin_rasterize_agg(
-                df["cellid"],
-                df["value"],
-                f.lit(4326),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("int"),
-                f.lit(None).cast("int"),
-                f.lit("centroids"),
-                f.lit(1),
-            ).alias("tile")
-        )
+        .agg(rx.rst_quadbin_rasterize_agg(df["cellid"], df["value"]).alias("tile"))
         .first()
     )
     spark.catalog.dropTempView("_qb_cells_heavy")
@@ -2247,8 +2204,6 @@ def rst_bng_rasterize_agg_python_heavy_example(spark):
     near central London (EPSG:27700).  Grouped by region, producing 1 rasterized tile.
     """
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-
-    rx.register(spark)
     from databricks.labs.gbx.gridx.bng import functions as bngx  # noqa: PLC0415
 
     bngx.register(spark)
@@ -2264,27 +2219,13 @@ def rst_bng_rasterize_agg_python_heavy_example(spark):
             ('R1', cast(529000.0 as double), cast(179000.0 as double), cast(3.0 as double))
         ) AS t(region, e, n, val)
     """)
-    from pyspark.sql import functions as f  # noqa: PLC0415
-
     df = spark.table("_bng_cells_heavy")
+    # cellid + value are the only required args; the extent/size/mode/kring
+    # options default to the same values the lightweight tier uses (BNG forces
+    # EPSG:27700, so out_srid is a no-op).
     result = (
         df.groupBy("region")
-        .agg(
-            rx.rst_bng_rasterize_agg(
-                df["cellid"],
-                df["value"],
-                f.lit(27700),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("double"),
-                f.lit(None).cast("int"),
-                f.lit(None).cast("int"),
-                f.lit("centroids"),
-                f.lit(1),
-            ).alias("tile")
-        )
+        .agg(rx.rst_bng_rasterize_agg(df["cellid"], df["value"]).alias("tile"))
         .first()
     )
     spark.catalog.dropTempView("_bng_cells_heavy")

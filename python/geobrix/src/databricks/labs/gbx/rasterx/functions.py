@@ -542,31 +542,36 @@ def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
 
 def rst_h3_rasterize_agg(
     cellid: ColLike,
-    value: ColLike,
-    out_srid: ColLike,
-    pixel_size: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width: ColLike,
-    height: ColLike,
-    mode: ColLike,
-    kring_pad: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = None,
+    kring_pad: ColLike = None,
 ) -> Column:
     """Rasterize a group's H3 cells into one tile (pixel-centroid burn).
 
     Use with ``groupBy``; each row contributes one H3 ``cellid`` (and optionally
-    a ``value``). When ``value`` is ``None`` / ``f.lit(None)``, pixels covered by
-    any cell are burned with ``1.0`` (presence mask).  Supply an explicit canvas
+    a ``value``). When ``value`` is omitted (or ``None``), pixels covered by any
+    cell are burned with ``1.0`` (presence mask).  Supply an explicit canvas
     (``xmin`` … ``height``) from ``rst_h3_gridspec`` for aligned multi-band
     stacking; otherwise the grid is auto-derived from the cell set.
 
+    Every argument except ``cellid`` is optional and defaults to the same value
+    the lightweight tier uses, so the common call is simply
+    ``rx.rst_h3_rasterize_agg("cellid", "value")``. Because SQL binds
+    positionally, an omitted keyword is filled here with a correctly-typed SQL
+    literal (a typed ``NULL`` for the extent/size fields).
+
     Args:
         cellid:     LONG column of H3 cell ids.
-        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
-                    for a presence mask.
-        out_srid:   EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
+        value:      DOUBLE burn-value column; omit for a presence mask.
+        out_srid:   EPSG SRID of the output raster (default ``4326``).
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (CRS units).
         ymin:       Minimum Y of the output canvas (CRS units).
@@ -574,28 +579,32 @@ def rst_h3_rasterize_agg(
         ymax:       Maximum Y of the output canvas (CRS units).
         width:      Canvas width in pixels (INTEGER).
         height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
-                    (``f.lit(0)`` = no expansion).
+                    (default ``1``; ``0`` = no expansion).
 
     Returns:
         Column of raster tile — the v2 tile struct with fields
         ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
+
+    def _c(x, default):
+        return _col(x) if x is not None else default
+
     return f.call_function(
         "gbx_rst_h3_rasterize_agg",
         _col(cellid),
-        _col(value),
-        _col(out_srid),
-        _col(pixel_size),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width),
-        _col(height),
-        _col(mode),
-        _col(kring_pad),
+        _c(value, f.lit(None).cast("double")),
+        _c(out_srid, f.lit(4326)),
+        _c(pixel_size, f.lit(None).cast("double")),
+        _c(xmin, f.lit(None).cast("double")),
+        _c(ymin, f.lit(None).cast("double")),
+        _c(xmax, f.lit(None).cast("double")),
+        _c(ymax, f.lit(None).cast("double")),
+        _c(width, f.lit(None).cast("int")),
+        _c(height, f.lit(None).cast("int")),
+        _c(mode, f.lit("centroids")),
+        _c(kring_pad, f.lit(1)),
     )
 
 
@@ -1194,31 +1203,36 @@ def rst_bng_tessellate(
 
 def rst_quadbin_rasterize_agg(
     cellid: ColLike,
-    value: ColLike,
-    out_srid: ColLike,
-    pixel_size: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width: ColLike,
-    height: ColLike,
-    mode: ColLike,
-    kring_pad: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = None,
+    kring_pad: ColLike = None,
 ) -> Column:
     """Rasterize a group's CARTO quadbin v0 cells into one tile (pixel-centroid burn).
 
     Use with ``groupBy``; each row contributes one quadbin ``cellid`` (BIGINT) and
-    optionally a ``value``. When ``value`` is ``None`` / ``f.lit(None)``, pixels
-    covered by any cell are burned with ``1.0`` (presence mask). Supply an explicit
-    canvas (``xmin`` … ``height``) for aligned multi-band stacking; otherwise the
-    grid is auto-derived from the cell set.
+    optionally a ``value``. When ``value`` is omitted (or ``None``), pixels covered
+    by any cell are burned with ``1.0`` (presence mask). Supply an explicit canvas
+    (``xmin`` … ``height``) for aligned multi-band stacking; otherwise the grid is
+    auto-derived from the cell set.
+
+    Every argument except ``cellid`` is optional and defaults to the same value
+    the lightweight tier uses, so the common call is simply
+    ``rx.rst_quadbin_rasterize_agg("cellid", "value")``. Because SQL binds
+    positionally, an omitted keyword is filled here with a correctly-typed SQL
+    literal (a typed ``NULL`` for the extent/size fields).
 
     Args:
         cellid:     BIGINT column of quadbin cell ids.
-        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
-                    for a presence mask.
-        out_srid:   EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
+        value:      DOUBLE burn-value column; omit for a presence mask.
+        out_srid:   EPSG SRID of the output raster (default ``4326``).
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (CRS units).
         ymin:       Minimum Y of the output canvas (CRS units).
@@ -1226,53 +1240,62 @@ def rst_quadbin_rasterize_agg(
         ymax:       Maximum Y of the output canvas (CRS units).
         width:      Canvas width in pixels (INTEGER).
         height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
-                    (``f.lit(0)`` = no expansion).
+                    (default ``1``; ``0`` = no expansion).
 
     Returns:
         Column of raster tile — the v2 tile struct with fields
         ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
+
+    def _c(x, default):
+        return _col(x) if x is not None else default
+
     return f.call_function(
         "gbx_rst_quadbin_rasterize_agg",
         _col(cellid),
-        _col(value),
-        _col(out_srid),
-        _col(pixel_size),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width),
-        _col(height),
-        _col(mode),
-        _col(kring_pad),
+        _c(value, f.lit(None).cast("double")),
+        _c(out_srid, f.lit(4326)),
+        _c(pixel_size, f.lit(None).cast("double")),
+        _c(xmin, f.lit(None).cast("double")),
+        _c(ymin, f.lit(None).cast("double")),
+        _c(xmax, f.lit(None).cast("double")),
+        _c(ymax, f.lit(None).cast("double")),
+        _c(width, f.lit(None).cast("int")),
+        _c(height, f.lit(None).cast("int")),
+        _c(mode, f.lit("centroids")),
+        _c(kring_pad, f.lit(1)),
     )
 
 
 def rst_bng_rasterize_agg(
     cellid: ColLike,
-    value: ColLike,
-    out_srid: ColLike,
-    pixel_size: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width: ColLike,
-    height: ColLike,
-    mode: ColLike,
-    kring_pad: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = None,
+    kring_pad: ColLike = None,
 ) -> Column:
     """Rasterize a group's BNG grid cells into one tile (pixel-centroid burn).
 
     Use with ``groupBy``; each row contributes one BNG ``cellid`` (STRING, e.g.
-    ``"TQ3080"``) and optionally a ``value``. When ``value`` is ``None`` /
-    ``f.lit(None)``, pixels covered by any cell are burned with ``1.0``
-    (presence mask). Supply an explicit canvas (``xmin`` … ``height``) for
-    aligned multi-band stacking; otherwise the grid is auto-derived from the
-    cell set.
+    ``"TQ3080"``) and optionally a ``value``. When ``value`` is omitted (or
+    ``None``), pixels covered by any cell are burned with ``1.0`` (presence
+    mask). Supply an explicit canvas (``xmin`` … ``height``) for aligned
+    multi-band stacking; otherwise the grid is auto-derived from the cell set.
+
+    Every argument except ``cellid`` is optional and defaults to the same value
+    the lightweight tier uses, so the common call is simply
+    ``rx.rst_bng_rasterize_agg("cellid", "value")``. Because SQL binds
+    positionally, an omitted keyword is filled here with a correctly-typed SQL
+    literal (a typed ``NULL`` for the extent/size fields).
 
     Note on ``out_srid``: BNG always operates in EPSG:27700 (British National Grid).
     The ``out_srid`` argument is accepted for API consistency with the H3 and
@@ -1281,10 +1304,9 @@ def rst_bng_rasterize_agg(
 
     Args:
         cellid:     STRING column of BNG cell ids (e.g. ``"TQ3080"``).
-        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
-                    for a presence mask.
-        out_srid:   Ignored — BNG forces EPSG:27700. Pass ``f.lit(27700)`` for
-                    clarity or any integer; the value has no effect.
+        value:      DOUBLE burn-value column; omit for a presence mask.
+        out_srid:   Ignored — BNG forces EPSG:27700 (default). Accepted for
+                    parity with the H3/quadbin variants; the value has no effect.
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (BNG eastings).
         ymin:       Minimum Y of the output canvas (BNG northings).
@@ -1292,28 +1314,32 @@ def rst_bng_rasterize_agg(
         ymax:       Maximum Y of the output canvas (BNG northings).
         width:      Canvas width in pixels (INTEGER).
         height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
-                    (``f.lit(0)`` = no expansion).
+                    (default ``1``; ``0`` = no expansion).
 
     Returns:
         Column of raster tile — the v2 tile struct with fields
         ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
+
+    def _c(x, default):
+        return _col(x) if x is not None else default
+
     return f.call_function(
         "gbx_rst_bng_rasterize_agg",
         _col(cellid),
-        _col(value),
-        _col(out_srid),
-        _col(pixel_size),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width),
-        _col(height),
-        _col(mode),
-        _col(kring_pad),
+        _c(value, f.lit(None).cast("double")),
+        _c(out_srid, f.lit(27700)),
+        _c(pixel_size, f.lit(None).cast("double")),
+        _c(xmin, f.lit(None).cast("double")),
+        _c(ymin, f.lit(None).cast("double")),
+        _c(xmax, f.lit(None).cast("double")),
+        _c(ymax, f.lit(None).cast("double")),
+        _c(width, f.lit(None).cast("int")),
+        _c(height, f.lit(None).cast("int")),
+        _c(mode, f.lit("centroids")),
+        _c(kring_pad, f.lit(1)),
     )
 
 

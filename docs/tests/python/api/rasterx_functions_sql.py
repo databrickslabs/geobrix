@@ -1816,11 +1816,20 @@ GROUP BY region;
 
 
 rst_combineavg_agg_sql_example_output = """
+# Heavyweight SQL — one tile struct per group:
 +------+-----------------------------------------------------------+
 |region|regional_average                                           |
 +------+-----------------------------------------------------------+
 |...   |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(<agg>, 'GTiff') to rebuild a tile:
++------+-----------------+
+|region|regional_average |
++------+-----------------+
+|...   |[B@... (BINARY)  |
++------+-----------------+
 """
 
 

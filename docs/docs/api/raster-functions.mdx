@@ -815,7 +815,7 @@ Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-r
 
 Streaming aggregator that burns BNG cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is automatically reprojected to **EPSG:27700** (British National Grid) before rasterization. BNG cell IDs are **STRING**. The inverse of `rst_bng_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
-`gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
+`gbx_rst_bng_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile).
 
 **Signature:** `rst_bng_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
@@ -843,7 +843,7 @@ Powered by **rasterio** + **NumPy**. Aggregate — `groupBy(...).agg(rx.rst_comb
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_combineavg_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_combineavg_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_combineavg_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_combineavg_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
@@ -877,7 +877,7 @@ Powered by **rasterio** with GDAL VRT Python pixel functions. Aggregate — `gro
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_derivedband_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_derivedband_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_derivedband_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_derivedband_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
@@ -911,7 +911,7 @@ Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Aggregate — bu
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_dtmfromgeoms_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_dtmfromgeoms_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_dtmfromgeoms_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_dtmfromgeoms_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
@@ -952,7 +952,7 @@ Powered by **rasterio**. Aggregate — `groupBy(...).agg(rx.rst_frombands_agg("t
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_frombands_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_frombands_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_frombands_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_frombands_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
@@ -990,7 +990,7 @@ Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Aggregate — `groupBy(...)
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_gridfrompoints_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_gridfrompoints_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_gridfrompoints_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_gridfrompoints_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
@@ -1031,7 +1031,7 @@ Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rast
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_h3_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_h3_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_h3_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_h3_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
@@ -1084,7 +1084,7 @@ Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.r
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_merge_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_merge_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_merge_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_merge_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
@@ -1123,7 +1123,7 @@ Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-r
 
 Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. The input raster is interpreted as EPSG:4326 (lon/lat); resolution is the quadbin zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
-`gbx_rst_quadbin_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**.
+`gbx_rst_quadbin_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile).
 
 **Signature:** `rst_quadbin_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
@@ -1149,7 +1149,7 @@ Powered by **rasterio** (`rasterio.features`). Aggregate — burns the group's `
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_rasterize_agg` returns a tile **`STRUCT<cellid, raster, metadata>`**; the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
+Heavyweight `gbx_rst_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
 
 ```sql
 -- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry

@@ -53,7 +53,7 @@ Rasterio is typically available in Databricks ML runtimes, or install via:
 Convert GeoBrix raster tiles to rasterio datasets for processing:
 
 :::tip Understanding Tiles
-GeoBrix tiles are structured types with three fields: `cellid`, `raster`, and `metadata`. The `raster` field contains either a file path (String) or binary content (Binary). See [Tile Structure](../api/tile-structure) for details.
+GeoBrix tiles are structured types with eight fields (the v2 tile): `cellid`, `raster`, `path`, `window`, `clip_polygon`, `clip_crs`, `crs`, and `metadata`. `raster` holds the binary raster bytes (nullable — `null` on a virtual tile, where `path` + `window` locate the pixels to read lazily instead). See [Tile Structure](../api/tile-structure) for details.
 :::
 
 <CodeFromTest 

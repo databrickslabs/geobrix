@@ -5,15 +5,14 @@ Only tests for code that is used in docs/docs/api/rasterx-functions.mdx.
 
 import pytest
 
-# Heavy-tier copy-then-mutate ops (buildoverviews, cog_convert, convolve,
-# fillnodata, filter, setsrid, threshold) currently return an error tile:
-# GDALTranslate/gdal.Open yields a null output dataset (e.g. Cannot invoke
-# Dataset.FlushCache()/SetProjection because the copy is null; COG Translate
-# fails in VSI_TIFFOpen). Pre-existing heavy-tier defect, same family as the
-# known RST_Clip/RST_V2RoundTrip heavy failures — not a docs-example bug.
-# The example (unwrapped invocation) is correct; the tier does not yet produce
-# a valid tile. xfail until the heavy op is fixed.
-_HEAVY_ERROR_TILE_BUG = "pre-existing heavy-tier error-tile bug (null output dataset in copy-then-mutate GDAL path)"
+# rst_cog_convert's heavy path fails in COG Translate (VSI_TIFFOpen on the
+# .ovr.tmp sidecar) — a real heavy-tier defect, not a docs-example bug: the
+# example (unwrapped invocation) is correct, the tier does not yet produce a
+# valid tile. (The other copy-then-mutate ops — buildoverviews, convolve,
+# fillnodata, filter, setsrid, threshold — turned out to be fine; their earlier
+# failures were the all-NoData placeholder fixture, resolved by the committed
+# real single-band fixture.) xfail until the COG path is fixed.
+_HEAVY_ERROR_TILE_BUG = "pre-existing heavy-tier error-tile bug (rst_cog_convert COG Translate fails in VSI_TIFFOpen)"
 
 try:
     from . import rasterx_functions
@@ -409,7 +408,6 @@ def test_rst_band_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_band")
 
 
-@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
 def test_rst_buildoverviews_python_heavy_example(spark):
     """rst_buildoverviews returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -432,7 +430,6 @@ def test_rst_cog_convert_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_cog_convert")
 
 
-@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
 def test_rst_convolve_python_heavy_example(spark):
     """rst_convolve returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -440,7 +437,6 @@ def test_rst_convolve_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_convolve")
 
 
-@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
 def test_rst_fillnodata_python_heavy_example(spark):
     """rst_fillnodata returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -448,7 +444,6 @@ def test_rst_fillnodata_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_fillnodata")
 
 
-@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
 def test_rst_filter_python_heavy_example(spark):
     """rst_filter returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -491,7 +486,6 @@ def test_rst_resample_to_size_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_resample_to_size")
 
 
-@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
 def test_rst_setsrid_python_heavy_example(spark):
     """rst_setsrid returns a non-null tile struct."""
     assert rasterx_functions is not None
@@ -499,7 +493,6 @@ def test_rst_setsrid_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_setsrid")
 
 
-@pytest.mark.xfail(reason=_HEAVY_ERROR_TILE_BUG, strict=True)
 def test_rst_threshold_python_heavy_example(spark):
     """rst_threshold returns a non-null tile struct (binary mask)."""
     assert rasterx_functions is not None

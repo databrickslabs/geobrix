@@ -26,15 +26,19 @@ def sample_rasters(spark):
     """
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as F
+    from _fixtures import single_band_path  # noqa: PLC0415
 
     rx.register(spark)
 
+    # Committed real single-band fixture (the /Volumes sentinel2 is an all-NoData
+    # placeholder); fall back to the /Volumes copies only if it is unavailable.
+    committed = str(single_band_path())
     sentinel2 = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
     elevation = f"{SAMPLE_DATA_BASE}/nyc/elevation/srtm_n40w073.tif"
 
     import os
 
-    for path in [sentinel2, elevation]:
+    for path in [committed, sentinel2, elevation]:
         if not os.path.exists(path):
             continue
         try:

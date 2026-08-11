@@ -9,23 +9,21 @@ NOTE: sample-data/Volumes/main/default/geobrix_samples/ is gitignored
 (see .gitignore lines 40-41), so committed test fixtures live under
 src/test/resources/binary/ instead.
 
-Fixture paths
+Fixture paths (all committed under src/test/resources/binary/)
 -------------
-SINGLE_BAND   nyc_sentinel2_red.tif — sourced from the sample-data /Volumes mount
-               via path_config.SAMPLE_DATA_BASE; resolves to
-               /Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/
-               nyc_sentinel2_red.tif in the geobrix-dev container.
-MULTIBAND     rgb_nir_small.tif — committed under
-               src/test/resources/binary/geotiff-small/ (3 bands: red/NIR/green,
-               8x8 pixels, EPSG:4326, per-band metadata tags).
-DEM           srtm_n40w073.tif — sourced from the sample-data /Volumes mount
-               via path_config.SAMPLE_DATA_BASE; resolves to
-               /Volumes/main/default/test-data/geobrix-examples/nyc/elevation/
-               srtm_n40w073.tif in the geobrix-dev container.
-NETCDF        prAdjust_day_HadGEM2-CC_*.nc — committed under
-               src/test/resources/binary/netcdf-CMIP5/; has two subdatasets
-               (time_bnds, prAdjust) and is used by rst_subdatasets /
-               rst_getsubdataset examples.
+SINGLE_BAND   nyc_sentinel2_red_small.tif — 236x161 UInt16, EPSG:32618, real
+               spatially-varying data. Replaces the all-NoData /Volumes
+               placeholder (min=max=0) which silently degraded pixel-dependent
+               examples and made tiling generators emit zero rows. Same
+               georeferencing as the placeholder so header/coordinate examples
+               are unchanged. Regenerate with make_single_band_fixture().
+MULTIBAND     rgb_nir_small.tif — 3 bands (red/NIR/green), 8x8 pixels, EPSG:4326,
+               per-band metadata tags. Regenerate with make_multiband_fixture().
+DEM           dem_small.tif — 64x64 Float32, EPSG:32618, real elevation
+               variation (~0-311m). Regenerate with make_dem_fixture().
+COLOR_TABLE   elevation.clr — gdaldem color ramp for rst_color_relief.
+NETCDF        prAdjust_day_HadGEM2-CC_*.nc — two subdatasets (time_bnds,
+               prAdjust); used by rst_subdatasets / rst_getsubdataset.
 """
 
 from pathlib import Path
@@ -40,6 +38,7 @@ import os
 MULTIBAND = "src/test/resources/binary/geotiff-small/rgb_nir_small.tif"
 DEM = "src/test/resources/binary/elevation/dem_small.tif"
 COLOR_TABLE = "src/test/resources/binary/elevation/elevation.clr"
+SINGLE_BAND = "src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif"
 
 # Long filename committed under netcdf-CMIP5/
 _NETCDF_FILENAME = (
@@ -47,12 +46,6 @@ _NETCDF_FILENAME = (
     "_rcp45_r1i1p1_20201201-20201231.nc"
 )
 NETCDF = f"src/test/resources/binary/netcdf-CMIP5/{_NETCDF_FILENAME}"
-
-# Single-band is sourced from the /Volumes mount (available in the
-# geobrix-dev container when started with sample-data volumes).
-# We compute this lazily from path_config so tests that don't need it
-# don't import path_config at module load time.
-_SINGLE_BAND: str | None = None
 
 
 def _sample_data_base() -> str:
@@ -67,9 +60,17 @@ def _sample_data_base() -> str:
         return f"{root.rstrip('/')}/geobrix-examples"
 
 
-def single_band_path() -> str:
-    """Absolute path to the canonical single-band GeoTIFF."""
-    return f"{_sample_data_base()}/nyc/sentinel2/nyc_sentinel2_red.tif"
+def single_band_path() -> Path:
+    """Absolute path to the committed single-band GeoTIFF.
+
+    A real 236x161 UInt16 raster (EPSG:32618) with spatially-varying pixel
+    values. The /Volumes sample `nyc_sentinel2_red.tif` is an all-NoData
+    placeholder (min=max=0), which silently degrades every pixel-dependent
+    example and makes tiling generators emit zero rows; the committed fixture
+    carries real data with the same georeferencing.
+    """
+    repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
+    return repo_root / SINGLE_BAND
 
 
 def dem_path() -> Path:
@@ -114,7 +115,7 @@ def single_band_tile_df(spark):
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    path = single_band_path()
+    path = str(single_band_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
         rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
@@ -185,7 +186,7 @@ def single_band_tile_df_heavy(spark):
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
-    path = single_band_path()
+    path = str(single_band_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
         rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
@@ -373,6 +374,53 @@ def make_color_table(path: "str | Path | None" = None) -> Path:
         "nv 0 0 0"
     )
     dest.write_text(ramp)
+    return dest
+
+
+def make_single_band_fixture(path: "str | Path | None" = None) -> Path:
+    """(Re)generate the committed single-band fixture (nyc_sentinel2_red_small.tif).
+
+    236x161 UInt16 single-band raster with the EXACT georeferencing of the
+    /Volumes sample placeholder — EPSG:32618, 10 m pixels, origin
+    (2121950, -10790470), nodata=0 — so every header/coordinate assertion
+    (width=236, height=161, pixel (100,80) <-> world (2122955,-10791275)) still
+    holds. Unlike the all-NoData placeholder, this carries real spatially-varying
+    pixel values (a smooth gradient + a Gaussian blob, 1..4000), so pixel
+    statistics are meaningful and the tiling generators (rst_retile / maketiles /
+    tooverlappingtiles) emit real (non-empty) tiles.
+    """
+    import numpy as np  # noqa: PLC0415
+    import rasterio  # noqa: PLC0415
+    from rasterio.crs import CRS  # noqa: PLC0415
+    from affine import Affine  # noqa: PLC0415
+
+    repo_root = Path(__file__).parents[4]
+    dest = Path(path) if path else repo_root / SINGLE_BAND
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    width, height = 236, 161
+    # Exact placeholder transform: 10 m pixels, origin (2121950, -10790470).
+    transform = Affine(10.0, 0.0, 2121950.0, 0.0, -10.0, -10790470.0)
+
+    xx, yy = np.meshgrid(np.linspace(0, 1, width), np.linspace(0, 1, height))
+    gradient = 400 + 3000 * (xx + yy) / 2
+    blob = 1500 * np.exp(-((xx - 0.55) ** 2 + (yy - 0.4) ** 2) / 0.04)
+    noise = np.random.RandomState(7).normal(0, 40, (height, width))
+    # Keep values in 1..4000 (avoid 0, which is NoData) so every pixel is valid.
+    data = np.clip(gradient + blob + noise, 1, 4000).astype(np.uint16)
+
+    profile = {
+        "driver": "GTiff",
+        "dtype": "uint16",
+        "width": width,
+        "height": height,
+        "count": 1,
+        "crs": CRS.from_epsg(32618),
+        "transform": transform,
+        "nodata": 0,
+    }
+    with rasterio.open(dest, "w", **profile) as ds:
+        ds.write(data, 1)
     return dest
 
 

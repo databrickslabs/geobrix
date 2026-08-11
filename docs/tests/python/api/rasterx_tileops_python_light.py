@@ -314,7 +314,7 @@ def rst_fromcontent_python_light_example(spark):
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     rx.register(spark)
-    path = single_band_path()
+    path = str(single_band_path())
     binary_df = spark.read.format("binaryFile").load(path)
     tile_df = binary_df.select(
         rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
@@ -395,7 +395,7 @@ def rst_fromfile_python_light_example(spark):
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     rx.register(spark)
-    path = single_band_path()
+    path = str(single_band_path())
     path_df = spark.createDataFrame([(path,)], ["path"])
     tile_df = path_df.select(rx.rst_fromfile("path", f.lit("GTiff")).alias("tile"))
     result = tile_df.select(rx.rst_format("tile").alias("format")).first()

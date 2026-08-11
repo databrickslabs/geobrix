@@ -43,7 +43,7 @@ dev = [
 ]
 test = [
     "pytest>=7.0",
-    "shapely>=2.0.0",
+    "shapely>=2.1.2",
     "rasterio>=1.3.0",
     "numpy>=1.24.0",
     # pyvx (light VectorX / MVT) tests use mapbox-vector-tile as the decode

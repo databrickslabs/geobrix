@@ -537,11 +537,11 @@ result.show()
 
   val rst_min_scala_example_output: String =
     """
-+------------------+
-|band_min          |
-+------------------+
++-------------------+
+|band_min           |
++-------------------+
 |[50.0, 102.0, 82.0]|
-+------------------+
++-------------------+
 """.trim
 
   val rst_pixelcount_scala_example: String =

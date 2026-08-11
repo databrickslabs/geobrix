@@ -259,11 +259,11 @@ SELECT gbx_rst_min(tile) AS band_min FROM multiband_rasters;
 
 
 rst_min_sql_example_output = """
-+------------------+
-|band_min          |
-+------------------+
++-------------------+
+|band_min           |
++-------------------+
 |[50.0, 102.0, 82.0]|
-+------------------+
++-------------------+
 """
 
 
@@ -1029,11 +1029,11 @@ FROM rasters;
 
 
 rst_worldtorastercoord_sql_example_output = """
-+----------+---------+---------+
++-----------+---------+---------+
 |pixel_coord|pixel_col|pixel_row|
-+----------+---------+---------+
++-----------+---------+---------+
 |{5490, ...}|5490     |5490     |
-+----------+---------+---------+
++-----------+---------+---------+
 """
 
 
@@ -1257,13 +1257,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t
 
 
 rst_h3_rastertogridavg_sql_example_output = """
-+----+---------------------+-------+
-|band|cellID               |measure|
-+----+---------------------+-------+
-|1   |599686042433355775   |123.45|
-|1   |599686043374559743   |98.12 |
-|2   |599686042433355775   |210.67|
-+----+---------------------+-------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|123.45 |
+|1   |599686043374559743|98.12  |
+|2   |599686042433355775|210.67 |
++----+------------------+-------+
 (one row per band×cell; LATERAL output yields [band, cellID, measure] columns)
 """
 
@@ -1390,13 +1390,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4
 
 
 rst_h3_rastertogridstddev_sql_example_output = """
-+----+---------------------+------+
-|band|cellID               |measure|
-+----+---------------------+------+
-|1   |599686042433355775   |35.29 |
-|1   |599686043374559743   |37.27 |
-|2   |599686042433355775   |34.01 |
-+----+---------------------+------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|35.29  |
+|1   |599686043374559743|37.27  |
+|2   |599686042433355775|34.01  |
++----+------------------+-------+
 (standard deviation per band×cell)
 """
 
@@ -1409,13 +1409,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile,
 
 
 rst_quadbin_rastertogridavg_sql_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|123.45 |
-|1   |12346|124.20 |
-|2   |12345|210.67 |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |123.45 |
+|1   |12346 |124.20 |
+|2   |12345 |210.67 |
++----+------+-------+
 (one row per band×Quadbin cell)
 """
 
@@ -1428,13 +1428,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(til
 
 
 rst_quadbin_rastertogridcount_sql_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|256    |
-|1   |12346|240    |
-|2   |12345|256    |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |256    |
+|1   |12346 |240    |
+|2   |12345 |256    |
++----+------+-------+
 (pixel count per band×Quadbin cell)
 """
 
@@ -1447,13 +1447,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile,
 
 
 rst_quadbin_rastertogridmax_sql_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|255.0  |
-|1   |12346|254.0  |
-|2   |12345|240.0  |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |255.0  |
+|1   |12346 |254.0  |
+|2   |12345 |240.0  |
++----+------+-------+
 (max value per band×Quadbin cell)
 """
 
@@ -1466,13 +1466,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile,
 
 
 rst_quadbin_rastertogridmin_sql_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|0.0    |
-|1   |12346|10.0   |
-|2   |12345|5.0    |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |0.0    |
+|1   |12346 |10.0   |
+|2   |12345 |5.0    |
++----+------+-------+
 (min value per band×Quadbin cell)
 """
 
@@ -1485,13 +1485,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(ti
 
 
 rst_quadbin_rastertogridmedian_sql_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|120.5  |
-|1   |12346|122.0  |
-|2   |12345|115.0  |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |120.5  |
+|1   |12346 |122.0  |
+|2   |12345 |115.0  |
++----+------+-------+
 (median value per band×Quadbin cell)
 """
 
@@ -1504,13 +1504,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile,
 
 
 rst_quadbin_rastertogridsum_sql_example_output = """
-+----+-----+--------+
-|band|cellID|measure |
-+----+-----+--------+
-|1   |12345|31563.0 |
-|1   |12346|29488.0 |
-|2   |12345|28672.0 |
-+----+-----+--------+
++----+------+-------+
+|band|cellID|measure|
++----+------+-------+
+|1   |12345 |31563.0|
+|1   |12346 |29488.0|
+|2   |12345 |28672.0|
++----+------+-------+
 (sum of pixel values per band×Quadbin cell)
 """
 
@@ -1523,13 +1523,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(
 
 
 rst_quadbin_rastertogridvariance_sql_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|1245.5 |
-|1   |12346|1389.2 |
-|2   |12345|1156.0 |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |1245.5 |
+|1   |12346 |1389.2 |
+|2   |12345 |1156.0 |
++----+------+-------+
 (variance per band×Quadbin cell)
 """
 
@@ -1542,13 +1542,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(ti
 
 
 rst_quadbin_rastertogridstddev_sql_example_output = """
-+----+-----+------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+------+
-|1   |12345|35.29 |
-|1   |12346|37.27 |
-|2   |12345|34.01 |
-+----+-----+------+
++----+------+-------+
+|1   |12345 |35.29  |
+|1   |12346 |37.27  |
+|2   |12345 |34.01  |
++----+------+-------+
 (standard deviation per band×Quadbin cell)
 """
 
@@ -2256,7 +2256,7 @@ SELECT gbx_rst_combineavg(array(tile)) AS combined FROM multiband_rasters;
 
 rst_combineavg_sql_example_output = """
 +-----------------------------------------------------------+
-|combined                                                  |
+|combined                                                   |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
@@ -2276,7 +2276,7 @@ SELECT gbx_rst_derivedband(tile, 'def double(in_ar, out_ar, xoff, yoff, xsize, y
 
 rst_derivedband_sql_example_output = """
 +-----------------------------------------------------------+
-|result                                                    |
+|result                                                     |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
@@ -2324,7 +2324,7 @@ SELECT gbx_rst_merge(array(tile)) AS merged FROM multiband_rasters;
 
 rst_merge_sql_example_output = """
 +-----------------------------------------------------------+
-|merged                                                    |
+|merged                                                     |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
@@ -2625,11 +2625,11 @@ FROM dem_rasters;
 
 
 rst_contour_sql_example_output = """
-+--------------------------------------+
-|contours                              |
-+--------------------------------------+
++-----------------------------------------------------------------------------------------------------------------+
+|contours                                                                                                         |
++-----------------------------------------------------------------------------------------------------------------+
 |[{[BINARY], 50.0}, {[BINARY], 100.0}, {[BINARY], 150.0}, {[BINARY], 200.0}, {[BINARY], 250.0}, {[BINARY], 300.0}]|
-+--------------------------------------+
++-----------------------------------------------------------------------------------------------------------------+
 """
 
 

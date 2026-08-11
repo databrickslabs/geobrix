@@ -365,11 +365,11 @@ bng_aswkt_example_output = """
 """
 
 bng_cellarea_example_output = """
-+------+----------+
-|cell_id|area_km2  |
-+------+----------+
-|TQ3080|1.0       |
-+------+----------+
++-------+--------+
+|cell_id|area_km2|
++-------+--------+
+|TQ3080 |1.0     |
++-------+--------+
 """
 
 bng_centroid_example_output = """

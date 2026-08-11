@@ -203,20 +203,20 @@ WHERE st_area(st_geomfromwkb(shape)) > 500;"""
 # =============================================================================
 
 SQL_LIST_FUNCTIONS_output = """
-+----------------------+
-|function              |
-+----------------------+
-|gbx_rst_asformat      |
-|gbx_rst_avg           |
-|gbx_rst_bandmetadata  |
-|gbx_rst_boundingbox   |
-|...                   |
-|gbx_bng_cellarea      |
-|gbx_bng_pointascell    |
-|...                   |
-|gbx_st_legacyaswkb    |
-|...                   |
-+----------------------+
++--------------------+
+|function            |
++--------------------+
+|gbx_rst_asformat    |
+|gbx_rst_avg         |
+|gbx_rst_bandmetadata|
+|gbx_rst_boundingbox |
+|...                 |
+|gbx_bng_cellarea    |
+|gbx_bng_pointascell |
+|...                 |
+|gbx_st_legacyaswkb  |
+|...                 |
++--------------------+
 """
 
 SQL_DESCRIBE_output = """
@@ -259,11 +259,11 @@ SQL_BNG_CELL_OPERATIONS_output = """
 |1.0       |
 +----------+
 
-+------+----------+
-|grid |area_km2  |
-+------+----------+
-|TQ3080|1.0       |
-+------+----------+
++------+--------+
+|grid  |area_km2|
++------+--------+
+|TQ3080|1.0     |
++------+--------+
 """
 
 SQL_BNG_POINT_TO_CELL_output = """
@@ -285,13 +285,13 @@ SQL_BNG_SPATIAL_AGGREGATION_output = """
 """
 
 SQL_BNG_MULTI_RESOLUTION_output = """
-+-----------+----------+-----+
-|resolution |cell_count|
-+-----------+----------+-----+
-|10km       |...       |
-|1km        |...       |
-|100m       |...       |
-+-----------+----------+-----+
++----------+----------+
+|resolution|cell_count|
++----------+----------+
+|10km      |...       |
+|1km       |...       |
+|100m      |...       |
++----------+----------+
 """
 
 SQL_VECTORX_MIGRATION_WORKFLOW_output = """

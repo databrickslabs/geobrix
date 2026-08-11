@@ -215,13 +215,13 @@ def performance_batch_operations(spark):
 # ============================================================================
 
 error_check_function_availability_output = """
-+------------------+
-|function          |
-+------------------+
-|gbx_rst_asformat  |
-|gbx_rst_avg       |
++--------------------+
+|function            |
++--------------------+
+|gbx_rst_asformat    |
+|gbx_rst_avg         |
 |gbx_rst_bandmetadata|
-+------------------+
++--------------------+
 Only showing top 3 rows
 
 -DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox

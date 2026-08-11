@@ -38,12 +38,12 @@ def rst_h3_rastertogridavg_python_light_example(spark):
 
 
 rst_h3_rastertogridavg_python_light_example_output = """
-+----+------------------------------+----+
-|band|cellID                        |measure|
-+----+------------------------------+----+
-|1   |599686042433355775            |123.45|
-|1   |599686042433355776            |124.20|
-+----+------------------------------+----+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|123.45 |
+|1   |599686042433355776|124.20 |
++----+------------------+-------+
 (one row per band × H3 cell)
 """
 
@@ -199,12 +199,12 @@ def rst_h3_rastertogridstddev_python_light_example(spark):
 
 
 rst_h3_rastertogridstddev_python_light_example_output = """
-+----+------------------------------+------+
-|band|cellID                        |measure|
-+----+------------------------------+------+
-|1   |599686042433355775            |35.29 |
-|1   |599686042433355776            |37.27 |
-+----+------------------------------+------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|35.29  |
+|1   |599686042433355776|37.27  |
++----+------------------+-------+
 (standard deviation per band × H3 cell)
 """
 
@@ -227,12 +227,12 @@ def rst_quadbin_rastertogridavg_python_light_example(spark):
 
 
 rst_quadbin_rastertogridavg_python_light_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|123.45 |
-|1   |12346|124.20 |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |123.45 |
+|1   |12346 |124.20 |
++----+------+-------+
 (one row per band × Quadbin cell)
 """
 
@@ -250,12 +250,12 @@ def rst_quadbin_rastertogridcount_python_light_example(spark):
 
 
 rst_quadbin_rastertogridcount_python_light_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|256    |
-|1   |12346|240    |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |256    |
+|1   |12346 |240    |
++----+------+-------+
 (pixel count per band × Quadbin cell)
 """
 
@@ -273,12 +273,12 @@ def rst_quadbin_rastertogridmax_python_light_example(spark):
 
 
 rst_quadbin_rastertogridmax_python_light_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|255.0  |
-|1   |12346|254.0  |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |255.0  |
+|1   |12346 |254.0  |
++----+------+-------+
 (max value per band × Quadbin cell)
 """
 
@@ -296,12 +296,12 @@ def rst_quadbin_rastertogridmin_python_light_example(spark):
 
 
 rst_quadbin_rastertogridmin_python_light_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|0.0    |
-|1   |12346|10.0   |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |0.0    |
+|1   |12346 |10.0   |
++----+------+-------+
 (min value per band × Quadbin cell)
 """
 
@@ -319,12 +319,12 @@ def rst_quadbin_rastertogridmedian_python_light_example(spark):
 
 
 rst_quadbin_rastertogridmedian_python_light_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|120.5  |
-|1   |12346|122.0  |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |120.5  |
+|1   |12346 |122.0  |
++----+------+-------+
 (median value per band × Quadbin cell)
 """
 
@@ -342,12 +342,12 @@ def rst_quadbin_rastertogridsum_python_light_example(spark):
 
 
 rst_quadbin_rastertogridsum_python_light_example_output = """
-+----+-----+--------+
-|band|cellID|measure |
-+----+-----+--------+
-|1   |12345|31563.0 |
-|1   |12346|29488.0 |
-+----+-----+--------+
++----+------+-------+
+|band|cellID|measure|
++----+------+-------+
+|1   |12345 |31563.0|
+|1   |12346 |29488.0|
++----+------+-------+
 (sum of pixel values per band × Quadbin cell)
 """
 
@@ -365,12 +365,12 @@ def rst_quadbin_rastertogridvariance_python_light_example(spark):
 
 
 rst_quadbin_rastertogridvariance_python_light_example_output = """
-+----+-----+-------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+-------+
-|1   |12345|1245.5 |
-|1   |12346|1389.2 |
-+----+-----+-------+
++----+------+-------+
+|1   |12345 |1245.5 |
+|1   |12346 |1389.2 |
++----+------+-------+
 (variance per band × Quadbin cell)
 """
 
@@ -388,12 +388,12 @@ def rst_quadbin_rastertogridstddev_python_light_example(spark):
 
 
 rst_quadbin_rastertogridstddev_python_light_example_output = """
-+----+-----+------+
++----+------+-------+
 |band|cellID|measure|
-+----+-----+------+
-|1   |12345|35.29 |
-|1   |12346|37.27 |
-+----+-----+------+
++----+------+-------+
+|1   |12345 |35.29  |
+|1   |12346 |37.27  |
++----+------+-------+
 (standard deviation per band × Quadbin cell)
 """
 

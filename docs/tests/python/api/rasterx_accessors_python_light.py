@@ -456,11 +456,11 @@ def rst_min_python_light_example(spark):
 
 
 rst_min_python_light_example_output = """
-+------------------+
-|band_min          |
-+------------------+
++-------------------+
+|band_min           |
++-------------------+
 |[50.0, 102.0, 82.0]|
-+------------------+
++-------------------+
 """
 
 
@@ -513,11 +513,11 @@ def rst_pixelcount_python_light_example(spark):
 
 
 rst_pixelcount_python_light_example_output = """
-+-----------+
-|pixel_count|
-+-----------+
++------------+
+|pixel_count |
++------------+
 |[64, 64, 64]|
-+-----------+
++------------+
 """
 
 

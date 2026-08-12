@@ -1350,6 +1350,46 @@ def _sp_scalar_error_row(fs, run_id, pool, n, env, warmup_iters, e):
     )
 
 
+def _run_sp_creation(spark, run_id, pool, env, row_counts, warmup, measured,
+                     raw, nparts, partition_size, F):
+    """Time rst_fromfile virtual-tile CREATION over the binaryFile `path` column.
+
+    The binaryFile DataFrame ``raw`` carries a ``path`` URI column; this leg times
+    ``prx.rst_fromfile(F.col("path"), "GTiff")`` at each row-count ladder point and
+    emits rows with ``input_tile="virtual"``, ``output_disposition="deferred"``.
+    Runs only when ``input_tile == "virtual"`` and ``rst_fromfile`` is among the
+    selected fn names (gated in ``run_spark_path``).
+    """
+    import math as _math
+
+    from databricks.labs.gbx.bench.spec import REGISTRY
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    fs = REGISTRY["rst_fromfile"]
+    path_df = raw.select(F.col("path"))
+    rows = []
+    for n in sorted(row_counts):
+        _psize = (
+            partition_size
+            if partition_size and partition_size > 0
+            else max(1, n // (nparts * 4))
+        )
+        _parts = max(1, _math.ceil(n / _psize))
+        df = path_df.limit(n).repartition(_parts, F.rand())
+        try:
+
+            def job(_df=df):
+                c = prx.rst_fromfile(F.col("path"), "GTiff")
+                _df.select(c.alias("out")).write.format("noop").mode("overwrite").save()
+
+            stats = time_iters(job, warmup, measured)
+            r = _sp_scalar_ok_row(fs, run_id, pool, n, env, stats)
+        except Exception as e:  # noqa: BLE001
+            r = _sp_scalar_error_row(fs, run_id, pool, n, env, warmup, e)
+        rows.append(_dc.replace(r, input_tile="virtual", output_disposition="deferred"))
+    return rows
+
+
 def _run_sp_scalar_fn(
     fs,
     run_id,
@@ -1707,6 +1747,17 @@ def run_spark_path(
                 out[_i] = _dc.replace(out[_i], input_tile="virtual", output_disposition=_disp)
         _flush(out, _mark)
         _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
+    # rst_fromfile creation micro-leg: times virtual-tile creation from a path column.
+    # rst_fromfile has no ordinary spark-path form (pure-core only in the registry); the
+    # binaryFile `raw` DataFrame carries a `path` column, so this dedicated leg measures
+    # the distributed creation cost. Runs only when input_tile=="virtual" AND the caller
+    # explicitly selected rst_fromfile.
+    _fn_names = {fs.name for fs in fnspecs}
+    if input_tile == "virtual" and "rst_fromfile" in _fn_names:
+        out += _run_sp_creation(
+            spark, run_id, pool, env, row_counts, warmup, measured,
+            raw, _nparts, partition_size, F,
+        )
     df_all.unpersist()
     return out
 

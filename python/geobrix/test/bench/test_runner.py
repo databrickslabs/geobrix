@@ -873,3 +873,15 @@ def test_pure_core_parity_slope_width(tmp_path):
     assert res, "expected parity rows"
     for name, px, ok, mat, virt in res:
         assert ok, f"{name}@{px}: virtual != materialized ({mat} vs {virt})"
+
+
+def test_creation_microleg_defined():
+    from databricks.labs.gbx.bench import runner as rn
+    assert hasattr(rn, "_run_sp_creation")
+
+
+def test_rst_fromfile_column_builds():
+    from pyspark.sql import functions as F
+    from databricks.labs.gbx.pyrx import functions as prx
+    c = prx.rst_fromfile(F.col("path"), "GTiff")
+    assert c is not None

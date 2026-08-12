@@ -837,11 +837,12 @@ def test_build_input_tile_virtual_is_bytes_free(tmp_path):
     assert virt["cellid"] == 7  # corpus cellid preserved (not _fromfile_impl's 0)
 
 
-def test_build_input_tile_virtual_no_silent_fallback():
-    import pytest
+def test_build_input_tile_virtual_no_silent_fallback(monkeypatch):
+    import databricks.labs.gbx.pyrx.functions as pf
 
-    with pytest.raises(Exception):
-        rn._build_input_tile("/nonexistent/path.tif", b"", 0, "virtual")
+    monkeypatch.setattr(pf, "_fromfile_impl", lambda *a, **kw: None)
+    with pytest.raises(ValueError, match="returned null"):
+        rn._build_input_tile("/any.tif", b"", 0, "virtual")
 
 
 def test_run_spark_path_accepts_input_tile_kwarg():

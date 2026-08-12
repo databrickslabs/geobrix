@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 import shapely.geometry
 import shapely.wkb
@@ -286,9 +286,31 @@ class FnSpec:
     # stream; heavy: array-returning scalar), which is the honest comparison -- there
     # is no light scalar form to force, and no heavy UDTF form to force.
     udtf: bool = False
+    # Optional explicit disposition for a scalar accessor on a virtual input:
+    # "deferred" (header-only) or "materialized" (reads pixels). None => derive
+    # from the pixel-reading allowlist below. Ignored for tile-returning ops
+    # (their disposition is sampled from the output tile at run time).
+    virtual_disposition: Optional[str] = None
 
 
 _BOTH = ("pure-core", "spark-path")
+
+# Accessors that MUST read pixels (statistics over pixel values); everything
+# else in the accessor category reads only the header/metadata via open_header.
+# Verified against pyrx: these route through pixel-reading UDFs, the rest through
+# _header_accessor_udf (open_header, no pixel I/O).
+_PIXEL_READING_ACCESSORS = frozenset({
+    "rst_avg", "rst_min", "rst_max", "rst_median",
+    "rst_pixelcount", "rst_summary", "rst_histogram",
+})
+
+
+def accessor_disposition(name: str, fs: "FnSpec | None" = None) -> str:
+    """Disposition of a scalar accessor on a virtual input tile."""
+    if fs is not None and fs.virtual_disposition is not None:
+        return fs.virtual_disposition
+    return "materialized" if name in _PIXEL_READING_ACCESSORS else "deferred"
+
 
 # --- source-path groups (DRY) ----------------------------------------------
 # Editing the registry must NOT re-bench everything, so the harness files

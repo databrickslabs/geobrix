@@ -1070,3 +1070,24 @@ def test_every_fnspec_declares_existing_sources():
         assert f.sources, f"{f.name} has no sources"
         for p in f.sources:
             assert (root / p).exists(), f"{f.name}: missing source {p}"
+
+
+# --- Task 3: accessor virtual-tile disposition classification ----------------
+
+
+def test_pixel_reading_accessors_are_materialized():
+    for fn in ("rst_avg", "rst_min", "rst_max", "rst_median",
+               "rst_pixelcount", "rst_summary", "rst_histogram"):
+        assert s.accessor_disposition(fn) == "materialized", fn
+
+
+def test_header_accessors_are_deferred():
+    for fn in ("rst_width", "rst_height", "rst_numbands", "rst_srid",
+               "rst_pixelwidth", "rst_georeference", "rst_boundingbox"):
+        assert s.accessor_disposition(fn) == "deferred", fn
+
+
+def test_virtual_disposition_override_wins():
+    fs = s.REGISTRY["rst_width"]
+    fs2 = __import__("dataclasses").replace(fs, virtual_disposition="materialized")
+    assert s.accessor_disposition("rst_width", fs2) == "materialized"

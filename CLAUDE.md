@@ -330,12 +330,32 @@ some agent. State the relevant ones up front so the agent doesn't burn a run on 
    produce false positives (`case Seq(...)`, `c.head`, overload chains that delegate) — mark
    findings CONFIRMED vs SUSPECTED and quote real source, never paraphrase a signature from
    memory. A fabricated parameter list is worse than no report.
-6. If a precondition is missing (no JAR, no sample data, stale staged artifact), **say so
-   plainly and stop** — do not report the consequence as a defect, and do not silently
-   substitute a weaker test.
+6. If a precondition for a **scoped** check is missing (no JAR, no sample data, stale staged
+   artifact), emit **one clear line** — `PRECONDITION MISSING: <what>; <check> not run` — and
+   stop that check. Do **not** report the consequence as a defect, do not silently substitute a
+   weaker test, and do **not** narrate a confusing half-state (e.g. "CANNOT VERIFY (no JAR)")
+   about a tier — either it was in scope (then it's a clean PRECONDITION-MISSING line) or it was
+   never in scope (then don't mention it at all).
 7. Exclude build artifacts from every search: `docs/build-static-zip/`,
    `docs/tests/coverage-report/`, `docs/tests/.pytest_cache/`, `target/`, `scripts/docker/m2/`,
    `*.pyc`. A naive grep for a Scala symbol otherwise hits minified JS in the docs build.
+
+**Lead-agent responsibility (do NOT push this onto the subagent):** decide the tier/JAR
+strategy *before* dispatching and state it in the prompt. Check `ls target/*.jar` yourself; a
+pyrx/package-source-only change usually means there is **no fresh JAR**. Then the dispatch must
+say, explicitly: which tiers to exercise, whether a staged JAR exists, and what to do if a
+precondition is absent. When heavy verification is wanted but no fresh JAR is staged, either
+(a) build+stage the JAR first, or (b) hand the subagent a **JAR-free isolation path** — e.g.
+"register the pyrx UDF directly via `spark.udf.register(name, _pyrx_udf)`; do NOT call
+`rasterx.register()` (it loads the JAR via `register_ds` and will wall you)." If neither is
+possible, tell the subagent heavy is **out of scope** for this run. A subagent hitting a missing
+precondition it was never briefed on is a dispatch failure, not a subagent failure.
+
+**Package-source changes need the unit suite, not just doc-tests.** A change to
+`python/geobrix/src/.../{pyrx,pyvx,pygx}/functions.py` (or any package source) must be verified
+with `gbx:test:pyrx` (etc.) on the affected `python/geobrix/test/**` files. Doc-tests exercise
+the example surface, not the committed unit tests — a behavior change can leave the doc-tests
+green while breaking `test/pyrx/*`.
 
 ## Adding or fixing a `gbx:*` command
 

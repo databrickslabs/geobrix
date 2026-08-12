@@ -404,6 +404,16 @@ def main() -> int:
     # Tiles per spark-path partition; 0 = auto (n / (slots*4): oversubscribe slots ~4x so
     # finished slots grab pending tasks rather than idling on the straggler tail).
     partition_size = int(_arg("--override-partition-size", "0"))
+    # --input-tile materialized|virtual: input tile mode for the light spark-path leg.
+    # materialized = bytes column (default, matches all prior bench runs).
+    # virtual = path+window tile (tests the new virtual-tile reader path).
+    input_tile = _arg("--input-tile", "materialized")
+    if input_tile not in ("materialized", "virtual"):
+        print(
+            f"ERROR: --input-tile must be 'materialized' or 'virtual' (got '{input_tile}')",
+            file=sys.stderr,
+        )
+        return 2
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
@@ -544,6 +554,8 @@ def main() -> int:
         benchmark_netcdf_writer=benchmark_netcdf_writer,
         #  --netcdf-writer-only: ONLY run the NetCDF writer benchmark, skip fn benchmarks.
         netcdf_writer_only=netcdf_writer_only,
+        #  --input-tile materialized|virtual: input tile mode for the light spark-path leg.
+        input_tile=input_tile,
     )
     if explain_only:
         # Plans are a spark-path concern only; never run the pure-core sections.

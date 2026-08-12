@@ -4,14 +4,21 @@ Idempotently re-apply GeoBrix's local adjustments to the user-global QC judge
 (`~/.claude/qc-judge/`). Databricks force-updates those files periodically and can
 wipe the adjustments; re-run this after any suspected update.
 
-Two marker-guarded adjustments (no-op if already present):
+Three marker-guarded adjustments (no-op if already present):
 1. **WARN-check ERROR no longer hard-blocks** (`qc_core.py` `compute_verdict`) — a
-   tooling failure (e.g. the LLM subprocess dying on an `ANTHROPIC_API_KEY` /
-   claude.ai env conflict) reports ERROR but must not block an otherwise-clean push;
+   tooling failure reports ERROR but must not block an otherwise-clean push;
    CRITICAL checks still block on error.
 2. **Inline override token honored** (`qc.py` `handle_pre`) — `QC_OVERRIDE=1` /
    `QC_SKIP=1` in the pushed command string is respected, so the incantation the
    block message prints works even from an agent tool call.
+3. **Enterprise-gateway LLM model** (`qc_io.py` `run_llm_check`) — the judge
+   hardcodes a public model id (e.g. `claude-haiku-4-5-*`) that the Databricks
+   gateway (`dbexec/llm`) cannot resolve, so `claude -p` exits 1 and the LLM checks
+   (commit-msg-quality, docs-match-code, test-completeness) ERROR. This resolves the
+   model to the gateway alias (`ANTHROPIC_DEFAULT_HAIKU_MODEL`, e.g.
+   `system.ai.claude-haiku-4-5`) when a gateway is active, so the checks actually
+   RUN under enterprise auth. (This fixes the root cause that adjustment #1 was a
+   safety-net for.)
 
 ## Usage
 

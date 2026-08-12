@@ -12,6 +12,12 @@
 #      QC_OVERRIDE=1 / QC_SKIP=1 token in the pushed command string, so the
 #      very incantation the block message prints actually works from an agent
 #      tool call (the PreToolUse hook otherwise reads only its own process env).
+#   3. qc_io.py run_llm_check: resolve the LLM model via the enterprise gateway
+#      alias. The judge hardcodes a public model id (e.g. claude-haiku-4-5-*),
+#      which the Databricks gateway (dbexec/llm) cannot resolve -> `claude -p`
+#      exits 1 and the LLM checks ERROR. Use ANTHROPIC_DEFAULT_HAIKU_MODEL (the
+#      gateway alias, e.g. system.ai.claude-haiku-4-5) when a gateway is active,
+#      so the checks actually RUN under enterprise auth instead of failing.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -71,6 +77,7 @@ qc_dir = os.environ["QC_DIR"]
 check_only = os.environ.get("CHECK_ONLY") == "1"
 core_path = os.path.join(qc_dir, "qc_core.py")
 qc_path = os.path.join(qc_dir, "qc.py")
+io_path = os.path.join(qc_dir, "qc_io.py")
 
 MARKER = "GBX-QC-FIX"  # sentinel proving an adjustment is applied
 
@@ -100,6 +107,30 @@ def _inline_env_flag(cmd: str, name: str) -> bool:
     return False
 
 '''
+
+# --- Adjustment 3: qc_io.py enterprise-gateway model resolution ------------
+# Insert a helper before run_llm_check, and resolve `model` through it at the
+# top of run_llm_check (right after the prompt is built).
+IO_HELPER = '''def _effective_llm_model(model: str) -> str:
+    """''' + MARKER + ''': resolve the model id for `claude -p`. Under an
+    enterprise gateway (Databricks dbexec/llm: CLAUDE_CODE_USE_GATEWAY /
+    ANTHROPIC_BASE_URL set) a hardcoded public model id is unresolvable and
+    `claude -p` exits 1; use the gateway's small-model alias there
+    (ANTHROPIC_DEFAULT_HAIKU_MODEL, e.g. system.ai.claude-haiku-4-5). Personal
+    (non-gateway) auth keeps the configured/default model unchanged."""
+    import os as _os
+    if _os.environ.get("CLAUDE_CODE_USE_GATEWAY") or _os.environ.get("ANTHROPIC_BASE_URL"):
+        return (_os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                or _os.environ.get("ANTHROPIC_SMALL_FAST_MODEL")
+                or _os.environ.get("ANTHROPIC_MODEL")
+                or model)
+    return model
+
+'''
+IO_ANCHOR = "def run_llm_check(spec: dict, ctx: dict, *, model: str, llm_timeout: int) -> dict:"
+IO_RESOLVE_OLD = '    prompt = _format_prompt(spec.get("prompt", ""), ctx, inputs)'
+IO_RESOLVE_NEW = (IO_RESOLVE_OLD
+                  + '\n    model = _effective_llm_model(model)  # ' + MARKER)
 
 def read(p):
     with open(p, "r") as fh:
@@ -164,6 +195,25 @@ else:
     else:
         results.append(("inline-override-token", "missing-anchor"))
 
+# ---- Adjustment 3 ----
+if not os.path.exists(io_path):
+    results.append(("gateway-llm-model", "missing-anchor"))
+else:
+    io = read(io_path)
+    if MARKER in io and "_effective_llm_model" in io:
+        results.append(("gateway-llm-model", "already"))
+    elif IO_ANCHOR in io and IO_RESOLVE_OLD in io:
+        if check_only:
+            results.append(("gateway-llm-model", "would-apply"))
+        else:
+            io2 = io.replace(IO_ANCHOR, IO_HELPER + IO_ANCHOR, 1)
+            io2 = io2.replace(IO_RESOLVE_OLD, IO_RESOLVE_NEW, 1)
+            bak = backup_and_write(io_path, io2)
+            results.append(("gateway-llm-model", f"applied (backup {os.path.basename(bak)})"))
+            changed = True
+    else:
+        results.append(("gateway-llm-model", "missing-anchor"))
+
 # ---- Report ----
 print("QC judge adjustments:")
 missing = False
@@ -177,7 +227,7 @@ for name, state in results:
 # ---- Verify the patched files still import cleanly ----
 if changed:
     proc = subprocess.run(
-        [sys.executable, "-c", "import sys; sys.path.insert(0, %r); import qc_core, qc; print('import ok')" % qc_dir],
+        [sys.executable, "-c", "import sys; sys.path.insert(0, %r); import qc_core, qc, qc_io; print('import ok')" % qc_dir],
         capture_output=True, text=True,
     )
     if proc.returncode != 0:

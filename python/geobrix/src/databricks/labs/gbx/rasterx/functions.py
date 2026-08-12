@@ -684,7 +684,11 @@ def rst_fromfile(path: ColLike, driver: ColLike) -> Column:
             "the pyrx Python reader; the JVM cannot read UC Volumes). Install geobrix[light], or use "
             "spark.read.format('binaryFile').load(path) + gbx_rst_fromcontent(content, driver)."
         ) from e
-    return _pyrx.rst_fromfile(path, driver)
+    # The heavyweight surface always yields a MATERIALIZED tile (raster bytes
+    # present): a virtual tile carries only a path, which JVM expressions cannot
+    # read. pyrx.rst_fromfile now defaults to a virtual tile, so force
+    # materialize=True here to preserve this shim's bytes-present contract.
+    return _pyrx.rst_fromfile(path, driver, materialize=True)
 
 
 def rst_frombands(bands: ColLike) -> Column:

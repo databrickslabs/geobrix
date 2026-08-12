@@ -539,61 +539,125 @@ def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
     return _fromcontent_udf(_col(content), _col(driver))
 
 
-# rst_fromfile: read raster bytes from a (FUSE) path and wrap as a tile.
-# Mirrors the heavyweight gbx_rst_fromfile(path, driver): 2 string args; the
-# driver is a format hint carried into metadata (rasterio auto-detects on open).
-# The heavyweight wraps eval in Option(...).orNull, so a bad/missing path
-# yields NULL rather than raising — match that by returning None on failure.
-@f.udf(V2_TILE_SCHEMA)
-def _fromfile_udf(path, driver):
+# rst_fromfile: reference a raster on disk as a tile. LIGHT-TIER DEFAULT is a
+# VIRTUAL tile — the source file IS the durable backing store, so the tile just
+# points at the path (plus the whole-file window + metadata read from the header,
+# no pixel I/O). ``materialize=True`` reads the pixels now and returns a
+# materialized (bytes) tile. Because the path is already durable there is no
+# ``virtualize_dir``/``virtualize_prefix`` (those exist only for functions that
+# COMPUTE new pixels and need somewhere to write them).
+# A bad/missing path yields NULL (matching the heavyweight's Option(...).orNull).
+def _fromfile_impl(path, driver, materialize):
+    """Shared body for both the Python-binding UDF (3-arg) and the SQL UDF (2-arg,
+    virtual). Returns a v2 tile row (virtual by default, materialized when asked),
+    or None on a bad/missing path."""
     if path is None:
         return None
-    from rasterio.io import MemoryFile
-
-    from databricks.labs.gbx.ds._listing import to_local_path
+    from databricks.labs.gbx.ds._listing import to_local_path, to_spark_uri
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     drv = "GTiff" if driver is None else str(driver)
+    local = to_local_path(str(path))
+
+    if materialize:
+        # Eager path: read the source bytes SEQUENTIALLY (FUSE-safe) and re-encode
+        # via an in-memory MemoryFile — a tiled/COG GTiff over a UC Volume seeks to
+        # block offsets on read, which Volume FUSE can't serve, so we read the whole
+        # file then open from memory rather than rasterio.open() on the path.
+        from rasterio.io import MemoryFile
+
+        try:
+            with open(local, "rb") as _fh:
+                _src_bytes = _fh.read()
+            with MemoryFile(_src_bytes) as _src_mf, _src_mf.open() as src:
+                data = src.read()
+                profile = src.profile.copy()
+                profile.update(driver="GTiff")
+                with MemoryFile() as mf:
+                    with mf.open(**profile) as dst:
+                        dst.write(data)
+                    new_bytes = mf.read()
+        except Exception:  # noqa: BLE001 — null-on-error, matching heavyweight
+            return None
+        return _serde.build_tile(new_bytes, drv, 0)
+
+    # Default (virtual): open the HEADER only (no pixel read; header reads don't
+    # seek block offsets, so FUSE is fine) to record width/height/count, and
+    # return a bytes-free tile that points at the path over its whole-file window.
+    # Like the raster reader's passthrough tile, ``crs`` is intentionally left
+    # NULL: that field doubles as open_tile's warp-target, so setting it to the
+    # source CRS would make a later rst_setsrid see pending_srid != crs and warp
+    # spuriously. The source CRS stays implicit in the path.
+    import rasterio
+
     try:
-        # Read the source bytes SEQUENTIALLY (FUSE-safe) and open from an in-memory
-        # MemoryFile, rather than rasterio.open() on the path: a tiled/COG GTiff over a
-        # UC Volume seeks to block offsets on read, which Volume FUSE can't serve. Columns
-        # carry dbfs:-qualified paths (to_spark_uri); strip the scheme for the open().
-        with open(to_local_path(str(path)), "rb") as _fh:
-            _src_bytes = _fh.read()
-        with MemoryFile(_src_bytes) as _src_mf, _src_mf.open() as src:
-            data = src.read()
-            profile = src.profile.copy()
-            profile.update(driver="GTiff")
-            with MemoryFile() as mf:
-                with mf.open(**profile) as dst:
-                    dst.write(data)
-                new_bytes = mf.read()
-    except Exception:
-        # Heavyweight returns NULL on read failure (Option(...).orNull).
+        with rasterio.open(local) as src:
+            width, height, count = src.width, src.height, src.count
+    except Exception:  # noqa: BLE001 — null-on-error, matching heavyweight
         return None
-    return _serde.build_tile(new_bytes, drv, 0)
+    meta = {
+        "sourcePath": str(path),
+        "driver": drv,
+        "width": str(width),
+        "height": str(height),
+        "count": str(count),
+    }
+    return VirtualTile(
+        cellid=0,
+        raster=None,
+        path=to_spark_uri(str(path)),
+        window=(0, 0, width, height),
+        metadata=meta,
+    ).to_row()
 
 
-def rst_fromfile(path: ColLike, driver: ColLike = "GTiff") -> Column:
-    """Build a tile struct by reading the raster at ``path`` into its bytes.
+@f.udf(V2_TILE_SCHEMA)
+def _fromfile_udf(path, driver, materialize):
+    """Python-binding UDF: 3-arg (path, driver, materialize)."""
+    return _fromfile_impl(path, driver, bool(materialize))
 
-    Mirrors the heavyweight ``gbx_rst_fromfile(path, driver)``: ``path`` is a
-    filesystem path (FUSE ``/Volumes/...`` paths work on Databricks) and
-    ``driver`` is a GDAL driver short-name hint carried into the tile metadata
-    (rasterio auto-detects the actual format on open). A path that cannot be
-    read returns NULL (matching the heavyweight's null-on-error behaviour).
+
+@f.udf(V2_TILE_SCHEMA)
+def _fromfile_sql_udf(path, driver):
+    """SQL-registered UDF: 2-arg (path, driver) — always virtual (the light-tier
+    default). SQL has no ergonomic way to pass the materialize flag; callers that
+    want bytes use the Python binding with materialize=True, or wrap the virtual
+    tile with a downstream op. Keeps the historical 2-arg SQL surface intact."""
+    return _fromfile_impl(path, driver, False)
+
+
+def rst_fromfile(
+    path: ColLike, driver: ColLike = "GTiff", materialize: Optional[bool] = None
+) -> Column:
+    """Reference the raster at ``path`` as a tile — a **virtual** tile by default.
+
+    ``path`` is a filesystem path (FUSE ``/Volumes/...`` paths work on Databricks)
+    and ``driver`` is a GDAL driver short-name hint carried into the tile metadata
+    (rasterio auto-detects the actual format on open).
+
+    Light-tier default is a **virtual tile**: bytes-free, pointing at ``path`` over
+    its whole-file window — no pixels are read until a downstream op needs them.
+    This is the lazy entry point for loading rasters by path. Pass
+    ``materialize=True`` to read the pixels now and return a materialized (bytes)
+    tile instead. There is no ``virtualize_dir``/``virtualize_prefix`` here: the
+    source file already is the durable backing store, so nothing needs writing.
+
+    A path that cannot be opened returns NULL (matching the heavyweight's
+    null-on-error behaviour), whether virtual (header open fails) or materialized.
 
     Args:
-        path:   Raster file path (string column).
-        driver: GDAL driver short name hint. Defaults to "GTiff".
+        path:        Raster file path (string column).
+        driver:      GDAL driver short name hint. Defaults to "GTiff".
+        materialize: ``True`` reads pixels now and returns a materialized tile;
+                     default (``None``/``False``) returns a virtual tile.
 
     Returns:
-        Tile struct, or NULL if the path cannot be read.
+        Tile struct (virtual by default, materialized when ``materialize=True``),
+        or NULL if the path cannot be opened.
     """
     drv = f.lit(driver) if isinstance(driver, str) else _col(driver)
-    return _fromfile_udf(_col(path), drv)
+    return _fromfile_udf(_col(path), drv, f.lit(bool(materialize)))
 
 
 # rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.
@@ -5356,9 +5420,7 @@ def _as_tile_cellid_envelope_udf_fn(raster_bytes):
     return _serde.build_tile(rb[8:], "GTiff", cellid)
 
 
-_as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(
-    _as_tile_cellid_envelope_udf_fn
-)
+_as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(_as_tile_cellid_envelope_udf_fn)
 
 
 # --- grouped-agg pandas_udf(BinaryType()) reducers --------------------------
@@ -6529,7 +6591,7 @@ _sql_accessors = {
 # objects directly — no wrapper needed.
 _sql_tile_ops = {
     "gbx_rst_fromcontent": _fromcontent_udf,
-    "gbx_rst_fromfile": _fromfile_udf,
+    "gbx_rst_fromfile": _fromfile_sql_udf,
     "gbx_rst_merge": _merge_udf,
     "gbx_rst_combineavg": _combineavg_udf,
     "gbx_rst_frombands": _frombands_udf,

@@ -42,16 +42,20 @@ surfacing and fixing any virtual-tile correctness or behavior defects the run ex
 
 1. **Virtual input** — tile-*consuming* functions fed a virtual input tile
    (`raster=NULL`, `path`+`window` set), timed at default behavior.
-2. **Virtual output / creation** — tile-*producing* functions, above all `rst_fromfile` creating a
-   virtual tile from a path (the create-a-virtual-tile-from-path cost, already the default on this
-   branch). Also `rst_fromcontent` (note: from bytes you already hold, so its virtual disposition
-   differs — a per-function nuance, not excluded).
+2. **Virtual output / creation** — the create-a-virtual-tile-from-path cost, measured via a
+   **dedicated spark-path creation micro-leg** (chosen option A). **Why a micro-leg:** verified
+   against source, `rst_fromfile` is registered `modes=("pure-core",)`, `input_kind="path"` — it has
+   **no ordinary spark-path form** because the current materialized tile DataFrame carries no `path`
+   column. Our virtual leg *introduces* a path-bearing tile, so the creation micro-leg times building
+   a virtual tile from a `path` column at scale (the distributed per-tile creation cost). Pure-core
+   `rst_fromfile`/`rst_fromcontent` stay as-is; `rst_fromcontent` (bytes you already hold) is not a
+   distributed-creation case and is out of the micro-leg.
 
 We impose **no** materialization strategy. Whether the output comes back virtual or materialized is
 the function's own decision: pixel-generating ops (slope, hillshade, mapalgebra, warp/resample,
-clip) materialize as part of doing their work; pending-instruction/passthrough ops (setnodata,
-setsrid, band-select, metadata edits — the `light-through-finalize-spec` class) stay virtual and
-return lazily. The column reflects what the library naturally does.
+clip) materialize as part of doing their work; pending-instruction/passthrough ops (`rst_setsrid`,
+`rst_setcrs`, `rst_initnodata`, band-select, metadata edits — the `light-through-finalize-spec`
+class) stay virtual and return lazily. The column reflects what the library naturally does.
 
 **Scope:** every function in the light raster leg that consumes **or** produces a tile — accessors,
 tile-in/tile-out ops, and the tile producers (`rst_fromfile`, `rst_fromcontent`). Nothing is carved
@@ -63,10 +67,15 @@ materialization?*
 - `deferred` — tile stayed virtual / only the header/window metadata was read.
 - `materialized` — pixels were read or generated.
 - Detection: tile-returning/producing ops → sample the result tile's `raster` field
-  (`raster is None` ⇒ `deferred`). Scalar accessors have no output tile → a small **verified**
-  per-function classification (metadata-only accessors like width/srid/georeference/bbox ⇒
-  `deferred`; pixel-reading accessors like avg/min/max/median/histogram/summary/pixelcount ⇒
-  `materialized`), validated against measured timing, never guessed.
+  (`raster is None` ⇒ `deferred`). **Verified against source:** the spark-path leg does **not**
+  inspect outputs today (it writes to a `noop` sink purely for timing); only the aggregator branch
+  does an untimed `.collect()` of one row to fingerprint. So disposition capture is net-new — done
+  via a **small untimed `.collect()` of one output row per function** (modeled on that aggregator
+  collect), kept out of the timed noop loop so it never perturbs timings. Scalar accessors have no
+  output tile → a small **verified** per-function classification (metadata-only accessors like
+  width/srid/georeference/bbox ⇒ `deferred`; pixel-reading accessors like
+  avg/min/max/median/histogram/summary/pixelcount ⇒ `materialized`), validated against measured
+  timing, never guessed.
 
 **Grain:** one virtual row per `(fn, tile-shape, row-count)`, keyed identically to the existing
 materialized rows, published as a new virtual column beside the materialized one, with disposition.
@@ -99,35 +108,48 @@ may have shifted).
    instead of `build_tile(...)`. `col_fn`s already receive a `V2_TILE_SCHEMA` struct and open
    on-demand, so **no `col_fn` rewrites**.
 
-3. **Spark-path only.** The virtual leg runs spark-path across the row-count sweep. Pure-core
-   unchanged.
+3. **Spark-path only (for the published timing column).** The virtual timing leg runs spark-path
+   across the row-count sweep. `df_all` is built once per `run_spark_path` call (runner.py ~1395);
+   the virtual branch produces a virtual `df_all` variant with the same partitioning/caching.
 
-4. **Tile producers (`rst_fromfile`, `rst_fromcontent`).** Take a `path`/`bytes`
-   (`input_kind="path"`/`"bytes"`), measured for **creation** cost — time the op producing its
-   default tile; disposition follows from the produced tile. Ensure they're included in the leg; no
-   special-casing beyond inclusion.
+3b. **Creation micro-leg (option A).** A small spark-path leg that times
+   `prx.rst_fromfile(path, driver)` over a **`path` column** (from the `binaryFile` load, which
+   already carries `path`) — the distributed cost of creating a virtual tile from a path. This is
+   separate from the tile-consuming leg because `rst_fromfile` has no standard spark-path `col_fn`
+   over the tile struct. Recorded as its own `(fn=rst_fromfile, row-count)` rows with
+   `input_tile=virtual`, `output_disposition=deferred`.
 
-5. **Disposition capture.** After `col_fn`, record per function: tile-returning/producing → sample
-   output tile `raster` null-ness; scalar accessors → the verified `FnSpec` classification (new
-   field in `spec.py`).
+4. **Tile producers.** `rst_fromfile` is handled by the creation micro-leg (3b). `rst_fromcontent`
+   (`input_kind="bytes"`) stays pure-core-only — not a distributed-creation case.
+
+5. **Disposition capture (net-new; untimed).** After the timed loop, a **separate untimed
+   `.collect()`** of one output row per function samples the result tile's `raster` null-ness
+   (`None` ⇒ `deferred`), modeled on the existing aggregator fingerprint collect. Scalar accessors →
+   the verified `FnSpec` classification (new field in `spec.py`). This never runs inside the timed
+   noop loop.
 
 6. **`results.py` — `ResultRow` gains two fields:** `input_tile` (`materialized`|`virtual`) and
    `output_disposition` (`deferred`|`materialized`|`na`), with backward-compatible defaults so
    existing JSONL still parses.
 
-Net footprint: `runner.py` (`_to_tile` branch + disposition sampling + flag threading),
-`results.py` (2 fields + markdown), `spec.py` (accessor classification field),
-`cluster.py` (expose the flag in the generated job/notebook). No `col_fn` rewrites.
+Net footprint: `runner.py` (virtual `_to_tile` branch + virtual `df_all` variant + creation
+micro-leg + untimed disposition collect + pure-core virtual-input parity path + flag threading),
+`results.py` (2 fields + markdown), `spec.py` (accessor disposition classification field),
+`cluster.py` (expose the flag in the generated job/notebook). No `col_fn` rewrites for the
+tile-consuming leg.
 
 ## Section B.5 — QA & correctness discipline (no papering over)
 
 This run is a **second QA pass** on the virtual-tile feature. The bar:
 
-1. **Correctness gate — virtual must equal materialized.** Every function's virtual-input output
-   must **fingerprint-match** its materialized output (reuse `fingerprint.py`). Any divergence is a
-   correctness bug in the virtual-tile code path (`pyrx/core/virtual_tile.py`, `_serde.open_tile`),
-   not a benchmark curiosity → stop, systematic-debugging, fix upstream, add a regression test. A
-   diverging number is **not** published.
+1. **Correctness gate — virtual must equal materialized (run in pure-core).** The parity check runs
+   in **pure-core**, which already captures `output_fingerprint` (spark-path does not fingerprint
+   scalar/tile ops — verified against source). For each function: run pure-core with a materialized
+   input and with a virtual input, and assert the two `output_fingerprint`s match via
+   `fingerprint.py`. Any divergence is a correctness bug in the virtual-tile code path
+   (`pyrx/core/virtual_tile.py`, the lazy path+window read), not a benchmark curiosity → stop,
+   systematic-debugging, fix upstream, add a regression test. A diverging number is **not**
+   published. (Timing stays in spark-path; correctness stays in pure-core — clean separation.)
 2. **No silent fallback.** The virtual `_to_tile` branch and lazy `open_tile(path, window)` must
    **never** degrade to materialized-on-error. A failure surfaces as a hard error/finding, not a
    quiet fallback that hides the bug behind a plausible number.
@@ -210,13 +232,15 @@ eliminated**; the materialized column is the prior baseline; `rst_fromfile` is t
 Local Docker, **before any cluster time**:
 1. Unit-test the virtual `_to_tile` branch emits a correct virtual `V2_TILE_SCHEMA`
    (`raster=None`, `path`/`window`/`cellid` set).
-2. Test disposition detection: passthrough op (setnodata) ⇒ `deferred`; compute op (slope) ⇒
-   `materialized`.
-3. **Correctness gate test:** virtual-input output fingerprint-equals materialized-input output on
-   a sample (the QA promise, as a test).
-4. `ResultRow` new fields serialize/parse with backward-compat defaults.
-5. Small local spark-path smoke (a few fns, low row-count) in Docker exercising the virtual leg
-   end-to-end.
+2. Test disposition detection: passthrough op (`rst_setsrid`) ⇒ `deferred`; compute op
+   (`rst_slope`) ⇒ `materialized` (via the untimed one-row collect).
+3. **Correctness gate test (pure-core):** for a sample fn, pure-core virtual-input
+   `output_fingerprint` equals materialized-input `output_fingerprint` (the QA promise, as a test).
+4. `ResultRow` new fields serialize/parse with backward-compat defaults (old JSONL still loads).
+5. Test the creation micro-leg builds/times `rst_fromfile` from a `path` column and records
+   `input_tile=virtual`, `output_disposition=deferred`.
+6. Small local spark-path smoke (a few fns, low row-count) in Docker exercising the virtual leg +
+   creation micro-leg end-to-end.
 
 Run via `gbx:test:pyrx` on the affected bench tests (package-source change ⇒ unit suite, not just a
 dry run). Only after local green do we go to the cluster. All harness edits are TDD'd; feature

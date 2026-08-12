@@ -187,6 +187,7 @@ rst_to_webmercator_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(reprojected to Web Mercator, EPSG:3857)
 """
 
 
@@ -284,29 +285,52 @@ rst_h3_tessellate_python_light_example_output = """
 
 
 def rst_bng_tessellate_python_light_example(spark):
-    """Tessellate a raster into British National Grid cells (resolution 3).
+    """Tessellate a raster into British National Grid cells (resolution 3 = 1km).
 
     rst_bng_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
     function. The raster is first warped to EPSG:27700 (British National Grid),
-    so a raster whose extent falls outside Great Britain yields no cells (an
-    empty result, not an error) — as with this NYC-area sample.
+    so it must cover Great Britain to yield cells. We synthesize a small raster
+    over central London (a 2km square around 530000,180000 in EPSG:27700, burned
+    directly in that CRS) so the tessellation produces real 1km BNG cells.
     """
     from databricks.labs.gbx.pyrx import functions as rx
+    from pyspark.sql import functions as f
 
     rx.register(spark)
-    single_band_tile_df(spark).createOrReplaceTempView("rasters")
+    # A 2km x 2km square over central London, in EPSG:27700 metres.
+    london_wkt = (
+        "POLYGON((529000 179000, 531000 179000, "
+        "531000 181000, 529000 181000, 529000 179000))"
+    )
+    london = spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(london_wkt),
+            f.lit(1.0),
+            f.lit(529000.0),
+            f.lit(179000.0),
+            f.lit(531000.0),
+            f.lit(181000.0),
+            f.lit(200),
+            f.lit(200),
+            f.lit(27700),
+        ).alias("tile")
+    )
+    london.createOrReplaceTempView("rasters")
     return spark.sql(
         "SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, 3) t"
     ).take(3)
 
 
 rst_bng_tessellate_python_light_example_output = """
-+------+-----+
-|cellid|...  |
-+------+-----+
-+------+-----+
-(one v2-Tile row per BNG cell overlapping the raster after warping to
-EPSG:27700; empty here because the NYC-area sample is outside Great Britain)
++------+-----------------------------------------------------------+
+|cellid|...                                                        |
++------+-----------------------------------------------------------+
+|TQ2979|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|TQ2980|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|TQ3079|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(one v2-Tile row per 1km BNG cell overlapping the London raster; cellid is the
+BNG grid-square STRING)
 """
 
 

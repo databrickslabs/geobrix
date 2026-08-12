@@ -36,6 +36,7 @@ rst_ndvi_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band NDVI raster: (NIR-Red)/(NIR+Red))
 """
 
 
@@ -62,6 +63,7 @@ rst_evi_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band EVI raster: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
 """
 
 
@@ -85,6 +87,7 @@ rst_savi_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band SAVI raster: (NIR-Red)/(NIR+Red+L)*(1+L))
 """
 
 
@@ -109,6 +112,7 @@ rst_ndwi_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band NDWI raster: (Green-NIR)/(Green+NIR))
 """
 
 
@@ -134,6 +138,7 @@ rst_nbr_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band NBR raster: (NIR-SWIR)/(NIR+SWIR))
 """
 
 
@@ -162,6 +167,7 @@ rst_index_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band index raster computed from named formula)
 """
 
 
@@ -195,6 +201,7 @@ rst_combineavg_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(averaged combined raster from 3 input tiles)
 """
 
 
@@ -228,6 +235,7 @@ rst_derivedband_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(raster with derived band from Python UDF)
 """
 
 
@@ -293,4 +301,5 @@ rst_merge_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(merged raster from co-registered input tiles)
 """

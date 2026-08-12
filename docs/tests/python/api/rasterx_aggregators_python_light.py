@@ -68,6 +68,7 @@ rst_combineavg_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -108,6 +109,7 @@ rst_derivedband_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -143,6 +145,7 @@ rst_frombands_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -173,6 +176,7 @@ rst_merge_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -242,6 +246,7 @@ rst_rasterize_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -314,6 +319,7 @@ rst_gridfrompoints_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -387,6 +393,7 @@ rst_dtmfromgeoms_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -449,6 +456,7 @@ rst_h3_rasterize_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -497,6 +505,7 @@ rst_quadbin_rasterize_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -546,4 +555,5 @@ rst_bng_rasterize_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """

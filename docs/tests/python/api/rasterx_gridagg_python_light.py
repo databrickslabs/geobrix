@@ -609,3 +609,39 @@ rst_bng_rastertogridstddev_python_light_example_output = """
 +----+------+------------------+
 (population standard deviation per band × BNG cell)
 """
+
+
+# ============================================================================
+# H3 cell utilities — scalar, no raster input
+# ============================================================================
+
+
+def h3_cell_bbox_python_light_example(spark):
+    """Bounding box STRUCT for H3 cells in a given CRS (light tier scalar UDF).
+
+    gbx_h3_cell_bbox is a scalar function — call it in a plain select over a
+    column of H3 cell ids. Here we build a small DataFrame of NYC-area
+    resolution-9 cell ids and request the EPSG:4326 centroid-mode bbox
+    (kring_pad omitted → default). Returns STRUCT<xmin, ymin, xmax, ymax>.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [(617733151020810239,), (617733151085035519,), (617733151021334527,)],
+        ["cellid"],
+    )
+    return df.select(
+        "cellid",
+        rx.gbx_h3_cell_bbox("cellid", f.lit(4326), f.lit("centroids")).alias("bbox"),
+    ).take(3)
+
+
+h3_cell_bbox_python_light_example_output = """
++------------------+------------------------------+
+|cellid            |bbox                          |
++------------------+------------------------------+
+|617733151020810239|{-74.02, 40.70, -74.01, 40.71}|
++------------------+------------------------------+
+(STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
+"""

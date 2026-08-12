@@ -33,6 +33,7 @@ rst_slope_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(slope in degrees; auto-scaled from raster CRS units)
 """
 
 
@@ -55,6 +56,7 @@ rst_aspect_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(aspect in compass degrees: 0=N, 90=E, 180=S, 270=W)
 """
 
 
@@ -77,6 +79,7 @@ rst_hillshade_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(8-bit hillshade: 0..255, NW azimuth 45-degree altitude)
 """
 
 
@@ -96,6 +99,7 @@ rst_tri_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(TRI: mean absolute neighbour difference)
 """
 
 
@@ -115,6 +119,7 @@ rst_tpi_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(TPI: positive=ridge, negative=valley)
 """
 
 
@@ -134,6 +139,7 @@ rst_roughness_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(roughness: max absolute difference in 3x3 window)
 """
 
 
@@ -158,6 +164,7 @@ rst_color_relief_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(4-band RGBA tile mapped via gdaldem color table)
 """
 
 
@@ -180,6 +187,7 @@ rst_proximity_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(distance in pixels to nearest non-NoData pixel, capped at 100)
 """
 
 
@@ -204,6 +212,7 @@ rst_contour_python_light_example_output = """
 +-----------------------------------------------------------------------------------------------------------------+
 |[{[BINARY], 50.0}, {[BINARY], 100.0}, {[BINARY], 150.0}, {[BINARY], 200.0}, {[BINARY], 250.0}, {[BINARY], 300.0}]|
 +-----------------------------------------------------------------------------------------------------------------+
+(array of contour features: LineString geometry + elevation)
 """
 
 
@@ -232,6 +241,7 @@ rst_viewshed_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(binary viewshed: 1=visible, 0=not visible)
 """
 
 
@@ -254,6 +264,7 @@ rst_sample_python_light_example_output = """
 +-------+
 |[302.0]|
 +-------+
+(array of sampled values, one per band)
 """
 
 
@@ -306,6 +317,7 @@ rst_gridfrompoints_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(IDW-interpolated tile over specified extent)
 """
 
 
@@ -372,4 +384,5 @@ rst_dtmfromgeoms_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(TIN-interpolated DTM over specified extent and pixel count)
 """

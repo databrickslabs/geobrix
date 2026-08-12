@@ -311,11 +311,13 @@ rst_width_python_heavy_example_output = """
 
 
 def rst_fromfile_python_heavy_example(spark):
-    """Load a raster tile from a file path using the heavy rasterx Python tier.
+    """Load a raster tile from a file path via the heavy (rasterx) Python tier.
 
-    rst_fromfile is available in the light (pyrx) and heavy (rasterx) Python tiers only.
-    There is no Scala Column form: the JVM executor cannot read UC Volume FUSE paths,
-    so this function delegates to the Python worker.
+    rst_fromfile has no Scala/JVM Column form (the JVM executor cannot read UC
+    Volume FUSE paths), so the heavy `rasterx` binding delegates to the pyrx
+    loader. The heavyweight surface always returns a MATERIALIZED tile (raster
+    bytes present) — a virtual tile carries only a path, which JVM expressions
+    cannot read — so heavy accessors like rst_width work directly on the result.
     """
     import os
     import tempfile
@@ -333,6 +335,7 @@ def rst_fromfile_python_heavy_example(spark):
 
     try:
         path_df = spark.createDataFrame([(tmp_path,)], ["path"])
+        # Heavy rst_fromfile returns a materialized tile (bytes present).
         tile_df = path_df.select(rx.rst_fromfile("path", f.lit("GTiff")).alias("tile"))
         result = tile_df.select(rx.rst_width("tile").alias("width")).first()
         return result["width"]
@@ -1748,7 +1751,7 @@ rst_combineavg_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -1792,7 +1795,7 @@ rst_derivedband_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -1827,7 +1830,7 @@ rst_frombands_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -1858,7 +1861,7 @@ rst_merge_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -1927,7 +1930,7 @@ rst_rasterize_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -1999,7 +2002,7 @@ rst_gridfrompoints_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -2071,7 +2074,7 @@ rst_dtmfromgeoms_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -2135,7 +2138,7 @@ rst_h3_rasterize_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -2186,7 +2189,7 @@ rst_quadbin_rasterize_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -2238,7 +2241,7 @@ rst_bng_rasterize_agg_python_heavy_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(returns a v2 Tile)
+(one v2 Tile per group — raster bytes populated, path null)
 """
 
 
@@ -2519,7 +2522,7 @@ rst_mapalgebra_python_heavy_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(result raster from map algebra expression A * 2)
+(single-band Float32 NDVI tile; per-pixel (NIR-Red)/(NIR+Red) in [-1, 1])
 """
 
 
@@ -3097,6 +3100,7 @@ rst_to_webmercator_python_heavy_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(reprojected to Web Mercator, EPSG:3857)
 """
 
 
@@ -3184,28 +3188,49 @@ rst_h3_tessellate_python_heavy_example_output = """
 
 
 def rst_bng_tessellate_python_heavy_example(spark):
-    """Tessellate raster into British National Grid cells (1km resolution)."""
+    """Tessellate raster into British National Grid cells (resolution 3 = 1km).
+
+    rst_bng_tessellate is a generator (one ROW per BNG cell). The raster is
+    warped to EPSG:27700 first, so it must cover Great Britain to yield cells.
+    We synthesize a small raster over central London (a 2km square around
+    530000,180000 in EPSG:27700) so the tessellation produces real 1km cells.
+    Calling a generator inside `select` explodes it to one row per cell.
+    """
     from pyspark.sql import functions as f
 
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    df = spark.table("rasters")
-    # rst_bng_tessellate is a generator (one row per BNG cell). The raster is
-    # warped to EPSG:27700 first, so a raster outside Great Britain (like this
-    # NYC-area sample) yields no rows — an empty result, not an error.
-    return df.select(
-        rx.rst_bng_tessellate("tile", f.lit(3)).alias("bng_cells")
-    ).collect()
+    london_wkt = (
+        "POLYGON((529000 179000, 531000 179000, "
+        "531000 181000, 529000 181000, 529000 179000))"
+    )
+    df = spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(london_wkt),
+            f.lit(1.0),
+            f.lit(529000.0),
+            f.lit(179000.0),
+            f.lit(531000.0),
+            f.lit(181000.0),
+            f.lit(200),
+            f.lit(200),
+            f.lit(27700),
+        ).alias("tile")
+    )
+    return df.select(rx.rst_bng_tessellate("tile", f.lit(3)).alias("bng_cell")).take(3)
 
 
 rst_bng_tessellate_python_heavy_example_output = """
-+---+
-|bng|
-+---+
-|[{ |
-+---+
-(array of tile structs per BNG cell; raster rewarped to EPSG:27700)
++-----------------------------------------------------------+
+|bng_cell                                                   |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(one v2-tile-struct row per 1km BNG cell overlapping the London raster; the
+generator explodes to rows in a plain select)
 """
 
 
@@ -3251,10 +3276,12 @@ def rst_retile_python_heavy_example(spark):
 
 
 rst_retile_python_heavy_example_output = """
-+---+---+---+
-|z  |x  |y  |
-+---+---+---+
-(one row per sub-tile: each sub-tile is a v2-Tile struct)
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
 
@@ -3271,10 +3298,12 @@ def rst_tooverlappingtiles_python_heavy_example(spark):
 
 
 rst_tooverlappingtiles_python_heavy_example_output = """
-+---+---+---+
-|z  |x  |y  |
-+---+---+---+
-(one row per overlapping tile: each is a v2-Tile struct)
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per overlapping tile; t.* expands the v2-Tile struct fields)
 """
 
 
@@ -3315,13 +3344,18 @@ def rst_polygonize_python_heavy_example(spark):
 
 
 rst_polygonize_python_heavy_example_output = """
-[{geom_wkb: ..., value: 365.0}, {geom_wkb: ..., value: 366.0}, ...]
-(ARRAY<struct(geom_wkb BINARY (WKB), value DOUBLE)> — one element per region)
++----------------------------------------+
+|features                                |
++----------------------------------------+
+|[{[BINARY], 365.0}, {[BINARY], 366.0}]  |
++----------------------------------------+
+(ARRAY<struct(geom_wkb BINARY (WKB), value DOUBLE)> — one element per region;
+ the example returns this array via .first()["features"])
 """
 
 
 def rst_maketiles_python_heavy_example(spark):
-    """Subdivide raster into tiles by approximate size (UDTF, BROKEN in heavy tier)."""
+    """Subdivide raster into tiles by approximate size (generator, via SQL LATERAL)."""
     if rx is None:
         raise ImportError("rasterx not installed")
 
@@ -3332,10 +3366,12 @@ def rst_maketiles_python_heavy_example(spark):
 
 
 rst_maketiles_python_heavy_example_output = """
-+---+---+---+
-|z  |x  |y  |
-+---+---+---+
-(one row per sub-tile; NOT WORKING IN HEAVY TIER)
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
 
@@ -3372,7 +3408,7 @@ rst_rasterize_python_heavy_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(rasterized tile: pixels inside the polygon carry the burn value)
+(rasterized tile: pixels inside the polygon carry the burn value; outside = NoData)
 """
 
 
@@ -3891,4 +3927,38 @@ rst_bng_rastertogridstddev_python_heavy_example_output = """
  [...],  # band 2
  [...]]  # band 3
 (ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+def h3_cell_bbox_python_heavy_example(spark):
+    """Bounding box STRUCT for H3 cells in a given CRS (heavy tier scalar).
+
+    gbx_h3_cell_bbox is a scalar function — call it in a plain select over a
+    column of H3 cell ids. Builds a small DataFrame of NYC-area resolution-9
+    cell ids and requests the EPSG:4326 centroid-mode bbox (kring_pad default 0).
+    Returns STRUCT<xmin, ymin, xmax, ymax>.
+    """
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f
+
+    df = spark.createDataFrame(
+        [(617733151020810239,), (617733151085035519,), (617733151021334527,)],
+        ["cellid"],
+    )
+    return df.select(
+        "cellid",
+        rx.gbx_h3_cell_bbox("cellid", f.lit(4326), f.lit("centroids"), f.lit(0)).alias(
+            "bbox"
+        ),
+    ).take(3)
+
+
+h3_cell_bbox_python_heavy_example_output = """
++------------------+------------------------------+
+|cellid            |bbox                          |
++------------------+------------------------------+
+|617733151020810239|{-74.02, 40.70, -74.01, 40.71}|
++------------------+------------------------------+
+(STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
 """

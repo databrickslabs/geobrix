@@ -133,8 +133,11 @@ def test_rastertogrid_sql_example_executes(spark, example_attr, grid_type):
     rx.register(spark)
     light_examples._get_multiband_df(spark).createOrReplaceTempView("multiband_rasters")
 
-    sql = getattr(sql_examples, example_attr)()
-    assert "LATERAL" in sql and "LATERAL VIEW explode" not in sql
+    raw_sql = getattr(sql_examples, example_attr)()
+    assert "LATERAL" in raw_sql and "LATERAL VIEW explode" not in raw_sql
+    # E2 examples carry two variations (heavy scalar first, light LATERAL second);
+    # execute the LATERAL statement for the pyrx tier.
+    sql = sql_examples._sql_variant(raw_sql, lateral=True)
 
     result = spark.sql(sql).take(5)
     assert isinstance(result, list)
@@ -153,3 +156,18 @@ def test_rastertogrid_sql_example_outputs_exist():
         assert hasattr(
             sql_examples, f"{example_attr}_output"
         ), f"missing {example_attr}_output"
+
+
+def test_h3_cell_bbox_python_light_example(spark):
+    """h3_cell_bbox light-tier scalar example returns non-null bbox structs."""
+    assert light_examples is not None
+    rows = light_examples.h3_cell_bbox_python_light_example(spark)
+    assert isinstance(rows, list) and len(rows) == 3
+    for row in rows:
+        d = row.asDict()
+        assert d["cellid"] is not None
+        bbox = d["bbox"]
+        assert bbox is not None
+        # STRUCT<xmin, ymin, xmax, ymax> — ordered, finite.
+        assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
+    assert hasattr(light_examples, "h3_cell_bbox_python_light_example_output")

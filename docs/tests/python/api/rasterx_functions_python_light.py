@@ -101,7 +101,7 @@ rst_boundingbox_python_light_example_output = """
 +----+
 |[...|
 +----+
-(WKB binary bytes — bounding POLYGON of the raster extent)
+(WKB binary — bounding POLYGON of the raster extent in EPSG:32618)
 """
 
 

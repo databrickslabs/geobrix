@@ -86,10 +86,11 @@ def test_rst_h3_tessellate_python_light_example(spark):
 
 
 def test_rst_bng_tessellate_python_light_example(spark):
-    """rst_bng_tessellate (UDTF via LATERAL) — no cells for a non-GB raster."""
+    """rst_bng_tessellate (UDTF via LATERAL) yields 1km BNG cell rows over London."""
     rows = transforms_examples.rst_bng_tessellate_python_light_example(spark)
-    # NYC-area sample lies outside Great Britain, so BNG tessellation is empty.
-    assert isinstance(rows, list) and len(rows) == 0
+    # Synthetic 2km London raster (EPSG:27700) → several overlapping 1km cells.
+    assert isinstance(rows, list) and len(rows) >= 1
+    assert "cellid" in rows[0].asDict() and rows[0]["raster"] is not None
 
 
 def test_rst_quadbin_tessellate_python_light_example(spark):

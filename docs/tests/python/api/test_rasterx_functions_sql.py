@@ -603,7 +603,11 @@ def test_rst_polygonize_sql_example(spark):
     from databricks.labs.gbx.rasterx import functions as rx
 
     rx.register(spark)
-    sql = rasterx_functions_sql.rst_polygonize_sql_example()
+    # The example carries two variations (heavy scalar first, light LATERAL
+    # second); execute the heavy scalar statement under the rasterx tier.
+    sql = rasterx_functions_sql._sql_variant(
+        rasterx_functions_sql.rst_polygonize_sql_example(), lateral=False
+    )
     result = spark.sql(sql).collect()
     assert len(result) == 1
     features = result[0]["features"]
@@ -930,15 +934,15 @@ def london_rasters_view(spark):
     spark.catalog.dropTempView("london_rasters")
 
 
-# The rastertogrid SQL examples use the light-tier UDTF LATERAL form
-#   SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_<grid>_rastertogrid<agg>(tile, res) t
-# which resolves only under the light (pyrx) registration — the heavy tier
-# registers these names as scalar ARRAY-returning functions, so the TVF form is
-# UNRESOLVABLE_TABLE_VALUED_FUNCTION under `rx.register` (rasterx). This module
-# registers the heavy tier, so here we validate the example STRING shape only;
-# the executable round-trip lives in
-# test_rasterx_gridagg_python_light.py::test_rastertogrid_sql_example_executes,
-# which registers pyrx and runs each example against the multiband fixture.
+# The rastertogrid SQL examples invoke DIFFERENTLY per tier, so each example
+# carries TWO labeled variations (see the tier-divergence doc convention):
+#   Heavyweight (scalar ARRAY): SELECT gbx_rst_<grid>_rastertogrid<agg>(tile, res) AS grid FROM v
+#   Lightweight (pyrx UDTF):    SELECT t.* FROM v, LATERAL gbx_rst_<grid>_rastertogrid<agg>(tile, res) t
+# The heavy scalar form comes FIRST so heavy-only DESCRIBE FUNCTION extraction
+# (first_statement_containing) picks it up; the light LATERAL form comes second.
+# This module registers the heavy tier, so here we validate the STRING shape of
+# BOTH variations; the executable round-trips live in the tier-specific modules
+# (test_rasterx_gridagg_python_light.py runs the LATERAL form under pyrx).
 _RASTERTOGRID_SQL_EXAMPLES = [
     (f"rst_{grid}_rastertogrid{agg}_sql_example", f"gbx_rst_{grid}_rastertogrid{agg}")
     for grid in ("h3", "quadbin", "bng")
@@ -948,19 +952,28 @@ _RASTERTOGRID_SQL_EXAMPLES = [
 
 @pytest.mark.parametrize("example_attr,sql_fn", _RASTERTOGRID_SQL_EXAMPLES)
 def test_rastertogrid_sql_example_shape(example_attr, sql_fn):
-    """Each rastertogrid SQL example is a non-empty light-tier LATERAL UDTF query.
+    """Each rastertogrid SQL example carries both a heavy scalar and a light LATERAL form.
 
-    The example uses the modern `LATERAL gbx_rst_...(tile, res) t` table-function
-    form (superseding the old `LATERAL VIEW explode(...)` syntax). Execution is
-    covered in the light-tier test module; here we assert the string surface.
+    Invocation diverges across tiers, so the example must show TWO genuine
+    variations: the heavy scalar `explode(gbx_rst_...(tile, res))` form (first,
+    for DESCRIBE FUNCTION) and the light `LATERAL gbx_rst_...(tile, res) t`
+    table-function form (superseding the old `LATERAL VIEW explode(...)` syntax).
     """
     sql = getattr(rasterx_functions_sql, example_attr)()
     assert isinstance(sql, str) and sql.strip(), f"{example_attr} must be non-empty"
     assert sql_fn in sql, f"{example_attr} should mention {sql_fn}"
-    assert "LATERAL" in sql, f"{example_attr} should use the LATERAL UDTF form"
+    assert "LATERAL" in sql, f"{example_attr} should include the light LATERAL form"
     assert (
         "LATERAL VIEW explode" not in sql
     ), f"{example_attr} still uses the retired LATERAL VIEW explode syntax"
+    # Both tier variations must be present and correctly ordered.
+    heavy = rasterx_functions_sql._sql_variant(sql, lateral=False)
+    light = rasterx_functions_sql._sql_variant(sql, lateral=True)
+    assert "LATERAL" not in heavy.upper(), f"{example_attr} heavy form must be scalar"
+    assert "LATERAL" in light.upper(), f"{example_attr} light form must use LATERAL"
+    assert sql.index(f"{sql_fn}(tile") < sql.index(
+        "LATERAL"
+    ), f"{example_attr}: heavy scalar form must come before the light LATERAL form"
     assert hasattr(
         rasterx_functions_sql, f"{example_attr}_output"
     ), f"{example_attr}_output constant missing"
@@ -986,17 +999,18 @@ def test_rst_quadbin_tessellate_sql_example(spark, london_rasters, london_raster
     """quadbin tessellate generator emits one raster tile chip per overlapping cell."""
     sql = rasterx_functions_sql.rst_quadbin_tessellate_sql_example()
     assert "gbx_rst_quadbin_tessellate" in sql
-    # covering mode over zoom 12; the CollectionGenerator yields one `tile` per
-    # overlapping quadbin cell (used via LATERAL VIEW, like gbx_rst_maketiles).
-    result = spark.sql("""
-        SELECT r.path, g.tile
-        FROM london_rasters r
-        LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'covering') g AS tile
-    """).collect()
+    # Modern LATERAL table-function form (heavy CollectionGenerator accepts it, like
+    # gbx_rst_maketiles). Execute the first (covering-mode) documented statement
+    # against the London raster view.
+    assert (
+        "LATERAL VIEW" not in sql
+    ), "tessellate example should use modern LATERAL ... t"
+    stmt = rasterx_functions_sql._sql_variant(sql, lateral=True).replace(
+        "FROM rasters", "FROM london_rasters"
+    )
+    result = spark.sql(stmt).collect()
     assert len(result) > 0, "quadbin tessellate produced no tile rows"
-    first = result[0].asDict()
-    assert "tile" in first
-    assert first["tile"] is not None
+    assert result[0]["raster"] is not None
     assert hasattr(rasterx_functions_sql, "rst_quadbin_tessellate_sql_example_output")
 
 
@@ -1004,16 +1018,17 @@ def test_rst_bng_tessellate_sql_example(spark, london_rasters, london_rasters_vi
     """bng tessellate generator emits one raster tile chip per overlapping BNG cell."""
     sql = rasterx_functions_sql.rst_bng_tessellate_sql_example()
     assert "gbx_rst_bng_tessellate" in sql
-    # BNG warps the raster to EPSG:27700 then yields one `tile` per overlapping cell.
-    result = spark.sql("""
-        SELECT r.path, g.tile
-        FROM london_rasters r
-        LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'covering') g AS tile
-    """).collect()
+    # Modern LATERAL table-function form; BNG warps the raster to EPSG:27700 then
+    # yields one row per overlapping 1km cell. Execute the first documented statement.
+    assert (
+        "LATERAL VIEW" not in sql
+    ), "tessellate example should use modern LATERAL ... t"
+    stmt = rasterx_functions_sql._sql_variant(sql, lateral=True).replace(
+        "FROM rasters", "FROM london_rasters"
+    )
+    result = spark.sql(stmt).collect()
     assert len(result) > 0, "bng tessellate produced no tile rows"
-    first = result[0].asDict()
-    assert "tile" in first
-    assert first["tile"] is not None
+    assert result[0]["raster"] is not None
     assert hasattr(rasterx_functions_sql, "rst_bng_tessellate_sql_example_output")
 
 

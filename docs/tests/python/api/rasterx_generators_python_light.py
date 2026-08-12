@@ -36,12 +36,12 @@ def rst_retile_python_light_example(spark):
 
 
 rst_retile_python_light_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(one row per sub-tile: 64x64 tiles from the input raster)
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
 
@@ -63,12 +63,12 @@ def rst_tooverlappingtiles_python_light_example(spark):
 
 
 rst_tooverlappingtiles_python_light_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(one row per overlapping tile: 64x64 tiles with 8% overlap)
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per overlapping tile; t.* expands the v2-Tile struct fields)
 """
 
 
@@ -141,12 +141,12 @@ def rst_maketiles_python_light_example(spark):
 
 
 rst_maketiles_python_light_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(one row per sub-tile: splits are powers of four (1, 4, 16, ...))
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
 

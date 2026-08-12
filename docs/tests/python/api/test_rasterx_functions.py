@@ -849,11 +849,14 @@ def test_rst_h3_tessellate_python_heavy_example(spark):
 
 
 def test_rst_bng_tessellate_python_heavy_example(spark):
-    """rst_bng_tessellate (generator) yields no rows for a non-GB raster."""
+    """rst_bng_tessellate (generator) yields 1km BNG cell rows over a London raster."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_bng_tessellate_python_heavy_example(spark)
-    # NYC-area sample lies outside Great Britain → empty after warp to EPSG:27700.
-    assert isinstance(result, list) and len(result) == 0
+    # Synthetic 2km London raster (EPSG:27700) → several overlapping 1km cells.
+    assert isinstance(result, list) and len(result) > 0
+    # Generator explodes to rows; each row is a v2 tile struct.
+    first = result[0].asDict()
+    assert "bng_cell" in first and first["bng_cell"] is not None
 
 
 def test_rst_quadbin_tessellate_python_heavy_example(spark):
@@ -1046,3 +1049,17 @@ def test_bng_rastertogrid_python_heavy_example(spark, example_fn, aggregator):
             assert isinstance(
                 cell["cellID"], str
             ), f"band {band_idx} BNG cellID must be a STRING"
+
+
+def test_h3_cell_bbox_python_heavy_example(spark):
+    """h3_cell_bbox heavy-tier scalar example returns non-null ordered bbox structs."""
+    assert rasterx_functions is not None
+    rows = rasterx_functions.h3_cell_bbox_python_heavy_example(spark)
+    assert isinstance(rows, list) and len(rows) == 3
+    for row in rows:
+        d = row.asDict()
+        assert d["cellid"] is not None
+        bbox = d["bbox"]
+        assert bbox is not None
+        assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
+    assert hasattr(rasterx_functions, "h3_cell_bbox_python_heavy_example_output")

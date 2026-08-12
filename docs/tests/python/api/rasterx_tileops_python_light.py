@@ -33,13 +33,13 @@ except ImportError:
 
 
 def _get_single_band_df(spark):
-    from _fixtures import single_band_tile_df  # noqa: PLC0415
+    from ._fixtures import single_band_tile_df  # noqa: PLC0415
 
     return single_band_tile_df(spark)
 
 
 def _get_multiband_df(spark):
-    from _fixtures import multiband_tile_df  # noqa: PLC0415
+    from ._fixtures import multiband_tile_df  # noqa: PLC0415
 
     return multiband_tile_df(spark)
 
@@ -67,7 +67,7 @@ rst_asformat_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; raster bytes populated, path null)
+(re-encoded tile in the requested GDAL format; light tier returns a materialized v2 Tile)
 """
 
 
@@ -98,7 +98,7 @@ rst_band_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; single band extracted from the 3-band multiband fixture)
+(single band extracted from the 3-band multiband fixture; light tier returns a materialized v2 Tile)
 """
 
 
@@ -127,7 +127,7 @@ rst_buildoverviews_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; overviews at levels [2, 4] embedded in the tile)
+(tile with internal overviews at levels [2, 4] embedded; light tier returns a materialized v2 Tile)
 """
 
 
@@ -165,7 +165,7 @@ rst_clip_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; polygon is in the raster's native CRS (no SRID = no reprojection))
+(clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection); light tier returns a materialized v2 Tile)
 """
 
 
@@ -191,7 +191,7 @@ rst_cog_convert_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; a COG is a valid GeoTIFF with tiled internal layout)
+(COG tile; a COG is a valid GeoTIFF with tiled internal layout; light tier returns a materialized v2 Tile)
 """
 
 
@@ -224,7 +224,7 @@ rst_convolve_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; kernel is a 3x3 identity)
+(convolved tile; kernel is a 3x3 identity; light tier returns a materialized v2 Tile)
 """
 
 
@@ -253,7 +253,7 @@ rst_fillnodata_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; NoData holes searched within 100 pixels)
+(filled tile; NoData holes searched within 100 pixels; light tier returns a materialized v2 Tile)
 """
 
 
@@ -282,7 +282,7 @@ rst_filter_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; 3x3 median filter applied)
+(filtered tile; 3x3 median filter applied; light tier returns a materialized v2 Tile)
 """
 
 
@@ -301,7 +301,7 @@ def rst_fromcontent_python_light_example(spark):
     binaryFile runs in Spark (holds the Volume credential) and works on any
     compute — both lightweight and heavyweight tiers.
     """
-    from _fixtures import single_band_path  # noqa: PLC0415
+    from ._fixtures import single_band_path  # noqa: PLC0415
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -362,7 +362,7 @@ rst_frombands_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; 3 per-band tiles stacked back into a 3-band tile)
+(3 per-band tiles stacked back into a 3-band tile; light tier returns a materialized v2 Tile)
 """
 
 
@@ -374,32 +374,40 @@ rst_frombands_python_light_example_output = """
 
 
 def rst_fromfile_python_light_example(spark):
-    """Load a raster tile from a file path using the light pyrx tier.
+    """Reference a raster by path — a VIRTUAL tile by default (light pyrx tier).
 
-    Constructor: takes a column of file paths and opens each via rasterio.
-    Light and SQL tiers only — there is no Scala/JVM form (the JVM executor
-    cannot read UC Volume FUSE paths). For a tier-agnostic alternative use
-    binaryFile + rst_fromcontent.
+    The default tile is bytes-free: ``raster`` is null and it points at the file
+    over its whole-file ``window``, so no pixels are read until a downstream op
+    needs them. Pass ``materialize=True`` to read the pixels now and get a
+    materialized (bytes) tile instead. Light and SQL tiers only — there is no
+    Scala/JVM form (the JVM executor cannot read UC Volume FUSE paths).
     """
-    from _fixtures import single_band_path  # noqa: PLC0415
+    from ._fixtures import single_band_path  # noqa: PLC0415
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
 
     rx.register(spark)
     path = str(single_band_path())
     path_df = spark.createDataFrame([(path,)], ["path"])
-    tile_df = path_df.select(rx.rst_fromfile("path", f.lit("GTiff")).alias("tile"))
-    result = tile_df.select(rx.rst_format("tile").alias("format")).first()
-    return result["format"]
+    # Default: a VIRTUAL tile — raster is null, path + window are populated.
+    tile = path_df.select(rx.rst_fromfile("path").alias("tile")).first()["tile"]
+    return {
+        "raster_is_null": tile["raster"] is None,
+        "has_path": tile["path"] is not None,
+        "window": tile["window"] is not None,
+    }
 
 
 rst_fromfile_python_light_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile loaded from a file path; light and SQL tiers only)
+# Default — a VIRTUAL tile (lazy; no pixels read):
++------+------------+----------------+
+|raster|path        |window          |
++------+------------+----------------+
+|null  |/Volumes/...|{0, 0, 236, 161}|
++------+------------+----------------+
+(raster is null → bytes-free; path + whole-file window carry the reference)
+
+# rst_fromfile("path", materialize=True) instead returns a materialized tile:
+#   {0, <raster bytes>, null, ..., {driver -> GTiff, ...}}  (raster populated)
 """
 
 
@@ -425,7 +433,7 @@ rst_initnodata_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; NoData initialized to -9999.0 when absent)
+(tile with NoData initialized; light tier returns a materialized v2 Tile)
 """
 
 
@@ -455,7 +463,7 @@ rst_resample_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; 2x bilinear upsampled from the 236x161 source)
+(2x bilinear upsampled tile; source is 236x161 px; light tier returns a materialized v2 Tile)
 """
 
 
@@ -487,7 +495,7 @@ rst_resample_to_res_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; downsampled from 10 m to 20 m resolution)
+(downsampled tile; 10 m to 20 m resolution; light tier returns a materialized v2 Tile)
 """
 
 
@@ -519,7 +527,7 @@ rst_resample_to_size_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; resampled to 100x100 pixels)
+(resampled tile forced to 100x100 pixels; light tier returns a materialized v2 Tile)
 """
 
 
@@ -576,7 +584,7 @@ rst_setsrid_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; SRID stamped to 32618 without reprojecting)
+(tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject; light tier returns a materialized v2 Tile)
 """
 
 
@@ -605,7 +613,7 @@ rst_threshold_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; pixels > 0.0 → 1, others → 0)
+(binary mask tile; pixels > 0.0 → 1, others → 0; light tier returns a materialized v2 Tile)
 """
 
 
@@ -633,7 +641,7 @@ rst_transform_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; source EPSG:32618 (UTM Zone 18N) reprojected to EPSG:4326)
+(reprojected tile; source EPSG:32618 (UTM Zone 18N) to EPSG:4326; light tier returns a materialized v2 Tile)
 """
 
 
@@ -693,5 +701,5 @@ rst_updatetype_python_light_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(light tier returns a materialized v2 Tile; use rst_type to confirm the new data type)
+(type-converted tile; use rst_type to confirm the new data type; light tier returns a materialized v2 Tile)
 """

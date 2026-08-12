@@ -48,6 +48,36 @@ Views `rasters`, `multiband_rasters`, `dem_rasters`, and `netcdf_rasters` create
 Every example on this page reads from one of these views.
 """
 
+
+def _sql_variant(sql: str, *, lateral: bool) -> str:
+    """Pick one tier's statement from a dual-variation SQL example.
+
+    Some functions invoke differently per tier — the heavyweight tier registers
+    them as scalar (ARRAY-returning) functions called with a plain ``SELECT``,
+    while the lightweight (pyrx) tier registers them as streaming table functions
+    that must be called with ``LATERAL``. Those examples therefore hold two
+    ``;``-separated statements: the heavy scalar form first (so heavy-only
+    ``DESCRIBE FUNCTION`` extraction picks it up) and the light ``LATERAL`` form
+    second. Execution tests run one statement at a time, so they use this helper
+    to select the statement for the tier under test.
+
+    ``lateral=True`` returns the ``LATERAL`` statement (light tier); ``lateral=False``
+    returns the non-``LATERAL`` scalar statement (heavy tier). Single-variation
+    examples (no divergence) return their sole statement either way.
+    """
+    # Drop full-line ``--`` comments FIRST, then split on ``;``. A ``;`` can appear
+    # inside a comment (e.g. "call directly; then ..."), which would otherwise
+    # shatter the statement — so comment removal must precede the split.
+    code = "\n".join(ln for ln in sql.splitlines() if not ln.strip().startswith("--"))
+    bodies = [s.strip() for s in code.split(";") if s.strip()]
+    for body in bodies:
+        has_lateral = "LATERAL" in body.upper()
+        if lateral == has_lateral:
+            return body
+    # No divergence (only one form present): return it regardless of `lateral`.
+    return bodies[0] if bodies else sql.strip()
+
+
 # ============================================================================
 # Accessor Functions - Get Raster Properties
 # ============================================================================
@@ -714,17 +744,20 @@ FROM raster_paths;
 
 
 rst_fromfile_sql_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
+# gbx_rst_fromfile returns a VIRTUAL tile (raster null, path + window set) —
+# accessors like width/height read the header without materializing pixels:
++------+------------+------------------+
+|raster|path        |window            |
++------+------------+------------------+
+|null  |/data/ra... |{0, 0, 10980, ...}|
++------+------------+------------------+
 
 +----+-----+------+
 |path|width|height|
 +----+-----+------+
 |... |10980|10980 |
 +----+-----+------+
+(width/height come from the header of the virtual tile — no pixel read)
 """
 
 
@@ -778,11 +811,20 @@ GROUP BY scene_id;
 
 
 rst_frombands_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +--------+-----------------------------------------------------------+
 |scene_id|multi_band                                                 |
 +--------+-----------------------------------------------------------+
-|S2A_001 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +--------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(multi_band, 'GTiff') to rebuild a tile struct:
++--------+-------------------+
+|scene_id|multi_band         |
++--------+-------------------+
+|...     |[B@... (BINARY)    |
++--------+-------------------+
 """
 
 
@@ -909,6 +951,7 @@ rst_ndvi_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band NDVI raster: (NIR-Red)/(NIR+Red))
 """
 
 
@@ -989,12 +1032,30 @@ FROM rasters;
 """
 
 
+rst_rastertoworldcoordx_sql_example_output = """
++-------+
+|easting|
++-------+
+|500980 |
++-------+
+"""
+
+
 def rst_rastertoworldcoordy_sql_example():
     """Convert pixel Y to world Y coordinate"""
     return """
 SELECT
     gbx_rst_rastertoworldcoordy(tile, 100, 80) as northing
 FROM rasters;
+"""
+
+
+rst_rastertoworldcoordy_sql_example_output = """
++--------+
+|northing|
++--------+
+|4599220 |
++--------+
 """
 
 
@@ -1113,11 +1174,20 @@ SELECT region, gbx_rst_derivedband_agg(tile, 'def f(a): return a', 'f') as resul
 
 
 rst_derivedband_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +------+-----------------------------------------------------------+
 |region|result                                                     |
 +------+-----------------------------------------------------------+
 |...   |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(result, 'GTiff') to rebuild a tile struct:
++------+-------------------+
+|region|result             |
++------+-------------------+
+|...   |[B@... (BINARY)    |
++------+-------------------+
 """
 
 
@@ -1134,6 +1204,7 @@ rst_initnodata_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(tile with NoData initialized)
 """
 
 
@@ -1192,30 +1263,25 @@ def rst_quadbin_tessellate_sql_example():
 -- covering mode (default): every quadbin cell whose tile overlaps the raster
 -- bbox, each chip clipped to its cell. Zoom 12 for a city-scale raster. The
 -- generator yields one `tile` chip per overlapping cell.
-SELECT r.path, g.tile
-FROM rasters r
-LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'covering') g AS tile;
+SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'covering') t;
 
 -- centroid mode: single-assign each valid pixel to the cell holding its
 -- centroid (chips partition the pixels, no double-count).
-SELECT r.path, g.tile
-FROM rasters r
-LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12, 'centroid') g AS tile;
+SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'centroid') t;
 
 -- backward-compatible two-argument form (covering)
-SELECT r.path, g.tile
-FROM rasters r
-LATERAL VIEW gbx_rst_quadbin_tessellate(r.tile, 12) g AS tile;
+SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12) t;
 """
 
 
 rst_quadbin_tessellate_sql_example_output = """
-+----+-----------------------------------------------------------+
-|path|tile                                                       |
-+----+-----------------------------------------------------------+
-|... |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+----+-----------------------------------------------------------+
-+----+----------------------------------------------+"""
++------+-------------------+--------------+
+|source|cellid             |raster        |
++------+-------------------+--------------+
+|...   |5250127588525215743|<raster bytes>|
++------+-------------------+--------------+
+(SELECT t.* expands the v2-tile struct; cellid is the quadbin index)
+"""
 
 
 def rst_bng_tessellate_sql_example():
@@ -1224,35 +1290,35 @@ def rst_bng_tessellate_sql_example():
 -- covering mode (default): every BNG grid square whose cell overlaps the raster
 -- bbox. '1km' (== integer resolution 3); a raster in any CRS is warped to
 -- EPSG:27700 first. The generator yields one `tile` chip per overlapping cell.
-SELECT r.path, g.tile
-FROM rasters r
-LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'covering') g AS tile;
+SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'covering') t;
 
 -- centroid mode: single-assign each valid pixel to the cell holding its centroid.
-SELECT r.path, g.tile
-FROM rasters r
-LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km', 'centroid') g AS tile;
+SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'centroid') t;
 
 -- backward-compatible two-argument form (covering)
-SELECT r.path, g.tile
-FROM rasters r
-LATERAL VIEW gbx_rst_bng_tessellate(r.tile, '1km') g AS tile;
+SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km') t;
 """
 
 
 rst_bng_tessellate_sql_example_output = """
-+----+-----------------------------------------------------------+
-|path|tile                                                       |
-+----+-----------------------------------------------------------+
-|... |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+----+-----------------------------------------------------------+
-+----+----------------------------------------------+"""
++------+------+--------------+
+|source|cellid|raster        |
++------+------+--------------+
+|...   |TQ2979|<raster bytes>|
++------+------+--------------+
+(SELECT t.* expands the v2-tile struct; cellid is the BNG grid-square STRING)
+"""
 
 
 def rst_h3_rastertogridavg_sql_example():
     """Aggregate raster values to H3 grid using average"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridavg(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t;
 """
 
 
@@ -1264,14 +1330,21 @@ rst_h3_rastertogridavg_sql_example_output = """
 |1   |599686043374559743|98.12  |
 |2   |599686042433355775|210.67 |
 +----+------------------+-------+
-(one row per band×cell; LATERAL output yields [band, cellID, measure] columns)
+(one row per band×cell. The lightweight LATERAL form yields these [band, cellID,
+ measure] rows directly; the heavyweight scalar form returns a nested ARRAY that
+ explode(...) flattens to the same rows.)
 """
 
 
 def rst_h3_rastertogridcount_sql_example():
     """Count pixels per H3 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridcount(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t;
 """
 
 
@@ -1290,7 +1363,12 @@ rst_h3_rastertogridcount_sql_example_output = """
 def rst_h3_rastertogridmax_sql_example():
     """Get maximum values per H3 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridmax(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t;
 """
 
 
@@ -1309,7 +1387,12 @@ rst_h3_rastertogridmax_sql_example_output = """
 def rst_h3_rastertogridmin_sql_example():
     """Get minimum values per H3 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridmin(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t;
 """
 
 
@@ -1328,7 +1411,12 @@ rst_h3_rastertogridmin_sql_example_output = """
 def rst_h3_rastertogridmedian_sql_example():
     """Get median values per H3 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t;
 """
 
 
@@ -1347,7 +1435,12 @@ rst_h3_rastertogridmedian_sql_example_output = """
 def rst_h3_rastertogridsum_sql_example():
     """Get the sum of pixel values per H3 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridsum(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t;
 """
 
 
@@ -1366,7 +1459,12 @@ rst_h3_rastertogridsum_sql_example_output = """
 def rst_h3_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per H3 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t;
 """
 
 
@@ -1385,7 +1483,12 @@ rst_h3_rastertogridvariance_sql_example_output = """
 def rst_h3_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per H3 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_h3_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t;
 """
 
 
@@ -1404,7 +1507,12 @@ rst_h3_rastertogridstddev_sql_example_output = """
 def rst_quadbin_rastertogridavg_sql_example():
     """Aggregate raster values to CARTO quadbin v0 cells using average"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridavg(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t;
 """
 
 
@@ -1423,7 +1531,12 @@ rst_quadbin_rastertogridavg_sql_example_output = """
 def rst_quadbin_rastertogridcount_sql_example():
     """Count pixels per CARTO quadbin v0 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridcount(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t;
 """
 
 
@@ -1442,7 +1555,12 @@ rst_quadbin_rastertogridcount_sql_example_output = """
 def rst_quadbin_rastertogridmax_sql_example():
     """Get maximum values per CARTO quadbin v0 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridmax(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t;
 """
 
 
@@ -1461,7 +1579,12 @@ rst_quadbin_rastertogridmax_sql_example_output = """
 def rst_quadbin_rastertogridmin_sql_example():
     """Get minimum values per CARTO quadbin v0 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridmin(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t;
 """
 
 
@@ -1480,7 +1603,12 @@ rst_quadbin_rastertogridmin_sql_example_output = """
 def rst_quadbin_rastertogridmedian_sql_example():
     """Get median values per CARTO quadbin v0 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t;
 """
 
 
@@ -1499,7 +1627,12 @@ rst_quadbin_rastertogridmedian_sql_example_output = """
 def rst_quadbin_rastertogridsum_sql_example():
     """Get the sum of pixel values per CARTO quadbin v0 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridsum(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t;
 """
 
 
@@ -1518,7 +1651,12 @@ rst_quadbin_rastertogridsum_sql_example_output = """
 def rst_quadbin_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per CARTO quadbin v0 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t;
 """
 
 
@@ -1537,7 +1675,12 @@ rst_quadbin_rastertogridvariance_sql_example_output = """
 def rst_quadbin_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per CARTO quadbin v0 cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_quadbin_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t;
 """
 
 
@@ -1569,7 +1712,12 @@ rst_quadbin_rastertogridstddev_sql_example_output = """
 def rst_bng_rastertogridavg_sql_example():
     """Aggregate raster values to British National Grid cells using average"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridavg(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t;
 """
 
 
@@ -1588,7 +1736,12 @@ rst_bng_rastertogridavg_sql_example_output = """
 def rst_bng_rastertogridcount_sql_example():
     """Count pixels per British National Grid cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridcount(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t;
 """
 
 
@@ -1607,7 +1760,12 @@ rst_bng_rastertogridcount_sql_example_output = """
 def rst_bng_rastertogridmax_sql_example():
     """Get maximum values per British National Grid cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridmax(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t;
 """
 
 
@@ -1626,7 +1784,12 @@ rst_bng_rastertogridmax_sql_example_output = """
 def rst_bng_rastertogridmin_sql_example():
     """Get minimum values per British National Grid cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridmin(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t;
 """
 
 
@@ -1645,7 +1808,12 @@ rst_bng_rastertogridmin_sql_example_output = """
 def rst_bng_rastertogridmedian_sql_example():
     """Get median values per British National Grid cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridmedian(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t;
 """
 
 
@@ -1664,7 +1832,12 @@ rst_bng_rastertogridmedian_sql_example_output = """
 def rst_bng_rastertogridsum_sql_example():
     """Get the sum of pixel values per British National Grid cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridsum(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t;
 """
 
 
@@ -1683,7 +1856,12 @@ rst_bng_rastertogridsum_sql_example_output = """
 def rst_bng_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per British National Grid cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridvariance(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t;
 """
 
 
@@ -1702,7 +1880,12 @@ rst_bng_rastertogridvariance_sql_example_output = """
 def rst_bng_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per British National Grid cell"""
     return """
-SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t
+-- Heavyweight: scalar ARRAY return (one element per band) — call directly;
+-- explode to flatten the per-band arrays to rows.
+SELECT gbx_rst_bng_rastertogridstddev(tile, 3) AS grid FROM multiband_rasters;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL.
+SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t;
 """
 
 
@@ -1754,11 +1937,12 @@ LATERAL gbx_rst_retile(tile, 256, 256) t;
 
 
 rst_retile_sql_example_output = """
-+----+-----------------------------------------------------------+
-|path|tile                                                       |
-+----+-----------------------------------------------------------+
-|... |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+----+-----------------------------------------------------------+
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
 
@@ -1772,11 +1956,12 @@ LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 10) t;
 
 
 rst_tooverlappingtiles_sql_example_output = """
-+----+-----------------------------------------------------------+
-|path|tile                                                       |
-+----+-----------------------------------------------------------+
-|... |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+----+-----------------------------------------------------------+
++------+----------+-----+----------------------+
+|cellid|raster    |path |...                   |
++------+----------+-----+----------------------+
+|0     |<bytes>   |...  |{driver -> GTiff, ...}|
++------+----------+-----+----------------------+
+(one row per overlapping tile; t.* expands the v2-Tile struct fields)
 """
 
 
@@ -1845,11 +2030,20 @@ GROUP BY scene_id;
 
 
 rst_merge_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +--------+-----------------------------------------------------------+
 |scene_id|merged_scene                                               |
 +--------+-----------------------------------------------------------+
-|S2A_001 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +--------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(merged_scene, 'GTiff') to rebuild a tile struct:
++--------+-------------------+
+|scene_id|merged_scene       |
++--------+-------------------+
+|...     |[B@... (BINARY)    |
++--------+-------------------+
 """
 
 
@@ -1952,6 +2146,7 @@ rst_rasterize_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(rasterized tile: pixels inside the polygon carry the burn value; outside = NoData)
 """
 
 
@@ -1971,35 +2166,56 @@ GROUP BY region_id;
 
 
 rst_rasterize_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +---------+-----------------------------------------------------------+
 |region_id|tile                                                       |
 +---------+-----------------------------------------------------------+
-|R-01     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...      |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +---------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
++---------+-------------------+
+|region_id|tile               |
++---------+-------------------+
+|...      |[B@... (BINARY)    |
++---------+-------------------+
 """
 
 
 def rst_polygonize_sql_example():
     """Extract polygons from contiguous-value regions of a freshly-rasterized tile."""
     return """
--- Round-trip: rasterize a polygon then immediately polygonize it. The output
--- array contains one feature per contiguous value region; each feature carries
--- the burn value as the `value` field.
+-- Heavyweight: scalar ARRAY return — call directly; each feature carries the
+-- source pixel value as the `value` field. Round-trip: rasterize a polygon then
+-- immediately polygonize it.
 SELECT gbx_rst_polygonize(
     gbx_rst_rasterize(
         unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'),
         42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326
     )
 ) AS features;
+
+-- Lightweight (pyrx): streaming table function — must use LATERAL; one row per
+-- contiguous-value region as (geom_wkb, value).
+SELECT t.geom_wkb, t.value FROM rasters, LATERAL gbx_rst_polygonize(tile, 1, 4) t;
 """
 
 
 rst_polygonize_sql_example_output = """
+# Heavyweight SQL — one ARRAY of features per row:
 +------------------+
 |features          |
 +------------------+
 |[{[BINARY], 42.0}]|
 +------------------+
+
+# Lightweight SQL — LATERAL streams one row per region (geom_wkb, value):
++---------+-----+
+|geom_wkb |value|
++---------+-----+
+|...      |365.0|
++---------+-----+
 """
 
 
@@ -2027,6 +2243,7 @@ rst_slope_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(slope in degrees; auto-scaled from raster CRS units)
 """
 
 
@@ -2045,6 +2262,7 @@ rst_aspect_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(aspect in compass degrees: 0=N, 90=E, 180=S, 270=W)
 """
 
 
@@ -2062,6 +2280,7 @@ rst_hillshade_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(8-bit hillshade: 0..255, NW azimuth 45-degree altitude)
 """
 
 
@@ -2079,6 +2298,7 @@ rst_tri_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(TRI: mean absolute neighbour difference)
 """
 
 
@@ -2096,6 +2316,7 @@ rst_tpi_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(TPI: positive=ridge, negative=valley)
 """
 
 
@@ -2113,6 +2334,7 @@ rst_roughness_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(roughness: max absolute difference in 3x3 window)
 """
 
 
@@ -2136,6 +2358,7 @@ rst_color_relief_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(4-band RGBA tile mapped via gdaldem color table)
 """
 
 
@@ -2166,6 +2389,7 @@ rst_evi_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band EVI raster: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
 """
 
 
@@ -2187,6 +2411,7 @@ rst_savi_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band SAVI raster: (NIR-Red)/(NIR+Red+L)*(1+L))
 """
 
 
@@ -2208,6 +2433,7 @@ rst_ndwi_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band NDWI raster: (Green-NIR)/(Green+NIR))
 """
 
 
@@ -2229,6 +2455,7 @@ rst_nbr_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band NBR raster: (NIR-SWIR)/(NIR+SWIR))
 """
 
 
@@ -2250,6 +2477,7 @@ rst_index_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single-band index raster computed from named formula)
 """
 
 
@@ -2412,6 +2640,7 @@ rst_gridfrompoints_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(IDW-interpolated tile over specified extent)
 """
 
 
@@ -2431,11 +2660,20 @@ GROUP BY region_id;
 
 
 rst_gridfrompoints_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +---------+-----------------------------------------------------------+
 |region_id|idw                                                        |
 +---------+-----------------------------------------------------------+
-|R-01     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...      |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +---------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(idw, 'GTiff') to rebuild a tile struct:
++---------+-------------------+
+|region_id|idw                |
++---------+-------------------+
+|...      |[B@... (BINARY)    |
++---------+-------------------+
 """
 
 
@@ -2471,6 +2709,7 @@ rst_sample_sql_example_output = """
 +-------+
 |[302.0]|
 +-------+
+(array of sampled values, one per band)
 """
 
 
@@ -2621,6 +2860,7 @@ rst_proximity_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(distance in pixels to nearest non-NoData pixel, capped at 100)
 """
 
 
@@ -2639,6 +2879,7 @@ rst_contour_sql_example_output = """
 +-----------------------------------------------------------------------------------------------------------------+
 |[{[BINARY], 50.0}, {[BINARY], 100.0}, {[BINARY], 150.0}, {[BINARY], 200.0}, {[BINARY], 250.0}, {[BINARY], 300.0}]|
 +-----------------------------------------------------------------------------------------------------------------+
+(array of contour features: LineString geometry + elevation)
 """
 
 
@@ -2657,6 +2898,7 @@ rst_viewshed_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(binary viewshed: 1=visible, 0=not visible)
 """
 
 
@@ -2703,11 +2945,20 @@ GROUP BY region_id;
 
 
 rst_dtmfromgeoms_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +---------+-----------------------------------------------------------+
 |region_id|dtm                                                        |
 +---------+-----------------------------------------------------------+
-|R-01     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...      |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +---------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(dtm, 'GTiff') to rebuild a tile struct:
++---------+-------------------+
+|region_id|dtm                |
++---------+-------------------+
+|...      |[B@... (BINARY)    |
++---------+-------------------+
 """
 
 
@@ -2720,8 +2971,7 @@ def rst_h3_rasterize_agg_sql_example():
     """Aggregator: rasterize a group of H3 cells into one tile (pixel-centroid burn)."""
     return """
 -- Rasterize H3 cells into one raster tile per region. Each cell's value is
--- burned at the cell centroid pixel. The output BINARY is a GTiff-encoded tile;
--- wrap with gbx_rst_fromcontent(..., 'GTiff') to recover a tile struct.
+-- burned at the cell centroid pixel.
 SELECT region_id,
     gbx_rst_h3_rasterize_agg(
         cellid, burn_value,
@@ -2737,11 +2987,20 @@ GROUP BY region_id;
 
 
 rst_h3_rasterize_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +---------+-----------------------------------------------------------+
 |region_id|tile                                                       |
 +---------+-----------------------------------------------------------+
-|R-01     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...      |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +---------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
++---------+-------------------+
+|region_id|tile               |
++---------+-------------------+
+|...      |[B@... (BINARY)    |
++---------+-------------------+
 """
 
 
@@ -2750,8 +3009,7 @@ def rst_quadbin_rasterize_agg_sql_example():
     return """
 -- Rasterize quadbin cells into one raster tile per region. Each cell's value
 -- is burned at the cell centroid pixel; the extent auto-derives from the cell
--- set (null canvas args). cellid is BIGINT. The output BINARY is a GTiff-encoded
--- tile; wrap with gbx_rst_fromcontent(..., 'GTiff') to recover a tile struct.
+-- set (null canvas args). cellid is BIGINT.
 SELECT region_id,
     gbx_rst_quadbin_rasterize_agg(
         cellid, burn_value,
@@ -2767,11 +3025,20 @@ GROUP BY region_id;
 
 
 rst_quadbin_rasterize_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +---------+-----------------------------------------------------------+
 |region_id|tile                                                       |
 +---------+-----------------------------------------------------------+
-|R-01     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...      |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +---------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
++---------+-------------------+
+|region_id|tile               |
++---------+-------------------+
+|...      |[B@... (BINARY)    |
++---------+-------------------+
 """
 
 
@@ -2781,8 +3048,7 @@ def rst_bng_rasterize_agg_sql_example():
 -- Rasterize BNG cells into one raster tile per region. cellid is a STRING
 -- (e.g. 'TQ38SW'); the srid argument is a no-op (BNG always forces EPSG:27700,
 -- pass 27700 for clarity). The extent auto-derives from the cell set (null
--- canvas args). The output BINARY is a GTiff-encoded tile; wrap with
--- gbx_rst_fromcontent(..., 'GTiff') to recover a tile struct.
+-- canvas args).
 SELECT region_id,
     gbx_rst_bng_rasterize_agg(
         cellid, burn_value,
@@ -2798,11 +3064,20 @@ GROUP BY region_id;
 
 
 rst_bng_rasterize_agg_sql_example_output = """
+# Heavyweight SQL — one v2 tile struct per group:
 +---------+-----------------------------------------------------------+
 |region_id|tile                                                       |
 +---------+-----------------------------------------------------------+
-|R-01     |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|...      |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +---------+-----------------------------------------------------------+
+
+# Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
+# gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
++---------+-------------------+
+|region_id|tile               |
++---------+-------------------+
+|...      |[B@... (BINARY)    |
++---------+-------------------+
 """
 
 
@@ -2829,4 +3104,5 @@ h3_cell_bbox_sql_example_output = """
 +------------------+------------------------------+
 |617733151020810239|{-74.02, 40.70, -74.01, 40.71}|
 +------------------+------------------------------+
+(STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
 """

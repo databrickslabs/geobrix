@@ -425,6 +425,7 @@ result.show()
 +-----+
 |  720|
 +-----+
+(width of the extracted prAdjust subdataset — 720 pixels, 31 bands, 360 rows)
 """.trim
 
   val rst_height_scala_example: String =
@@ -753,6 +754,7 @@ result.show(truncate = false)
 +------------------------------------------------------+
 |{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> [31...|
 +------------------------------------------------------+
+(map with SUBDATASET_1_NAME/DESC for time_bnds and SUBDATASET_2_NAME/DESC for prAdjust)
 """.trim
 
   val rst_summary_scala_example: String =
@@ -915,6 +917,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(re-encoded tile in the requested GDAL format)
 """.trim
 
   val rst_band_scala_example: String =
@@ -935,6 +938,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(single band extracted from the 3-band multiband fixture)
 """.trim
 
   val rst_buildoverviews_scala_example: String =
@@ -954,6 +958,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(tile with internal overviews at levels [2, 4] embedded)
 """.trim
 
   val rst_clip_scala_example: String =
@@ -976,6 +981,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(clipped tile; polygon is in the raster's native CRS (no SRID = no reprojection))
 """.trim
 
   val rst_cog_convert_scala_example: String =
@@ -995,6 +1001,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(COG tile; a COG is a valid GeoTIFF with tiled internal layout)
 """.trim
 
   val rst_convolve_scala_example: String =
@@ -1019,6 +1026,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(convolved tile; kernel is a 3x3 identity)
 """.trim
 
   val rst_fillnodata_scala_example: String =
@@ -1038,6 +1046,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(filled tile; NoData holes searched within 100 pixels)
 """.trim
 
   val rst_filter_scala_example: String =
@@ -1057,6 +1066,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(filtered tile; 3x3 median filter applied)
 """.trim
 
   val rst_fromcontent_scala_example: String =
@@ -1109,6 +1119,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(3 per-band tiles stacked back into a 3-band tile)
 """.trim
 
   val rst_initnodata_scala_example: String =
@@ -1128,6 +1139,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(tile with NoData initialized)
 """.trim
 
   val rst_resample_scala_example: String =
@@ -1147,6 +1159,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(2x bilinear upsampled tile; source is 236x161 px)
 """.trim
 
   val rst_resample_to_res_scala_example: String =
@@ -1166,6 +1179,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(downsampled tile; 10 m to 20 m resolution)
 """.trim
 
   val rst_resample_to_size_scala_example: String =
@@ -1185,6 +1199,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(resampled tile forced to 100x100 pixels)
 """.trim
 
   val rst_setcrs_scala_example: String =
@@ -1224,6 +1239,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject)
 """.trim
 
   val rst_threshold_scala_example: String =
@@ -1243,6 +1259,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(binary mask tile; pixels > 0.0 → 1, others → 0)
 """.trim
 
   val rst_transform_scala_example: String =
@@ -1262,6 +1279,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(reprojected tile; source EPSG:32618 (UTM Zone 18N) to EPSG:4326)
 """.trim
 
   val rst_transformcrs_scala_example: String =
@@ -1301,6 +1319,7 @@ result.show()
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(type-converted tile; use rst_type to confirm the new data type)
 """.trim
 
   // ===========================================================================
@@ -1330,6 +1349,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_derivedband_agg_scala_example: String =
@@ -1356,6 +1376,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_frombands_agg_scala_example: String =
@@ -1381,6 +1402,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_merge_agg_scala_example: String =
@@ -1406,6 +1428,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_rasterize_agg_scala_example: String =
@@ -1430,6 +1453,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_gridfrompoints_agg_scala_example: String =
@@ -1461,6 +1485,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_dtmfromgeoms_agg_scala_example: String =
@@ -1492,6 +1517,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_h3_rasterize_agg_scala_example: String =
@@ -1518,6 +1544,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_quadbin_rasterize_agg_scala_example: String =
@@ -1546,6 +1573,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   val rst_bng_rasterize_agg_scala_example: String =
@@ -1574,6 +1602,7 @@ result.show()
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
   // =========================================================================
@@ -1598,7 +1627,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(single-band NDVI: (NIR-Red)/(NIR+Red))
+(single-band NDVI raster: (NIR-Red)/(NIR+Red))
 """.trim
 
   val rst_evi_scala_example: String =
@@ -1619,7 +1648,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(single-band EVI: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
+(single-band EVI raster: G*(NIR-Red)/(NIR+C1*Red-C2*Blue+L))
 """.trim
 
   val rst_savi_scala_example: String =
@@ -1640,7 +1669,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(single-band SAVI: (NIR-Red)/(NIR+Red+L)*(1+L))
+(single-band SAVI raster: (NIR-Red)/(NIR+Red+L)*(1+L))
 """.trim
 
   val rst_ndwi_scala_example: String =
@@ -1661,7 +1690,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(single-band NDWI: (Green-NIR)/(Green+NIR))
+(single-band NDWI raster: (Green-NIR)/(Green+NIR))
 """.trim
 
   val rst_nbr_scala_example: String =
@@ -1682,7 +1711,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(single-band NBR: (NIR-SWIR)/(NIR+SWIR))
+(single-band NBR raster: (NIR-SWIR)/(NIR+SWIR))
 """.trim
 
   val rst_index_scala_example: String =
@@ -1825,7 +1854,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(slope in degrees; auto-scaled from CRS units)
+(slope in degrees; auto-scaled from raster CRS units)
 """.trim
 
   val rst_aspect_scala_example: String =
@@ -1925,7 +1954,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(roughness: max difference in 3x3 window)
+(roughness: max absolute difference in 3x3 window)
 """.trim
 
   val rst_color_relief_scala_example: String =
@@ -2284,6 +2313,31 @@ result.show(truncate = false)
 (array of structs: [{cellid: LONG, raster: BINARY}, ...])
 """
 
+  val h3_cell_bbox_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+rx.register(spark)
+// H3 res-9 cell ids (as BIGINT); scalar bbox in EPSG:4326, centroids mode.
+val schema = StructType(Seq(StructField("cellid", LongType())))
+val rows = Seq(617733151020810239L, 617733151085035519L, 617733151021334527L)
+val df = spark.createDataFrame(spark.sparkContext.parallelize(rows.map(org.apache.spark.sql.Row(_))), schema)
+val result = df.select(col("cellid"), rx.gbx_h3_cell_bbox(col("cellid"), 4326, "centroids", 0).alias("bbox"))
+result.show(truncate = false)
+""".trim
+
+  val h3_cell_bbox_scala_example_output: String =
+    """
++------------------+------------------------------+
+|cellid            |bbox                          |
++------------------+------------------------------+
+|617733151020810239|{-74.02, 40.70, -74.01, 40.71}|
++------------------+------------------------------+
+(STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
+"""
+
   val rst_bng_tessellate_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -2425,7 +2479,7 @@ result.show(truncate = false)
 +-----+
 |[{0, |
 +-----+
-(array of tile structs per MB subdivision; NOT WORKING IN HEAVY TIER)
+(array of tile structs per MB subdivision)
 """
 
   val rst_rasterize_scala_example: String =
@@ -2455,7 +2509,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(rasterized tile: pixels inside the polygon carry the burn value)
+(rasterized tile: pixels inside the polygon carry the burn value; outside = NoData)
 """
 
   // ============================================================================

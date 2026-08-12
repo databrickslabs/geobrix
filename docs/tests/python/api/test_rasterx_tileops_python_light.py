@@ -218,7 +218,11 @@ def test_rst_frombands_python_light_example(spark):
 
 
 def test_rst_fromfile_python_light_example(spark):
-    """rst_fromfile loads a GTiff tile from the canonical single-band path."""
+    """rst_fromfile defaults to a VIRTUAL tile: raster null, path + window set."""
     assert tileops_examples is not None
     result = tileops_examples.rst_fromfile_python_light_example(spark)
-    assert result == "GTiff", f"Expected 'GTiff', got {result!r}"
+    assert result == {
+        "raster_is_null": True,
+        "has_path": True,
+        "window": True,
+    }, f"expected a virtual tile (raster null, path+window set), got {result!r}"

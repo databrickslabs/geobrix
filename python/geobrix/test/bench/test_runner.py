@@ -810,3 +810,41 @@ def test_pure_core_emits_na_by_design_for_low_band_count(tmp_path):
     )
     assert rows and all(r.status == "na_by_design" for r in rows)
     assert all("band" in r.note.lower() for r in rows)
+
+
+def test_build_input_tile_virtual_is_bytes_free(tmp_path):
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=1,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    te = next(t for t in corpus.size_sweep if t.role != "bng_gb")
+    p = tmp_path / te.path
+    content = p.read_bytes()
+    mat = rn._build_input_tile(str(p), content, 7, "materialized")
+    assert mat["raster"] is not None and mat["cellid"] == 7
+    virt = rn._build_input_tile(str(p), content, 7, "virtual")
+    assert virt["raster"] is None
+    assert virt["path"] and virt["window"] is not None
+    assert virt["cellid"] == 7  # corpus cellid preserved (not _fromfile_impl's 0)
+
+
+def test_build_input_tile_virtual_no_silent_fallback():
+    import pytest
+
+    with pytest.raises(Exception):
+        rn._build_input_tile("/nonexistent/path.tif", b"", 0, "virtual")
+
+
+def test_run_spark_path_accepts_input_tile_kwarg():
+    import inspect
+
+    assert "input_tile" in inspect.signature(rn.run_spark_path).parameters

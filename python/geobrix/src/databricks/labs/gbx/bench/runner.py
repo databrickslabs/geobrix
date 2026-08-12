@@ -628,6 +628,25 @@ def _grid_aggregate_df(spark, fs):
     return spark.createDataFrame(rows, schema=schema)
 
 
+def _build_input_tile(path, content, cellid, input_tile):
+    """Build a V2 tile dict for the spark-path leg.
+
+    materialized -> bytes tile (build_tile). virtual -> bytes-free tile pointing
+    at the path over its whole-file window, built via the real rst_fromfile
+    creation path (_fromfile_impl), so the leg dogfoods the feature. Raises on a
+    virtual build failure -- NEVER silently falls back to materialized.
+    """
+    if input_tile == "virtual":
+        from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+        row = _fromfile_impl(path, "GTiff", False)
+        if row is None:
+            raise ValueError(f"virtual tile build returned null for {path!r}")
+        row["cellid"] = int(cellid)  # preserve corpus cellid for key alignment
+        return row
+    return _serde.build_tile(bytes(content), "GTiff", int(cellid))
+
+
 def _emit_explain(label: str, df, explain_dir: str = "") -> None:
     """Print a DataFrame's formatted physical plan under a labeled header and, when
     explain_dir is set, also persist it to {explain_dir}/{label}.explain.txt so a run's
@@ -1356,6 +1375,7 @@ def run_spark_path(
     partition_size: int = 0,
     explain_only: bool = False,
     explain_dir: str = "",
+    input_tile: str = "materialized",
 ) -> List[ResultRow]:
     """Time each fn as a Spark Column over N tile rows (serialization + UDF overhead).
 
@@ -1417,8 +1437,7 @@ def run_spark_path(
         import os
 
         cid = _cellid_by_base.get(os.path.basename(path), 0)
-        # build_tile emits the full 8-field v2 tile dict; return it directly.
-        return _serde.build_tile(bytes(content), "GTiff", cid)
+        return _build_input_tile(path, content, cid, input_tile)
 
     raw = spark.read.format("binaryFile").load(paths)
     # binaryFile partitions by maxPartitionBytes (packs many small tiles per partition);

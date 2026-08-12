@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as _dc
 import platform
 import statistics
 import time
@@ -645,6 +646,23 @@ def _build_input_tile(path, content, cellid, input_tile):
         row["cellid"] = int(cellid)  # preserve corpus cellid for key alignment
         return row
     return _serde.build_tile(bytes(content), "GTiff", int(cellid))
+
+
+def _disposition_of(fs, sample_out_tile):
+    """Disposition for a fn on a virtual input. Accessors: classify by name.
+    Tile-returning: inspect the sampled output tile (raster None => deferred).
+    None sample => "na" (uncaptured), never a crash."""
+    from databricks.labs.gbx.bench.spec import accessor_disposition
+
+    if fs.category == "accessor":
+        return accessor_disposition(fs.name, fs)
+    if sample_out_tile is None:
+        return "na"
+    try:
+        raster = sample_out_tile["raster"]
+    except (KeyError, TypeError, IndexError):
+        raster = None
+    return "deferred" if raster is None else "materialized"
 
 
 def _emit_explain(label: str, df, explain_dir: str = "") -> None:
@@ -1586,10 +1604,7 @@ def run_spark_path(
                 env,
                 partition_size=partition_size,
             )
-            _flush(out, _mark)
-            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
-            continue
-        if getattr(fs, "udtf", False):
+        elif getattr(fs, "udtf", False):
             # UDTF grid fns (rastertogrid* / tessellate): the lightweight impl is a
             # registered Python UDTF, so the realistic distributed per-tile cost is a
             # SQL LATERAL table-function join over the tile DataFrame -- NOT a scalar
@@ -1614,26 +1629,39 @@ def run_spark_path(
                 math,
                 F,
             )
-            _flush(out, _mark)
-            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
-            continue
-        out += _run_sp_scalar_fn(
-            fs,
-            run_id,
-            pool,
-            env,
-            row_counts,
-            warmup,
-            measured,
-            df_all,
-            _warm_df,
-            max_rows,
-            _nparts,
-            partition_size,
-            _input_col,
-            math,
-            F,
-        )
+        else:
+            out += _run_sp_scalar_fn(
+                fs,
+                run_id,
+                pool,
+                env,
+                row_counts,
+                warmup,
+                measured,
+                df_all,
+                _warm_df,
+                max_rows,
+                _nparts,
+                partition_size,
+                _input_col,
+                math,
+                F,
+            )
+        if input_tile == "virtual":
+            _sample = None
+            if fs.category != "accessor" and getattr(fs, "input_kind", "tile") == "tile":
+                try:
+                    _row1 = (
+                        df_all.limit(1)
+                        .select(fs.col_fn(_input_col(fs.name, "tile", df_all), fs.args).alias("out"))
+                        .collect()
+                    )
+                    _sample = _row1[0]["out"] if _row1 else None
+                except Exception as _e:  # noqa: BLE001 — finding, not a silent skip
+                    print(f"[bench][QA] disposition sample failed for {fs.name}: {_e}")
+            _disp = _disposition_of(fs, _sample)
+            for _i in range(_mark, len(out)):
+                out[_i] = _dc.replace(out[_i], input_tile="virtual", output_disposition=_disp)
         _flush(out, _mark)
         _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
     df_all.unpersist()

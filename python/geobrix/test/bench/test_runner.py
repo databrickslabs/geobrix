@@ -849,3 +849,15 @@ def test_run_spark_path_accepts_input_tile_kwarg():
     import inspect
 
     assert "input_tile" in inspect.signature(rn.run_spark_path).parameters
+
+
+def test_disposition_accessor_uses_classifier():
+    assert rn._disposition_of(s.REGISTRY["rst_avg"], None) == "materialized"
+    assert rn._disposition_of(s.REGISTRY["rst_width"], None) == "deferred"
+
+
+def test_disposition_tile_returning_from_output_tile():
+    assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": b"xx"}) == "materialized"
+    assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": None}) == "deferred"
+    # no sample available -> "na" (not a crash)
+    assert rn._disposition_of(s.REGISTRY["rst_slope"], None) == "na"

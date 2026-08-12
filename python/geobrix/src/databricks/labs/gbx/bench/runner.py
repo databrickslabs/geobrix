@@ -236,6 +236,49 @@ def _fingerprint_for(fs, out):
     return fingerprint_output(out)
 
 
+def _parity_fp(fs, out):
+    from databricks.labs.gbx.bench import fingerprint as fp
+
+    k = getattr(fs, "fingerprint_kind", "auto")
+    if k == "dggs_grid":
+        return fp.fingerprint_dggs_grid(out)
+    if k == "dggs_grid_str":
+        return fp.fingerprint_dggs_grid_str(out)
+    if k == "vector":
+        return fp.fingerprint_vector(out)
+    if k == "collection":
+        return fp.fingerprint_collection(out)
+    return fp.fingerprint_output(out)
+
+
+def run_pure_core_parity(corpus_root, corpus, fnspecs):
+    """Per tile-input fn, compare materialized-open vs virtual-open output
+    fingerprints. Returns (fn, tile_px, matched, mat_fp, virt_fp). Exceptions are
+    recorded as matched=False findings, never swallowed."""
+    from databricks.labs.gbx.pyrx.core import open_tile as _ot
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    root = Path(corpus_root)
+    sweep = [t for t in corpus.size_sweep if t.role != "bng_gb"]
+    out = []
+    for fs in fnspecs:
+        if getattr(fs, "input_kind", "tile") != "tile":
+            continue
+        for te in sweep:
+            p = root / te.path
+            try:
+                with _serde.open_tile(p.read_bytes()) as ds:
+                    mat_fp = _parity_fp(fs, fs.core_fn(ds, fs.args))
+                vt = VirtualTile(cellid=int(te.cellid), raster=None, path=str(p),
+                                 window=(0, 0, te.tile_px, te.tile_px)).to_row()
+                with _ot._open(vt) as ds:
+                    virt_fp = _parity_fp(fs, fs.core_fn(ds, fs.args))
+                out.append((fs.name, te.tile_px, mat_fp == virt_fp, mat_fp, virt_fp))
+            except Exception as e:  # noqa: BLE001 — finding, not silent skip
+                out.append((fs.name, te.tile_px, False, "", f"ERROR: {e}"))
+    return out
+
+
 def run_pure_core(
     corpus_root,
     corpus: m.Corpus,

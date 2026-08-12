@@ -861,3 +861,15 @@ def test_disposition_tile_returning_from_output_tile():
     assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": None}) == "deferred"
     # no sample available -> "na" (not a crash)
     assert rn._disposition_of(s.REGISTRY["rst_slope"], None) == "na"
+
+
+def test_pure_core_parity_slope_width(tmp_path):
+    from databricks.labs.gbx.bench import runner as rn, spec as s, datagen as dg
+    corpus = dg.generate_corpus(out_dir=tmp_path, seed=9, tile_px=[64], bands=[1],
+        dtypes=["float32"], srids=[4326], nodata_fracs=[0.0], row_rows=1,
+        row_tile_px=64, row_bands=1, row_dtype="float32")
+    fns = s.select(functions=["rst_slope", "rst_width"])
+    res = rn.run_pure_core_parity(tmp_path, corpus, fns)
+    assert res, "expected parity rows"
+    for name, px, ok, mat, virt in res:
+        assert ok, f"{name}@{px}: virtual != materialized ({mat} vs {virt})"

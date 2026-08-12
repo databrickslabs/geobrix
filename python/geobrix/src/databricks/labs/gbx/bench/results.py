@@ -63,6 +63,13 @@ class ResultRow:
     # existing callers are unaffected (the field has a default). Carries values like
     # "none", "serverless", "classic", or "auto".
     split_strategy: Optional[str] = None
+    # Which input tile the row measured: "materialized" (bytes) or "virtual"
+    # (path+window, bytes-free). Default preserves every pre-existing row.
+    input_tile: str = "materialized"
+    # Did the fn materialize pixels on a virtual input: "deferred" (stayed
+    # virtual / header-only), "materialized" (read/generated pixels), or "na"
+    # (not applicable / not captured). Default "na".
+    output_disposition: str = "na"
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

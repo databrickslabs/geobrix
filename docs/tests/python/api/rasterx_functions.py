@@ -315,40 +315,33 @@ def rst_fromfile_python_heavy_example(spark):
 
     rst_fromfile has no Scala/JVM Column form (the JVM executor cannot read UC
     Volume FUSE paths), so the heavy `rasterx` binding delegates to the pyrx
-    loader. The heavyweight surface always returns a MATERIALIZED tile (raster
-    bytes present) — a virtual tile carries only a path, which JVM expressions
-    cannot read — so heavy accessors like rst_width work directly on the result.
+    loader — but forces `materialize=True`, because the heavyweight surface
+    always returns a MATERIALIZED v2 tile (raster bytes present): a virtual tile
+    carries only a path, which JVM expressions cannot read. Uses the same
+    committed single-band fixture the Setup `rasters` view is built from
+    (rst_fromfile takes a path, not a tile column, so it reads the fixture file
+    directly rather than the Setup view).
     """
-    import os
-    import tempfile
-
+    from ._fixtures import single_band_path  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
     rx.register(spark)
-
-    # Write a synthetic GeoTIFF to a temp file on the driver
-    raster_bytes = _make_geotiff_bytes(width=4, height=3, count=1)
-    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
-        tmp.write(raster_bytes)
-        tmp_path = tmp.name
-
-    try:
-        path_df = spark.createDataFrame([(tmp_path,)], ["path"])
-        # Heavy rst_fromfile returns a materialized tile (bytes present).
-        tile_df = path_df.select(rx.rst_fromfile("path", f.lit("GTiff")).alias("tile"))
-        result = tile_df.select(rx.rst_width("tile").alias("width")).first()
-        return result["width"]
-    finally:
-        os.unlink(tmp_path)
+    path = str(single_band_path())
+    path_df = spark.createDataFrame([(path,)], ["path"])
+    # Heavy rst_fromfile delegates to pyrx with materialize=True → bytes present.
+    return path_df.select(
+        rx.rst_fromfile("path", f.lit("GTiff")).alias("tile")
+    ).first()["tile"]
 
 
 rst_fromfile_python_heavy_example_output = """
-+-----+
-|width|
-+-----+
-|    4|
-+-----+
++------------------------------------------------------------+
+|tile                                                        |
++------------------------------------------------------------+
+|{0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}|
++------------------------------------------------------------+
+(a MATERIALIZED v2 tile: raster bytes present, path/window null)
 """
 
 

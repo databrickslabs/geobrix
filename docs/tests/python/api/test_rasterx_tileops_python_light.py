@@ -218,11 +218,10 @@ def test_rst_frombands_python_light_example(spark):
 
 
 def test_rst_fromfile_python_light_example(spark):
-    """rst_fromfile defaults to a VIRTUAL tile: raster null, path + window set."""
+    """rst_fromfile defaults to a VIRTUAL v2 tile: raster null, path + window set."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_fromfile_python_light_example(spark)
-    assert result == {
-        "raster_is_null": True,
-        "has_path": True,
-        "window": True,
-    }, f"expected a virtual tile (raster null, path+window set), got {result!r}"
+    tile = tileops_examples.rst_fromfile_python_light_example(spark)
+    assert tile is not None, "rst_fromfile returned null for a readable path"
+    assert tile["raster"] is None, "virtual tile must have raster=None (bytes-free)"
+    assert tile["path"] is not None, "virtual tile must carry the source path"
+    assert tile["window"] is not None, "virtual tile must carry the whole-file window"

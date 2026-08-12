@@ -381,6 +381,11 @@ def rst_fromfile_python_light_example(spark):
     needs them. Pass ``materialize=True`` to read the pixels now and get a
     materialized (bytes) tile instead. Light and SQL tiers only — there is no
     Scala/JVM form (the JVM executor cannot read UC Volume FUSE paths).
+
+    Unlike the other examples on this page, this one does NOT read the Setup
+    ``rasters`` view: rst_fromfile is a constructor that takes a file PATH, not a
+    tile column. We use the same committed single-band fixture the ``rasters``
+    view is itself built from, passing its path in a column.
     """
     from ._fixtures import single_band_path  # noqa: PLC0415
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
@@ -388,26 +393,21 @@ def rst_fromfile_python_light_example(spark):
     rx.register(spark)
     path = str(single_band_path())
     path_df = spark.createDataFrame([(path,)], ["path"])
-    # Default: a VIRTUAL tile — raster is null, path + window are populated.
-    tile = path_df.select(rx.rst_fromfile("path").alias("tile")).first()["tile"]
-    return {
-        "raster_is_null": tile["raster"] is None,
-        "has_path": tile["path"] is not None,
-        "window": tile["window"] is not None,
-    }
+    # Default: a VIRTUAL v2 tile — raster is null, path + window are populated.
+    return path_df.select(rx.rst_fromfile("path").alias("tile")).first()["tile"]
 
 
 rst_fromfile_python_light_example_output = """
-# Default — a VIRTUAL tile (lazy; no pixels read):
-+------+------------+----------------+
-|raster|path        |window          |
-+------+------------+----------------+
-|null  |/Volumes/...|{0, 0, 236, 161}|
-+------+------------+----------------+
+# Default — a VIRTUAL v2 tile (same struct as always, just bytes-free):
++------------------------------------------------------------+
+|tile                                                        |
++------------------------------------------------------------+
+|{0, null, /Volumes/..., {0, 0, 236, 161}, ..., null, {...}} |
++------------------------------------------------------------+
 (raster is null → bytes-free; path + whole-file window carry the reference)
 
-# rst_fromfile("path", materialize=True) instead returns a materialized tile:
-#   {0, <raster bytes>, null, ..., {driver -> GTiff, ...}}  (raster populated)
+# rst_fromfile("path", materialize=True) instead returns a MATERIALIZED v2 tile:
+#   {0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}  (raster set)
 """
 
 

@@ -73,10 +73,11 @@ def test_rst_width_python_heavy_example(spark):
 
 
 def test_rst_fromfile_python_heavy_example(spark):
-    """rst_fromfile (heavy) reads a temp-file tile and returns its width."""
+    """rst_fromfile (heavy) returns a MATERIALIZED tile (raster bytes present)."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_fromfile_python_heavy_example(spark)
-    assert result == 4, f"Expected width 4, got {result}"
+    _assert_heavy_tile(result, "rst_fromfile")
+    assert result["path"] is None, "materialized tile must have path=None"
 
 
 def test_heavy_output_constants_exist():

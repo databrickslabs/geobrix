@@ -1175,7 +1175,10 @@ def test_rst_fromfile_roundtrip(spark, tmp_path):
     with rasterio.open(p, "w", **profile) as dst:
         dst.write(data)
     df = spark.createDataFrame([(p,)], ["path"])
-    tile = df.select(prx.rst_fromfile("path", f.lit("GTiff")).alias("t")).first()["t"]
+    # materialize=True -> a bytes tile whose raster round-trips.
+    tile = df.select(
+        prx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
+    ).first()["t"]
     assert tile is not None
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert ds.width == 4
@@ -1183,11 +1186,32 @@ def test_rst_fromfile_roundtrip(spark, tmp_path):
         assert ds.crs.to_epsg() == 4326
 
 
+def test_rst_fromfile_virtual_by_default(spark, tmp_path):
+    # 2-arg default is a VIRTUAL tile: raster None, path (bare) + whole-file
+    # window populated. No pixels read.
+    import rasterio
+
+    p = str(tmp_path / "scene.tif")
+    with _serde.open_tile(make_geotiff_bytes(width=4, height=3, epsg=4326)) as src:
+        profile = src.profile.copy()
+        data = src.read()
+    with rasterio.open(p, "w", **profile) as dst:
+        dst.write(data)
+    df = spark.createDataFrame([(p,)], ["path"])
+    tile = df.select(prx.rst_fromfile("path", f.lit("GTiff")).alias("t")).first()["t"]
+    assert tile is not None
+    assert tile["raster"] is None  # bytes-free
+    assert tile["path"] == p  # BARE path stored (no dbfs:/file: scheme)
+    w = tile["window"]
+    assert (w["col_off"], w["row_off"], w["width"], w["height"]) == (0, 0, 4, 3)
+
+
 def test_rst_fromfile_strips_scheme_before_open(spark, tmp_path):
-    # Columns carry scheme-qualified paths (to_spark_uri -> dbfs:/file:); the udf
-    # must strip the scheme back to the bare FUSE path before rasterio.open, else
-    # the open fails (rasterio cannot open 'file:/...'). A bare tmp file prefixed
-    # with 'file:' exercises that strip (file:/tmp/x -> /tmp/x, which exists).
+    # Columns may carry scheme-qualified paths (to_spark_uri -> dbfs:/file:); the
+    # udf must strip the scheme back to the bare FUSE path before rasterio.open,
+    # else the open fails (rasterio cannot open 'file:/...'). A bare tmp file
+    # prefixed with 'file:' exercises that strip (file:/tmp/x -> /tmp/x). Use
+    # materialize=True so the read actually happens.
     import rasterio
 
     p = str(tmp_path / "scene.tif")
@@ -1197,7 +1221,9 @@ def test_rst_fromfile_strips_scheme_before_open(spark, tmp_path):
     with rasterio.open(p, "w", **profile) as dst:
         dst.write(data)
     df = spark.createDataFrame([("file:" + p,)], ["path"])
-    tile = df.select(prx.rst_fromfile("path", f.lit("GTiff")).alias("t")).first()["t"]
+    tile = df.select(
+        prx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
+    ).first()["t"]
     assert tile is not None  # scheme stripped -> open succeeded
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert ds.width == 4 and ds.height == 3

@@ -553,7 +553,7 @@ def _fromfile_impl(path, driver, materialize):
     or None on a bad/missing path."""
     if path is None:
         return None
-    from databricks.labs.gbx.ds._listing import to_local_path, to_spark_uri
+    from databricks.labs.gbx.ds._listing import to_local_path
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
@@ -603,10 +603,15 @@ def _fromfile_impl(path, driver, materialize):
         "height": str(height),
         "count": str(count),
     }
+    # Store the BARE (scheme-free) path, exactly like the raster reader's virtual
+    # passthrough tile (raster.py stores partition.file_path). Downstream staging
+    # (_stage_local_if_needed) triggers on a bare "/Volumes"/"/dbfs" prefix and
+    # does NOT strip a "dbfs:" scheme, so a to_spark_uri()-qualified path would
+    # never stage and rasterio.open("dbfs:/Volumes/...") would fail on Databricks.
     return VirtualTile(
         cellid=0,
         raster=None,
-        path=to_spark_uri(str(path)),
+        path=local,
         window=(0, 0, width, height),
         metadata=meta,
     ).to_row()
@@ -620,11 +625,19 @@ def _fromfile_udf(path, driver, materialize):
 
 @f.udf(V2_TILE_SCHEMA)
 def _fromfile_sql_udf(path, driver):
-    """SQL-registered UDF: 2-arg (path, driver) — always virtual (the light-tier
-    default). SQL has no ergonomic way to pass the materialize flag; callers that
-    want bytes use the Python binding with materialize=True, or wrap the virtual
-    tile with a downstream op. Keeps the historical 2-arg SQL surface intact."""
+    """SQL UDF registered by the LIGHT (pyrx) tier: 2-arg (path, driver) → a
+    VIRTUAL tile (materialize=False, the light-tier default). Keeps the historical
+    2-arg SQL surface; the tier that registers decides virtual vs materialized."""
     return _fromfile_impl(path, driver, False)
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _fromfile_sql_materialized_udf(path, driver):
+    """SQL UDF registered by the HEAVY (rasterx) tier: 2-arg (path, driver) → a
+    MATERIALIZED tile (bytes present). Same call text as the light registration;
+    the heavyweight tier reads the pixels because JVM/heavy expressions cannot use
+    a virtual path-only tile. Whichever tier's register() ran last wins."""
+    return _fromfile_impl(path, driver, True)
 
 
 def rst_fromfile(

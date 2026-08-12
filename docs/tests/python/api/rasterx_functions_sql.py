@@ -730,11 +730,19 @@ rst_upperleft_sql_example_output = """
 def rst_fromfile_sql_example():
     """Load raster from file path"""
     return """
--- Load from path
+-- gbx_rst_fromfile is a Python UDF (no JVM form; requires geobrix[light]). The
+-- SQL call is the same 2-argument form in both tiers — the tier you register
+-- decides the result (whichever register() ran last wins):
+--   Lightweight (rx.register / pyrx):     returns a VIRTUAL tile (bytes-free,
+--                                          path + whole-file window; lazy).
+--   Heavyweight (rasterx register):       returns a MATERIALIZED tile (raster
+--                                          bytes present) — JVM/heavy callers
+--                                          cannot use a virtual path-only tile.
 SELECT
-    gbx_rst_fromfile('/data/raster.tif', 'GTiff') as tile;
+    gbx_rst_fromfile('/Volumes/main/geobrix_samples/nyc/sentinel2.tif', 'GTiff') AS tile;
 
--- Load multiple and get properties
+-- Either way, accessors read what they need — width/height come from the header
+-- (no pixel read even for the virtual tile):
 SELECT
     path,
     gbx_rst_width(gbx_rst_fromfile(path, 'GTiff')) as width,
@@ -744,20 +752,29 @@ FROM raster_paths;
 
 
 rst_fromfile_sql_example_output = """
-# gbx_rst_fromfile returns a VIRTUAL tile (raster null, path + window set) —
-# accessors like width/height read the header without materializing pixels:
-+------+------------+------------------+
-|raster|path        |window            |
-+------+------------+------------------+
-|null  |/data/ra... |{0, 0, 10980, ...}|
-+------+------------+------------------+
+# Both tiers return the SAME v2 tile struct (cellid, raster, path, window, ...);
+# only the field values differ — virtual carries the path, materialized the bytes.
 
+# Lightweight registration — a VIRTUAL v2 tile (raster null; path + window set):
++---------------------------------------------------------------+
+|tile                                                           |
++---------------------------------------------------------------+
+|{0, null, /Volumes/..., {0, 0, 10980, 10980}, ..., null, {...}}|
++---------------------------------------------------------------+
+
+# Heavyweight registration — a MATERIALIZED v2 tile (raster bytes; path null):
++---------------------------------------------------------------+
+|tile                                                           |
++---------------------------------------------------------------+
+|{0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}   |
++---------------------------------------------------------------+
+
+# width/height (either tier) read from the header:
 +----+-----+------+
 |path|width|height|
 +----+-----+------+
 |... |10980|10980 |
 +----+-----+------+
-(width/height come from the header of the virtual tile — no pixel read)
 """
 
 

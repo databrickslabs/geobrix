@@ -65,10 +65,17 @@ def register(_spark: SparkSession) -> None:
     # Scala gbx_rst_fromfile in place (it still reads local / DBFS / Workspace, just not /Volumes).
     try:
         from databricks.labs.gbx.pyrx.functions import (
-            _fromfile_udf as _pyrx_fromfile_udf,
+            _fromfile_sql_materialized_udf as _pyrx_fromfile_materialized_udf,
         )
 
-        _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_udf)
+        # Register the 2-arg (path, driver) SQL UDF, but the HEAVY variant that
+        # MATERIALIZES: heavy/JVM callers need bytes (a virtual path-only tile is
+        # useless to them). Same call text as the light registration
+        # (gbx_rst_fromfile(path, driver)); the tier decides virtual vs
+        # materialized, last register() wins. (_fromfile_udf is the 3-arg
+        # Python-binding variant and must NOT be registered here, or 2-arg SQL
+        # calls break on arity.)
+        _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_materialized_udf)
     except (
         Exception
     ):  # noqa: BLE001 - pyrx/[light] not installed: keep the Scala fallback

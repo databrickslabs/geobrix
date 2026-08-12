@@ -875,6 +875,41 @@ def test_pure_core_parity_slope_width(tmp_path):
         assert ok, f"{name}@{px}: virtual != materialized ({mat} vs {virt})"
 
 
+def test_pure_core_parity_full_tile_set(tmp_path):
+    """Parity: virtual-open == materialized-open output fingerprint for every
+    tile-input fn in the full registry over a 1-band 64px float32 4326 corpus.
+
+    Exclusions (non-virtual reasons, not divergences):
+      - input_kind != "tile": tile_array / bytes / path / geometry / *_aggregate
+        fns are not tile-input and are excluded by design.
+      - min_bands > 1: rst_ndvi, rst_ndwi, rst_nbr, rst_band, rst_evi, rst_savi,
+        rst_index require >= 2 input bands; the 1-band corpus cannot satisfy them.
+        This is a corpus limitation, not a virtual-tile issue.
+
+    fingerprint=False fns (timing-only, e.g. rst_boundingbox returning WKB,
+    rst_viewshed, rst_color_relief) are still exercised: run_pure_core_parity
+    skips fingerprinting for those and uses "" == "" (both succeed → ok=True).
+    A virtual-tile open failure would still surface as ok=False.
+
+    If this test finds ok=False for any (fn, tile_px) pair it is a REAL virtual-tile
+    divergence — do not weaken the assertion or exclude the fn without root-cause.
+    """
+    from databricks.labs.gbx.bench import runner as rn, spec as s, datagen as dg
+    corpus = dg.generate_corpus(out_dir=tmp_path, seed=9, tile_px=[64], bands=[1],
+        dtypes=["float32"], srids=[4326], nodata_fracs=[0.0], row_rows=1,
+        row_tile_px=64, row_bands=1, row_dtype="float32")
+    fns = [
+        f for f in s.select(set="full")
+        if getattr(f, "input_kind", "tile") == "tile"
+        and getattr(f, "min_bands", 1) <= 1
+    ]
+    assert fns, "expected tile-input fns from full registry"
+    res = rn.run_pure_core_parity(tmp_path, corpus, fns)
+    assert res, "expected parity rows"
+    bad = [(name, px, mat, virt) for name, px, ok, mat, virt in res if not ok]
+    assert not bad, f"virtual!=materialized divergences: {bad}"
+
+
 def test_creation_microleg_defined():
     from databricks.labs.gbx.bench import runner as rn
     assert hasattr(rn, "_run_sp_creation")

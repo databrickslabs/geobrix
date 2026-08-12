@@ -236,21 +236,6 @@ def _fingerprint_for(fs, out):
     return fingerprint_output(out)
 
 
-def _parity_fp(fs, out):
-    from databricks.labs.gbx.bench import fingerprint as fp
-
-    k = getattr(fs, "fingerprint_kind", "auto")
-    if k == "dggs_grid":
-        return fp.fingerprint_dggs_grid(out)
-    if k == "dggs_grid_str":
-        return fp.fingerprint_dggs_grid_str(out)
-    if k == "vector":
-        return fp.fingerprint_vector(out)
-    if k == "collection":
-        return fp.fingerprint_collection(out)
-    return fp.fingerprint_output(out)
-
-
 def run_pure_core_parity(corpus_root, corpus, fnspecs):
     """Per tile-input fn, compare materialized-open vs virtual-open output
     fingerprints. Returns (fn, tile_px, matched, mat_fp, virt_fp). Exceptions are
@@ -264,15 +249,18 @@ def run_pure_core_parity(corpus_root, corpus, fnspecs):
     for fs in fnspecs:
         if getattr(fs, "input_kind", "tile") != "tile":
             continue
+        _do_fp = getattr(fs, "fingerprint", True)
         for te in sweep:
             p = root / te.path
             try:
                 with _serde.open_tile(p.read_bytes()) as ds:
-                    mat_fp = _parity_fp(fs, fs.core_fn(ds, fs.args))
+                    _mat_out = fs.core_fn(ds, fs.args)
+                mat_fp = _fingerprint_for(fs, _mat_out) if _do_fp else ""
                 vt = VirtualTile(cellid=int(te.cellid), raster=None, path=str(p),
                                  window=(0, 0, te.tile_px, te.tile_px)).to_row()
                 with _ot._open(vt) as ds:
-                    virt_fp = _parity_fp(fs, fs.core_fn(ds, fs.args))
+                    _virt_out = fs.core_fn(ds, fs.args)
+                virt_fp = _fingerprint_for(fs, _virt_out) if _do_fp else ""
                 out.append((fs.name, te.tile_px, mat_fp == virt_fp, mat_fp, virt_fp))
             except Exception as e:  # noqa: BLE001 — finding, not silent skip
                 out.append((fs.name, te.tile_px, False, "", f"ERROR: {e}"))
@@ -1730,9 +1718,9 @@ def run_spark_path(
                 math,
                 F,
             )
-        if input_tile == "virtual":
+        if input_tile == "virtual" and getattr(fs, "input_kind", "tile") == "tile":
             _sample = None
-            if fs.category != "accessor" and getattr(fs, "input_kind", "tile") == "tile":
+            if fs.category != "accessor":
                 try:
                     _row1 = (
                         df_all.limit(1)

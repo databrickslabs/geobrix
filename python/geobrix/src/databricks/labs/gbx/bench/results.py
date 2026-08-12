@@ -351,11 +351,13 @@ def summarize(rows: List[ResultRow], pool_size=None) -> str:
     if virt:
         _def = sum(1 for row in virt if row.output_disposition == "deferred")
         _mat = sum(1 for row in virt if row.output_disposition == "materialized")
+        _na_d = sum(1 for row in virt if row.output_disposition == "na")
         lines += [
             "",
             "## Virtual-tile disposition",
             f"- deferred (stayed virtual / header-only): {_def}",
             f"- materialized (read/generated pixels): {_mat}",
+            f"- na (not applicable / not captured): {_na_d}",
             "",
             "| fn | disposition |",
             "|---|---|",

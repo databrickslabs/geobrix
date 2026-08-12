@@ -3269,11 +3269,11 @@ def rst_retile_python_heavy_example(spark):
 
 
 rst_retile_python_heavy_example_output = """
-+------+----------+-----+----------------------+
-|cellid|raster    |path |...                   |
-+------+----------+-----+----------------------+
-|0     |<bytes>   |...  |{driver -> GTiff, ...}|
-+------+----------+-----+----------------------+
++------+--------------+-----+----------------------+
+|cellid|raster        |path |...                   |
++------+--------------+-----+----------------------+
+|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
++------+--------------+-----+----------------------+
 (one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
@@ -3291,11 +3291,11 @@ def rst_tooverlappingtiles_python_heavy_example(spark):
 
 
 rst_tooverlappingtiles_python_heavy_example_output = """
-+------+----------+-----+----------------------+
-|cellid|raster    |path |...                   |
-+------+----------+-----+----------------------+
-|0     |<bytes>   |...  |{driver -> GTiff, ...}|
-+------+----------+-----+----------------------+
++------+--------------+-----+----------------------+
+|cellid|raster        |path |...                   |
++------+--------------+-----+----------------------+
+|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
++------+--------------+-----+----------------------+
 (one row per overlapping tile; t.* expands the v2-Tile struct fields)
 """
 
@@ -3359,11 +3359,11 @@ def rst_maketiles_python_heavy_example(spark):
 
 
 rst_maketiles_python_heavy_example_output = """
-+------+----------+-----+----------------------+
-|cellid|raster    |path |...                   |
-+------+----------+-----+----------------------+
-|0     |<bytes>   |...  |{driver -> GTiff, ...}|
-+------+----------+-----+----------------------+
++------+--------------+-----+----------------------+
+|cellid|raster        |path |...                   |
++------+--------------+-----+----------------------+
+|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
++------+--------------+-----+----------------------+
 (one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 

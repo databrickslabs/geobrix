@@ -207,11 +207,11 @@ SELECT gbx_rst_georeference(tile) AS georeference FROM rasters;
 
 
 rst_georeference_sql_example_output = """
-+--------------------------------------------------------------+
-|georeference                                                  |
-+--------------------------------------------------------------+
-|{scaleX -> 10.0, scaleY -> -10.0, upperLeftX -> 2121950.0,... |
-+--------------------------------------------------------------+
++-------------------------------------------------------------+
+|georeference                                                 |
++-------------------------------------------------------------+
+|{scaleX -> 10.0, scaleY -> -10.0, upperLeftX -> 2121950.0,...|
++-------------------------------------------------------------+
 """
 
 
@@ -269,11 +269,11 @@ SELECT gbx_rst_avg(tile) AS band_averages FROM multiband_rasters;
 
 
 rst_avg_sql_example_output = """
-+------------------------------------+
-|band_averages                       |
-+------------------------------------+
-|[83.59375, 153.125, 114.3125]       |
-+------------------------------------+
++-----------------------------+
+|band_averages                |
++-----------------------------+
+|[83.59375, 153.125, 114.3125]|
++-----------------------------+
 """
 
 
@@ -353,11 +353,11 @@ SELECT gbx_rst_median(tile) AS band_median FROM multiband_rasters;
 
 
 rst_median_sql_example_output = """
-+---------------------+
-|band_median          |
-+---------------------+
-|[85.0, 157.5, 111.5] |
-+---------------------+
++--------------------+
+|band_median         |
++--------------------+
+|[85.0, 157.5, 111.5]|
++--------------------+
 """
 
 
@@ -389,11 +389,11 @@ SELECT gbx_rst_type(tile) AS band_types FROM multiband_rasters;
 
 
 rst_type_sql_example_output = """
-+-----------------------------+
-|band_types                   |
-+-----------------------------+
-|[UInt16, UInt16, UInt16]     |
-+-----------------------------+
++------------------------+
+|band_types              |
++------------------------+
+|[UInt16, UInt16, UInt16]|
++------------------------+
 """
 
 
@@ -461,34 +461,35 @@ SELECT gbx_rst_getnodata(tile) AS nodata FROM rasters;
 
 
 rst_getnodata_sql_example_output = """
-+--------+
-|nodata  |
-+--------+
-|[0.0]   |
-+--------+
++------+
+|nodata|
++------+
+|[0.0] |
++------+
 """
 
 
 def rst_getsubdataset_sql_example():
-    """Extract a named subdataset from a NetCDF raster and verify its width.
+    """Extract a named subdataset from a NetCDF raster as a tile.
 
     Uses the committed CMIP5 NetCDF fixture which has two subdatasets:
     time_bnds and prAdjust. Subdatasets require a multi-layer format such as NetCDF.
-    Wraps with rst_width to prove extraction and return a real scalar.
+    Returns the extracted subdataset as a raster tile (wrap with rst_width /
+    rst_metadata to inspect it — the prAdjust subdataset is 720x360, 31 bands).
     """
     return """
 -- netcdf_rasters view is from the CMIP5 NetCDF fixture (has time_bnds and prAdjust)
-SELECT gbx_rst_width(gbx_rst_getsubdataset(tile, 'prAdjust')) AS width FROM netcdf_rasters;
+SELECT gbx_rst_getsubdataset(tile, 'prAdjust') AS subdataset FROM netcdf_rasters;
 """
 
 
 rst_getsubdataset_sql_example_output = """
-+-----+
-|width|
-+-----+
-|  720|
-+-----+
-(width of the extracted prAdjust subdataset — 720 pixels, 31 bands, 360 rows)
++-----------------------------------------------------------+
+|subdataset                                                 |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(the extracted prAdjust subdataset as a tile — 720x360, 31 bands)
 """
 
 
@@ -694,11 +695,11 @@ SELECT gbx_rst_upperlefty(tile) AS upper_left_y FROM rasters;
 
 
 rst_upperlefty_sql_example_output = """
-+---------------+
-|upper_left_y   |
-+---------------+
-|-10790470.0    |
-+---------------+
++------------+
+|upper_left_y|
++------------+
+|-10790470.0 |
++------------+
 """
 
 
@@ -763,11 +764,11 @@ rst_fromfile_sql_example_output = """
 +---------------------------------------------------------------+
 
 # Heavyweight registration — a MATERIALIZED v2 tile (raster bytes; path null):
-+---------------------------------------------------------------+
-|tile                                                           |
-+---------------------------------------------------------------+
-|{0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}   |
-+---------------------------------------------------------------+
++------------------------------------------------------------+
+|tile                                                        |
++------------------------------------------------------------+
+|{0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}|
++------------------------------------------------------------+
 
 # width/height (either tier) read from the header:
 +----+-----+------+
@@ -837,11 +838,11 @@ rst_frombands_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(multi_band, 'GTiff') to rebuild a tile struct:
-+--------+-------------------+
-|scene_id|multi_band         |
-+--------+-------------------+
-|...     |[B@... (BINARY)    |
-+--------+-------------------+
++--------+---------------+
+|scene_id|multi_band     |
++--------+---------------+
+|...     |[B@... (BINARY)|
++--------+---------------+
 """
 
 
@@ -1032,11 +1033,11 @@ FROM rasters;
 
 
 rst_rastertoworldcoord_sql_example_output = """
-+------------------+-------+--------+
-|world_coord       |easting|northing|
-+------------------+-------+--------+
-|{500980.0, ...}   |500980 |4599220 |
-+------------------+-------+--------+
++---------------+-------+--------+
+|world_coord    |easting|northing|
++---------------+-------+--------+
+|{500980.0, ...}|500980 |4599220 |
++---------------+-------+--------+
 """
 
 
@@ -1200,11 +1201,11 @@ rst_derivedband_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(result, 'GTiff') to rebuild a tile struct:
-+------+-------------------+
-|region|result             |
-+------+-------------------+
-|...   |[B@... (BINARY)    |
-+------+-------------------+
++------+---------------+
+|region|result         |
++------+---------------+
+|...   |[B@... (BINARY)|
++------+---------------+
 """
 
 
@@ -1366,13 +1367,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4)
 
 
 rst_h3_rastertogridcount_sql_example_output = """
-+----+---------------------+-------+
-|band|cellID               |measure|
-+----+---------------------+-------+
-|1   |599686042433355775   |256    |
-|1   |599686043374559743   |240    |
-|2   |599686042433355775   |256    |
-+----+---------------------+-------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|256    |
+|1   |599686043374559743|240    |
+|2   |599686042433355775|256    |
++----+------------------+-------+
 (pixel count per band×cell)
 """
 
@@ -1390,13 +1391,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t
 
 
 rst_h3_rastertogridmax_sql_example_output = """
-+----+---------------------+-------+
-|band|cellID               |measure|
-+----+---------------------+-------+
-|1   |599686042433355775   |255.0  |
-|1   |599686043374559743   |254.0  |
-|2   |599686042433355775   |240.0  |
-+----+---------------------+-------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|255.0  |
+|1   |599686043374559743|254.0  |
+|2   |599686042433355775|240.0  |
++----+------------------+-------+
 (max value per band×cell)
 """
 
@@ -1414,13 +1415,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t
 
 
 rst_h3_rastertogridmin_sql_example_output = """
-+----+---------------------+-------+
-|band|cellID               |measure|
-+----+---------------------+-------+
-|1   |599686042433355775   |0.0    |
-|1   |599686043374559743   |10.0   |
-|2   |599686042433355775   |5.0    |
-+----+---------------------+-------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|0.0    |
+|1   |599686043374559743|10.0   |
+|2   |599686042433355775|5.0    |
++----+------------------+-------+
 (min value per band×cell)
 """
 
@@ -1438,13 +1439,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4
 
 
 rst_h3_rastertogridmedian_sql_example_output = """
-+----+---------------------+-------+
-|band|cellID               |measure|
-+----+---------------------+-------+
-|1   |599686042433355775   |120.5  |
-|1   |599686043374559743   |122.0  |
-|2   |599686042433355775   |115.0  |
-+----+---------------------+-------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|120.5  |
+|1   |599686043374559743|122.0  |
+|2   |599686042433355775|115.0  |
++----+------------------+-------+
 (median value per band×cell)
 """
 
@@ -1462,13 +1463,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t
 
 
 rst_h3_rastertogridsum_sql_example_output = """
-+----+---------------------+--------+
-|band|cellID               |measure |
-+----+---------------------+--------+
-|1   |599686042433355775   |31563.0 |
-|1   |599686043374559743   |29488.0 |
-|2   |599686042433355775   |28672.0 |
-+----+---------------------+--------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|31563.0|
+|1   |599686043374559743|29488.0|
+|2   |599686042433355775|28672.0|
++----+------------------+-------+
 (sum of pixel values per band×cell)
 """
 
@@ -1486,13 +1487,13 @@ SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile,
 
 
 rst_h3_rastertogridvariance_sql_example_output = """
-+----+---------------------+-------+
-|band|cellID               |measure|
-+----+---------------------+-------+
-|1   |599686042433355775   |1245.5 |
-|1   |599686043374559743   |1389.2 |
-|2   |599686042433355775   |1156.0 |
-+----+---------------------+-------+
++----+------------------+-------+
+|band|cellID            |measure|
++----+------------------+-------+
+|1   |599686042433355775|1245.5 |
+|1   |599686043374559743|1389.2 |
+|2   |599686042433355775|1156.0 |
++----+------------------+-------+
 (variance per band×cell)
 """
 
@@ -1935,11 +1936,11 @@ LATERAL gbx_rst_maketiles(tile, 4) t;
 
 
 rst_maketiles_sql_example_output = """
-+------+----------+-----+----------------------+
-|cellid|raster    |path |...                   |
-+------+----------+-----+----------------------+
-|0     |<bytes>   |...  |{driver -> GTiff, ...}|
-+------+----------+-----+----------------------+
++------+--------------+----+----------------------+
+|cellid|raster        |path|...                   |
++------+--------------+----+----------------------+
+|0     |<raster bytes>|... |{driver -> GTiff, ...}|
++------+--------------+----+----------------------+
 (one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
@@ -1954,11 +1955,11 @@ LATERAL gbx_rst_retile(tile, 256, 256) t;
 
 
 rst_retile_sql_example_output = """
-+------+----------+-----+----------------------+
-|cellid|raster    |path |...                   |
-+------+----------+-----+----------------------+
-|0     |<bytes>   |...  |{driver -> GTiff, ...}|
-+------+----------+-----+----------------------+
++------+--------------+----+----------------------+
+|cellid|raster        |path|...                   |
++------+--------------+----+----------------------+
+|0     |<raster bytes>|... |{driver -> GTiff, ...}|
++------+--------------+----+----------------------+
 (one row per sub-tile; t.* expands the v2-Tile struct fields)
 """
 
@@ -1973,11 +1974,11 @@ LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 10) t;
 
 
 rst_tooverlappingtiles_sql_example_output = """
-+------+----------+-----+----------------------+
-|cellid|raster    |path |...                   |
-+------+----------+-----+----------------------+
-|0     |<bytes>   |...  |{driver -> GTiff, ...}|
-+------+----------+-----+----------------------+
++------+--------------+----+----------------------+
+|cellid|raster        |path|...                   |
++------+--------------+----+----------------------+
+|0     |<raster bytes>|... |{driver -> GTiff, ...}|
++------+--------------+----+----------------------+
 (one row per overlapping tile; t.* expands the v2-Tile struct fields)
 """
 
@@ -2027,11 +2028,11 @@ rst_combineavg_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(<agg>, 'GTiff') to rebuild a tile:
-+------+-----------------+
-|region|regional_average |
-+------+-----------------+
-|...   |[B@... (BINARY)  |
-+------+-----------------+
++------+----------------+
+|region|regional_average|
++------+----------------+
+|...   |[B@... (BINARY) |
++------+----------------+
 """
 
 
@@ -2056,11 +2057,11 @@ rst_merge_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(merged_scene, 'GTiff') to rebuild a tile struct:
-+--------+-------------------+
-|scene_id|merged_scene       |
-+--------+-------------------+
-|...     |[B@... (BINARY)    |
-+--------+-------------------+
++--------+---------------+
+|scene_id|merged_scene   |
++--------+---------------+
+|...     |[B@... (BINARY)|
++--------+---------------+
 """
 
 
@@ -2192,11 +2193,11 @@ rst_rasterize_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
-+---------+-------------------+
-|region_id|tile               |
-+---------+-------------------+
-|...      |[B@... (BINARY)    |
-+---------+-------------------+
++---------+---------------+
+|region_id|tile           |
++---------+---------------+
+|...      |[B@... (BINARY)|
++---------+---------------+
 """
 
 
@@ -2228,11 +2229,11 @@ rst_polygonize_sql_example_output = """
 +------------------+
 
 # Lightweight SQL — LATERAL streams one row per region (geom_wkb, value):
-+---------+-----+
-|geom_wkb |value|
-+---------+-----+
-|...      |365.0|
-+---------+-----+
++--------+-----+
+|geom_wkb|value|
++--------+-----+
+|...     |365.0|
++--------+-----+
 """
 
 
@@ -2686,11 +2687,11 @@ rst_gridfrompoints_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(idw, 'GTiff') to rebuild a tile struct:
-+---------+-------------------+
-|region_id|idw                |
-+---------+-------------------+
-|...      |[B@... (BINARY)    |
-+---------+-------------------+
++---------+---------------+
+|region_id|idw            |
++---------+---------------+
+|...      |[B@... (BINARY)|
++---------+---------------+
 """
 
 
@@ -2781,11 +2782,11 @@ SELECT gbx_rst_histogram(tile) AS histogram FROM multiband_rasters;
 
 
 rst_histogram_sql_example_output = """
-+--------------------------------------------------+
-|histogram                                         |
-+--------------------------------------------------+
-|{band_1 -> [1, 0, 0, ...], band_2 -> [1, 0, 1,... |
-+--------------------------------------------------+
++-------------------------------------------------+
+|histogram                                        |
++-------------------------------------------------+
+|{band_1 -> [1, 0, 0, ...], band_2 -> [1, 0, 1,...|
++-------------------------------------------------+
 """
 
 
@@ -2971,11 +2972,11 @@ rst_dtmfromgeoms_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(dtm, 'GTiff') to rebuild a tile struct:
-+---------+-------------------+
-|region_id|dtm                |
-+---------+-------------------+
-|...      |[B@... (BINARY)    |
-+---------+-------------------+
++---------+---------------+
+|region_id|dtm            |
++---------+---------------+
+|...      |[B@... (BINARY)|
++---------+---------------+
 """
 
 
@@ -3013,11 +3014,11 @@ rst_h3_rasterize_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
-+---------+-------------------+
-|region_id|tile               |
-+---------+-------------------+
-|...      |[B@... (BINARY)    |
-+---------+-------------------+
++---------+---------------+
+|region_id|tile           |
++---------+---------------+
+|...      |[B@... (BINARY)|
++---------+---------------+
 """
 
 
@@ -3051,11 +3052,11 @@ rst_quadbin_rasterize_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
-+---------+-------------------+
-|region_id|tile               |
-+---------+-------------------+
-|...      |[B@... (BINARY)    |
-+---------+-------------------+
++---------+---------------+
+|region_id|tile           |
++---------+---------------+
+|...      |[B@... (BINARY)|
++---------+---------------+
 """
 
 
@@ -3090,11 +3091,11 @@ rst_bng_rasterize_agg_sql_example_output = """
 
 # Lightweight SQL — raster bytes as BINARY (see the note above); wrap with
 # gbx_rst_fromcontent(tile, 'GTiff') to rebuild a tile struct:
-+---------+-------------------+
-|region_id|tile               |
-+---------+-------------------+
-|...      |[B@... (BINARY)    |
-+---------+-------------------+
++---------+---------------+
+|region_id|tile           |
++---------+---------------+
+|...      |[B@... (BINARY)|
++---------+---------------+
 """
 
 

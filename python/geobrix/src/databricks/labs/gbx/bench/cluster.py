@@ -53,6 +53,10 @@ ORDER = [
     # Large-raster profile: splitStrategy value ("none"|"serverless"|"classic"|"auto").
     # None for all other profiles; the field is optional in ResultRow.
     "split_strategy",
+    # Virtual-tile bench leg: which input-tile form was measured ("materialized" or "virtual").
+    "input_tile",
+    # Whether the fn materialized pixels on a virtual input: "deferred", "materialized", "na".
+    "output_disposition",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.
@@ -259,6 +263,10 @@ VECTOR_LEGS = {vector_legs!r}
 # "geojson_gbx"). Empty = all four. Combined with --vector-legs and --lightweight-only/
 # --heavyweight-only, this runs ONE (format x tier x leg) per job for true cold isolation.
 VECTOR_FORMATS = {vector_formats!r}
+# --input-tile: which form of input tile the spark-path runner receives ("materialized" or
+# "virtual"). "materialized" is the classic path (bytes from binaryFile); "virtual" passes
+# a path+window tile struct and triggers the virtual-tile reader code path.
+INPUT_TILE = {input_tile!r}
 
 os.makedirs(OUT, exist_ok=True)
 # Disable AQE so it can't coalesce the spark-path repartition back toward
@@ -518,7 +526,7 @@ def run_light(mode):
         runner.run_spark_path(
             spark, CORPUS, corpus, fnspecs, RUN_ID, ROW_COUNTS, SPARK_WARMUP,
             SPARK_MEASURED, "cluster", sink=None, partition_size=PARTITION_SIZE,
-            explain_only=True, explain_dir=EXPLAIN_DIR,
+            explain_only=True, explain_dir=EXPLAIN_DIR, input_tile=INPUT_TILE,
         )
         return []
     _purge_errors("lightweight", mode)
@@ -542,7 +550,7 @@ def run_light(mode):
             )
         else:
             _new = runner.run_spark_path(
-                spark, CORPUS, corpus, _todo, RUN_ID, ROW_COUNTS, SPARK_WARMUP, SPARK_MEASURED, "cluster", sink=_sink, partition_size=PARTITION_SIZE
+                spark, CORPUS, corpus, _todo, RUN_ID, ROW_COUNTS, SPARK_WARMUP, SPARK_MEASURED, "cluster", sink=_sink, partition_size=PARTITION_SIZE, input_tile=INPUT_TILE
             )
         lw.extend(_new)
     return _loaded + _new
@@ -2856,6 +2864,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         netcdf_only=bool(cfg.get("netcdf_only")),
         benchmark_netcdf_writer=bool(cfg.get("benchmark_netcdf_writer")),
         netcdf_writer_only=bool(cfg.get("netcdf_writer_only")),
+        input_tile=str(cfg.get("input_tile", "materialized")),
     )
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section

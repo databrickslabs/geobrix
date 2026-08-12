@@ -57,7 +57,7 @@ def spark():
 def test_rows_to_dataframe_schema_and_where(spark):
     df = cl.rows_to_dataframe([_row(), _row(fn="rst_avg")], spark, where="cluster")
     cols = df.columns
-    assert len(cols) == 36
+    assert len(cols) == 38
     assert "output_fingerprint" in cols
     assert "iter_total_wall_clock_s" in cols
     assert "avg_wall_clock_s" in cols
@@ -67,18 +67,20 @@ def test_rows_to_dataframe_schema_and_where(spark):
     assert cols[0] == "run_event_num"
     # Column ORDER: the headline timing metrics sit right after `mode` (per_tile_avg_s
     # immediately left of per_tile_avg_ms), and the per-iter distribution (iter_*) trails
-    # as the last four columns.
+    # before the virtual-tile fields.
     assert cols == cl.ORDER
     mo = cols.index("mode")
     assert cols[mo + 1] == "avg_wall_clock_s"
     assert cols[mo + 2] == "per_tile_avg_s"
     assert cols[mo + 3] == "per_tile_avg_ms"
-    assert cols[-5:] == [
+    assert cols[-7:] == [
         "iter_median_s",
         "iter_min_s",
         "iter_p90_s",
         "iter_total_wall_clock_s",
         "split_strategy",
+        "input_tile",
+        "output_disposition",
     ]
     vals = {r["fn"]: r["env_where"] for r in df.collect()}
     assert vals == {"rst_width": "cluster", "rst_avg": "cluster"}
@@ -351,3 +353,17 @@ def test_build_bench_notebook_explain_only_threading():
     assert "EXPLAIN_ONLY = True" in src_ex
     assert "explain_only=True" in src_ex
     assert "explain_dir=EXPLAIN_DIR" in src_ex
+
+
+def _build_min_notebook(cl, input_tile="materialized"):
+    """Render the bench notebook source string for the given input_tile value."""
+    cfg = _cfg(input_tile=input_tile)
+    return "\n".join("".join(c.get("source", [])) for c in cl.build_bench_notebook(cfg)["cells"])
+
+
+def test_notebook_threads_input_tile():
+    from databricks.labs.gbx.bench import cluster as cl  # noqa: F811
+    src = _build_min_notebook(cl, input_tile="virtual")
+    assert "INPUT_TILE" in src
+    assert "input_tile=INPUT_TILE" in src
+    assert "'virtual'" in src or '"virtual"' in src

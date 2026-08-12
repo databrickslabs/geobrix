@@ -30,6 +30,15 @@
       "expect_exit": 0,
       "timeout_seconds": 30
     },
+    "docs-examples": {
+      "name": "Docs example output tables well-formed + all declared tabs complete",
+      "type": "command",
+      "severity": "warn",
+      "enabled": true,
+      "cmd": "[ -f docs/scripts/check-docs-examples.py ] || { echo 'absent; skip'; exit 0; }; python3 docs/scripts/check-docs-examples.py",
+      "expect_exit": 0,
+      "timeout_seconds": 30
+    },
     "doc-coverage": {
       "name": "Every registered function documented + no placeholder example outputs",
       "type": "command",

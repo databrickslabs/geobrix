@@ -125,15 +125,14 @@ def mapalgebra(rasters, expression: str) -> bytes:
     # Which variables does this call need? Those explicitly bound, plus the
     # positional defaults A..(n-1) so a bare "A + B" still works.
     needed = set(bindings) | {_VARS[i] for i in range(len(rasters))}
-    resolved = {
-        var: bindings.get(var, (_VARS.index(var), 1)) for var in needed
-    }
+    resolved = {var: bindings.get(var, (_VARS.index(var), 1)) for var in needed}
 
     local_dict = {}
     opened = {}  # raster_index -> (MemoryFile, dataset)
     invalid = None
     template = None
     try:
+
         def _open(raster_index):
             if raster_index not in opened:
                 mf = MemoryFile(bytes(rasters[raster_index]))
@@ -145,7 +144,16 @@ def mapalgebra(rasters, expression: str) -> bytes:
         template = _open(0)
         for var in sorted(resolved, key=_VARS.index):
             raster_index, band = resolved[var]
-            data, valid = read_masked(_open(raster_index), band)
+            ds = _open(raster_index)
+            # Bounds-check the band here (the raster is open, so its band count is
+            # known) — mirrors the friendly raster-index message in _parse_spec,
+            # rather than letting rasterio raise an opaque IndexError deep in read.
+            if not (1 <= band <= ds.count):
+                raise ValueError(
+                    f"map-algebra {var}_band={band} is out of range: raster "
+                    f"{raster_index} has {ds.count} band(s) (valid 1..{ds.count})"
+                )
+            data, valid = read_masked(ds, band)
             local_dict[var] = data
             invalid = (~valid) if invalid is None else (invalid | ~valid)
         result = ne.evaluate(calc, local_dict=local_dict)

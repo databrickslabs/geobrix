@@ -135,6 +135,15 @@ class GDALCalcTest extends AnyFunSuite with BeforeAndAfterAll {
         GDALCalc.tokenizeCommand(cmd) shouldBe cmd.split(" ").filterNot(_.isEmpty).toSeq
     }
 
+    test("tokenizeCommand splits on space only (a tab stays inside the token)") {
+        // The tokenizer must match split(" "), NOT split on whitespace: a tab is a
+        // legal character inside an argument value and must not shatter the token.
+        val cmd = "gdal_calc --calc=A\tB --outfile=out.tif"
+        val toks = GDALCalc.tokenizeCommand(cmd)
+        toks shouldBe cmd.split(" ").filterNot(_.isEmpty).toSeq
+        toks should contain("--calc=A\tB")
+    }
+
     test("GDALCalc should handle a calc expression containing SPACES") {
         // Regression: executeCalc used to split the whole command on " ", shattering a
         // spaced --calc value into broken argv tokens so gdal_calc produced empty output.

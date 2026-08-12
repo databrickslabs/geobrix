@@ -89,9 +89,7 @@ def test_mapalgebra_json_spec_scalar():
 def test_mapalgebra_json_spec_matches_bare_string():
     """The heavy JSON form and the bare numexpr string produce identical output."""
     bare = mapalgebra.mapalgebra([_ras(10.0), _ras(4.0)], "(A - B) / (A + B)")
-    js = mapalgebra.mapalgebra(
-        [_ras(10.0), _ras(4.0)], '{"calc": "(A - B) / (A + B)"}'
-    )
+    js = mapalgebra.mapalgebra([_ras(10.0), _ras(4.0)], '{"calc": "(A - B) / (A + B)"}')
     with _serde.open_tile(bare) as ob, _serde.open_tile(js) as oj:
         assert np.allclose(ob.read(1), oj.read(1))
 
@@ -117,7 +115,9 @@ def test_mapalgebra_extra_options_raises():
     import pytest
 
     with pytest.raises(ValueError, match="extra_options|not supported"):
-        mapalgebra.mapalgebra([_ras(4.0)], '{"calc": "A*2", "extra_options": "--type=Float32"}')
+        mapalgebra.mapalgebra(
+            [_ras(4.0)], '{"calc": "A*2", "extra_options": "--type=Float32"}'
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +172,12 @@ def test_mapalgebra_band_selection_positional_two_copies():
 
 
 def test_mapalgebra_band_out_of_range_raises():
-    """A band index past the raster's band count is a clear error."""
+    """A band past the raster's band count is a clear ValueError (not an opaque
+    rasterio IndexError from deep in read) — mirrors the raster-index message."""
     import pytest
 
     ras = _ras_bands([1.0, 2.0])  # 2 bands
-    with pytest.raises(Exception):  # rasterio raises IndexError/RasterioIOError on band 5
+    with pytest.raises(ValueError, match=r"A_band=5 is out of range.*2 band"):
         mapalgebra.mapalgebra([ras], '{"calc": "A", "A_band": 5}')
 
 

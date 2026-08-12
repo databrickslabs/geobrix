@@ -36,7 +36,9 @@ object GDALCalc {
             } else if (c == '"' || c == '\'') {
                 quote = c // opening quote — drop it, mark token started
                 inToken = true
-            } else if (c == ' ' || c == '\t') {
+            } else if (c == ' ') {
+                // Split on space only — matches the documented `split(" ")` behavior
+                // exactly (a tab, if one ever appears, stays inside the token).
                 if (inToken) { tokens += cur.toString; cur.setLength(0); inToken = false }
             } else {
                 cur.append(c); inToken = true

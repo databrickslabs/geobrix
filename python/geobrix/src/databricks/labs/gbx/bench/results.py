@@ -347,6 +347,26 @@ def summarize(rows: List[ResultRow], pool_size=None) -> str:
             ["note"],
             lambda r: [r.note],
         )
+    virt = [row for row in rows if row.input_tile == "virtual"]
+    if virt:
+        _def = sum(1 for row in virt if row.output_disposition == "deferred")
+        _mat = sum(1 for row in virt if row.output_disposition == "materialized")
+        lines += [
+            "",
+            "## Virtual-tile disposition",
+            f"- deferred (stayed virtual / header-only): {_def}",
+            f"- materialized (read/generated pixels): {_mat}",
+            "",
+            "| fn | disposition |",
+            "|---|---|",
+        ]
+        for row in sorted(virt, key=lambda x: x.fn):
+            lines.append(f"| {row.fn} | {row.output_disposition} |")
+    _anom = [row for row in rows if row.status == "error"]
+    if _anom:
+        lines += ["", "## QA anomalies (must be triaged, not published around)"]
+        for row in _anom:
+            lines.append(f"- {row.fn} ({row.input_tile}): {row.note}")
     return "\n".join(lines)
 
 

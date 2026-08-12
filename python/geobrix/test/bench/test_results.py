@@ -320,3 +320,17 @@ def test_resultrow_loads_legacy_row_without_new_fields(tmp_path):
     row = r.read_jsonl(p)[0]
     assert row.input_tile == "materialized"
     assert row.output_disposition == "na"
+
+
+def test_summarize_surfaces_disposition_and_anomalies():
+    from databricks.labs.gbx.bench.results import summarize
+    rows = [
+        _row_for_new_fields(fn="rst_setsrid", input_tile="virtual", output_disposition="deferred"),
+        _row_for_new_fields(fn="rst_slope", input_tile="virtual", output_disposition="materialized"),
+        _row_for_new_fields(fn="rst_clip", input_tile="virtual", output_disposition="na",
+             status="error", note="boom"),
+    ]
+    md = summarize(rows)
+    assert "disposition" in md.lower()
+    assert "deferred" in md and "materialized" in md
+    assert "rst_clip" in md  # anomaly surfaced

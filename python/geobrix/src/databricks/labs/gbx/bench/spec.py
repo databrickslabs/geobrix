@@ -302,6 +302,10 @@ _BOTH = ("pure-core", "spark-path")
 _PIXEL_READING_ACCESSORS = frozenset({
     "rst_avg", "rst_min", "rst_max", "rst_median",
     "rst_pixelcount", "rst_summary", "rst_histogram",
+    # rst_isempty scans every band's valid-pixel values (accessors.isempty ->
+    # _valid_values per band) to decide all-NoData, so it reads pixels and
+    # materializes on a virtual tile -- NOT a header-only accessor.
+    "rst_isempty",
 })
 
 
@@ -1767,12 +1771,17 @@ REGISTRY: Dict[str, FnSpec] = {
     # --- bucket C, group C4: tiling fns -> a COLLECTION of tiles (5) ----------
     # rst_maketiles / rst_retile / rst_tooverlappingtiles / rst_separatebands /
     # rst_xyzpyramid each take ONE tile and emit MANY. They ride the default
-    # input_kind == "tile" (a single open dataset), but the core_fn returns a
+    # input_kind == "tile" (a single open dataset), and the core_fn returns a
     # LIST of tile bytes, which the runner fingerprints with the new
     # `raster_collection` kind: tile COUNT (compared exactly) plus the pooled,
-    # ORDER-INDEPENDENT agg stats over all output tiles' pixels. The col_fn
-    # yields an ARRAY column the spark-path runner writes via noop. Args are
-    # sized for the 256/512-px corpus (e.g. retile 128x128 -> 4 tiles on 256).
+    # ORDER-INDEPENDENT agg stats over all output tiles' pixels.
+    # rst_maketiles / rst_retile / rst_tooverlappingtiles / rst_separatebands have
+    # udtf=True: their light implementation is a Python UDTF (col_fn raises
+    # NotImplementedError with a LATERAL hint); udtf=True routes the spark-path
+    # through SQL LATERAL instead of the scalar col_fn path (see FnSpec.udtf).
+    # rst_xyzpyramid is modes=("pure-core",) only — it has NO spark-path leg and
+    # therefore does NOT use udtf=True or LATERAL routing. Args are sized for the
+    # 256/512-px corpus (e.g. retile 128x128 -> 4 tiles on 256).
     "rst_maketiles": FnSpec(
         "rst_maketiles",
         "gbx_rst_maketiles",
@@ -1781,6 +1790,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"size_in_mb": 1},
         core_fn=lambda ds, a: tiling.make_tiles(ds, float(a["size_in_mb"])),
         col_fn=lambda t, a: prx.rst_maketiles(t, a["size_in_mb"]),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
             _HEAVY + "generators/RST_MakeTiles.scala",
@@ -1797,6 +1807,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"tile_width": 128, "tile_height": 128},
         core_fn=lambda ds, a: tiling.retile(ds, a["tile_width"], a["tile_height"]),
         col_fn=lambda t, a: prx.rst_retile(t, a["tile_width"], a["tile_height"]),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (_HEAVY + "generators/RST_ReTile.scala", _OPS + "ReTile.scala"),
         core=False,
@@ -1814,6 +1825,7 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: prx.rst_tooverlappingtiles(
             t, a["tile_width"], a["tile_height"], a["overlap"]
         ),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
             _HEAVY + "generators/RST_ToOverlappingTiles.scala",
@@ -1830,6 +1842,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: tiling.separate_bands(ds),
         col_fn=lambda t, a: prx.rst_separatebands(t),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
             _HEAVY + "generators/RST_SeparateBands.scala",
@@ -2490,6 +2503,11 @@ REGISTRY: Dict[str, FnSpec] = {
             t, F.array(*[F.lit(float(v)) for v in a["levels"]])
         ),
         fingerprint_kind="vector",
+        # Reads every pixel to trace iso-lines and emits geometry rows, not an output
+        # tile: the disposition sampler finds no tile struct, so pin it explicitly
+        # (same rationale as rst_polygonize -> materialized). Without this it would
+        # sample-classify as "deferred" (no raster field) despite reading all pixels.
+        virtual_disposition="materialized",
         # GDAL's contour generator and the lightweight marching-squares segmenter
         # produce the same iso-lines but split them into segments differently, so
         # per-segment measures/attrs spread ~1.5%. That is an inherent algorithm
@@ -2509,6 +2527,10 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: prx.rst_polygonize(
             t, F.lit(a["band"]), F.lit(a["connectedness"])
         ),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
+        # Reads every pixel to vectorize and emits geometry rows, not an output tile:
+        # the disposition sampler finds no tile-struct column, so we pin it explicitly.
+        virtual_disposition="materialized",
         fingerprint_kind="vector",
         sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Polygonize.scala",),
         core=False,

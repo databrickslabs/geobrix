@@ -682,9 +682,18 @@ def _build_input_tile(path, content, cellid, input_tile):
 def _disposition_of(fs, sample_out_tile):
     """Disposition for a fn on a virtual input. Accessors: classify by name.
     Tile-returning: inspect the sampled output tile (raster None => deferred).
-    None sample => "na" (uncaptured), never a crash."""
+    None sample => "na" (uncaptured), never a crash.
+
+    Highest-precedence rule: if the FnSpec sets virtual_disposition explicitly,
+    that value wins for any category (accessor, UDTF, or tile-returning fn).
+    This lets fns like rst_polygonize (emits geometry rows, not tiles) be pinned
+    to "materialized" without needing a tile-struct sample.
+    """
     from databricks.labs.gbx.bench.spec import accessor_disposition
 
+    # Explicit per-fn override wins unconditionally — checked before accessor/sample logic.
+    if getattr(fs, "virtual_disposition", None) is not None:
+        return fs.virtual_disposition
     if fs.category == "accessor":
         return accessor_disposition(fs.name, fs)
     if sample_out_tile is None:
@@ -694,6 +703,27 @@ def _disposition_of(fs, sample_out_tile):
     except (KeyError, TypeError, IndexError):
         raster = None
     return "deferred" if raster is None else "materialized"
+
+
+def _find_udtf_tile_struct(row):
+    """Return row as the tile-struct sample if it contains a 'raster' field, else None.
+
+    For UDTFs that emit V2_TILE_SCHEMA rows (separatebands, retile,
+    tooverlappingtiles, maketiles, tessellate*), the collected Row IS the tile
+    struct — its top-level fields match V2_TILE_SCHEMA including 'raster'.
+
+    For UDTFs emitting flat grid rows (band/cellID/measure from rastertogrid*)
+    or vector rows (geom_wkb/value from polygonize), there is no 'raster' field
+    and this returns None, leaving the caller to fall through to the
+    virtual_disposition override or 'na'.
+
+    Pure (no Spark): testable with plain dicts or Row-like objects.
+    """
+    try:
+        _ = row["raster"]
+        return row
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return None
 
 
 def _emit_explain(label: str, df, explain_dir: str = "") -> None:
@@ -1518,6 +1548,12 @@ def run_spark_path(
     # (e.g. dbfs:/Volumes/...) that won't string-match the local path, but the basename is
     # stable. Tiny dict (basename -> cellid), safe to capture in the UDF closure.
     _cellid_by_base = {Path(te.path).name: int(te.cellid) for te in tiles}
+    # Look up the GB tile from the corpus size_sweep (added by generate_corpus for the BNG
+    # raster->grid / tessellate fns). Add its cellid BEFORE the UDF is defined so the
+    # closure captures the complete dict; then reuse _gb_entry when building df_gb below.
+    _gb_entry = next((te for te in corpus.size_sweep if te.role == "bng_gb"), None)
+    if _gb_entry is not None:
+        _cellid_by_base[Path(_gb_entry.path).name] = int(_gb_entry.cellid)
 
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
@@ -1594,6 +1630,40 @@ def run_spark_path(
     ).cache()
     _warm_df.count()  # materialize so building it isn't charged to any fn's timing
 
+    # GB tile DataFrame for BNG raster->grid / tessellate fns (gb_tile=True).
+    # Pure-core routes these fns to the corpus's "bng_gb" tile so they bin REAL BNG
+    # cells; without the same routing the spark-path benches NYC (EPSG:4326) tiles
+    # reprojected to EPSG:27700, which land outside Great Britain -> empty grid.
+    # Replicate the single GB tile to max_rows rows (1000 identical tiles is fine;
+    # per-tile timing + disposition are what matter) via crossJoin against
+    # spark.range(max_rows) so no duplicate paths go into binaryFile.load().
+    _want_gb = any(getattr(f, "gb_tile", False) for f in fnspecs)
+    df_gb = None
+    warm_df_gb = None
+    # Skip when explain_only: that branch returns before the timing loop that uses
+    # df_gb (and _explain_spark_path plans over df_all), so building + caching the GB
+    # tile here would only leak the cache and run a needless count in plan-only mode.
+    if _want_gb and not explain_only:
+        if _gb_entry is None:
+            print(
+                "[bench] gb_tile fns present but corpus has no role='bng_gb' entry; "
+                "these fns will fall back to the ordinary row pool (NYC tiles)."
+            )
+        else:
+            _gb_path = str(root / _gb_entry.path)
+            df_gb = (
+                spark.read.format("binaryFile").load([_gb_path])
+                .crossJoin(spark.range(max_rows))
+                .select(_to_tile(F.col("path"), F.col("content")).alias("tile"))
+                .repartition(_nparts, F.rand())
+                .cache()
+            )
+            df_gb.count()
+            warm_df_gb = spark.createDataFrame(
+                df_gb.rdd.mapPartitions(lambda _p: _it.islice(_p, 1)), df_gb.schema
+            ).cache()
+            warm_df_gb.count()
+
     # --explain-only: build each fn's spark-path DataFrame and PRINT its physical plan,
     # no timing / no Delta write (delegated to _explain_spark_path).
     if explain_only:
@@ -1661,6 +1731,17 @@ def run_spark_path(
         if "spark-path" not in fs.modes:
             continue
         _sp_leg_i += 1
+        # Route gb_tile fns (BNG raster->grid / tessellate, which reproject to
+        # EPSG:27700 and drop out-of-GB pixels) to the dedicated GB tile DF so
+        # they bench REAL cells.  Every other fn uses the ordinary NYC row pool DF.
+        _fn_df = (
+            df_gb if (getattr(fs, "gb_tile", False) and df_gb is not None) else df_all
+        )
+        _fn_warm_df = (
+            warm_df_gb
+            if (getattr(fs, "gb_tile", False) and warm_df_gb is not None)
+            else _warm_df
+        )
         _mark = len(out)
         if getattr(fs, "input_kind", "tile") in _agg_kinds:
             out += _run_aggregate(
@@ -1692,8 +1773,8 @@ def run_spark_path(
                 measured,
                 env,
                 pool,
-                df_all,
-                _warm_df,
+                _fn_df,
+                _fn_warm_df,
                 max_rows,
                 _nparts,
                 partition_size,
@@ -1709,8 +1790,8 @@ def run_spark_path(
                 row_counts,
                 warmup,
                 measured,
-                df_all,
-                _warm_df,
+                _fn_df,
+                _fn_warm_df,
                 max_rows,
                 _nparts,
                 partition_size,
@@ -1720,17 +1801,70 @@ def run_spark_path(
             )
         if input_tile == "virtual" and getattr(fs, "input_kind", "tile") == "tile":
             _sample = None
+            # True when the UDTF returned rows but none contained a tile struct
+            # (case 2: flat measure rows / geometry rows — rastertogrid*, polygonize).
+            _got_flat_udtf_rows = False
             if fs.category != "accessor":
-                try:
-                    _row1 = (
-                        df_all.limit(1)
-                        .select(fs.col_fn(_input_col(fs.name, "tile", df_all), fs.args).alias("out"))
-                        .collect()
-                    )
-                    _sample = _row1[0]["out"] if _row1 else None
-                except Exception as _e:  # noqa: BLE001 — finding, not a silent skip
-                    print(f"[bench][QA] disposition sample failed for {fs.name}: {_e}")
+                if getattr(fs, "udtf", False):
+                    # UDTF: col_fn raises NotImplementedError; sample via SQL LATERAL.
+                    # Three cases from the LATERAL sample:
+                    #   1. Row returned AND _find_udtf_tile_struct finds tile struct ->
+                    #      pass to _disposition_of for raster null-ness check
+                    #      (tessellate, retile, maketiles, tooverlappingtiles, separatebands)
+                    #   2. Row returned but NO tile struct (flat measures / geometry rows) ->
+                    #      set _got_flat_udtf_rows=True; _disp resolved to "materialized"
+                    #      below (rastertogrid* emit measure rows; polygonize emits geometry)
+                    #   3. No rows / sample failed -> _sample stays None -> "na" or
+                    #      virtual_disposition override
+                    _disp_view = f"_bench_disp_{fs.name}_{id(_fn_df)}"
+                    try:
+                        _fn_df.limit(1).createOrReplaceTempView(_disp_view)
+                        _udtf_rows = (
+                            spark.sql(_udtf_lateral_sql(_disp_view, fs))
+                            .limit(1)
+                            .collect()
+                        )
+                        if _udtf_rows:
+                            _tile_struct = _find_udtf_tile_struct(_udtf_rows[0])
+                            if _tile_struct is not None:
+                                _sample = _tile_struct  # case 1
+                            else:
+                                _got_flat_udtf_rows = True  # case 2
+                    except Exception as _e:  # noqa: BLE001 — finding, not a silent skip
+                        print(
+                            f"[bench][QA] disposition sample failed for {fs.name}: {_e}"
+                        )
+                    finally:
+                        try:
+                            spark.catalog.dropTempView(_disp_view)
+                        except Exception:  # noqa: BLE001 — best-effort cleanup
+                            pass
+                else:
+                    try:
+                        _row1 = (
+                            _fn_df.limit(1)
+                            .select(
+                                fs.col_fn(
+                                    _input_col(fs.name, "tile", _fn_df), fs.args
+                                ).alias("out")
+                            )
+                            .collect()
+                        )
+                        _sample = _row1[0]["out"] if _row1 else None
+                    except Exception as _e:  # noqa: BLE001 — finding, not a silent skip
+                        print(
+                            f"[bench][QA] disposition sample failed for {fs.name}: {_e}"
+                        )
             _disp = _disposition_of(fs, _sample)
+            # Case 2: UDTF emitted non-tile rows (flat measure rows from rastertogrid*
+            # or geometry rows from polygonize). These UDTFs necessarily read all
+            # input pixels to produce their output, so the virtual input is consumed
+            # -> "materialized". virtual_disposition override has already been applied
+            # by _disposition_of above and wins unconditionally; only rewrite "na".
+            # A hypothetical header-only UDTF that emits flat rows without reading
+            # pixels would need virtual_disposition="deferred" to override this.
+            if _got_flat_udtf_rows and _disp == "na":
+                _disp = "materialized"
             for _i in range(_mark, len(out)):
                 out[_i] = _dc.replace(out[_i], input_tile="virtual", output_disposition=_disp)
         _flush(out, _mark)
@@ -1747,6 +1881,10 @@ def run_spark_path(
             raw, _nparts, partition_size, F,
         )
     df_all.unpersist()
+    if df_gb is not None:
+        df_gb.unpersist()
+    if warm_df_gb is not None:
+        warm_df_gb.unpersist()
     return out
 
 

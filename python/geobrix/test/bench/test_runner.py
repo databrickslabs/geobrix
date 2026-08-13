@@ -857,17 +857,32 @@ def test_disposition_accessor_uses_classifier():
 
 
 def test_disposition_tile_returning_from_output_tile():
-    assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": b"xx"}) == "materialized"
+    assert (
+        rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": b"xx"}) == "materialized"
+    )
     assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": None}) == "deferred"
     # no sample available -> "na" (not a crash)
     assert rn._disposition_of(s.REGISTRY["rst_slope"], None) == "na"
 
 
 def test_pure_core_parity_slope_width(tmp_path):
-    from databricks.labs.gbx.bench import runner as rn, spec as s, datagen as dg
-    corpus = dg.generate_corpus(out_dir=tmp_path, seed=9, tile_px=[64], bands=[1],
-        dtypes=["float32"], srids=[4326], nodata_fracs=[0.0], row_rows=1,
-        row_tile_px=64, row_bands=1, row_dtype="float32")
+    from databricks.labs.gbx.bench import datagen as dg
+    from databricks.labs.gbx.bench import runner as rn
+    from databricks.labs.gbx.bench import spec as s
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=1,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
     fns = s.select(functions=["rst_slope", "rst_width"])
     res = rn.run_pure_core_parity(tmp_path, corpus, fns)
     assert res, "expected parity rows"
@@ -894,12 +909,26 @@ def test_pure_core_parity_full_tile_set(tmp_path):
     If this test finds ok=False for any (fn, tile_px) pair it is a REAL virtual-tile
     divergence — do not weaken the assertion or exclude the fn without root-cause.
     """
-    from databricks.labs.gbx.bench import runner as rn, spec as s, datagen as dg
-    corpus = dg.generate_corpus(out_dir=tmp_path, seed=9, tile_px=[64], bands=[1],
-        dtypes=["float32"], srids=[4326], nodata_fracs=[0.0], row_rows=1,
-        row_tile_px=64, row_bands=1, row_dtype="float32")
+    from databricks.labs.gbx.bench import datagen as dg
+    from databricks.labs.gbx.bench import runner as rn
+    from databricks.labs.gbx.bench import spec as s
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=1,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
     fns = [
-        f for f in s.select(set="full")
+        f
+        for f in s.select(set="full")
         if getattr(f, "input_kind", "tile") == "tile"
         and getattr(f, "min_bands", 1) <= 1
     ]
@@ -912,24 +941,41 @@ def test_pure_core_parity_full_tile_set(tmp_path):
 
 def test_creation_microleg_defined():
     from databricks.labs.gbx.bench import runner as rn
+
     assert hasattr(rn, "_run_sp_creation")
 
 
 def test_rst_fromfile_column_builds():
     from pyspark.sql import functions as F
+
     from databricks.labs.gbx.pyrx import functions as prx
+
     c = prx.rst_fromfile(F.col("path"), "GTiff")
     assert c is not None
 
 
 def test_spark_virtual_leg_smoke(spark, tmp_path):
-    from databricks.labs.gbx.bench import runner as rn, spec as s, datagen as dg
-    corpus = dg.generate_corpus(out_dir=tmp_path, seed=9, tile_px=[64], bands=[1],
-        dtypes=["float32"], srids=[4326], nodata_fracs=[0.0], row_rows=4,
-        row_tile_px=64, row_bands=1, row_dtype="float32")
+    from databricks.labs.gbx.bench import datagen as dg
+    from databricks.labs.gbx.bench import runner as rn
+    from databricks.labs.gbx.bench import spec as s
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
     fns = s.select(functions=["rst_slope", "rst_setsrid", "rst_avg", "rst_fromfile"])
-    rows = rn.run_spark_path(spark, tmp_path, corpus, fns, "smoke", [4], 1, 1,
-                             "venv", input_tile="virtual")
+    rows = rn.run_spark_path(
+        spark, tmp_path, corpus, fns, "smoke", [4], 1, 1, "venv", input_tile="virtual"
+    )
     ok = [r for r in rows if r.status == "ok"]
     assert ok, "expected ok rows"
     assert all(r.input_tile == "virtual" for r in ok)

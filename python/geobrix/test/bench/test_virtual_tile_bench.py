@@ -3,20 +3,31 @@
 Also covers Defect-A/B regression tests for the five tiling/polygonize UDTFs
 that were mis-specced as scalars and the UDTF-aware disposition sampler.
 """
+
 from pathlib import Path
 
 from databricks.labs.gbx.bench import datagen as dg
 from databricks.labs.gbx.bench.fingerprint import fingerprint_output
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx.core import accessors, open_tile as ot, terrain
+from databricks.labs.gbx.pyrx.core import accessors
+from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core import terrain
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
 
 def _one_tile(tmp_path):
     corpus = dg.generate_corpus(
-        out_dir=tmp_path, seed=9, tile_px=[64], bands=[1], dtypes=["float32"],
-        srids=[4326], nodata_fracs=[0.0], row_rows=1, row_tile_px=64,
-        row_bands=1, row_dtype="float32",
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=1,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
     )
     te = next(t for t in corpus.size_sweep if t.role != "bng_gb")
     return Path(tmp_path) / te.path, te
@@ -26,8 +37,9 @@ def test_slope_virtual_equals_materialized(tmp_path):
     p, te = _one_tile(tmp_path)
     with _serde.open_tile(p.read_bytes()) as ds:
         mat = terrain.slope(ds, unit="degrees", xscale=None, yscale=None)
-    vt = VirtualTile(cellid=0, raster=None, path=str(p),
-                     window=(0, 0, te.tile_px, te.tile_px))
+    vt = VirtualTile(
+        cellid=0, raster=None, path=str(p), window=(0, 0, te.tile_px, te.tile_px)
+    )
     with ot._open(vt.to_row()) as ds:
         virt = terrain.slope(ds, unit="degrees", xscale=None, yscale=None)
     assert fingerprint_output(mat) == fingerprint_output(virt)
@@ -39,8 +51,9 @@ def test_width_virtual_is_header_only_and_matches(tmp_path):
         mat_w = accessors.width(ds)
     # window=(0,0,w,h) covers the full extent; open_header detects _is_full_extent
     # and yields src directly (no pixel I/O), confirming the header-only path.
-    vt = VirtualTile(cellid=0, raster=None, path=str(p),
-                     window=(0, 0, te.tile_px, te.tile_px))
+    vt = VirtualTile(
+        cellid=0, raster=None, path=str(p), window=(0, 0, te.tile_px, te.tile_px)
+    )
     with ot.open_header(vt.to_row()) as ds:
         virt_w = accessors.width(ds)
     assert mat_w == virt_w
@@ -49,6 +62,7 @@ def test_width_virtual_is_header_only_and_matches(tmp_path):
 # =========================================================================
 # Defect-A regression: 5 tiling/polygonize UDTFs mis-specced as scalars
 # =========================================================================
+
 
 def test_five_tiling_udtfs_have_udtf_flag():
     """All 5 previously mis-specced tiling/polygonize fns now carry udtf=True."""
@@ -73,8 +87,8 @@ def test_tiling_udtf_args_order_and_lateral_sql():
     Verified against the pyrx function signatures (gbx_rst_maketiles(tile,
     size_in_mb), gbx_rst_retile(tile, tile_width, tile_height), etc.).
     """
-    from databricks.labs.gbx.bench.spec import REGISTRY
     from databricks.labs.gbx.bench.runner import _udtf_lateral_sql
+    from databricks.labs.gbx.bench.spec import REGISTRY
 
     cases = [
         (
@@ -117,10 +131,12 @@ def test_tiling_udtf_args_order_and_lateral_sql():
 # Defect-B regression: _disposition_of virtual_disposition override
 # =========================================================================
 
+
 def test_disposition_of_virtual_disposition_override():
     """virtual_disposition wins before any accessor or sample-inspection logic."""
     from dataclasses import dataclass
     from typing import Optional
+
     from databricks.labs.gbx.bench.runner import _disposition_of
 
     @dataclass
@@ -160,13 +176,13 @@ def test_disposition_of_rst_polygonize_virtual_disposition():
     finds no 'raster' field and sample_out_tile is None.  The virtual_disposition
     pin must make _disposition_of return 'materialized' regardless.
     """
-    from databricks.labs.gbx.bench.spec import REGISTRY
     from databricks.labs.gbx.bench.runner import _disposition_of
+    from databricks.labs.gbx.bench.spec import REGISTRY
 
     fs = REGISTRY["rst_polygonize"]
-    assert getattr(fs, "virtual_disposition", None) == "materialized", (
-        "rst_polygonize FnSpec must have virtual_disposition='materialized'"
-    )
+    assert (
+        getattr(fs, "virtual_disposition", None) == "materialized"
+    ), "rst_polygonize FnSpec must have virtual_disposition='materialized'"
     # With no sample (simulating a geometry-output UDTF), override wins.
     assert _disposition_of(fs, None) == "materialized"
 
@@ -174,6 +190,7 @@ def test_disposition_of_rst_polygonize_virtual_disposition():
 # =========================================================================
 # _find_udtf_tile_struct: pure unit tests (no Spark)
 # =========================================================================
+
 
 def test_find_udtf_tile_struct_with_raster_bytes():
     """A dict with a 'raster' key is returned as the tile struct."""
@@ -219,6 +236,7 @@ def test_find_udtf_tile_struct_none_input():
 # Validates the end-to-end path: LATERAL query + _find_udtf_tile_struct
 # + _disposition_of for a tiling UDTF (rst_retile).
 # =========================================================================
+
 
 def test_udtf_virtual_tile_disposition_not_na(tmp_path, spark):
     """run_spark_path with input_tile='virtual' must yield output_disposition != 'na'
@@ -275,6 +293,7 @@ def test_udtf_virtual_tile_disposition_not_na(tmp_path, spark):
 # Case-2 logic must infer "materialized" (pixels read) not leave "na".
 # =========================================================================
 
+
 def test_rastertogrid_udtf_virtual_tile_disposition_materialized(tmp_path, spark):
     """run_spark_path with rst_h3_rastertogridavg + input_tile='virtual' must yield
     output_disposition='materialized', not 'na'.
@@ -327,6 +346,7 @@ def test_rastertogrid_udtf_virtual_tile_disposition_materialized(tmp_path, spark
 # fake rows to drive the case-1/2/3 logic without 33 Spark runs.
 # =========================================================================
 
+
 def _simulate_udtf_disposition(fs, fake_row):
     """Drive the sampler's case-1/2/3 logic with a fake row (no Spark).
 
@@ -334,7 +354,7 @@ def _simulate_udtf_disposition(fs, fake_row):
     is not None, find the tile struct (case 1) or flag flat rows (case 2),
     then apply _disposition_of + case-2 upgrade.
     """
-    from databricks.labs.gbx.bench.runner import _find_udtf_tile_struct, _disposition_of
+    from databricks.labs.gbx.bench.runner import _disposition_of, _find_udtf_tile_struct
 
     _sample = None
     _got_flat = False
@@ -367,7 +387,7 @@ def test_no_udtf_spark_path_fn_yields_na_given_nonempty_output():
     from databricks.labs.gbx.bench.spec import REGISTRY
 
     _tile_row = {"cellid": 0, "raster": b"bytes", "path": None}  # V2_TILE_SCHEMA
-    _flat_row = {"band": 1, "cellID": 0, "measure": 0.5}          # flat grid row
+    _flat_row = {"band": 1, "cellID": 0, "measure": 0.5}  # flat grid row
 
     _valid = {"deferred", "materialized"}
     _failures = []
@@ -386,7 +406,7 @@ def test_no_udtf_spark_path_fn_yields_na_given_nonempty_output():
                 )
 
     assert not _failures, (
-        f"The following UDTF spark-path fns produced 'na' given a non-empty output:\n"
+        "The following UDTF spark-path fns produced 'na' given a non-empty output:\n"
         + "\n".join(_failures)
     )
 
@@ -396,6 +416,7 @@ def test_no_udtf_spark_path_fn_yields_na_given_nonempty_output():
 # the bug where run_spark_path used only the NYC row pool for all fns,
 # giving gb_tile=True fns an empty grid and output_disposition='na').
 # =========================================================================
+
 
 def test_bng_rastertogrid_sparkpath_uses_gb_tile(tmp_path, spark):
     """run_spark_path with rst_bng_rastertogridavg (gb_tile=True) + input_tile='virtual'
@@ -429,9 +450,9 @@ def test_bng_rastertogrid_sparkpath_uses_gb_tile(tmp_path, spark):
         row_dtype="float32",
     )
     # Confirm the corpus has a bng_gb entry (invariant of generate_corpus).
-    assert any(te.role == "bng_gb" for te in corpus.size_sweep), (
-        "test pre-condition: generate_corpus must produce a role='bng_gb' entry"
-    )
+    assert any(
+        te.role == "bng_gb" for te in corpus.size_sweep
+    ), "test pre-condition: generate_corpus must produce a role='bng_gb' entry"
 
     fns = s.select(functions=["rst_bng_rastertogridavg"])
     rows = rn.run_spark_path(
@@ -493,9 +514,9 @@ def test_bng_rastertogrid_sparkpath_fallback_no_crash(tmp_path, spark):
         size_sweep=[te for te in full_corpus.size_sweep if te.role != "bng_gb"],
         row_pool=full_corpus.row_pool,
     )
-    assert not any(te.role == "bng_gb" for te in stripped.size_sweep), (
-        "test pre-condition: stripped corpus must have no bng_gb entry"
-    )
+    assert not any(
+        te.role == "bng_gb" for te in stripped.size_sweep
+    ), "test pre-condition: stripped corpus must have no bng_gb entry"
 
     fns = s.select(functions=["rst_bng_rastertogridavg"])
     # Must not raise; rows may be empty-grid (na disposition) but no exception.
@@ -511,7 +532,9 @@ def test_bng_rastertogrid_sparkpath_fallback_no_crash(tmp_path, spark):
         where="venv",
         input_tile="virtual",
     )
-    assert rows is not None, "run_spark_path must return a list (even if empty) on fallback"
+    assert (
+        rows is not None
+    ), "run_spark_path must return a list (even if empty) on fallback"
 
 
 def test_vector_output_fns_pin_disposition_explicitly():

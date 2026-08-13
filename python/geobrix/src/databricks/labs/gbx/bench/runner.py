@@ -256,8 +256,12 @@ def run_pure_core_parity(corpus_root, corpus, fnspecs):
                 with _serde.open_tile(p.read_bytes()) as ds:
                     _mat_out = fs.core_fn(ds, fs.args)
                 mat_fp = _fingerprint_for(fs, _mat_out) if _do_fp else ""
-                vt = VirtualTile(cellid=int(te.cellid), raster=None, path=str(p),
-                                 window=(0, 0, te.tile_px, te.tile_px)).to_row()
+                vt = VirtualTile(
+                    cellid=int(te.cellid),
+                    raster=None,
+                    path=str(p),
+                    window=(0, 0, te.tile_px, te.tile_px),
+                ).to_row()
                 with _ot._open(vt) as ds:
                     _virt_out = fs.core_fn(ds, fs.args)
                 virt_fp = _fingerprint_for(fs, _virt_out) if _do_fp else ""
@@ -1368,8 +1372,19 @@ def _sp_scalar_error_row(fs, run_id, pool, n, env, warmup_iters, e):
     )
 
 
-def _run_sp_creation(spark, run_id, pool, env, row_counts, warmup, measured,
-                     raw, nparts, partition_size, F):
+def _run_sp_creation(
+    spark,
+    run_id,
+    pool,
+    env,
+    row_counts,
+    warmup,
+    measured,
+    raw,
+    nparts,
+    partition_size,
+    F,
+):
     """Time rst_fromfile virtual-tile CREATION over the binaryFile `path` column.
 
     The binaryFile DataFrame ``raw`` carries a ``path`` URI column; this leg times
@@ -1480,7 +1495,7 @@ def _run_sp_scalar_fn(
     return rows
 
 
-def run_spark_path(
+def run_spark_path(  # noqa: C901
     spark,
     corpus_root,
     corpus: m.Corpus,
@@ -1652,7 +1667,8 @@ def run_spark_path(
         else:
             _gb_path = str(root / _gb_entry.path)
             df_gb = (
-                spark.read.format("binaryFile").load([_gb_path])
+                spark.read.format("binaryFile")
+                .load([_gb_path])
                 .crossJoin(spark.range(max_rows))
                 .select(_to_tile(F.col("path"), F.col("content")).alias("tile"))
                 .repartition(_nparts, F.rand())
@@ -1866,7 +1882,9 @@ def run_spark_path(
             if _got_flat_udtf_rows and _disp == "na":
                 _disp = "materialized"
             for _i in range(_mark, len(out)):
-                out[_i] = _dc.replace(out[_i], input_tile="virtual", output_disposition=_disp)
+                out[_i] = _dc.replace(
+                    out[_i], input_tile="virtual", output_disposition=_disp
+                )
         _flush(out, _mark)
         _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
     # rst_fromfile creation micro-leg: times virtual-tile creation from a path column.
@@ -1877,8 +1895,17 @@ def run_spark_path(
     _fn_names = {fs.name for fs in fnspecs}
     if input_tile == "virtual" and "rst_fromfile" in _fn_names:
         out += _run_sp_creation(
-            spark, run_id, pool, env, row_counts, warmup, measured,
-            raw, _nparts, partition_size, F,
+            spark,
+            run_id,
+            pool,
+            env,
+            row_counts,
+            warmup,
+            measured,
+            raw,
+            _nparts,
+            partition_size,
+            F,
         )
     df_all.unpersist()
     if df_gb is not None:

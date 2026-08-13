@@ -45,7 +45,9 @@ _NON_TILE_REGISTERED = {
 
 def _tile_returning_registered_udfs():
     return [
-        (name, udf) for name, udf in fns._sql_tile_ops.items() if name not in _NON_TILE_REGISTERED
+        (name, udf)
+        for name, udf in fns._sql_tile_ops.items()
+        if name not in _NON_TILE_REGISTERED
     ]
 
 

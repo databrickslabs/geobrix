@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit
+from pyspark.sql.functions import col
 
 HERE = Path(__file__).resolve()
 LIBDIR = (HERE.parents[2] / "lib").resolve()

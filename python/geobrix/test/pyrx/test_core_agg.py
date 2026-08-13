@@ -466,7 +466,9 @@ class TestGroupedAggUdfSkipsCorrupt:
         from pyspark.sql import functions as sf
 
         df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
-        result = df.groupBy("g").agg(_combineavg_agg_udf(sf.col("tile")).alias("agg_bytes"))
+        result = df.groupBy("g").agg(
+            _combineavg_agg_udf(sf.col("tile")).alias("agg_bytes")
+        )
         rows = result.collect()
         assert rows, "no rows returned"
         # combineavg prepends 8-byte cellid envelope; total > 8 bytes for a real tile.
@@ -495,7 +497,8 @@ class TestGroupedAggUdfSkipsCorrupt:
         # Build a two-row group: valid tile → band 1, corrupt bytes → band 2.
         # Reuses the local v1 tile input schema (aggregators accept v1 on input).
         schema_with_band = StructType(
-            list(_V1_TILE_INPUT_SCHEMA.fields) + [StructField("band_idx", IntegerType(), True)]
+            list(_V1_TILE_INPUT_SCHEMA.fields)
+            + [StructField("band_idx", IntegerType(), True)]
         )
         rows_data = [
             {"cellid": 0, "raster": _valid_raster(), "metadata": {}, "band_idx": 1},
@@ -523,7 +526,9 @@ class TestGroupedAggUdfSkipsCorrupt:
         from pyspark.sql import functions as sf
 
         df = _spark_tile_df_raw(spark, [_valid_raster(), _corrupt_raster()])
-        result = df.groupBy("g").agg(_combineavg_agg_sql_udf(sf.col("tile")).alias("agg_bytes"))
+        result = df.groupBy("g").agg(
+            _combineavg_agg_sql_udf(sf.col("tile")).alias("agg_bytes")
+        )
         rows = result.collect()
         assert rows, "no rows returned"
         agg_b = rows[0]["agg_bytes"]

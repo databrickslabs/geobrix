@@ -358,11 +358,14 @@ def test_build_bench_notebook_explain_only_threading():
 def _build_min_notebook(cl, input_tile="materialized"):
     """Render the bench notebook source string for the given input_tile value."""
     cfg = _cfg(input_tile=input_tile)
-    return "\n".join("".join(c.get("source", [])) for c in cl.build_bench_notebook(cfg)["cells"])
+    return "\n".join(
+        "".join(c.get("source", [])) for c in cl.build_bench_notebook(cfg)["cells"]
+    )
 
 
 def test_notebook_threads_input_tile():
     from databricks.labs.gbx.bench import cluster as cl  # noqa: F811
+
     src = _build_min_notebook(cl, input_tile="virtual")
     assert "INPUT_TILE" in src
     assert "input_tile=INPUT_TILE" in src

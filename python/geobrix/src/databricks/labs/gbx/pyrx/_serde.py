@@ -31,7 +31,7 @@ from pyspark.sql.types import (
 )
 from rasterio.io import DatasetReader, MemoryFile
 
-from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
+from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
 # Legacy 3-field tile struct — INPUT-ONLY (reader/writer v1 read/load path).
 # NEVER a function output schema: every tile-returning UDF/UDTF emits

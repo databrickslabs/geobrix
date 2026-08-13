@@ -1076,14 +1076,28 @@ def test_every_fnspec_declares_existing_sources():
 
 
 def test_pixel_reading_accessors_are_materialized():
-    for fn in ("rst_avg", "rst_min", "rst_max", "rst_median",
-               "rst_pixelcount", "rst_summary", "rst_histogram"):
+    for fn in (
+        "rst_avg",
+        "rst_min",
+        "rst_max",
+        "rst_median",
+        "rst_pixelcount",
+        "rst_summary",
+        "rst_histogram",
+    ):
         assert s.accessor_disposition(fn) == "materialized", fn
 
 
 def test_header_accessors_are_deferred():
-    for fn in ("rst_width", "rst_height", "rst_numbands", "rst_srid",
-               "rst_pixelwidth", "rst_georeference", "rst_boundingbox"):
+    for fn in (
+        "rst_width",
+        "rst_height",
+        "rst_numbands",
+        "rst_srid",
+        "rst_pixelwidth",
+        "rst_georeference",
+        "rst_boundingbox",
+    ):
         assert s.accessor_disposition(fn) == "deferred", fn
 
 

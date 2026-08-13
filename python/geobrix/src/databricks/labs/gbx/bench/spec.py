@@ -299,14 +299,21 @@ _BOTH = ("pure-core", "spark-path")
 # else in the accessor category reads only the header/metadata via open_header.
 # Verified against pyrx: these route through pixel-reading UDFs, the rest through
 # _header_accessor_udf (open_header, no pixel I/O).
-_PIXEL_READING_ACCESSORS = frozenset({
-    "rst_avg", "rst_min", "rst_max", "rst_median",
-    "rst_pixelcount", "rst_summary", "rst_histogram",
-    # rst_isempty scans every band's valid-pixel values (accessors.isempty ->
-    # _valid_values per band) to decide all-NoData, so it reads pixels and
-    # materializes on a virtual tile -- NOT a header-only accessor.
-    "rst_isempty",
-})
+_PIXEL_READING_ACCESSORS = frozenset(
+    {
+        "rst_avg",
+        "rst_min",
+        "rst_max",
+        "rst_median",
+        "rst_pixelcount",
+        "rst_summary",
+        "rst_histogram",
+        # rst_isempty scans every band's valid-pixel values (accessors.isempty ->
+        # _valid_values per band) to decide all-NoData, so it reads pixels and
+        # materializes on a virtual tile -- NOT a header-only accessor.
+        "rst_isempty",
+    }
+)
 
 
 def accessor_disposition(name: str, fs: "FnSpec | None" = None) -> str:

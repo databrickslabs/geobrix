@@ -125,12 +125,18 @@ def run_spark_path_reader(
     measured: int,
     size_mib: int = 16,
     where: str = "venv",
+    split_plan_read: bool = False,
 ) -> List[ResultRow]:
     """Time the raster_gbx Spark data source over a corpus directory.
 
     Registers the light DS, then times
     ``spark.read.format("raster_gbx").option("sizeInMB", ...).load(path).count()``.
     One ResultRow is emitted covering the whole directory.
+
+    When ``split_plan_read=True``, times ``RasterGbxReader.partitions()``
+    separately (driver-side planning) and records the result as ``plan_s`` in the
+    emitted ``ResultRow``. The total ``.count()`` iteration time is unchanged.
+    This isolates the listing/header-open planning cost from the executor read cost.
     """
     from databricks.labs.gbx.ds.register import register
 
@@ -144,6 +150,19 @@ def run_spark_path_reader(
             .load(path)
             .count()
         )
+
+    # Optional: time planning separately to isolate the listing/header-open cost.
+    _plan_s = 0.0
+    if split_plan_read:
+        import time as _time
+        from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+        _plan_start = _time.monotonic()
+        try:
+            RasterGbxReader({"path": path, "sizeInMB": str(size_mib)}).partitions()
+        except Exception:  # noqa: BLE001
+            pass  # planning failure handled by the timed _job below
+        _plan_s = _time.monotonic() - _plan_start
 
     try:
         stats = time_iters(_job, warmup, measured)
@@ -185,6 +204,7 @@ def run_spark_path_reader(
                 status="ok",
                 note=os.path.basename(path.rstrip("/\\")),
                 output_fingerprint="",
+                plan_s=_plan_s,
                 **env,
             )
         ]
@@ -213,10 +233,175 @@ def run_spark_path_reader(
                 status="error",
                 note=str(e)[:300],
                 output_fingerprint="",
+                plan_s=0.0,
                 **env,
             )
         ]
     return out
+
+
+def run_virtual_tile_pixel_read(
+    spark,
+    path: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    where: str = "cluster",
+    disable_file: bool = False,
+) -> List[ResultRow]:
+    """Time a pixel-reading operation over virtual tiles from the light raster reader.
+
+    Loads a directory as virtual tiles (``virtualTiles=true``), then applies a Python
+    UDF that calls ``rasterio.open`` + ``ds.read(1)`` on each executor to force actual
+    pixel reads. This measures the per-tile I/O cost (FUSE open + band read) separately
+    from planning cost.
+
+    ``disable_file=True`` sets ``GBX_DISABLE_FILE=1`` before the run, simulating the
+    no-FILE fallback (FUSE reads on every executor open). Compare FILE-on vs FILE-off
+    to measure the FILE byte-range read win in the virtual-tile reader path.
+
+    **Cluster-only:** intended for manual at-scale runs on a dedicated cluster (not CI).
+    Run the listing comparative first (``run_spark_path_reader`` with ``split_plan_read``),
+    then this leg to measure executor-side read cost separately.
+
+    Runbook:
+    1. Confirm ``bench-corpus-reader-10k`` exists at
+       ``/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-reader-10k``
+       (10,000 tiny 256px / 1-band / float32 tiles; generated separately).
+    2. Stage the wheel: ``gbx:data:push-wheel``.
+    3. Run FILE-on (no env override)::
+
+         run_virtual_tile_pixel_read(spark, corpus_dir, "file-on", warmup=1, measured=3)
+
+    4. Run FILE-off::
+
+         run_virtual_tile_pixel_read(spark, corpus_dir, "file-off", warmup=1, measured=3,
+                                     disable_file=True)
+
+    5. Compare ``iter_median_s`` and ``throughput_rows_s`` between the two result rows.
+    """
+    import os
+    import time as _time  # noqa: F401 (imported for completeness; unused directly here)
+
+    if disable_file:
+        os.environ["GBX_DISABLE_FILE"] = "1"
+    else:
+        os.environ.pop("GBX_DISABLE_FILE", None)
+
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    import pyspark.sql.functions as _F
+    from pyspark.sql.types import DoubleType
+
+    @_F.udf(DoubleType())
+    def _pixel_mean(path_col, window_col):
+        """Force rasterio.open + band1 read on the executor."""
+        import rasterio
+        from rasterio.windows import Window as _W
+
+        if path_col is None:
+            return None
+        try:
+            win = None
+            if window_col is not None:
+                win = _W(
+                    window_col["col_off"],
+                    window_col["row_off"],
+                    window_col["width"],
+                    window_col["height"],
+                )
+            with rasterio.open(path_col) as ds:
+                data = ds.read(1, window=win) if win else ds.read(1)
+            return float(data.mean())
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _job():
+        return (
+            spark.read.format("raster_gbx")
+            .option("virtualTiles", "true")
+            .load(path)
+            .select(
+                _pixel_mean(_F.col("tile.path"), _F.col("tile.window")).alias("mean")
+            )
+            .count()
+        )
+
+    mode_label = "virtual-pixel-read-no-file" if disable_file else "virtual-pixel-read"
+    try:
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        try:
+            actual_rows = _job()
+        except Exception:  # noqa: BLE001
+            actual_rows = 0
+        return [
+            ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="raster_read_pixels",
+                category="reader",
+                mode=mode_label,
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=int(actual_rows),
+                nodata_frac=0.0,
+                warmup_iters=stats["warmup_iters"],
+                measured_iters=stats["measured_iters"],
+                iter_median_s=ms / 1000.0,
+                iter_min_s=stats["iter_min_ms"] / 1000.0,
+                iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                per_tile_avg_s=(ms / actual_rows / 1000.0) if (ms and actual_rows) else 0.0,
+                per_tile_avg_ms=(ms / actual_rows) if (ms and actual_rows) else 0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=(actual_rows / (ms / 1000.0)) if (ms and actual_rows) else 0.0,
+                peak_rss_mb=peak_rss_mb(),
+                status="ok",
+                note=f"virtual-tile pixel read ({mode_label})",
+                output_fingerprint="",
+                **env,
+            )
+        ]
+    except Exception as e:  # noqa: BLE001
+        return [
+            ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="raster_read_pixels",
+                category="reader",
+                mode=mode_label,
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                iter_total_wall_clock_s=0.0,
+                avg_wall_clock_s=0.0,
+                per_tile_avg_s=0.0,
+                per_tile_avg_ms=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=peak_rss_mb(),
+                status="error",
+                note=str(e)[:500],
+                output_fingerprint="",
+                **env,
+            )
+        ]
 
 
 def run_format_read(

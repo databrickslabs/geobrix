@@ -70,6 +70,9 @@ class ResultRow:
     # virtual / header-only), "materialized" (read/generated pixels), or "na"
     # (not applicable / not captured). Default "na".
     output_disposition: str = "na"
+    # Planning time in seconds from a split plan/read measurement.
+    # 0.0 when not measured (the default; all pre-existing rows stay valid).
+    plan_s: float = 0.0
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

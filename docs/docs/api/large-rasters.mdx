@@ -195,6 +195,15 @@ reader selection options, and how `rst_*` functions choose their output shape �
 is covered on the **[Virtual Tiles](./virtual-tiles)** page. Prepare your COGs
 here; read them there.
 
+:::tip Virtual tiles + large COGs: byte-range reads
+When virtual tiles reference **windows** of a large Cloud-Optimized GeoTIFF,
+Databricks FILE can fetch only the bytes covering each window's COG tile blocks —
+rather than opening and seeking the full file. For large COGs (hundreds of MB),
+this is where the virtual-tile model pays off most: many narrow window references
+into one large COG are substantially cheaper with FILE than with the FUSE fallback.
+See [FILE-on vs FILE-off](../api/benchmarking#file-capability-cog-multiwindow) for measured results.
+:::
+
 ## See also
 
 - [Virtual Tiles](./virtual-tiles) — the reading model and virtual↔materialized lifecycle over prepared COGs

@@ -87,6 +87,50 @@ the [COG Reader](./cog).
 **Internally-tiled sources** split on a block-snapped grid.
 :::
 
+:::tip Loading many small files
+Reading a directory that contains a large number of small files can be slow:
+the reader must visit every file header at planning time to compute tile windows.
+For large tile counts, prefer one of:
+- **`manifest` option** — supply a JSON or Parquet file listing `path` + `window` for each tile; the reader skips the directory walk and header opens entirely.
+  ```python
+  spark.read.format("raster_gbx") \
+      .option("manifest", "/Volumes/catalog/schema/vol/tiles.json") \
+      .option("virtualTiles", "true") \
+      .load("/Volumes/catalog/schema/vol/rasters")
+  ```
+- **`tilesTable` option** — point to a Delta table (e.g. one built by your ingest pipeline) that has a `path` column and optionally `window` / dimension columns.
+  ```python
+  spark.read.format("raster_gbx") \
+      .option("tilesTable", "geospatial.myschema.tile_index") \
+      .option("virtualTiles", "true") \
+      .load("/")
+  ```
+- **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [`cog_gbx` writer](./cog); the reader then opens a small number of large files whose headers are comparatively cheap.
+:::
+
+:::tip Reading GeoBrix output with a stock Spark reader
+Stock Spark file readers (`spark.read.format("binaryFile")`, `text`, `parquet`, …)
+silently skip any file whose name starts with `_` or `.` — Spark's hidden-file filter,
+applied during directory listing. Some GeoBrix raster tiles are written with a leading
+`_` in their (hashed) name, so a stock reader can miss a large fraction of a directory.
+Note that **`.option("pathGlobFilter", "*.tif")` does not override this filter** — the
+filter runs before the glob, so `_`-prefixed files stay excluded (an explicit `_*` glob,
+explicit `_`-file paths, and `recursiveFileLookup` do not help either).
+
+To read every tile, enumerate the paths on the driver (which does not apply the filter)
+and build the DataFrame explicitly — ideal when you only need the file list, e.g. to feed
+a VRT builder:
+
+```python
+from pathlib import Path
+paths = [str(p) for p in Path(output_dir).rglob("*.tif")]
+files_df = spark.createDataFrame([(p,) for p in paths], ["path"])
+```
+
+GeoBrix's own raster readers (`raster_gbx` / `gtiff_gbx` / `cog_gbx`) list files directly
+and are **not** affected — this applies only to stock Spark file readers.
+:::
+
 **Opt-in split (serverless budget):**
 
 <CodeFromTest code={largeRasterExamples} language="python" functionName="SPLIT_OPTIONS_TABLE"

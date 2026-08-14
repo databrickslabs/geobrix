@@ -791,6 +791,40 @@ The result splits cleanly along the `Disposition`:
 
 **The takeaway:** virtual tiles are a lazy-load win precisely for the operations that never touch pixels — metadata reads and the set-CRS / set-SRID / nodata / band-select edits that defer until a later terminal step. A pipeline that chains several of those deferred edits before one materializing step pays the pixel I/O **once, at the end**, instead of at every step. For pixel-generating or pixel-reading work the raster must be read regardless, so a materialized input is marginally cheaper there. (`rst_rastertoworldcoord` is the one `deferred` row that doesn't win: it derives a full per-pixel coordinate grid from the georeferencing, so it is compute-bound, not I/O-bound.)
 
+#### FILE byte-range vs FUSE: large-COG multi-window corpus {#file-capability-cog-multiwindow}
+
+The standard bench corpus uses many small whole-file tiles. To measure the
+Databricks FILE byte-range benefit directly, use the COG multi-window corpus:
+K large Cloud-Optimized GeoTIFFs, each referenced by M narrow window rows.
+FILE fetches only the COG tile blocks covering each window; the FUSE fallback
+opens and seeks the full file per window.
+
+**Generate the corpus:**
+
+```python
+import subprocess
+subprocess.run([
+    "python", "-m", "databricks.labs.gbx.bench.datagen",
+    "--out", "/Volumes/<catalog>/<schema>/<vol>/bench-corpus-cog-multiwindow",
+    "--cog-multiwindow", "--cog-count", "5", "--windows-per-cog", "200",
+    "--cog-px", "4096",
+], check=True)
+```
+
+**Run FILE-on vs FILE-off:**
+
+```python
+from databricks.labs.gbx.bench.readers import run_virtual_tile_pixel_read
+
+results_on  = run_virtual_tile_pixel_read(spark, path="<manifest_path>",
+                run_id="cog-file-on",  disable_file=False, where="cluster", warmup=1, measured=3)
+results_off = run_virtual_tile_pixel_read(spark, path="<manifest_path>",
+                run_id="cog-file-off", disable_file=True,  where="cluster", warmup=1, measured=3)
+```
+
+Set `GBX_DISABLE_FILE=1` in the cluster environment to disable FILE globally
+instead of using the `disable_file` parameter.
+
 ### Fan-out generators (streaming UDTFs)
 
 These functions are streaming Python UDTFs on the lightweight tier (one input tile → many output rows via `LATERAL`); the benchmark times the lightweight UDTF against the equivalent heavyweight Scala generator at matched fan-out and asserts that both tiers produce the **same flat row count** — decoded-feature parity as a hard gate.

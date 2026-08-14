@@ -118,6 +118,15 @@ When FILE is available (primarily on Databricks Runtime 19 dedicated clusters wi
 
 **Broadening:** As Databricks extends FILE support to additional environments, GeoBrix will transparently accelerate reads there as well — no user code changes required.
 
+:::tip Virtual tiles + large COGs: byte-range reads
+When virtual tiles reference **windows** of a large Cloud-Optimized GeoTIFF,
+Databricks FILE can fetch only the bytes covering each window's COG tile blocks —
+rather than opening and seeking the full file. For large COGs (hundreds of MB),
+this is where the virtual-tile model pays off most: many narrow window references
+into one large COG are substantially cheaper with FILE than with the FUSE fallback.
+See [FILE-on vs FILE-off](../api/benchmarking#file-capability-cog-multiwindow) for measured results.
+:::
+
 ## Reader selection surface
 
 The lightweight readers expose the windowing surface as read options:
@@ -132,6 +141,15 @@ The lightweight readers expose the windowing surface as read options:
 See the [`cog_gbx` reader](../readers/cog) and the
 [Readers overview](../readers/overview) for the full option reference — this page
 does not duplicate them.
+
+:::tip Many-file directories
+When a directory contains thousands of small tiles, loading it with `.load(dir)`
+incurs planning overhead even with virtual tiles (the reader still walks the directory
+and opens each header to compute `window` dimensions). Use the `manifest` or
+`tilesTable` reader option to supply pre-computed tile paths and windows, reducing
+planning to a single file or table read regardless of tile count.
+See [Raster Reader performance](../readers/raster#loading-many-small-files).
+:::
 
 ## Operating on tiles: your choice of output
 

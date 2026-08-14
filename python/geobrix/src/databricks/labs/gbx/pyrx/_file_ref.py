@@ -21,7 +21,8 @@ import rasterio
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
-from pyspark.sql import SparkSession
+from pyspark.sql import Column, SparkSession
+from pyspark.sql import functions as F
 
 _FILE_SUPPORT_CACHE: dict = {}
 
@@ -101,6 +102,31 @@ def _check_file_support(spark: SparkSession) -> bool:
         return result == "success"
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Column-level FILE injection helper
+# ---------------------------------------------------------------------------
+
+
+def file_ref_arg(tile_col: Column) -> Column:
+    """Return a Column expression for the file_ref argument to tile-reading UDFs.
+
+    If file_supported() is True, returns a plan-level FILE mint expression
+    (F.call_function("try_to_file", tile_col["path"])) that arrives at the UDF
+    as a real FileRef value.  Otherwise returns F.lit(None) so the UDF falls
+    back to the plain-path read.
+
+    Uses SparkSession.getActiveSession() internally (Serverless-safe: no
+    .rdd / _jvm / _jsc / sparkContext / conf.set).  Takes no spark param.
+    """
+    if file_supported():
+        # F.call_function calls a named Spark SQL function as a plan expression.
+        # try_to_file is a Spark SQL built-in (not a PySpark function) that mints
+        # a FILE reference from a Volume path string.
+        return F.call_function("try_to_file", tile_col["path"])
+    # FILE not supported or no session — pass None (UDF uses fallback path).
+    return F.lit(None)
 
 
 # ---------------------------------------------------------------------------

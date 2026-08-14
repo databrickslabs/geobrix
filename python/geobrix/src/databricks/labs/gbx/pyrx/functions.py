@@ -274,6 +274,58 @@ def _pixel_accessor_udf(core_fn, return_type):
     return _udf
 
 
+# --- FILE-aware 2-arg UDF factories (Increment 5 / Task 4) ------------------
+# These produce UDFs with signature (tile: Struct, file_ref: FileRef|null).
+# The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback path
+# per spec §4.3); only the public Python Column bindings use ``_uf_*``.
+def _header_accessor_udf_file(core_fn, return_type):
+    """Struct + FileRef accepting header-only accessor UDF (2-arg).
+
+    Signature: (tile: Struct, file_ref: FileRef|null) → return_type
+    Calls open_header(tile, file_ref=file_ref) internally.  When file_ref is
+    None the open_header front-door falls back to the plain-path read path.
+    """
+
+    @f.udf(return_type)
+    def _udf(tile, file_ref):
+        if _tile_is_empty(tile):
+            return None
+        try:
+            from databricks.labs.gbx.pyrx import _env
+
+            _env.configure_gdal_env()
+            with ot.open_header(tile, file_ref=file_ref) as ds:
+                return core_fn(ds)
+        except Exception:  # noqa: BLE001
+            return None
+
+    return _udf
+
+
+def _pixel_accessor_udf_file(core_fn, return_type):
+    """Struct + FileRef accepting pixel accessor UDF (2-arg).
+
+    Signature: (tile: Struct, file_ref: FileRef|null) → return_type
+    Calls _open(tile, file_ref=file_ref) internally.  When file_ref is None
+    the _open front-door falls back to the plain-path read path.
+    """
+
+    @f.udf(return_type)
+    def _udf(tile, file_ref):
+        if _tile_is_empty(tile):
+            return None
+        try:
+            from databricks.labs.gbx.pyrx import _env
+
+            _env.configure_gdal_env()
+            with ot._open(tile, file_ref=file_ref) as ds:
+                return core_fn(ds)
+        except Exception:  # noqa: BLE001
+            return None
+
+    return _udf
+
+
 # --- Module-level UDF singletons (built once at import) ---------------------
 # Header-only accessors (open_header — answer from the header, no pixel read;
 # a virtual tile is resolved from its ``path``).
@@ -307,6 +359,50 @@ def _metadata_udf(tile):
         _env.configure_gdal_env()
         with ot.open_header(tile) as ds:
             return accessors.metadata(ds)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# --- FILE-aware 2-arg UDF singletons (Task 4 / Increment 5) ----------------
+# Used by the public Python Column bindings; SQL registry still uses ``_u_*``.
+# Header-only (open_header — no pixel read):
+_uf_height = _header_accessor_udf_file(accessors.height, IntegerType())
+_uf_numbands = _header_accessor_udf_file(accessors.numbands, IntegerType())
+_uf_srid = _header_accessor_udf_file(accessors.srid, IntegerType())
+_uf_crs = _header_accessor_udf_file(accessors.crs, StringType())
+_uf_width = _header_accessor_udf_file(accessors.width, IntegerType())
+_uf_boundingbox = _header_accessor_udf_file(accessors.boundingbox, BinaryType())
+# Pixel-reading (_open — materialises the window):
+_uf_isempty = _pixel_accessor_udf_file(accessors.isempty, BooleanType())
+
+
+# metadata: HEADER-ONLY, MapType return (plain @f.udf; pandas_udf rejects
+# MapType on some Arrow builds).  2-arg FILE-aware variant for Python bindings.
+@f.udf(MapType(StringType(), StringType()))
+def _uf_metadata_udf(tile, file_ref):
+    if _tile_is_empty(tile):
+        return None
+    try:
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot.open_header(tile, file_ref=file_ref) as ds:
+            return accessors.metadata(ds)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+# summary: PIXEL accessor, StringType return.  2-arg FILE-aware variant.
+@f.udf(StringType())
+def _uf_summary_udf(tile, file_ref):
+    if _tile_is_empty(tile):
+        return None
+    try:
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot._open(tile, file_ref=file_ref) as ds:
+            return accessors.summary(ds)
     except Exception:  # noqa: BLE001
         return None
 
@@ -4353,20 +4449,40 @@ def rst_color_relief(
 # Accessor wrappers pass the FULL tile struct (not the raster subfield) so a
 # virtual tile's ``path`` is reachable; the header/pixel split is decided by the
 # factory that built each ``_u_*`` UDF (open_header vs _open).
+#
+# FILE-aware wiring (Task 4): the public Python bindings now call the 2-arg
+# ``_uf_*`` UDFs (Struct + FileRef), injecting a plan-level file_ref via
+# ``file_ref_arg()``.  When FILE is unsupported (local / non-DBR / env-disabled)
+# ``file_ref_arg`` returns ``F.lit(None)`` and the UDF falls back to the
+# plain-path read — identical to the previous single-arg path.
+# The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback,
+# no FILE acceleration for SQL per spec §4.3).
 def rst_width(tile: ColLike) -> Column:
-    return _u_width(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_width(tc, file_ref_arg(tc))
 
 
 def rst_height(tile: ColLike) -> Column:
-    return _u_height(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_height(tc, file_ref_arg(tc))
 
 
 def rst_numbands(tile: ColLike) -> Column:
-    return _u_numbands(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_numbands(tc, file_ref_arg(tc))
 
 
 def rst_srid(tile: ColLike) -> Column:
-    return _u_srid(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_srid(tc, file_ref_arg(tc))
 
 
 def rst_crs(tile: ColLike) -> Column:
@@ -4405,11 +4521,17 @@ def rst_upperlefty(tile: ColLike) -> Column:
 
 
 def rst_boundingbox(tile: ColLike) -> Column:
-    return _u_boundingbox(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_boundingbox(tc, file_ref_arg(tc))
 
 
 def rst_metadata(tile: ColLike) -> Column:
-    return _metadata_udf(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_metadata_udf(tc, file_ref_arg(tc))
 
 
 def rst_scalex(tile: ColLike) -> Column:
@@ -4567,7 +4689,10 @@ def rst_summary(tile: ColLike) -> Column:
     The JSON shape is GeoBrix-specific (driver, size, crs, geoTransform, bands
     with min/max/mean/stdDev), not a byte-for-byte ``gdalinfo -json`` match.
     """
-    return _summary_udf(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_summary_udf(tc, file_ref_arg(tc))
 
 
 def rst_histogram(

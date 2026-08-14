@@ -250,3 +250,98 @@ def test_open_tile_file_ref_degrades_to_fallback(gtiff_bytes):
             np.testing.assert_array_equal(pixels, expected)
     finally:
         os.remove(fallback_path)
+
+
+# ---------------------------------------------------------------------------
+# Tests for file_ref_arg injection (Task 4)
+# ---------------------------------------------------------------------------
+
+
+def test_binding_injection_passes_lit_none_when_file_not_supported(spark):
+    """file_ref_arg returns F.lit(None) when FILE is not supported.
+
+    ``spark`` param ensures the JVM is running (needed for Column._jc).
+    """
+    from unittest import mock
+
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    with mock.patch(
+        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
+    ):
+        tile_col = F.col("tile")
+        result_col = file_ref_arg(tile_col)
+        expr_str = str(result_col._jc)
+        # F.lit(None) renders as 'NULL' in Spark; confirm no try_to_file expression.
+        assert "try_to_file" not in expr_str, f"Unexpected try_to_file in {expr_str!r}"
+        assert expr_str.upper() == "NULL", f"Expected NULL literal, got {expr_str!r}"
+
+
+def test_binding_injection_uses_call_function_when_supported(spark):
+    """file_ref_arg returns a try_to_file Column when FILE is supported.
+
+    ``spark`` param ensures the JVM is running (needed for Column._jc).
+    """
+    from unittest import mock
+
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    with mock.patch(
+        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=True
+    ):
+        tile_col = F.col("tile")
+        result_col = file_ref_arg(tile_col)
+        expr_str = str(result_col._jc)
+        assert "try_to_file" in expr_str, f"Expected try_to_file in {expr_str!r}"
+
+
+def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
+    """End-to-end: rewired rst_height returns correct pixel height via fallback.
+
+    file_supported() returns False locally so file_ref_arg → F.lit(None) →
+    the 2-arg UDF falls back to the plain-path open_header path.  Builds a
+    materialized tile via rst_fromcontent (no JAR needed).
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    # Build a materialized tile from the gtiff_bytes fixture (4×3).
+    df = (
+        spark.createDataFrame([(gtiff_bytes,)], ["raster"])
+        .select(prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
+    )
+    result = df.select(prx.rst_height("tile")).collect()[0][0]
+    assert result == 3, f"Expected height=3, got {result}"
+
+
+def test_sql_registry_still_maps_to_single_arg_udfs():
+    """SQL_REGISTRY entries for accessors point at single-arg ``_u_*`` UDFs.
+
+    This confirms that the FILE-aware rewiring of the public Python bindings
+    did NOT inadvertently redirect the SQL registry entries to the 2-arg ``_uf_*``
+    UDFs.  SQL binds positionally, so a 2-arg UDF in the registry would cause
+    incorrect or errored SQL calls.
+    """
+    from databricks.labs.gbx.pyrx.functions import (
+        SQL_REGISTRY,
+        _metadata_udf,
+        _u_height,
+        _u_numbands,
+        _u_srid,
+        _u_width,
+    )
+
+    assert SQL_REGISTRY["gbx_rst_height"] is _u_height, "gbx_rst_height must map to _u_height"
+    assert SQL_REGISTRY["gbx_rst_numbands"] is _u_numbands, (
+        "gbx_rst_numbands must map to _u_numbands"
+    )
+    assert SQL_REGISTRY["gbx_rst_srid"] is _u_srid, "gbx_rst_srid must map to _u_srid"
+    assert SQL_REGISTRY["gbx_rst_width"] is _u_width, "gbx_rst_width must map to _u_width"
+    assert SQL_REGISTRY["gbx_rst_metadata"] is _metadata_udf, (
+        "gbx_rst_metadata must map to _metadata_udf (single-arg)"
+    )

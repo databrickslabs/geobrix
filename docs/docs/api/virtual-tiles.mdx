@@ -112,11 +112,11 @@ When FILE is available (primarily on Databricks Runtime 19 dedicated clusters wi
 
 ### Supported environments
 
-- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE acceleration lights up automatically. Virtual tiles use byte-range windowed reads.
+- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE acceleration engages where the runtime feature-detect succeeds — FILE must be enabled on the workspace/cluster and its prerequisite path readable. It is not guaranteed on every DBR 19 cluster. Where it succeeds, virtual tiles use byte-range windowed reads; where it does not, tiles fall back to the traditional FUSE path automatically.
 - **Local development, CI, Serverless Compute** (FILE not available): Virtual tiles work via the traditional FUSE + rasterio path. Behavior is identical; read latency is slightly higher (whole-file staging).
 - **Databricks Runtime 18, DBR LTS classic:** Virtual tiles work via the traditional FUSE path. No FILE acceleration.
 
-**Broadening:** As Databricks extends FILE support to serverless-GC and other environments, GeoBrix will transparently accelerate reads there as well — no user code changes required.
+**Broadening:** As Databricks extends FILE support to additional environments, GeoBrix will transparently accelerate reads there as well — no user code changes required.
 
 ## Reader selection surface
 

@@ -269,17 +269,21 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
         pending = _parse_pending(tile.metadata)
 
         # FILE branch: try windowed read via FileRef (avoids staging the full file).
-        # On success yield the DatasetReader directly; warp/clip are skipped because
-        # the FileRef already delivers the correctly-projected window from the source.
-        # On FileRefReadError fall through to the local-path branch below.
-        if file_ref is not None:
+        # A FileRef is a handle to the same source file — it does NOT reproject
+        # or clip.  This fast-path only applies for the no-clip AND no-warp case:
+        #   - clip_polygon is not None → fall through; local-path branch clips.
+        #   - warp needed → open_windowed_via_fileref raises FileRefReadError → fall through.
+        # On any FileRefReadError fall through to the local-path branch below.
+        if file_ref is not None and tile.clip_polygon is None:
             try:
                 from databricks.labs.gbx.pyrx._file_ref import (
                     FileRefReadError,
                     open_windowed_via_fileref,
                 )
 
-                with open_windowed_via_fileref(file_ref, tile.window, pending) as ds:
+                with open_windowed_via_fileref(
+                    file_ref, tile.window, pending, tile_crs=tile.crs
+                ) as ds:
                     yield ds
                 return
             except FileRefReadError:

@@ -6,10 +6,14 @@ Covers:
   - Any exception during roundtrip → False (exception swallowed, result cached)
   - open_windowed_via_fileref reads correct windowed pixels from a stub FileRef
   - open_windowed_via_fileref raises FileRefReadError on a non-seekable stream
+  - C1: clip_polygon set → FILE fast-path skipped; result matches fallback (clipped)
+  - C1: warp required → FileRefReadError raised; result matches fallback (warped)
+  - I1: caller-body exception propagates unchanged (not wrapped in FileRefReadError)
 """
 
 import io
 import os
+import struct
 import tempfile
 
 import numpy as np
@@ -317,6 +321,156 @@ def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
     )
     result = df.select(prx.rst_height("tile")).collect()[0][0]
     assert result == 3, f"Expected height=3, got {result}"
+
+
+# ---------------------------------------------------------------------------
+# C1: clip_polygon must not be bypassed by FILE fast-path
+# ---------------------------------------------------------------------------
+
+
+def _wkb_box(x0, y0, x1, y1):
+    """Build WKB little-endian Polygon for a bounding box (no shapely)."""
+    # byte_order(1) + type(4) + num_rings(4) + num_pts(4) + 5*(x,y)(80)
+    coords = [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+    header = struct.pack("<BII", 0x01, 3, 1) + struct.pack("<I", 5)
+    pts = b"".join(struct.pack("<dd", x, y) for x, y in coords)
+    return header + pts
+
+
+def test_open_tile_file_ref_clip_falls_through_to_clipped_result(gtiff_bytes):
+    """C1 clip guard: a tile with clip_polygon must not bypass clipping via FILE path.
+
+    Verifies that open_tile(tile, file_ref=stub) with clip_polygon set gives pixels
+    IDENTICAL to open_tile(tile, file_ref=None) (the clipped result), not the full
+    unclipped window.
+
+    gtiff_bytes fixture: 4×3 float32 EPSG:4326, origin (10.0, 50.0), pixel 0.5°.
+    Clip polygon covers left two columns (x=[10.0, 11.0]) → clipped width < 4.
+    """
+    from databricks.labs.gbx.pyrx.core.open_tile import open_tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    # Write the GeoTIFF to a temp file so both paths can read it.
+    fd, tmp_path = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(gtiff_bytes)
+
+        # Clip polygon covering left two columns: x=[10.0, 11.0], y=[48.0, 50.5]
+        # (fully covers the raster height; clips columns 0–1).
+        clip_wkb = _wkb_box(10.0, 48.0, 11.0, 50.5)
+
+        tile = VirtualTile(
+            cellid=0,
+            path=tmp_path,
+            window=(0, 0, 4, 3),
+            clip_polygon=clip_wkb,
+            clip_crs="EPSG:4326",
+        )
+
+        stub = _StubFileRef(gtiff_bytes)
+
+        # Read via FILE stub — must clip correctly (not return the full unclipped window).
+        with open_tile(tile, file_ref=stub) as ds_with_ref:
+            pixels_with_ref = ds_with_ref.read(1)
+            width_with_ref = ds_with_ref.width
+
+        # Read via plain fallback path (file_ref=None) — the authoritative clipped result.
+        with open_tile(tile, file_ref=None) as ds_no_ref:
+            pixels_no_ref = ds_no_ref.read(1)
+
+        # Both paths must give identical pixels.
+        np.testing.assert_array_equal(
+            pixels_with_ref,
+            pixels_no_ref,
+            err_msg="FILE path returned different pixels than fallback for clipped tile",
+        )
+        # And the result must be clipped (narrower than the full window width=4).
+        assert width_with_ref < 4, (
+            f"FILE path returned full-width={width_with_ref}; expected clip to reduce width"
+        )
+    finally:
+        os.remove(tmp_path)
+
+
+def test_open_tile_file_ref_warp_falls_through_to_warped_result(gtiff_bytes):
+    """C1 warp guard: a tile requesting a different CRS must not bypass reprojection.
+
+    Verifies that open_tile(tile, file_ref=stub) with tile.crs set to EPSG:3857
+    gives a result IDENTICAL to open_tile(tile, file_ref=None) (the warped result).
+
+    gtiff_bytes fixture is EPSG:4326; requesting EPSG:3857 triggers a warp in the
+    fallback path.  The FILE path must raise FileRefReadError and fall through.
+    """
+    from databricks.labs.gbx.pyrx.core.open_tile import open_tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(gtiff_bytes)
+
+        tile = VirtualTile(
+            cellid=0,
+            path=tmp_path,
+            window=(0, 0, 4, 3),
+            crs="EPSG:3857",
+        )
+
+        stub = _StubFileRef(gtiff_bytes)
+
+        # Read via FILE stub — must produce reprojected output (not raise, not skip warp).
+        with open_tile(tile, file_ref=stub) as ds_with_ref:
+            pixels_with_ref = ds_with_ref.read(1)
+            crs_with_ref = ds_with_ref.crs
+
+        # Read via plain fallback path (file_ref=None) — authoritative warped result.
+        with open_tile(tile, file_ref=None) as ds_no_ref:
+            pixels_no_ref = ds_no_ref.read(1)
+            crs_no_ref = ds_no_ref.crs
+
+        # Both must produce EPSG:3857 output.
+        assert crs_with_ref.to_epsg() == 3857, (
+            f"FILE path CRS={crs_with_ref}; expected EPSG:3857"
+        )
+        assert crs_no_ref.to_epsg() == 3857
+
+        # Pixel arrays must be identical.
+        np.testing.assert_array_equal(
+            pixels_with_ref,
+            pixels_no_ref,
+            err_msg="FILE path returned different pixels than fallback for warped tile",
+        )
+    finally:
+        os.remove(tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# I1: caller-body exception must propagate unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_open_windowed_via_fileref_caller_exception_propagates(gtiff_bytes):
+    """I1: exception raised in the caller's with-body must propagate unchanged.
+
+    Before the I1 fix, the yield was inside the broad try/except, so a caller-body
+    exception would be caught and re-raised as FileRefReadError, which then caused
+    a RuntimeError('generator didn't stop after throw()') at the contextmanager
+    level.  After the fix the yield is outside the broad handler, so the ValueError
+    must propagate directly.
+    """
+    from databricks.labs.gbx.pyrx._file_ref import open_windowed_via_fileref
+
+    stub = _StubFileRef(gtiff_bytes)
+    window = (0, 0, 4, 3)
+    pending = (None, None, None, None)
+
+    with pytest.raises(ValueError, match="caller boom"):
+        with open_windowed_via_fileref(stub, window, pending) as ds:
+            assert ds is not None  # generator did yield
+            raise ValueError("caller boom")
 
 
 def test_sql_registry_still_maps_to_single_arg_udfs():

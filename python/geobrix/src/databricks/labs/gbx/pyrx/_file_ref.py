@@ -27,6 +27,17 @@ from pyspark.sql import functions as F
 _FILE_SUPPORT_CACHE: dict = {}
 
 
+def _epsg_of_str(crs_str: str):
+    """Parse 'EPSG:3857' / '3857' -> 3857; None if not a plain EPSG code."""
+    s = str(crs_str).strip().upper()
+    if s.startswith("EPSG:"):
+        s = s[5:]
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
 def file_supported() -> bool:
     """Memoized per-SparkSession capability check for FILE support.
 
@@ -120,6 +131,9 @@ def file_ref_arg(tile_col: Column) -> Column:
     Uses SparkSession.getActiveSession() internally (Serverless-safe: no
     .rdd / _jvm / _jsc / sparkContext / conf.set).  Takes no spark param.
     """
+    # NOTE: on a FILE-enabled session the first call to file_supported() triggers
+    # a synchronous feature-detect query (memoized once per session) — so building
+    # the Column has a one-time side effect.
     if file_supported():
         # F.call_function calls a named Spark SQL function as a plan expression.
         # try_to_file is a Spark SQL built-in (not a PySpark function) that mints
@@ -141,13 +155,19 @@ class FileRefReadError(Exception):
 
 
 @contextmanager
-def open_windowed_via_fileref(file_ref, window, pending):
+def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     """Open a FileRef as a rasterio source and read exactly the window.
 
     The FileRef's .open() method must return a seekable stream (e.g. a
     ``_io.BufferedReader`` or ``io.BytesIO``).  The window and pending
     instructions are applied exactly as in open_tile, then a rasterio
     DatasetReader backed by an in-memory GeoTIFF is yielded.
+
+    A FileRef is a handle to the same source file — it does NOT reproject or
+    clip.  When ``tile_crs`` is set and a reprojection is required (the
+    requested CRS differs from the source CRS after any pending_srid relabel),
+    ``FileRefReadError`` is raised so the caller can degrade to the local-file
+    path (which warps correctly).
 
     Args:
         file_ref: Object with ``.open()`` (returns seekable stream) and
@@ -157,32 +177,62 @@ def open_windowed_via_fileref(file_ref, window, pending):
             ``VirtualTile.window``.
         pending: 4-tuple ``(bands|None, nodata|None, srid|None, crs_str|None)``
             from ``_parse_pending(tile.metadata)``.
+        tile_crs: Optional target CRS string from the tile (``tile.crs``).
+            When set and a reprojection would be required, ``FileRefReadError``
+            is raised to trigger fallback to the local-file path.
 
     Yields:
         An open ``rasterio.io.DatasetReader`` covering exactly the window.
 
     Raises:
         FileRefReadError: if the stream is not seekable, rasterio open fails,
-            or any other windowed-read failure occurs.  Callers may degrade to
-            ``file_ref.as_local_file()`` as a fallback.
+            a reprojection is required, or any other windowed-read setup
+            failure.  Callers may degrade to ``file_ref.as_local_file()``.
     """
+    # Setup phase: open stream, check seekable, check warp, build tile bytes.
+    # The broad except converts any failure here to FileRefReadError so the
+    # caller can degrade to the local-file path.  The yield is OUTSIDE this
+    # handler so that caller-body exceptions propagate unchanged (not wrapped).
     try:
         stream = file_ref.open()
         if not stream.seekable():
             raise FileRefReadError("FileRef stream is not seekable")
 
         with rasterio.open(stream) as src:
+            # Reprojection check: if tile_crs requests a different CRS than
+            # the source (after any pending_srid relabel), the FILE path cannot
+            # warp — raise FileRefReadError to degrade to the local-file path.
+            if tile_crs is not None:
+                _, _, pending_srid, _ = pending
+                src_epsg = src.crs.to_epsg() if src.crs else None
+                effective_src_epsg = (
+                    pending_srid if pending_srid is not None else src_epsg
+                )
+                want_epsg = _epsg_of_str(tile_crs)
+                if want_epsg is not None:
+                    if want_epsg != effective_src_epsg:
+                        raise FileRefReadError(
+                            "Reprojection required; degrading to local-file path"
+                        )
+                else:
+                    # Non-EPSG target (ESRI:*, WKT, PROJ4): cannot warp via FILE path.
+                    raise FileRefReadError(
+                        "Non-EPSG reprojection required; degrading to local-file path"
+                    )
+
             col_off, row_off, width, height = window
             rio_window = Window(col_off, row_off, width, height)
 
             from databricks.labs.gbx.pyrx.core.open_tile import _window_dataset_bytes
 
             tile_bytes = _window_dataset_bytes(src, rio_window, pending=pending)
-
-            with MemoryFile(tile_bytes) as mf:
-                with mf.open() as ds:
-                    yield ds
     except FileRefReadError:
         raise
     except Exception as exc:
         raise FileRefReadError(f"FileRef windowed read failed: {exc}") from exc
+
+    # Yield phase: outside the broad handler so that caller-body exceptions
+    # propagate unchanged (not converted to FileRefReadError → RuntimeError).
+    with MemoryFile(tile_bytes) as mf:
+        with mf.open() as ds:
+            yield ds

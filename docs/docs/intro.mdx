@@ -83,7 +83,7 @@ GridX's 40 functions break down as **BNG (23)**, **Quadbin (10)**, and **custom 
 
 ## Supported Databricks Runtimes
 
-GeoBrix supports both current Databricks Runtime LTS releases — a **single wheel + single JAR** runs on both (Scala 2.13.16 matches both, the JAR is Java-17 bytecode that loads on both JVMs, and Spark is a `provided` dependency):
+GeoBrix supports the current Databricks Runtime LTS releases — a **single wheel + single JAR** runs on **17.3 and 18 LTS** (Scala 2.13.16 matches both runtimes, the JAR is Java-17 bytecode that loads on both JVMs, and Spark is a `provided` dependency); the **lightweight tier** additionally runs on **DBR 19 LTS**:
 
 | DBR LTS | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
 |---|---|---|---|---|---|---|

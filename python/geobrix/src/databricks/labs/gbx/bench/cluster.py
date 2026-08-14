@@ -2857,7 +2857,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         row_counts=cfg["row_counts"],
         warmup=cfg["warmup"],
         measured=cfg["measured"],
-        spark_warmup=cfg.get("spark_warmup", 1),
+        spark_warmup=cfg.get("spark_warmup", 0),
         spark_measured=cfg.get("spark_measured", 1),
         partition_size=int(cfg.get("partition_size", 0)),
         truncate=cfg.get("truncate_results", False),

@@ -275,13 +275,14 @@ def run_virtual_tile_pixel_read(
        ``/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-reader-10k``
        (10,000 tiny 256px / 1-band / float32 tiles; generated separately).
     2. Stage the wheel: ``gbx:data:push-wheel``.
-    3. Run FILE-on (no env override)::
+    3. Run FILE-on (no env override).  Pass ``SPARK_WARMUP, SPARK_MEASURED`` (0/1)
+       from the notebook globals — this is a spark-path leg, not a pure-core microbench::
 
-         run_virtual_tile_pixel_read(spark, corpus_dir, "file-on", warmup=1, measured=3)
+         run_virtual_tile_pixel_read(spark, corpus_dir, run_id, SPARK_WARMUP, SPARK_MEASURED)
 
     4. Run FILE-off::
 
-         run_virtual_tile_pixel_read(spark, corpus_dir, "file-off", warmup=1, measured=3,
+         run_virtual_tile_pixel_read(spark, corpus_dir, run_id, SPARK_WARMUP, SPARK_MEASURED,
                                      disable_file=True)
 
     5. Compare ``iter_median_s`` and ``throughput_rows_s`` between the two result rows.

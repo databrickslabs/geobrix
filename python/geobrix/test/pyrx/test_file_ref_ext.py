@@ -489,3 +489,228 @@ def test_group2_singletons_exist():
     ]
     for name in expected:
         assert hasattr(prx, name), f"{name} must exist in functions module"
+
+
+# ---------------------------------------------------------------------------
+# Group 3 — Multi-input / array / aggregators
+# ---------------------------------------------------------------------------
+
+# Task 9 — rst_frombands (ARRAY input, FILE-ARRAY injection)
+
+
+def test_rst_frombands_binding_uses_uf_frombands():
+    import databricks.labs.gbx.pyrx.functions as prx
+    assert hasattr(prx, "_uf_frombands"), "_uf_frombands must exist"
+
+
+def test_rst_frombands_file_ref_equals_fallback(gtiff_bytes):
+    """rst_frombands: FILE-array path assembles same multi-band tile as fallback."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+    from databricks.labs.gbx.pyrx.functions import _dataset_to_gtiff_bytes
+
+    fd1, tmp1 = tempfile.mkstemp(suffix=".tif")
+    fd2, tmp2 = tempfile.mkstemp(suffix=".tif")
+    os.close(fd1)
+    os.close(fd2)
+    with open(tmp1, "wb") as fh:
+        fh.write(gtiff_bytes)
+    with open(tmp2, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        vt1 = VirtualTile(cellid=0, path=tmp1, window=(0, 0, 4, 3)).to_row()
+        vt2 = VirtualTile(cellid=0, path=tmp2, window=(0, 0, 4, 3)).to_row()
+
+        # Fallback: materialize each tile and call frombands_tiles.
+        with ot._open(vt1, file_ref=None) as ds1:
+            b1 = _dataset_to_gtiff_bytes(ds1)
+        with ot._open(vt2, file_ref=None) as ds2:
+            b2 = _dataset_to_gtiff_bytes(ds2)
+        expected_bytes = agg_core.frombands_tiles([(0, b1), (1, b2)])
+
+        # FILE path: read each tile via StubFileRef.
+        with ot._open(vt1, file_ref=_StubFileRef(gtiff_bytes)) as ds1:
+            fb1 = _dataset_to_gtiff_bytes(ds1)
+        with ot._open(vt2, file_ref=_StubFileRef(gtiff_bytes)) as ds2:
+            fb2 = _dataset_to_gtiff_bytes(ds2)
+        got_bytes = agg_core.frombands_tiles([(0, fb1), (1, fb2)])
+
+        with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+            with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+                np.testing.assert_array_equal(exp_ds.read(), got_ds.read())
+                assert got_ds.count == 2
+    finally:
+        os.remove(tmp1)
+        os.remove(tmp2)
+
+
+# Task 10 — rst_merge and rst_combineavg
+
+
+def test_rst_merge_binding_uses_uf_merge():
+    import databricks.labs.gbx.pyrx.functions as prx
+    assert hasattr(prx, "_uf_merge"), "_uf_merge must exist"
+    assert hasattr(prx, "_uf_combineavg"), "_uf_combineavg must exist"
+
+
+def test_rst_merge_file_ref_equals_fallback(gtiff_bytes):
+    """rst_merge: FILE-array path produces same mosaic as fallback."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+    from databricks.labs.gbx.pyrx.functions import _dataset_to_gtiff_bytes
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        vt = VirtualTile(cellid=0, path=tmp, window=(0, 0, 4, 3)).to_row()
+
+        with ot._open(vt, file_ref=None) as ds:
+            b = _dataset_to_gtiff_bytes(ds)
+        expected_bytes = agg_core.merge_tiles([b, b])
+
+        with ot._open(vt, file_ref=_StubFileRef(gtiff_bytes)) as ds:
+            fb = _dataset_to_gtiff_bytes(ds)
+        got_bytes = agg_core.merge_tiles([fb, fb])
+
+        with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+            with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+                np.testing.assert_array_equal(exp_ds.read(), got_ds.read())
+    finally:
+        os.remove(tmp)
+
+
+# Task 11 — rst_mapalgebra (FILE-array + expression arg)
+
+
+def test_rst_mapalgebra_binding_uses_uf_mapalgebra():
+    import databricks.labs.gbx.pyrx.functions as prx
+    assert hasattr(prx, "_uf_mapalgebra"), "_uf_mapalgebra must exist"
+
+
+def test_rst_mapalgebra_file_ref_equals_fallback(gtiff_bytes):
+    """rst_mapalgebra: FILE-array path produces same output as fallback."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import mapalgebra as mapalgebra_core
+    from databricks.labs.gbx.pyrx.functions import _dataset_to_gtiff_bytes
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        vt = VirtualTile(cellid=0, path=tmp, window=(0, 0, 4, 3)).to_row()
+        expression = "A * 2"
+
+        # Fallback path.
+        with ot._open(vt, file_ref=None) as ds:
+            b = _dataset_to_gtiff_bytes(ds)
+        expected_bytes = mapalgebra_core.mapalgebra([b], expression)
+
+        # FILE path.
+        with ot._open(vt, file_ref=_StubFileRef(gtiff_bytes)) as ds:
+            fb = _dataset_to_gtiff_bytes(ds)
+        got_bytes = mapalgebra_core.mapalgebra([fb], expression)
+
+        assert expected_bytes is not None and got_bytes is not None
+        with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+            with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+                np.testing.assert_allclose(exp_ds.read(), got_ds.read(), atol=1e-5)
+    finally:
+        os.remove(tmp)
+
+
+# Task 12 — grouped aggregators
+
+
+def test_rst_merge_agg_binding_has_file_variant():
+    import databricks.labs.gbx.pyrx.functions as prx
+    assert hasattr(prx, "_merge_agg_file_udf"), "_merge_agg_file_udf must exist"
+    assert hasattr(prx, "_combineavg_agg_file_udf"), "_combineavg_agg_file_udf must exist"
+    assert hasattr(prx, "_frombands_agg_file_udf"), "_frombands_agg_file_udf must exist"
+
+
+def test_rst_merge_agg_file_ref_unit(gtiff_bytes):
+    """Unit test: _merge_agg_file_udf processes tiles correctly with stub FileRefs."""
+    import pandas as pd
+    from rasterio.io import MemoryFile
+    import numpy as np
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        vt_row = VirtualTile(cellid=7, path=tmp, window=(0, 0, 4, 3)).to_row()
+        fref_stub = _StubFileRef(gtiff_bytes)
+
+        from databricks.labs.gbx.pyrx.functions import _merge_agg_file_udf
+
+        tile_series = pd.Series([vt_row])
+        fref_series = pd.Series([fref_stub])
+
+        # Call the underlying function directly (pandas_udf wraps a plain fn).
+        raw_fn = _merge_agg_file_udf.func
+        result_bytes = raw_fn(tile_series, fref_series)
+
+        assert result_bytes is not None
+        with MemoryFile(bytes(result_bytes)) as mf, mf.open() as ds:
+            assert ds.count == 1
+            np.testing.assert_array_equal(
+                ds.read(1).shape, (3, 4)  # height=3, width=4
+            )
+    finally:
+        os.remove(tmp)
+
+
+def test_rst_frombands_agg_file_ref_unit(gtiff_bytes):
+    """Unit test: _frombands_agg_file_udf stacks bands from stub FileRefs."""
+    import pandas as pd
+    from rasterio.io import MemoryFile
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        vt_row = VirtualTile(cellid=0, path=tmp, window=(0, 0, 4, 3)).to_row()
+        fref_stub = _StubFileRef(gtiff_bytes)
+
+        from databricks.labs.gbx.pyrx.functions import _frombands_agg_file_udf
+
+        tile_series = pd.Series([vt_row, vt_row])
+        fref_series = pd.Series([fref_stub, fref_stub])
+        band_series = pd.Series([0, 1])
+
+        raw_fn = _frombands_agg_file_udf.func
+        result_bytes = raw_fn(tile_series, fref_series, band_series)
+
+        assert result_bytes is not None
+        with MemoryFile(bytes(result_bytes)) as mf, mf.open() as ds:
+            # Both input tiles have 1 band each; combined should be 2 bands.
+            assert ds.count == 2
+    finally:
+        os.remove(tmp)
+
+
+def test_group3_sql_registry_unchanged():
+    """SQL registry must still point at single-arg UDFs for Group 3 ops."""
+    import databricks.labs.gbx.pyrx.functions as prx
+
+    registry = prx.SQL_REGISTRY
+    # Array ops: single-arg UDFs must be present in registry.
+    assert "gbx_rst_merge" in registry, "gbx_rst_merge must be in SQL_REGISTRY"
+    assert "gbx_rst_combineavg" in registry, "gbx_rst_combineavg must be in SQL_REGISTRY"
+    assert "gbx_rst_frombands" in registry, "gbx_rst_frombands must be in SQL_REGISTRY"
+    assert "gbx_rst_mapalgebra" in registry, "gbx_rst_mapalgebra must be in SQL_REGISTRY"
+    # Agg ops: single-arg UDFs must be present in registry.
+    assert "gbx_rst_merge_agg" in registry, "gbx_rst_merge_agg must be in SQL_REGISTRY"
+    # Confirm the registry entries are not the FILE variants.
+    assert registry["gbx_rst_merge"] is prx._merge_udf
+    assert registry["gbx_rst_combineavg"] is prx._combineavg_udf
+    assert registry["gbx_rst_frombands"] is prx._frombands_udf
+    assert registry["gbx_rst_mapalgebra"] is prx._mapalgebra_udf

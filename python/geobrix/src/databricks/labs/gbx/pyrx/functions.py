@@ -935,6 +935,54 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     return row
 
 
+@f.udf(V2_TILE_SCHEMA)
+def _uf_merge(tiles, file_refs):
+    """FILE-aware rst_merge: reads each input via its per-element FileRef.
+
+    ``tiles`` is ARRAY<tile struct>; ``file_refs`` is a parallel ARRAY<FileRef|null>
+    (same length) minted in the plan via F.transform.  Materialized elements have
+    file_refs[i]=None (try_to_file on NULL returns NULL); they fall through to verbatim
+    bytes to preserve the sort-key invariant (no re-encode of materialized tiles).
+    """
+    if not tiles:
+        return None
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    frefs = list(file_refs) if file_refs else []
+    while len(frefs) < len(tiles):
+        frefs.append(None)
+
+    rasters = []
+    dropped = 0
+    for t, fref in zip(tiles, frefs):
+        if t is None or _tile_is_empty(t):
+            continue
+        try:
+            vt = ot._to_virtual_tile(t)
+            if vt.is_virtual():
+                with ot._open(t, file_ref=fref) as ds:
+                    candidate = _dataset_to_gtiff_bytes(ds)
+            else:
+                candidate = bytes(vt.raster)
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+
+    if not rasters:
+        return None
+    new_bytes = agg_core.merge_tiles(rasters)
+    tile = _serde.build_tile(new_bytes, "GTiff", 0)
+    if dropped:
+        tile["metadata"][
+            "last_error"
+        ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
+    return tile
+
+
 def rst_merge(
     tiles: ColLike,
     virtualize_dir: Optional[str] = None,
@@ -969,7 +1017,13 @@ def rst_merge(
             f.lit(virtualize_prefix),
             f.lit(materialize),
         )
-    return _merge_udf(_col(tiles))
+    from databricks.labs.gbx.pyrx._file_ref import file_supported
+
+    tc = _col(tiles)
+    if file_supported():
+        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        return _uf_merge(tc, file_refs_col)
+    return _merge_udf(tc)
 
 
 # rst_combineavg: single ARRAY<tile struct> arg -> per-pixel mean tile.
@@ -1049,6 +1103,54 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     return row
 
 
+@f.udf(V2_TILE_SCHEMA)
+def _uf_combineavg(tiles, file_refs):
+    """FILE-aware rst_combineavg: reads each input via its per-element FileRef."""
+    if not tiles:
+        return None
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    frefs = list(file_refs) if file_refs else []
+    while len(frefs) < len(tiles):
+        frefs.append(None)
+
+    rasters = []
+    good_elems = []
+    dropped = 0
+    for t, fref in zip(tiles, frefs):
+        if t is None or _tile_is_empty(t):
+            continue
+        try:
+            vt = ot._to_virtual_tile(t)
+            if vt.is_virtual():
+                with ot._open(t, file_ref=fref) as ds:
+                    candidate = _dataset_to_gtiff_bytes(ds)
+            else:
+                candidate = bytes(vt.raster)
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+            good_elems.append(t)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+
+    if not rasters:
+        return None
+    cellids = {_tile_cellid(t) for t in good_elems}
+    cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
+    new_bytes = agg_core.combineavg_tiles(rasters)
+    if new_bytes is None:
+        return None
+    tile = _serde.build_tile(new_bytes, "GTiff", cellid)
+    if dropped:
+        tile["metadata"][
+            "last_error"
+        ] = f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
+    return tile
+
+
 def rst_combineavg(
     tiles: ColLike,
     virtualize_dir: Optional[str] = None,
@@ -1083,7 +1185,13 @@ def rst_combineavg(
             _col(tiles),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _combineavg_udf(_col(tiles))
+    from databricks.labs.gbx.pyrx._file_ref import file_supported
+
+    tc = _col(tiles)
+    if file_supported():
+        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        return _uf_combineavg(tc, file_refs_col)
+    return _combineavg_udf(tc)
 
 
 # rst_frombands: single ARRAY<single-band tile> arg -> multi-band tile.
@@ -1164,6 +1272,58 @@ def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
     return row
 
 
+@f.udf(V2_TILE_SCHEMA)
+def _uf_frombands(bands, file_refs):
+    """FILE-aware rst_frombands: reads each input via its per-element FileRef.
+
+    ``bands`` is ARRAY<tile struct>; ``file_refs`` is a parallel ARRAY<FileRef|null>
+    (same length) minted in the plan via F.transform.  Materialized elements have
+    file_refs[i]=None (try_to_file on NULL returns NULL); they fall through to verbatim
+    bytes to preserve the sort-key invariant (no re-encode of materialized tiles).
+    """
+    if not bands:
+        return None
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    frefs = list(file_refs) if file_refs else []
+    while len(frefs) < len(bands):
+        frefs.append(None)
+
+    indexed = []
+    dropped = 0
+    first_good = None
+    for i, (t, fref) in enumerate(zip(bands, frefs)):
+        if t is None or _tile_is_empty(t):
+            continue
+        try:
+            vt = ot._to_virtual_tile(t)
+            if vt.is_virtual():
+                with ot._open(t, file_ref=fref) as ds:
+                    candidate = _dataset_to_gtiff_bytes(ds)
+            else:
+                candidate = bytes(vt.raster)
+            with _serde.open_tile(candidate):
+                pass
+            indexed.append((i, candidate))
+            if first_good is None:
+                first_good = t
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+
+    if not indexed:
+        return None
+    cellid = _tile_cellid(first_good) if first_good is not None else 0
+    new_bytes = agg_core.frombands_tiles(indexed)
+    tile = _serde.build_tile(new_bytes, "GTiff", cellid)
+    if dropped:
+        tile["metadata"][
+            "last_error"
+        ] = f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
+    return tile
+
+
 def rst_frombands(
     bands: ColLike,
     virtualize_dir: Optional[str] = None,
@@ -1194,7 +1354,13 @@ def rst_frombands(
             _col(bands),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _frombands_udf(_col(bands))
+    from databricks.labs.gbx.pyrx._file_ref import file_supported
+
+    tc = _col(bands)
+    if file_supported():
+        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        return _uf_frombands(tc, file_refs_col)
+    return _frombands_udf(tc)
 
 
 # --- Tier 1b: tile-returning warp UDFs -------------------------------------
@@ -3079,6 +3245,46 @@ def _mapalgebra_v2_udf(
     )
 
 
+@f.udf(V2_TILE_SCHEMA)
+def _uf_mapalgebra(tiles, file_refs, expression):
+    """FILE-aware rst_mapalgebra: reads each input via its per-element FileRef.
+
+    ``tiles`` is ARRAY<tile struct>; ``file_refs`` is a parallel ARRAY<FileRef|null>
+    minted in the plan via F.transform.  Materialized elements (file_refs[i]=None)
+    fall through to verbatim bytes.
+    """
+    if tiles is None or expression is None:
+        return None
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    frefs = list(file_refs) if file_refs else []
+    while len(frefs) < len(tiles):
+        frefs.append(None)
+
+    elems = [(t, fref) for t, fref in zip(tiles, frefs)
+             if t is not None and not _tile_is_empty(t)]
+    if not elems:
+        return None
+
+    rasters = []
+    first_tile = None
+    for t, fref in elems:
+        vt = ot._to_virtual_tile(t)
+        if vt.is_virtual():
+            with ot._open(t, file_ref=fref) as ds:
+                rasters.append(_dataset_to_gtiff_bytes(ds))
+        else:
+            rasters.append(bytes(vt.raster))
+        if first_tile is None:
+            first_tile = t
+
+    new_bytes = mapalgebra_core.mapalgebra(rasters, str(expression))
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(first_tile) if first_tile else 0)
+
+
 def rst_mapalgebra(
     tiles: ColLike,
     json_spec: ColLike,
@@ -3122,7 +3328,13 @@ def rst_mapalgebra(
             expr_col,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _mapalgebra_udf(_col(tiles), expr_col)
+    from databricks.labs.gbx.pyrx._file_ref import file_supported
+
+    tc = _col(tiles)
+    if file_supported():
+        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        return _uf_mapalgebra(tc, file_refs_col, expr_col)
+    return _mapalgebra_udf(tc, expr_col)
 
 
 # --- Tier 1d3: generic named-index dispatcher (rst_index) -------------------
@@ -5991,6 +6203,40 @@ def _merge_agg_udf(tile: pd.Series) -> bytes:
 
 
 @pandas_udf(BinaryType())
+def _merge_agg_file_udf(tile: pd.Series, file_ref: pd.Series) -> bytes:
+    """FILE-aware merge aggregator: reads virtual tiles via per-row FileRef.
+
+    For each row: if file_ref is not None AND tile is virtual, read via
+    ot._open(tile_row, file_ref=fref); otherwise use verbatim bytes (fallback).
+    Materialized tiles use verbatim bytes (sort-key invariant preserved).
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    rasters = []
+    dropped = 0
+    for r, fref in zip(tile, file_ref):
+        if r is None:
+            continue
+        try:
+            vt = ot._to_virtual_tile(r)
+            if vt.is_virtual():
+                with ot._open(r, file_ref=fref) as ds:
+                    candidate = _dataset_to_gtiff_bytes(ds)
+            else:
+                candidate = bytes(vt.raster)
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not rasters:
+        return None
+    return agg_core.merge_tiles(rasters)
+
+
+@pandas_udf(BinaryType())
 def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
@@ -6022,6 +6268,44 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     # Prepend an 8-byte big-endian cellid envelope (stripped by the scalar UDF).
+    return cellid.to_bytes(8, "big", signed=True) + bytes(out)
+
+
+@pandas_udf(BinaryType())
+def _combineavg_agg_file_udf(tile: pd.Series, file_ref: pd.Series) -> bytes:
+    """FILE-aware combineavg aggregator: reads virtual tiles via per-row FileRef."""
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    rasters = []
+    cellid = 0
+    first = True
+    dropped = 0
+    for r, fref in zip(tile, file_ref):
+        if r is None:
+            continue
+        try:
+            vt = ot._to_virtual_tile(r)
+            if vt.is_virtual():
+                with ot._open(r, file_ref=fref) as ds:
+                    candidate = _dataset_to_gtiff_bytes(ds)
+            else:
+                candidate = bytes(vt.raster)
+            with _serde.open_tile(candidate):
+                pass
+            if first:
+                cid = r["cellid"] if hasattr(r, "__getitem__") else 0
+                cellid = int(cid) if cid is not None else 0
+                first = False
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not rasters:
+        return None
+    out = agg_core.combineavg_tiles(rasters)
+    if out is None:
+        return None
     return cellid.to_bytes(8, "big", signed=True) + bytes(out)
 
 
@@ -6078,6 +6362,37 @@ def _frombands_agg_udf(tile: pd.Series, band_index: pd.Series) -> bytes:
         return None
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
+    return agg_core.frombands_tiles(indexed)
+
+
+@pandas_udf(BinaryType())
+def _frombands_agg_file_udf(
+    tile: pd.Series, file_ref: pd.Series, band_index: pd.Series
+) -> bytes:
+    """FILE-aware frombands aggregator: reads virtual tiles via per-row FileRef."""
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    indexed = []
+    dropped = 0
+    for r, fref, idx in zip(tile, file_ref, band_index):
+        if idx is None or r is None:
+            continue
+        try:
+            vt = ot._to_virtual_tile(r)
+            if vt.is_virtual():
+                with ot._open(r, file_ref=fref) as ds:
+                    candidate = _dataset_to_gtiff_bytes(ds)
+            else:
+                candidate = bytes(vt.raster)
+            with _serde.open_tile(candidate):
+                pass
+            indexed.append((int(idx), candidate))
+        except Exception:  # noqa: BLE001
+            dropped += 1
+            continue
+    if not indexed:
+        return None
     return agg_core.frombands_tiles(indexed)
 
 
@@ -6520,7 +6835,12 @@ def rst_merge_agg(tile: ColLike) -> Column:
     Each tile carries its own georef/CRS, so the merge is spatial and the output
     spans the union extent. Returns a tile struct (cellid 0).
     """
-    return _as_tile_udf(_merge_agg_udf(_col(tile)))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg, file_supported
+
+    tc = _col(tile)
+    if file_supported():
+        return _as_tile_udf(_merge_agg_file_udf(tc, file_ref_arg(tc)))
+    return _as_tile_udf(_merge_agg_udf(tc))
 
 
 def rst_combineavg_agg(tile: ColLike) -> Column:
@@ -6534,7 +6854,12 @@ def rst_combineavg_agg(tile: ColLike) -> Column:
     shapes differ. The output cellid is the group's first tile cellid. Returns a
     tile struct.
     """
-    return _as_tile_cellid_envelope_udf(_combineavg_agg_udf(_col(tile)))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg, file_supported
+
+    tc = _col(tile)
+    if file_supported():
+        return _as_tile_cellid_envelope_udf(_combineavg_agg_file_udf(tc, file_ref_arg(tc)))
+    return _as_tile_cellid_envelope_udf(_combineavg_agg_udf(tc))
 
 
 def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
@@ -6547,7 +6872,14 @@ def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
 
     Returns a tile struct (cellid 0).
     """
-    return _as_tile_udf(_frombands_agg_udf(_col(tile), _col(band_index)))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg, file_supported
+
+    tc = _col(tile)
+    if file_supported():
+        return _as_tile_udf(
+            _frombands_agg_file_udf(tc, file_ref_arg(tc), _col(band_index))
+        )
+    return _as_tile_udf(_frombands_agg_udf(tc, _col(band_index)))
 
 
 def rst_rasterize_agg(

@@ -40,7 +40,11 @@ _ALLOWLIST = {
     # There are 3 such validation opens in the scalar *_bytes helpers + 5 in the
     # grouped-agg pandas_udfs (_merge_agg_udf, _combineavg_agg_udf,
     # _combineavg_agg_sql_udf, _frombands_agg_udf, _derivedband_agg_udf) = 8 total.
-    "_serde.open_tile(candidate)": 8,
+    # Group 3 FILE-aware variants follow the identical pattern: 3 scalar FILE UDFs
+    # (_uf_merge, _uf_combineavg, _uf_frombands) + 3 pandas_udf FILE variants
+    # (_merge_agg_file_udf, _combineavg_agg_file_udf, _frombands_agg_file_udf)
+    # add 6 more pre-validation opens on front-door-obtained bytes = 14 total.
+    "_serde.open_tile(candidate)": 14,
 }
 
 # The v1 shared UDF builders in _udf.py. Every registered rst_* function was

@@ -1,14 +1,25 @@
-"""Feature-detect for Databricks FILE type support.
+"""Feature-detect and windowed-read helpers for Databricks FILE type support.
 
-Checks once per SparkSession whether FILE is available, using a plan-level
-try_to_file mint followed by a UDF consume roundtrip. Result is memoized so
-subsequent calls are free.
+file_supported()
+    Checks once per SparkSession whether FILE is available, using a plan-level
+    try_to_file mint followed by a UDF consume roundtrip. Result is memoized so
+    subsequent calls are free.
 
-Serverless-safe: uses only spark.sql + UDF registration; no .rdd / _jvm /
-_jsc / sparkContext / conf.set.
+open_windowed_via_fileref(file_ref, window, pending)
+    Context manager: opens a FileRef's seekable stream via rasterio, reads
+    exactly the requested window (applying pending instructions), and yields
+    a DatasetReader backed by an in-memory GeoTIFF.  Raises FileRefReadError
+    on any failure so callers can degrade to a local-file fallback.
+
+Serverless-safe: no .rdd / _jvm / _jsc / sparkContext / conf.set.
 """
 
 import os
+from contextlib import contextmanager
+
+import rasterio
+from rasterio.io import MemoryFile
+from rasterio.windows import Window
 
 from pyspark.sql import SparkSession
 
@@ -90,3 +101,62 @@ def _check_file_support(spark: SparkSession) -> bool:
         return result == "success"
     except Exception:
         return False
+
+
+# ---------------------------------------------------------------------------
+# FileRef windowed-read helper
+# ---------------------------------------------------------------------------
+
+
+class FileRefReadError(Exception):
+    """Raised when a FILE/FILEREF windowed read fails (allows degradation)."""
+
+    pass
+
+
+@contextmanager
+def open_windowed_via_fileref(file_ref, window, pending):
+    """Open a FileRef as a rasterio source and read exactly the window.
+
+    The FileRef's .open() method must return a seekable stream (e.g. a
+    ``_io.BufferedReader`` or ``io.BytesIO``).  The window and pending
+    instructions are applied exactly as in open_tile, then a rasterio
+    DatasetReader backed by an in-memory GeoTIFF is yielded.
+
+    Args:
+        file_ref: Object with ``.open()`` (returns seekable stream) and
+            ``.as_local_file()`` (returns local path) methods — matching the
+            real ``pyspark.sql.types.FileRef`` contract.
+        window: ``(col_off, row_off, width, height)`` tuple from
+            ``VirtualTile.window``.
+        pending: 4-tuple ``(bands|None, nodata|None, srid|None, crs_str|None)``
+            from ``_parse_pending(tile.metadata)``.
+
+    Yields:
+        An open ``rasterio.io.DatasetReader`` covering exactly the window.
+
+    Raises:
+        FileRefReadError: if the stream is not seekable, rasterio open fails,
+            or any other windowed-read failure occurs.  Callers may degrade to
+            ``file_ref.as_local_file()`` as a fallback.
+    """
+    try:
+        stream = file_ref.open()
+        if not stream.seekable():
+            raise FileRefReadError("FileRef stream is not seekable")
+
+        with rasterio.open(stream) as src:
+            col_off, row_off, width, height = window
+            rio_window = Window(col_off, row_off, width, height)
+
+            from databricks.labs.gbx.pyrx.core.open_tile import _window_dataset_bytes
+
+            tile_bytes = _window_dataset_bytes(src, rio_window, pending=pending)
+
+            with MemoryFile(tile_bytes) as mf:
+                with mf.open() as ds:
+                    yield ds
+    except FileRefReadError:
+        raise
+    except Exception as exc:
+        raise FileRefReadError(f"FileRef windowed read failed: {exc}") from exc

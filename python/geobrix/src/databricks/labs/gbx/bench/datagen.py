@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import itertools
+import os
 from pathlib import Path
 
 import numpy as np
@@ -205,6 +207,34 @@ def generate_geometry_corpus(
     )
 
 
+def _default_jobs() -> int:
+    """Return the default thread-pool size for parallel tile writes.
+
+    I/O-bound FUSE writes benefit from many threads (the GIL is released on the
+    actual write syscall).  Cap at 32 to avoid overwhelming the FUSE layer on
+    very high core-count machines.
+    """
+    return min(32, (os.cpu_count() or 4) * 4)
+
+
+def _write_row_tile(args: tuple) -> "m.TileEntry":
+    """Generate and write a single row-pool tile; returns its TileEntry.
+
+    Called concurrently by ThreadPoolExecutor — each invocation is fully
+    independent (its own RNG seeded from *tile_seed*) so the GIL is released on
+    the actual FUSE write and all writes can proceed in parallel.
+
+    Args:
+        args: ``(j, out_dir, row_tile_px, row_bands, row_dtype,
+                  srid, tile_seed, base_cellid)``
+    """
+    j, out_dir, row_tile_px, row_bands, row_dtype, srid, tile_seed, base_cellid = args
+    b = make_tile_bytes(row_tile_px, row_bands, row_dtype, srid, 0.0, tile_seed)
+    rel = f"rows/r{j}.tif"
+    (Path(out_dir) / rel).write_bytes(b)
+    return m.TileEntry(rel, base_cellid + j, srid, row_dtype, row_bands, row_tile_px, 0.0)
+
+
 def generate_corpus(
     out_dir,
     seed,
@@ -217,6 +247,7 @@ def generate_corpus(
     row_tile_px,
     row_bands,
     row_dtype,
+    jobs=None,
 ) -> m.Corpus:
     out_dir = Path(out_dir)
     (out_dir / "size").mkdir(parents=True, exist_ok=True)
@@ -258,18 +289,23 @@ def generate_corpus(
     )
     cellid += 1
 
-    row_tiles = []
-    for j in range(row_rows):
-        srid = srids[j % len(srids)]
-        tile_seed = seed + 100000 + j
-        b = make_tile_bytes(row_tile_px, row_bands, row_dtype, srid, 0.0, tile_seed)
-        rel = f"rows/r{j}.tif"
-        (out_dir / rel).write_bytes(b)
-        row_tiles.append(
-            m.TileEntry(
-                rel, len(size_sweep) + j, srid, row_dtype, row_bands, row_tile_px, 0.0
-            )
-        )
+    # Build the per-tile args in deterministic index order.  Content is seeded
+    # per-(seed, j) so it is independent of thread scheduling; the manifest is
+    # assembled by iterating futures in submission order to guarantee the same
+    # TileEntry list regardless of which thread finishes first.
+    if jobs is None:
+        jobs = _default_jobs()
+    write_args = [
+        (j, out_dir, row_tile_px, row_bands, row_dtype,
+         srids[j % len(srids)], seed + 100000 + j, len(size_sweep))
+        for j in range(row_rows)
+    ]
+    if jobs == 1 or row_rows <= 1:
+        row_tiles = [_write_row_tile(a) for a in write_args]
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as ex:
+            futs = [ex.submit(_write_row_tile, a) for a in write_args]
+            row_tiles = [f.result() for f in futs]  # ordered by submission (= by j)
 
     corpus = m.Corpus(
         seed=seed,
@@ -446,6 +482,15 @@ def main(argv=None):
     ap.add_argument("--row-bands", type=int, default=4)
     ap.add_argument("--row-dtype", default="float32")
     ap.add_argument("--nodata-warn-threshold", type=float, default=0.9)
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        help=(
+            "Number of threads for parallel row-pool tile writes "
+            "(default: min(32, cpu_count*4); use 1 for serial/reproducibility check)"
+        ),
+    )
     ap.add_argument("--cog-multiwindow", action="store_true", default=False)
     ap.add_argument("--cog-count", type=int, default=3)
     ap.add_argument("--windows-per-cog", type=int, default=10)
@@ -481,6 +526,7 @@ def main(argv=None):
         row_tile_px=a.row_tile_px,
         row_bands=a.row_bands,
         row_dtype=a.row_dtype,
+        jobs=a.jobs,
     )
     problems = validity_gate(a.out, corpus, a.nodata_warn_threshold)
     if problems:

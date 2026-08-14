@@ -375,6 +375,13 @@ _uf_boundingbox = _header_accessor_udf_file(accessors.boundingbox, BinaryType())
 # Pixel-reading (_open — materialises the window):
 _uf_isempty = _pixel_accessor_udf_file(accessors.isempty, BooleanType())
 
+# Group 1 pixel accessors — FILE-aware 2-arg singletons.
+_uf_avg = _pixel_accessor_udf_file(accessors.avg, ArrayType(DoubleType()))
+_uf_min = _pixel_accessor_udf_file(accessors.minimum, ArrayType(DoubleType()))
+_uf_max = _pixel_accessor_udf_file(accessors.maximum, ArrayType(DoubleType()))
+_uf_median = _pixel_accessor_udf_file(accessors.median, ArrayType(DoubleType()))
+_uf_pixelcount = _pixel_accessor_udf_file(accessors.pixelcount, ArrayType(LongType()))
+
 
 # metadata: HEADER-ONLY, MapType return (plain @f.udf; pandas_udf rejects
 # MapType on some Arrow builds).  2-arg FILE-aware variant for Python bindings.
@@ -4598,9 +4605,10 @@ def rst_avg(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return NULL.
     """
-    # PIXEL accessor: needs the window pixels, so it opens via ``_open`` (which
-    # materialises a virtual tile's window). Passes the full tile struct.
-    return _u_avg(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_avg(tc, file_ref_arg(tc))
 
 
 def rst_min(tile: ColLike) -> Column:
@@ -4608,7 +4616,10 @@ def rst_min(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return NULL.
     """
-    return _u_min(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_min(tc, file_ref_arg(tc))
 
 
 def rst_max(tile: ColLike) -> Column:
@@ -4616,7 +4627,10 @@ def rst_max(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return NULL.
     """
-    return _u_max(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_max(tc, file_ref_arg(tc))
 
 
 def rst_median(tile: ColLike) -> Column:
@@ -4624,7 +4638,10 @@ def rst_median(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return NULL.
     """
-    return _u_median(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_median(tc, file_ref_arg(tc))
 
 
 def rst_pixelcount(tile: ColLike) -> Column:
@@ -4632,7 +4649,10 @@ def rst_pixelcount(tile: ColLike) -> Column:
 
     Empty / all-invalid bands return 0.
     """
-    return _u_pixelcount(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_pixelcount(tc, file_ref_arg(tc))
 
 
 def rst_memsize(tile: ColLike) -> Column:

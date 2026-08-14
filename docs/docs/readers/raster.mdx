@@ -87,6 +87,8 @@ the [COG Reader](./cog).
 **Internally-tiled sources** split on a block-snapped grid.
 :::
 
+#### Loading many small files {#loading-many-small-files}
+
 :::tip Loading many small files
 Reading a directory that contains a large number of small files can be slow:
 the reader must visit every file header at planning time to compute tile windows.
@@ -105,7 +107,7 @@ For large tile counts, prefer one of:
       .option("virtualTiles", "true") \
       .load("/")
   ```
-- **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [`cog_gbx` writer](./cog); the reader then opens a small number of large files whose headers are comparatively cheap.
+- **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog); the reader then opens a small number of large files whose headers are comparatively cheap.
 :::
 
 :::tip Reading GeoBrix output with a stock Spark reader

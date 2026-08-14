@@ -400,8 +400,7 @@ def generate_cog_multiwindow_corpus(
                 cog_profile = src.profile.copy()
                 cog_profile.update(
                     driver="COG",
-                    blockxsize=tile_size,
-                    blockysize=tile_size,
+                    BLOCKSIZE=tile_size,
                 )
                 with rasterio.open(str(dest), "w", **cog_profile) as dst:
                     dst.write(src.read())

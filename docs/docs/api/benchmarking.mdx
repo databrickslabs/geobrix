@@ -816,9 +816,11 @@ subprocess.run([
 ```python
 from databricks.labs.gbx.bench.readers import run_virtual_tile_pixel_read
 
-results_on  = run_virtual_tile_pixel_read(spark, path="<manifest_path>",
+results_on  = run_virtual_tile_pixel_read(spark, path="<corpus_dir>",
+                manifest="<manifest_path>",
                 run_id="cog-file-on",  disable_file=False, where="cluster", warmup=1, measured=3)
-results_off = run_virtual_tile_pixel_read(spark, path="<manifest_path>",
+results_off = run_virtual_tile_pixel_read(spark, path="<corpus_dir>",
+                manifest="<manifest_path>",
                 run_id="cog-file-off", disable_file=True,  where="cluster", warmup=1, measured=3)
 ```
 

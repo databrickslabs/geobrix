@@ -249,6 +249,7 @@ def run_virtual_tile_pixel_read(
     *,
     where: str = "cluster",
     disable_file: bool = False,
+    manifest: Optional[str] = None,
 ) -> List[ResultRow]:
     """Time a pixel-reading operation over virtual tiles from the light raster reader.
 
@@ -282,7 +283,6 @@ def run_virtual_tile_pixel_read(
     5. Compare ``iter_median_s`` and ``throughput_rows_s`` between the two result rows.
     """
     import os
-    import time as _time  # noqa: F401 (imported for completeness; unused directly here)
 
     if disable_file:
         os.environ["GBX_DISABLE_FILE"] = "1"
@@ -321,10 +321,14 @@ def run_virtual_tile_pixel_read(
             return None
 
     def _job():
+        reader = spark.read.format("raster_gbx").option("virtualTiles", "true")
+        if manifest is not None:
+            reader = reader.option("manifest", manifest)
+            load_path = path or "/"
+        else:
+            load_path = path
         return (
-            spark.read.format("raster_gbx")
-            .option("virtualTiles", "true")
-            .load(path)
+            reader.load(load_path)
             .select(
                 _pixel_mean(_F.col("tile.path"), _F.col("tile.window")).alias("mean")
             )

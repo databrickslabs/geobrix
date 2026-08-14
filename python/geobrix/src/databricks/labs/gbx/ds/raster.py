@@ -770,7 +770,10 @@ def _partitions_from_tile_rows(
     - Row has ``window``  → build ``_TilePartition`` directly; NO rasterio.open.
     - Row has ``width`` + ``height`` (no window) → use ``(0, 0, w, h)``; NO open.
     - Row has only ``path`` → call ``_plan_partitions_for_file``; header read
-      for that file only (still skips ``os.walk`` over the full directory).
+      occurs for that file only when ``emit_virtual=False``.  When
+      ``emit_virtual=True``, planning defers the header open to the executor
+      (lazy ``window=None``), so no header open happens at planning time even
+      for path-only rows.
     """
     result: list = []
     for row in rows:

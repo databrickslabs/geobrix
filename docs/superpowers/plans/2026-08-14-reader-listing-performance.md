@@ -831,7 +831,8 @@ so the corpus feeds run_virtual_tile_pixel_read in the FILE-capability bench."
 
   results_cog_on = run_virtual_tile_pixel_read(
       spark,
-      path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+      path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow",
+      manifest="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
       run_id="phase1-cog-file-on",
       warmup=1,
       measured=3,
@@ -847,7 +848,8 @@ so the corpus feeds run_virtual_tile_pixel_read in the FILE-capability bench."
   ```python
   results_cog_off = run_virtual_tile_pixel_read(
       spark,
-      path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+      path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow",
+      manifest="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
       run_id="phase1-cog-file-off",
       warmup=1,
       measured=3,
@@ -2127,7 +2129,8 @@ Re-run the Task 2c comparison (FILE-on vs FILE-off) on `bench-corpus-cog-multiwi
 # After Phase 2 remedy is staged; corpus generated in Task 2c:
 results_cog_final_on = run_virtual_tile_pixel_read(
     spark,
-    path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+    path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow",
+    manifest="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
     run_id="final-gate-cog-file-on",
     warmup=1,
     measured=3,
@@ -2136,7 +2139,8 @@ results_cog_final_on = run_virtual_tile_pixel_read(
 )
 results_cog_final_off = run_virtual_tile_pixel_read(
     spark,
-    path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+    path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow",
+    manifest="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
     run_id="final-gate-cog-file-off",
     warmup=1,
     measured=3,

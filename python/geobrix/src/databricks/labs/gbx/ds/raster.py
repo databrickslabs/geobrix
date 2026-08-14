@@ -443,12 +443,16 @@ def _plan_partitions_for_file(
                 file_path, clip_polygons, clip_crs, emit_virtual=True
             )
 
-        with rasterio.open(file_path) as ds:
-            width, height = ds.width, ds.height
+        # Approach 3 — lazy planning: skip the header open at plan time.
+        # Reuses the existing null-window slot (window=None already means
+        # "passthrough GTiff fast path" for materialized tiles), gated by
+        # emit_virtual=True. read() dispatches emit_virtual first, so there
+        # is no collision with the materialized passthrough case (is_passthrough=True).
+        # This avoids N rasterio.open calls when loading a directory of N files.
         return [
             _TilePartition(
                 file_path=file_path,
-                window=(0, 0, width, height),
+                window=None,  # filled lazily by read() on the executor
                 is_passthrough=False,
                 is_whole=True,
                 emit_fmt="gtiff",
@@ -958,13 +962,20 @@ class RasterGbxReader(DataSourceReader):
                     "height": str(ds.height),
                     "count": str(ds.count),
                 }
+                # Lazy window (Approach 3): window=None at plan → resolve here
+                # from the actual raster dims. Pre-planned windows are used as-is.
+                win = (
+                    (0, 0, ds.width, ds.height)
+                    if partition.window is None
+                    else partition.window
+                )
             yield (
                 source,
                 _v2_tile_row(
                     _encode.CELLID_FRESH,
                     None,
                     path=partition.file_path,
-                    window=partition.window,
+                    window=win,
                     metadata=meta,
                     clip_polygon=partition.clip_polygon,
                     clip_crs=partition.clip_crs,

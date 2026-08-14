@@ -227,6 +227,43 @@ per-variant duplication. Option A is always available as a mechanical rewrite of
 
 ---
 
+### 4d. Umbrella `_all` extras (feature-complete, per runtime)
+
+Beyond the runtime-core extras, a user who wants the *full* light-tier feature set today must
+know to combine several: `geobrix[light,stac,vizx,overture]`. To remove that reasoning burden
+— and to stop hand-picked partial installs from silently omitting a required dep (e.g.
+`pmtiles`, which lives **only** in `[light]`; a minimal hand-picked install drops it and the
+light import chain fails) — add feature-complete umbrellas, one per runtime:
+
+- **`light_all`** = `geobrix[light]` + `geobrix[stac]` + `geobrix[vizx]` + `geobrix[overture]`
+  — Serverless (environment v5), everything.
+- **`light_dbr19_all`** = `geobrix[light_dbr19]` + `geobrix[stac]` + `geobrix[vizx]` +
+  `geobrix[overture]` — classic DBR 19, everything.
+
+Mechanically these are extras that **reference other extras**
+(`light_all = ["geobrix[light]", "geobrix[stac]", "geobrix[vizx]", "geobrix[overture]"]`), so
+the umbrella inherits the runtime-correct `light` / `light_dbr19` pins automatically plus the
+feature deps. Each new `light_dbrNN` gets a matching `light_dbrNN_all`.
+
+**`[databricks]` is NOT included in `_all`** (decision, confirmable): it is the Databricks SDK
+integration, not a light-tier geo feature, and Databricks compute already provides its runtime.
+Users add `[databricks]` explicitly when needed.
+
+**Runtime-safety of the feature extras:** the *direct* deps of `stac` / `vizx` / `overture`
+carry **no** protobuf / grpcio / mapbox-vector-tile coupling (verified), so they compose
+cleanly with either runtime's `light`. The residual risk is **transitive** (a cloud SDK —
+`botocore` / `earthaccess` / `planetary-computer` / `pystac-client` — pulling a
+protobuf-adjacent dep). This is caught by resolving + hashing each `_all` variant's lock (§6);
+if a feature extra turns out to carry a runtime-sensitive transitive pin, it gets its own
+`_dbrNN` variant on the same base + delta pattern.
+
+**Our own bench/gen installs** should likewise use the complete `[light_dbr19]` (or
+`[light_dbr19_all]`) rather than a hand-picked minimal set — the runtime-matched extra is the
+"don't reason about deps" install for CI/bench too, and avoids the `pmtiles`-omission class of
+failure.
+
+---
+
 ## 5. pyspark Is Not pip-Installed
 
 No `[light]` variant (base, Serverless, or DBR-N) includes `pyspark` in its extras. pyspark

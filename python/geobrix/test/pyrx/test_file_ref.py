@@ -46,7 +46,7 @@ def test_file_supported_respects_env_override(spark):
 
 
 def test_file_supported_memoization(spark):
-    """Roundtrip runs exactly once; subsequent calls use the cached result."""
+    """Probe runs exactly once; subsequent calls use the cached result."""
     os.environ.pop("GBX_DISABLE_FILE", None)
     # Reset cache for this test
     from databricks.labs.gbx.pyrx import _file_ref
@@ -58,7 +58,7 @@ def test_file_supported_memoization(spark):
 
     def mock_sql(query):
         call_count[0] += 1
-        raise RuntimeError("spark.sql called")
+        raise RuntimeError("simulated UNSUPPORTED_DATATYPE")
 
     try:
         spark.sql = mock_sql
@@ -67,6 +67,38 @@ def test_file_supported_memoization(spark):
         assert result1 is False
         assert result2 is False
         assert call_count[0] == 1, f"Expected spark.sql called once, got {call_count[0]}"
+    finally:
+        spark.sql = original_sql
+
+
+def test_file_supported_returns_true_when_probe_succeeds(spark):
+    """Fixture-free probe: spark.sql().collect() succeeds → file_supported() returns True.
+
+    Uses a mock so no real FILE env is required.  Confirms the success path of
+    the plan-only probe yields True (old UDF-consume roundtrip always needed a
+    real file and returned False locally).
+    """
+    from unittest.mock import MagicMock
+
+    from databricks.labs.gbx.pyrx import _file_ref
+
+    _file_ref._FILE_SUPPORT_CACHE.clear()
+    os.environ.pop("GBX_DISABLE_FILE", None)
+
+    original_sql = spark.sql
+    call_count = [0]
+
+    def mock_sql(query):
+        call_count[0] += 1
+        mock_df = MagicMock()
+        mock_df.collect.return_value = [(True,)]
+        return mock_df
+
+    try:
+        spark.sql = mock_sql
+        result = file_supported()
+        assert result is True, f"Expected True when probe succeeds, got {result}"
+        assert call_count[0] == 1, f"Expected 1 spark.sql call, got {call_count[0]}"
     finally:
         spark.sql = original_sql
 
@@ -306,20 +338,26 @@ def test_binding_injection_uses_call_function_when_supported(spark):
 def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
     """End-to-end: rewired rst_height returns correct pixel height via fallback.
 
-    file_supported() returns False locally so file_ref_arg → F.lit(None) →
-    the 2-arg UDF falls back to the plain-path open_header path.  Builds a
-    materialized tile via rst_fromcontent (no JAR needed).
+    file_ref_arg → F.lit(None) → the 2-arg UDF falls back to the plain-path
+    open_header path.  Builds a materialized tile via rst_fromcontent (no JAR
+    needed).  file_supported() is mocked to False so the test exercises the
+    fallback path regardless of whether the local Spark session supports FILE.
     """
+    from unittest import mock
+
     from pyspark.sql import functions as F
 
     from databricks.labs.gbx.pyrx import functions as prx
 
-    # Build a materialized tile from the gtiff_bytes fixture (4×3).
-    df = (
-        spark.createDataFrame([(gtiff_bytes,)], ["raster"])
-        .select(prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
-    )
-    result = df.select(prx.rst_height("tile")).collect()[0][0]
+    with mock.patch(
+        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
+    ):
+        # Build a materialized tile from the gtiff_bytes fixture (4×3).
+        df = (
+            spark.createDataFrame([(gtiff_bytes,)], ["raster"])
+            .select(prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
+        )
+        result = df.select(prx.rst_height("tile")).collect()[0][0]
     assert result == 3, f"Expected height=3, got {result}"
 
 

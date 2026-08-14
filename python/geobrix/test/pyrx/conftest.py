@@ -7,11 +7,19 @@ something is wrong with the layering.
 
 import logging
 import os
+import sys
 
 import numpy as np
 import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
+
+# Ensure PySpark workers use the same interpreter as the driver.  Must be set
+# before any SparkContext is created (local-mode workers are separate Python
+# processes spawned per-task; without this they default to system Python and
+# fail with PYTHON_VERSION_MISMATCH when the test venv uses a different minor).
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +72,8 @@ def gtiff_bytes():
 
 @pytest.fixture(scope="module")
 def spark():
+    import sys
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     from pyspark.sql import SparkSession
 
@@ -71,6 +81,8 @@ def spark():
         SparkSession.builder.master("local[2]")
         .appName("pyrx-tests")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.pyspark.python", sys.executable)
+        .config("spark.pyspark.driver.python", sys.executable)
         .getOrCreate()
     )
     yield session

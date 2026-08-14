@@ -1,8 +1,8 @@
 """Feature-detect and windowed-read helpers for Databricks FILE type support.
 
 file_supported()
-    Checks once per SparkSession whether FILE is available, using a plan-level
-    try_to_file mint followed by a UDF consume roundtrip. Result is memoized so
+    Checks once per SparkSession whether FILE is available, using a fixture-free
+    plan-only probe (try_to_file on a nonexistent path). Result is memoized so
     subsequent calls are free.
 
 open_windowed_via_fileref(file_ref, window, pending)
@@ -52,11 +52,7 @@ def file_supported() -> bool:
     - Any exception during the roundtrip (UNSUPPORTED_DATATYPE, sentinel
       unreadable, consume failure, etc.).
 
-    Result is cached per SparkSession; the roundtrip runs at most once per session.
-
-    Sentinel detail: the feature-detect mints try_to_file on a sentinel Volume
-    path and consumes it in a UDF. Returns False if the file is not found
-    (acceptable — detect-failure causing fallback is always safe).
+    Result is cached per SparkSession; the probe runs at most once per session.
     """
     if os.environ.get("GBX_DISABLE_FILE") == "1":
         return False
@@ -75,42 +71,23 @@ def file_supported() -> bool:
 
 
 def _check_file_support(spark: SparkSession) -> bool:
-    """Run end-to-end roundtrip to verify FILE is usable.
+    """Run a fixture-free, plan-only probe to verify FILE is usable.
 
-    Mints try_to_file on a sentinel Volume path in the Spark PLAN (not in a
-    UDF), then consumes the FileRef in a UDF that calls fref.open().read(1).
-    Returns True only if the roundtrip succeeds; False on any exception.
+    Executes: SELECT try_to_file('<probe_path>') IS NULL
+    where probe_path is a clearly-nonexistent Volumes-shaped path.
 
-    CRITICAL: FileRef is MINTED IN THE PLAN via try_to_file (a SQL function),
-    NOT constructed inside a UDF (pyspark.sql.types.FileRef(path) does not
-    exist, and pyspark.sql.functions.try_to_file does not exist either).
+    Rationale: try_to_file (the try_ variant) returns NULL for a missing file
+    WHEN FILE is enabled and fileReferenceCreationMode is set; it RAISES
+    (UNSUPPORTED_DATATYPE "FILE", or a creation-mode error) when FILE is not
+    available/usable.  So: if the statement executes without raising → FILE is
+    usable → return True; on ANY exception → return False.  Using IS NULL returns
+    a boolean (never collects a FILE-typed value), which avoids the
+    "display of a FILE column fails" issue on older Serverless clients.
     """
     try:
-        from pyspark.sql import functions as F
-
-        sentinel_path = (
-            "/Volumes/main/geobrix_samples/geobrix-examples/london/"
-            "LC08_L2SP_202_024_20200625_20200705_02_T1_SR_B1.TIF"
-        )
-
-        # Mint FileRef in the PLAN via try_to_file (a Spark SQL function).
-        # Returns a DataFrame with a FILE-type column.
-        df_with_fref = spark.sql(f"SELECT try_to_file('{sentinel_path}') AS fref")
-
-        # Consume the FileRef column in a UDF.
-        @F.udf("string")
-        def _consume_fref(fref):
-            try:
-                with fref.open() as f:
-                    byte_read = f.read(1)
-                return "success" if byte_read else "empty"
-            except Exception:
-                return "failed"
-
-        result_df = df_with_fref.select(_consume_fref(F.col("fref")))
-        result = result_df.collect()[0][0]
-
-        return result == "success"
+        probe_path = "/Volumes/__gbx_file_probe__/__none__/__probe__.bin"
+        spark.sql(f"SELECT try_to_file('{probe_path}') IS NULL").collect()
+        return True
     except Exception:
         return False
 

@@ -57,6 +57,9 @@ ORDER = [
     "input_tile",
     # Whether the fn materialized pixels on a virtual input: "deferred", "materialized", "na".
     "output_disposition",
+    # Spark-path plan build time (seconds): time to call col_fn + build the DataFrame plan.
+    # Isolates the plan-build cost from the actual execution time.
+    "plan_s",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.
@@ -154,6 +157,14 @@ _PREAMBLE = """import json
 import os
 import importlib as _importlib
 import sys as _sys
+
+# --disable-file: suppress Databricks FILE type for virtual-tile reads (FILE-off A/B leg).
+# Must run before any geobrix imports that call file_supported() so the memoized
+# per-session cache is never populated with True.
+DISABLE_FILE = {disable_file!r}
+if DISABLE_FILE:
+    os.environ["GBX_DISABLE_FILE"] = "1"
+    print("GBX_DISABLE_FILE=1 — FILE type disabled for this leg")
 
 # DBR ships databricks/__init__.py that pre-sets databricks.__path__ to specific
 # system directories, excluding the %pip virtual-env site-packages where
@@ -2887,6 +2898,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         benchmark_netcdf_writer=bool(cfg.get("benchmark_netcdf_writer")),
         netcdf_writer_only=bool(cfg.get("netcdf_writer_only")),
         input_tile=str(cfg.get("input_tile", "materialized")),
+        disable_file=bool(cfg.get("disable_file", False)),
     )
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section

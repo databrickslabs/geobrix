@@ -414,6 +414,10 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    # --disable-file: set GBX_DISABLE_FILE=1 in the notebook so virtual-tile reads
+    # fall back to plain-path I/O (FILE type bypassed). Intended for the FILE-off A/B leg.
+    # Only meaningful when --input-tile virtual; silently a no-op for materialized inputs.
+    disable_file = "--disable-file" in sys.argv
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
@@ -556,6 +560,8 @@ def main() -> int:
         netcdf_writer_only=netcdf_writer_only,
         #  --input-tile materialized|virtual: input tile mode for the light spark-path leg.
         input_tile=input_tile,
+        #  --disable-file: set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg).
+        disable_file=disable_file,
     )
     if explain_only:
         # Plans are a spark-path concern only; never run the pure-core sections.

@@ -34,6 +34,7 @@ Options:
   --benchmark-netcdf    Also run NetCDF reader benchmark (light netcdf_gbx vs heavy netcdf_gdal)
   --netcdf-only         Run ONLY the NetCDF reader benchmark (no fn benchmarks)
   --input-tile <mode>   Input tile for the light spark-path leg: materialized (default) or virtual
+  --disable-file        Set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg; use with --input-tile virtual)
   --no-wait             Submit without blocking on completion
   --help, -h            Show help
 

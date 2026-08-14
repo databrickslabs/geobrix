@@ -14,11 +14,9 @@ import io
 import os
 import tempfile
 
-import pytest
 from databricks.labs.gbx.pyrx.core import accessors as _acc
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
-from databricks.labs.gbx.pyrx._file_ref import FileRefReadError
 
 
 class _StubFileRef:

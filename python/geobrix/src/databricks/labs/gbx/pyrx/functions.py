@@ -418,6 +418,25 @@ def _uf_summary_udf(tile, file_ref):
         return None
 
 
+# histogram: PIXEL accessor, MapType return.  2-arg FILE-aware variant.
+@f.udf(MapType(StringType(), ArrayType(LongType())))
+def _uf_histogram_udf(tile, file_ref, n_buckets, min_val, max_val, include_nodata):
+    if _tile_is_empty(tile):
+        return None
+    try:
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        nb = 256 if n_buckets is None else int(n_buckets)
+        lo = None if min_val is None else float(min_val)
+        hi = None if max_val is None else float(max_val)
+        inc = bool(include_nodata) if include_nodata is not None else False
+        with ot._open(tile, file_ref=file_ref) as ds:
+            return accessors.histogram(ds, nb, lo, hi, inc)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # Coordinate transforms are HEADER-ONLY (ds.xy / ds.index — no pixel read), so
 # build them like the other header accessors: struct-accepting (a virtual tile's
 # ``path`` is reachable) + open_header. The pre-sweep tile_scalar_udf2 builders
@@ -441,10 +460,34 @@ def _header_accessor_udf2(core_fn, return_type):
     return _udf
 
 
+def _header_accessor_udf3_file(core_fn, return_type):
+    """Struct + FileRef + 2 scalar args header-only accessor UDF (4 args total)."""
+
+    @f.udf(return_type)
+    def _udf(tile, file_ref, a, b):
+        if _tile_is_empty(tile):
+            return None
+        try:
+            from databricks.labs.gbx.pyrx import _env
+
+            _env.configure_gdal_env()
+            with ot.open_header(tile, file_ref=file_ref) as ds:
+                return core_fn(ds, a, b)
+        except Exception:  # noqa: BLE001
+            return None
+
+    return _udf
+
+
 _u_r2w_x = _header_accessor_udf2(coords.raster_to_world_x, DoubleType())
 _u_r2w_y = _header_accessor_udf2(coords.raster_to_world_y, DoubleType())
 _u_w2r_x = _header_accessor_udf2(coords.world_to_raster_x, IntegerType())
 _u_w2r_y = _header_accessor_udf2(coords.world_to_raster_y, IntegerType())
+
+_uf_r2w_x = _header_accessor_udf3_file(coords.raster_to_world_x, DoubleType())
+_uf_r2w_y = _header_accessor_udf3_file(coords.raster_to_world_y, DoubleType())
+_uf_w2r_x = _header_accessor_udf3_file(coords.world_to_raster_x, IntegerType())
+_uf_w2r_y = _header_accessor_udf3_file(coords.world_to_raster_y, IntegerType())
 
 
 # --- Group 1: per-band statistics & accessor UDFs ---------------------------
@@ -4584,19 +4627,31 @@ def rst_getnodata(tile: ColLike) -> Column:
 # HEADER-ONLY accessors: pass the FULL tile struct (not the raster subfield) so
 # a virtual tile's ``path`` is reachable; the UDF resolves via open_header.
 def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    return _u_r2w_x(_col(tile), _col(x), _col(y))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_r2w_x(tc, file_ref_arg(tc), _col(x), _col(y))
 
 
 def rst_rastertoworldcoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    return _u_r2w_y(_col(tile), _col(x), _col(y))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_r2w_y(tc, file_ref_arg(tc), _col(x), _col(y))
 
 
 def rst_worldtorastercoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    return _u_w2r_x(_col(tile), _col(x), _col(y))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_w2r_x(tc, file_ref_arg(tc), _col(x), _col(y))
 
 
 def rst_worldtorastercoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
-    return _u_w2r_y(_col(tile), _col(x), _col(y))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_w2r_y(tc, file_ref_arg(tc), _col(x), _col(y))
 
 
 def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
@@ -4749,6 +4804,9 @@ def rst_histogram(
 
     Values outside [min_val, max_val] are dropped (no out-of-range bucket).
     """
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
     nb = f.lit(n_buckets) if isinstance(n_buckets, int) else _col(n_buckets)
     lo = f.lit(None) if min_val is None else _col(min_val)
     hi = f.lit(None) if max_val is None else _col(max_val)
@@ -4757,7 +4815,7 @@ def rst_histogram(
         if isinstance(include_nodata, bool)
         else _col(include_nodata)
     )
-    return _histogram_udf(_col(tile), nb, lo, hi, inc)
+    return _uf_histogram_udf(tc, file_ref_arg(tc), nb, lo, hi, inc)
 
 
 # --- Tier 1d5: derived-band UDF ---------------------------------------------

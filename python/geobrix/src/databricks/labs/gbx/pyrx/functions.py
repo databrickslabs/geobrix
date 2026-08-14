@@ -4501,7 +4501,10 @@ def rst_crs(tile: ColLike) -> Column:
     Returns:
         STRING column — canonical CRS string, or NULL if CRS is absent.
     """
-    return _u_crs(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_crs(tc, file_ref_arg(tc))
 
 
 def rst_pixelwidth(tile: ColLike) -> Column:
@@ -4544,7 +4547,10 @@ def rst_scaley(tile: ColLike) -> Column:
 
 def rst_isempty(tile: ColLike) -> Column:
     """True if the raster has no size or every band is entirely NoData; BOOLEAN."""
-    return _u_isempty(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_isempty(tc, file_ref_arg(tc))
 
 
 def rst_type(tile: ColLike) -> Column:

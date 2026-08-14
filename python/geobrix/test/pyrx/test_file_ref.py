@@ -320,7 +320,7 @@ def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
 
 
 def test_sql_registry_still_maps_to_single_arg_udfs():
-    """SQL_REGISTRY entries for accessors point at single-arg ``_u_*`` UDFs.
+    """SQL_REGISTRY entries for all rewired accessors point at single-arg ``_u_*`` UDFs.
 
     This confirms that the FILE-aware rewiring of the public Python bindings
     did NOT inadvertently redirect the SQL registry entries to the 2-arg ``_uf_*``
@@ -330,7 +330,11 @@ def test_sql_registry_still_maps_to_single_arg_udfs():
     from databricks.labs.gbx.pyrx.functions import (
         SQL_REGISTRY,
         _metadata_udf,
+        _summary_udf,
+        _u_boundingbox,
+        _u_crs,
         _u_height,
+        _u_isempty,
         _u_numbands,
         _u_srid,
         _u_width,
@@ -344,4 +348,14 @@ def test_sql_registry_still_maps_to_single_arg_udfs():
     assert SQL_REGISTRY["gbx_rst_width"] is _u_width, "gbx_rst_width must map to _u_width"
     assert SQL_REGISTRY["gbx_rst_metadata"] is _metadata_udf, (
         "gbx_rst_metadata must map to _metadata_udf (single-arg)"
+    )
+    assert SQL_REGISTRY["gbx_rst_boundingbox"] is _u_boundingbox, (
+        "gbx_rst_boundingbox must map to _u_boundingbox"
+    )
+    assert SQL_REGISTRY["gbx_rst_summary"] is _summary_udf, (
+        "gbx_rst_summary must map to _summary_udf (single-arg)"
+    )
+    assert SQL_REGISTRY["gbx_rst_crs"] is _u_crs, "gbx_rst_crs must map to _u_crs"
+    assert SQL_REGISTRY["gbx_rst_isempty"] is _u_isempty, (
+        "gbx_rst_isempty must map to _u_isempty"
     )

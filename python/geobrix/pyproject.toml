@@ -51,13 +51,13 @@ test = [
     # Serverless). 2.1.0 still has the 2.x native-typed-attribute encode API.
     "mapbox-vector-tile>=2.1,<2.2",
 ]
-# Runtime deps for the lightweight pure-Python/PySpark APIs (no JAR) — the umbrella
-# extra covering all light tiers (raster today; vector/grid as they land). Install
-# with `pip install geobrix[light]`.
-# pandas + pyarrow are required by pyspark pandas_udf (Arrow batch serialization);
-# base pyspark does NOT pull them, so without these the rst_* wrappers fail to
-# import (_udf.py imports pandas) / at first invocation with a cryptic ImportError.
-light = [
+# Internal composition extra — NOT for direct user installation.
+# Intentionally named `light-base` (not `light`) to distinguish it from user-
+# facing extras. pip has no mechanism to mark an extra as private; contributors
+# must treat it as a build-time composition tool. Install geobrix[light]
+# (Serverless env v5 / classic DBR <=18) or geobrix[light_dbr19]
+# (classic DBR 19+) instead.
+light-base = [
     "rasterio>=1.3.0",
     "shapely>=2.0.0",
     "numpy>=1.24.0",
@@ -65,6 +65,44 @@ light = [
     "pyarrow>=11.0.0",
     "scipy>=1.11.0",
     "numexpr>=2.8.0",
+    "rio-cogeo>=7.0,<8",
+    "h3>=4.0,<5",
+    "quadbin>=0.2,<0.3",
+    # Protomaps PMTiles archive writer/reader (pure-Python) for the pmtiles_gbx
+    # tiled-output backend. Writer needs ascending tileid; Reader used in tests.
+    "pmtiles>=3.4,<4",
+    # OGR-free vector reading for the light *_gbx vector DataSources. pyogrio
+    # bundles its own libgdal; pyproj (pulled by pyogrio) maps CRS->srid/proj4.
+    "pyogrio>=0.12,<1",
+    # Cap pyproj: a floor-only, native-PROJ-tied dep that floats to "latest" on
+    # Serverless (not held by the immutable base) — same float-and-break risk as
+    # rio-tiler 9.3.0. No 4.x exists yet, so <4 is a no-op today but future-proofs.
+    "pyproj>=3.6,<4",
+    # Functional floor only; the <2.2 Serverless cap and the uncapped DBR 19 form
+    # live in the [light] and [light_dbr19] variant deltas below.
+    "mapbox-vector-tile>=2.1",
+    "scikit-image>=0.22,<1",
+    "xarray-spatial>=0.4,<1",
+    # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
+    # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
+    # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
+    # Folded into [light-base] (not a separate [netcdf] extra) so geobrix[light]
+    # reads NetCDF out of the box. Floor pinned; add a ceiling if a future
+    # release floats/breaks on Serverless env v5 (Py 3.12), same discipline as
+    # the rio-tiler / mapbox-vector-tile pins above.
+    "netcdf4>=1.6,<2",
+]
+# Runtime deps for the lightweight pure-Python/PySpark APIs (no JAR) — the umbrella
+# extra covering all light tiers (raster today; vector/grid as they land). Install
+# with `pip install geobrix[light]` (Serverless env v5 / classic DBR <=18).
+# pandas + pyarrow are required by pyspark pandas_udf (Arrow batch serialization);
+# base pyspark does NOT pull them, so without these the rst_* wrappers fail to
+# import (_udf.py imports pandas) / at first invocation with a cryptic ImportError.
+light = [
+    "geobrix[light-base]",
+    # --- Serverless (env v5) and classic DBR <=18 runtime-sensitive pins ---
+    # Combined with light-base's mapbox-vector-tile>=2.1, this resolves to
+    # >=2.1,<2.2 -- identical to the previous single [light] extra.
     # rio-tiler 9 uses TypedDict(extra_items=...) (PEP 728), which needs a recent
     # typing_extensions; DBR 17.3 ships an older one, so pin the floor explicitly
     # or the [light] import fails on-cluster (rio_tiler/types.py TypeError).
@@ -85,25 +123,13 @@ light = [
     # the stack needs >3.7 (requests <4,>=2.5; anyio >=2.8; httpx unpinned), so cap
     # at <3.8 to keep the Serverless base in place and silence the notice.
     "idna<3.8",
-    "rio-cogeo>=7.0,<8",
-    "h3>=4.0,<5",
-    "quadbin>=0.2,<0.3",
-    # Protomaps PMTiles archive writer/reader (pure-Python) for the pmtiles_gbx
-    # tiled-output backend. Writer needs ascending tileid; Reader used in tests.
-    "pmtiles>=3.4,<4",
-    # OGR-free vector reading for the light *_gbx vector DataSources. pyogrio
-    # bundles its own libgdal; pyproj (pulled by pyogrio) maps CRS->srid/proj4.
-    "pyogrio>=0.12,<1",
-    # Cap pyproj: a floor-only, native-PROJ-tied dep that floats to "latest" on
-    # Serverless (not held by the immutable base) — same float-and-break risk as
-    # rio-tiler 9.3.0. No 4.x exists yet, so <4 is a no-op today but future-proofs.
-    "pyproj>=3.6,<4",
-    # mapbox-vector-tile pinned to 2.1.x for the pyvx MVT encoder. Why this exact
-    # range matters on Databricks **Serverless** (env v5, the lightweight "halo"
-    # target): the resolver otherwise grabs 2.2.0, which hard-requires
-    # protobuf>=6.31.1 and so upgrades the immutable base protobuf 5.29.4 -> 6.x.
-    # protobuf 6 conflicts with Serverless's Spark-Connect/gRPC stack
-    # (grpcio-status / googleapis-common-protos pin protobuf<6); pip emits an
+    # Re-adds the floor from `light-base` to form the combined constraint
+    # `>=2.1,<2.2`. mapbox-vector-tile pinned to 2.1.x for the pyvx MVT encoder.
+    # Why this exact range matters on Databricks **Serverless** (env v5, the
+    # lightweight "halo" target): the resolver otherwise grabs 2.2.0, which
+    # hard-requires protobuf>=6.31.1 and so upgrades the immutable base protobuf
+    # 5.29.4 -> 6.x. protobuf 6 conflicts with Serverless's Spark-Connect/gRPC
+    # stack (grpcio-status / googleapis-common-protos pin protobuf<6); pip emits an
     # ERROR-prefixed conflict report that the Serverless %pip magic treats as a
     # hard install failure (verified on env v5). **2.1.0 keeps protobuf at the
     # base 5.29.4** (verified: clean install, MVT encodes via the same 2.x
@@ -111,16 +137,29 @@ light = [
     # Serverless. Do NOT widen to <3 (pulls 2.2.0 -> protobuf 6) or down to <2.1
     # (2.0.x downgrades protobuf to 4.25.9). 1.x lacks the 2.x encode API.
     "mapbox-vector-tile>=2.1,<2.2",
-    "scikit-image>=0.22,<1",
-    "xarray-spatial>=0.4,<1",
-    # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
-    # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
-    # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
-    # Folded into [light] (not a separate [netcdf] extra) so geobrix[light]
-    # reads NetCDF out of the box. Floor pinned; add a ceiling if a future
-    # release floats/breaks on Serverless env v5 (Py 3.12), same discipline as
-    # the rio-tiler / mapbox-vector-tile pins above.
-    "netcdf4>=1.6,<2",
+]
+# Classic DBR 19 variant: grpcio-status on DBR 19 requires protobuf>=6.31.1,
+# which conflicts with the <2.2 cap on mapbox-vector-tile (2.2.0 requires
+# protobuf>=6.31.1). Dropping that cap is the SOLE structurally necessary
+# change from [light]. The idna cap removal and rio-tiler relaxation are
+# OPTIONAL cleanliness changes; they are gated on on-cluster validation
+# (Task 6 — on-cluster smoke test) confirming they do not regress DBR 19 imports. Spec §7.
+light_dbr19 = [
+    "geobrix[light-base]",
+    # --- Classic DBR 19 runtime-sensitive pins ---
+    "typing_extensions>=4.13",  # DBR 19 certainly ships 4.13+; floor harmless
+    # OPTIONAL: relaxed from <9.3 to <9.4; the 9.3.x typing regression is a
+    # Serverless/Python 3.12 issue — unverified on DBR 19. Apply only if Task 6
+    # confirms rio-tiler 9.3.x imports cleanly on DBR 19 Python 3.12; revert
+    # to <9.3 here if validation fails (conservative fallback, OQ2).
+    "rio-tiler>=9.0,<9.4",
+    "httpcore>=1.0.9",          # DBR 19 ships >=1.0.9; floor harmless
+    # OPTIONAL: idna cap dropped (cleanliness). DBR 19 manages its own idna;
+    # the Serverless notebook-change warning does not apply on classic compute.
+    # Gated on Task 6 confirming idna>=3.8 does not cause import errors on DBR 19.
+    # REQUIRED: Drop <2.2 cap — protobuf>=6.31.1 is expected/required on DBR 19.
+    # This is the SOLE structurally necessary delta from [light].
+    "mapbox-vector-tile>=2.2",
 ]
 # For sample-data bundle uploads to Unity Catalog Volumes and gbx:test:bundle-databricks
 databricks = [

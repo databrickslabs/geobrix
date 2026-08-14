@@ -326,6 +326,35 @@ def _pixel_accessor_udf_file(core_fn, return_type):
     return _udf
 
 
+def _tile_producing_udf_file(core_fn):
+    """FILE-aware tile-producing UDF factory for ops with NO extra args.
+
+    Signature: (tile: Struct, file_ref: FileRef|null) → V2_TILE_SCHEMA
+    Reads input via ot._open(tile, file_ref=file_ref).  C1 guard (clip-polygon
+    and warp checks) is handled inside open_tile; on FileRefReadError it degrades
+    silently to the local-path branch.  core_fn(ds) must return GTiff bytes.
+
+    SQL registry keeps the single-arg ``_u_*`` / ``_<name>_udf`` entry unchanged.
+    Only the public Python Column binding uses the 2-arg ``_uf_*`` UDF.
+    """
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, file_ref):
+        if _tile_is_empty(tile):
+            return None
+        try:
+            from databricks.labs.gbx.pyrx import _env
+
+            _env.configure_gdal_env()
+            with ot._open(tile, file_ref=file_ref) as ds:
+                new_bytes = core_fn(ds)
+            return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+        except Exception:  # noqa: BLE001
+            return None
+
+    return _udf
+
+
 # --- Module-level UDF singletons (built once at import) ---------------------
 # Header-only accessors (open_header — answer from the header, no pixel read;
 # a virtual tile is resolved from its ``path``).
@@ -1169,7 +1198,7 @@ def rst_frombands(
 
 
 # --- Tier 1b: tile-returning warp UDFs -------------------------------------
-def _transform_bytes(tile, target_srid):
+def _transform_bytes(tile, target_srid, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
@@ -1187,14 +1216,14 @@ def _transform_bytes(tile, target_srid):
     vt = ot._to_virtual_tile(tile)
     if not vt.is_virtual() and vt.raster is not None:
         target_srid_int = int(target_srid)
-        with ot._open(tile) as ds:
+        with ot._open(tile, file_ref=file_ref) as ds:
             src_epsg = ds.crs.to_epsg() if ds.crs else None
             if src_epsg is not None and src_epsg == target_srid_int:
                 # Identity on a materialized tile: original bytes, sort key intact.
                 return bytes(vt.raster)
             return warp.reproject_to_srid(ds, target_srid_int)
     # Virtual tile: no original bytes — open and reproject (identity-short-circuits inside).
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return warp.reproject_to_srid(ds, int(target_srid))
 
 
@@ -1218,11 +1247,21 @@ def _transform_v2_udf(
     )
 
 
-def _to_webmercator_bytes(tile, resampling):
+@f.udf(V2_TILE_SCHEMA)
+def _uf_transform(tile, file_ref, target_srid):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _transform_bytes(tile, target_srid, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+def _to_webmercator_bytes(tile, resampling, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return warp.reproject_to_srid(ds, 3857, resampling=str(resampling))
 
 
@@ -1244,6 +1283,16 @@ def _to_webmercator_v2_udf(
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _uf_to_webmercator(tile, file_ref, resampling):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _to_webmercator_bytes(tile, resampling, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 def rst_transform(
@@ -1272,7 +1321,10 @@ def rst_transform(
             _col(srid),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _transform_udf(_col(tile), _col(srid))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_transform(tc, file_ref_arg(tc), _col(srid))
 
 
 def rst_to_webmercator(
@@ -1298,15 +1350,18 @@ def rst_to_webmercator(
             resampling_col,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _to_webmercator_udf(_col(tile), resampling_col)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_to_webmercator(tc, file_ref_arg(tc), resampling_col)
 
 
 # --- Tier 1c: tile-returning resample UDFs ----------------------------------
-def _resample_bytes(tile, factor, algorithm):
+def _resample_bytes(tile, factor, algorithm, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return resample.resample_by_factor(ds, float(factor), str(algorithm))
 
 
@@ -1330,11 +1385,21 @@ def _resample_v2_udf(
     )
 
 
-def _resample_to_size_bytes(tile, width_px, height_px, algorithm):
+@f.udf(V2_TILE_SCHEMA)
+def _uf_resample(tile, file_ref, factor, algorithm):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _resample_bytes(tile, factor, algorithm, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+def _resample_to_size_bytes(tile, width_px, height_px, algorithm, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return resample.resample_to_size(
             ds, int(width_px), int(height_px), str(algorithm)
         )
@@ -1360,11 +1425,23 @@ def _resample_to_size_v2_udf(
     )
 
 
-def _resample_to_res_bytes(tile, x_res, y_res, algorithm):
+@f.udf(V2_TILE_SCHEMA)
+def _uf_resample_to_size(tile, file_ref, width_px, height_px, algorithm):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _resample_to_size_bytes(
+        tile, width_px, height_px, algorithm, file_ref=file_ref
+    )
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+def _resample_to_res_bytes(tile, x_res, y_res, algorithm, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return resample.resample_to_res(ds, float(x_res), float(y_res), str(algorithm))
 
 
@@ -1386,6 +1463,16 @@ def _resample_to_res_v2_udf(
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _uf_resample_to_res(tile, file_ref, x_res, y_res, algorithm):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _resample_to_res_bytes(tile, x_res, y_res, algorithm, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 def rst_resample(
@@ -1413,7 +1500,10 @@ def rst_resample(
             alg,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _resample_udf(_col(tile), _col(factor), alg)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_resample(tc, file_ref_arg(tc), _col(factor), alg)
 
 
 def rst_resample_to_size(
@@ -1443,7 +1533,10 @@ def rst_resample_to_size(
             alg,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _resample_to_size_udf(_col(tile), _col(width_px), _col(height_px), alg)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_resample_to_size(tc, file_ref_arg(tc), _col(width_px), _col(height_px), alg)
 
 
 def rst_resample_to_res(
@@ -1473,7 +1566,10 @@ def rst_resample_to_res(
             alg,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _resample_to_res_udf(_col(tile), _col(x_res), _col(y_res), alg)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_resample_to_res(tc, file_ref_arg(tc), _col(x_res), _col(y_res), alg)
 
 
 # --- Tier 1d: tile-returning edit UDFs -------------------------------------
@@ -1528,11 +1624,40 @@ def _clip_v2_udf(
     )
 
 
-def _update_type_bytes(tile, new_type):
+@f.udf(V2_TILE_SCHEMA)
+def _uf_clip(tile, file_ref, geom_wkb, all_touched, clip_crs):
+    """FILE-aware rst_clip: reads input tile via file_ref, then clips.
+
+    C1 guard in open_tile: FILE fast-path applies when tile.clip_polygon is None
+    (normal for rst_clip input) AND no warp is pending.  The explicit geom_wkb
+    cutline is applied AFTER the tile bytes are read (not a tile-level clip_polygon).
+    """
+    if _tile_is_empty(tile) or geom_wkb is None:
+        return None
+    try:
+        from databricks.labs.gbx._geom import parse_geom
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        geom = parse_geom(geom_wkb)
+        if geom is None:
+            return None
+        with ot._open(tile, file_ref=file_ref) as ds:
+            new_bytes = edit.clip_to_geom(
+                ds, geom, bool(all_touched), geom_crs=clip_crs
+            )
+        if new_bytes is None:
+            return None
+        return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _update_type_bytes(tile, new_type, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return edit.update_type(ds, str(new_type))
 
 
@@ -1552,6 +1677,16 @@ def _update_type_v2_udf(tile, new_type, virtualize_dir, virtualize_prefix, mater
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _uf_update_type(tile, file_ref, new_type):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _update_type_bytes(tile, new_type, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 def _init_nodata_bytes(tile):
@@ -1591,6 +1726,38 @@ def _init_nodata_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
     )
 
 
+@f.udf(V2_TILE_SCHEMA)
+def _uf_initnodata(tile, file_ref):
+    """FILE-aware rst_initnodata.
+
+    Virtual tile: records a pending_nodata instruction; stays virtual (no pixel
+    read; file_ref unused — the pending path avoids reading entirely).
+    Materialized tile: applies init_nodata via ot._open (file_ref=file_ref threads
+    through open_tile; C1 guard auto-handles clip/warp cases).
+    """
+    if _tile_is_empty(tile):
+        return None
+    vt = ot._to_virtual_tile(tile)
+    if vt.is_virtual():
+        # Pending-instruction path: record intent, stay virtual (no pixel read).
+        md = dict(vt.metadata or {})
+        md.setdefault(ot.PENDING_NODATA, str(edit._DEFAULT_NODATA))
+        vt.metadata = md
+        return vt.to_row()
+    # Materialized: apply eagerly; file_ref is passed through open_tile.
+    try:
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot._open(tile, file_ref=file_ref) as ds:
+            new_bytes = edit.init_nodata(ds)
+        return VirtualTile(
+            cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+        ).to_row()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def rst_clip(
     tile: ColLike,
     geom: ColLike,
@@ -1624,9 +1791,10 @@ def rst_clip(
             f.lit(virtualize_prefix),
             f.lit(materialize),
         )
-    if clip_crs is None:
-        return _clip_udf(_col(tile), _col(geom), _col(cutline_all_touched))
-    return _clip_udf(_col(tile), _col(geom), _col(cutline_all_touched), crs_col)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_clip(tc, file_ref_arg(tc), _col(geom), _col(cutline_all_touched), crs_col)
 
 
 def rst_updatetype(
@@ -1649,7 +1817,10 @@ def rst_updatetype(
             _col(new_type),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _update_type_udf(_col(tile), _col(new_type))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_update_type(tc, file_ref_arg(tc), _col(new_type))
 
 
 def rst_initnodata(
@@ -1670,7 +1841,10 @@ def rst_initnodata(
             _col(tile),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _init_nodata_udf(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_initnodata(tc, file_ref_arg(tc))
 
 
 # --- Tier 1d6: operations UDFs (tryopen, setsrid, band, asformat, ----------
@@ -1737,6 +1911,34 @@ def _setsrid_v2_udf(tile, srid, virtualize_dir, virtualize_prefix, materialize):
     )
 
 
+@f.udf(V2_TILE_SCHEMA)
+def _uf_setsrid(tile, file_ref, srid):
+    """FILE-aware rst_setsrid (pending-instruction path for virtual tiles)."""
+    if _tile_is_empty(tile) or srid is None:
+        return None
+    vt = ot._to_virtual_tile(tile)
+    s = int(srid)
+    if s <= 0:
+        raise ValueError(f"rst_setsrid requires a positive EPSG code; got {s}")
+    if vt.is_virtual():
+        md = dict(vt.metadata or {})
+        md[ot.PENDING_SRID] = str(s)
+        md.pop(ot.PENDING_CRS, None)
+        vt.metadata = md
+        return vt.to_row()
+    try:
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot._open(tile, file_ref=file_ref) as ds:
+            new_bytes = edit.set_srid(ds, s)
+        return VirtualTile(
+            cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+        ).to_row()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # --- rst_setcrs: string-taking CRS relabel (pending-instruction on virtual) --
 def _setcrs_bytes(tile, crs_value):
     from databricks.labs.gbx.pyrx import _env
@@ -1768,12 +1970,41 @@ def _setcrs_udf(tile, crs_value):
     ).to_row()
 
 
+@f.udf(V2_TILE_SCHEMA)
+def _uf_setcrs(tile, file_ref, crs_value):
+    """FILE-aware rst_setcrs (pending-instruction path for virtual tiles)."""
+    if _tile_is_empty(tile) or crs_value is None:
+        return None
+    from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
+
+    canonical = crs_to_canonical(resolve_crs(str(crs_value)))
+    vt = ot._to_virtual_tile(tile)
+    if vt.is_virtual():
+        md = dict(vt.metadata or {})
+        md[ot.PENDING_CRS] = canonical
+        md.pop(ot.PENDING_SRID, None)
+        vt.metadata = md
+        return vt.to_row()
+    # Materialized: apply eagerly via file_ref.
+    try:
+        from databricks.labs.gbx.pyrx import _env
+
+        _env.configure_gdal_env()
+        with ot._open(tile, file_ref=file_ref) as ds:
+            new_bytes = edit.set_crs(ds, str(crs_value))
+        return VirtualTile(
+            cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+        ).to_row()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # --- rst_transformcrs: string-taking reproject (non-EPSG targets) -------------
-def _transformcrs_bytes(tile, crs_value):
+def _transformcrs_bytes(tile, crs_value, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return warp.reproject_to_crs(ds, str(crs_value))
 
 
@@ -1785,6 +2016,21 @@ def _transformcrs_udf(tile, crs_value):
     return VirtualTile(
         cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
     ).to_row()
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _uf_transformcrs(tile, file_ref, crs_value):
+    if _tile_is_empty(tile) or crs_value is None:
+        return None
+    try:
+        new_bytes = _transformcrs_bytes(tile, crs_value, file_ref=file_ref)
+        if new_bytes is None:
+            return None
+        return VirtualTile(
+            cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
+        ).to_row()
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def _band_bytes(tile, band_index):
@@ -2132,7 +2378,10 @@ def rst_setsrid(
             _col(srid),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _setsrid_udf(_col(tile), _col(srid))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_setsrid(tc, file_ref_arg(tc), _col(srid))
 
 
 def rst_setcrs(
@@ -2162,7 +2411,10 @@ def rst_setcrs(
     Returns:
         Tile with the same pixels/transform but the new CRS.
     """
-    return _setcrs_udf(_col(tile), _crs_col(crs))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_setcrs(tc, file_ref_arg(tc), _crs_col(crs))
 
 
 def rst_transformcrs(
@@ -2186,7 +2438,10 @@ def rst_transformcrs(
     Returns:
         Tile reprojected to the target CRS.
     """
-    return _transformcrs_udf(_col(tile), _crs_col(crs))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_transformcrs(tc, file_ref_arg(tc), _crs_col(crs))
 
 
 def rst_band(
@@ -2573,11 +2828,11 @@ def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
 
 
 # --- Tier 1d3: band-math / focal UDFs --------------------------------------
-def _threshold_bytes(tile, op, value):
+def _threshold_bytes(tile, op, value, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return edit.threshold(ds, op, value)
 
 
@@ -2597,6 +2852,16 @@ def _threshold_v2_udf(tile, op, value, virtualize_dir, virtualize_prefix, materi
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _uf_threshold(tile, file_ref, op, value):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _threshold_bytes(tile, op, value, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 def _filter_bytes(tile, kernel_size, operation):
@@ -2693,7 +2958,10 @@ def rst_threshold(
             val_col,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _threshold_udf(_col(tile), op_col, val_col)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_threshold(tc, file_ref_arg(tc), op_col, val_col)
 
 
 def rst_filter(
@@ -4021,7 +4289,7 @@ def rst_maketiles(tile: ColLike, size_in_mb: ColLike) -> None:
 
 
 # --- Tier 1f: terrain UDFs (slope, aspect, hillshade) ----------------------
-def _slope_bytes(tile, unit, xscale, yscale):
+def _slope_bytes(tile, unit, xscale, yscale, file_ref=None):
     """Shared slope body: open the (virtual or materialized) tile, compute
     slope, return the produced GTiff bytes."""
     from databricks.labs.gbx.pyrx import _env
@@ -4029,7 +4297,7 @@ def _slope_bytes(tile, unit, xscale, yscale):
     _env.configure_gdal_env()
     xs = None if xscale is None else float(xscale)
     ys = None if yscale is None else float(yscale)
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return terrain.slope(ds, unit=str(unit), xscale=xs, yscale=ys)
 
 
@@ -4054,11 +4322,21 @@ def _slope_v2_udf(
     )
 
 
-def _aspect_bytes(tile, trigonometric, zero_for_flat):
+@f.udf(V2_TILE_SCHEMA)
+def _uf_slope(tile, file_ref, unit, xscale, yscale):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _slope_bytes(tile, unit, xscale, yscale, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+def _aspect_bytes(tile, trigonometric, zero_for_flat, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return terrain.aspect(
             ds,
             trigonometric=bool(trigonometric),
@@ -4086,13 +4364,23 @@ def _aspect_v2_udf(
     )
 
 
-def _hillshade_bytes(tile, azimuth, altitude, z_factor, xscale, yscale):
+@f.udf(V2_TILE_SCHEMA)
+def _uf_aspect(tile, file_ref, trigonometric, zero_for_flat):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _aspect_bytes(tile, trigonometric, zero_for_flat, file_ref=file_ref)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+def _hillshade_bytes(tile, azimuth, altitude, z_factor, xscale, yscale, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     xs = None if xscale is None else float(xscale)
     ys = None if yscale is None else float(yscale)
-    with ot._open(tile) as ds:
+    with ot._open(tile, file_ref=file_ref) as ds:
         return terrain.hillshade(
             ds,
             azimuth=float(azimuth),
@@ -4129,6 +4417,18 @@ def _hillshade_v2_udf(
     return _shaped_result_row(
         new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
     )
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _uf_hillshade(tile, file_ref, azimuth, altitude, z_factor, xscale, yscale):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _hillshade_bytes(
+        tile, azimuth, altitude, z_factor, xscale, yscale, file_ref=file_ref
+    )
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
 def rst_slope(
@@ -4180,7 +4480,10 @@ def rst_slope(
             f.lit(virtualize_prefix),
             f.lit(materialize),
         )
-    return _slope_udf(_col(tile), unit_col, xs_col, ys_col)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_slope(tc, file_ref_arg(tc), unit_col, xs_col, ys_col)
 
 
 def rst_aspect(
@@ -4228,7 +4531,10 @@ def rst_aspect(
             zff_col,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _aspect_udf(_col(tile), trig_col, zff_col)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_aspect(tc, file_ref_arg(tc), trig_col, zff_col)
 
 
 def rst_hillshade(
@@ -4279,7 +4585,10 @@ def rst_hillshade(
             ys_col,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
-    return _hillshade_udf(_col(tile), az_col, alt_col, zf_col, xs_col, ys_col)
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_hillshade(tc, file_ref_arg(tc), az_col, alt_col, zf_col, xs_col, ys_col)
 
 
 # --- Tier 1g: terrain ruggedness UDFs (tri, tpi, roughness) -----------------

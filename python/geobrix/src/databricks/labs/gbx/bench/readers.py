@@ -253,14 +253,18 @@ def run_virtual_tile_pixel_read(
 ) -> List[ResultRow]:
     """Time a pixel-reading operation over virtual tiles from the light raster reader.
 
-    Loads a directory as virtual tiles (``virtualTiles=true``), then applies a Python
-    UDF that calls ``rasterio.open`` + ``ds.read(1)`` on each executor to force actual
-    pixel reads. This measures the per-tile I/O cost (FUSE open + band read) separately
-    from planning cost.
+    Loads a directory as virtual tiles (``virtualTiles=true``), then applies
+    ``rst_avg`` (the geobrix pyrx pixel accessor) on each tile to force actual pixel
+    reads via the shipping FILE path.  ``rst_avg`` calls ``file_ref_arg(tile_col)``
+    internally, which mints a FILE byte-range reference when ``file_supported()``
+    is True; otherwise falls back to the plain FUSE-path read.  This is the real
+    geobrix code path — ``file_ref_arg`` / ``open_windowed_via_fileref`` are both on
+    the critical path, so the FILE-on vs FILE-off comparison is valid.
 
-    ``disable_file=True`` sets ``GBX_DISABLE_FILE=1`` before the run, simulating the
-    no-FILE fallback (FUSE reads on every executor open). Compare FILE-on vs FILE-off
-    to measure the FILE byte-range read win in the virtual-tile reader path.
+    ``disable_file=True`` sets ``GBX_DISABLE_FILE=1`` before the run; this causes
+    ``file_supported()`` to return False → ``file_ref_arg`` returns ``lit(None)`` →
+    the UDF falls back to the FUSE read (no FILE byte-range). Compare FILE-on vs
+    FILE-off to measure the FILE byte-range read win in the virtual-tile reader path.
 
     **Cluster-only:** intended for manual at-scale runs on a dedicated cluster (not CI).
     Run the listing comparative first (``run_spark_path_reader`` with ``split_plan_read``),
@@ -295,30 +299,7 @@ def run_virtual_tile_pixel_read(
     env = capture_env(where)
 
     import pyspark.sql.functions as _F
-    from pyspark.sql.types import DoubleType
-
-    @_F.udf(DoubleType())
-    def _pixel_mean(path_col, window_col):
-        """Force rasterio.open + band1 read on the executor."""
-        import rasterio
-        from rasterio.windows import Window as _W
-
-        if path_col is None:
-            return None
-        try:
-            win = None
-            if window_col is not None:
-                win = _W(
-                    window_col["col_off"],
-                    window_col["row_off"],
-                    window_col["width"],
-                    window_col["height"],
-                )
-            with rasterio.open(path_col) as ds:
-                data = ds.read(1, window=win) if win else ds.read(1)
-            return float(data.mean())
-        except Exception:  # noqa: BLE001
-            return None
+    from databricks.labs.gbx.pyrx import functions as _pyrx
 
     def _job():
         reader = spark.read.format("raster_gbx").option("virtualTiles", "true")
@@ -329,9 +310,7 @@ def run_virtual_tile_pixel_read(
             load_path = path
         return (
             reader.load(load_path)
-            .select(
-                _pixel_mean(_F.col("tile.path"), _F.col("tile.window")).alias("mean")
-            )
+            .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
             .count()
         )
 

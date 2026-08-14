@@ -463,7 +463,7 @@ def generate_cog_multiwindow_corpus(
                 break
             actual_w = min(win_w, cog_px - off_x)
             manifest_rows.append(
-                {"path": rel_path, "window": [off_x, 0, actual_w, cog_px]}
+                {"path": str(dest.resolve()), "window": [off_x, 0, actual_w, cog_px]}
             )
 
     manifest_path = out_dir / "cog_multiwindow_manifest.json"

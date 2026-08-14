@@ -128,3 +128,42 @@ def test_cog_write_goes_through_temp_copy(tmp_path, monkeypatch):
         assert ds.driver == "GTiff"
         assert ds.width == 256
         assert ds.count == 1
+
+
+def test_cog_multiwindow_manifest_paths_are_absolute(tmp_path):
+    """generate_cog_multiwindow_corpus writes ABSOLUTE paths in the manifest.
+
+    Executors call rasterio.open(path) with the manifest path field directly;
+    a relative path like 'cogs/cog_0.tif' fails on any executor whose CWD is
+    not the corpus dir (which is always the case on Spark workers).  Paths must
+    be absolute so the executor can open the file regardless of its CWD.
+    """
+    import json
+    import os
+
+    import rasterio
+
+    from databricks.labs.gbx.bench.datagen import generate_cog_multiwindow_corpus
+
+    manifest_path = generate_cog_multiwindow_corpus(
+        out_dir=tmp_path,
+        seed=42,
+        cog_count=1,
+        windows_per_cog=2,
+        cog_px=256,
+        bands=1,
+        dtype="float32",
+        srid=4326,
+    )
+
+    rows = json.loads(manifest_path.read_text())
+    assert rows, "manifest must have rows"
+
+    for row in rows:
+        p = row["path"]
+        assert os.path.isabs(p), (
+            f"manifest path must be absolute so executors can open it; got: {p!r}"
+        )
+        # Confirm the absolute path is actually openable (not just syntactically correct).
+        with rasterio.open(p) as ds:
+            assert ds.width == 256

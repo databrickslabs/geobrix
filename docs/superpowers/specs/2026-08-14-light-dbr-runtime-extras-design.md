@@ -326,7 +326,19 @@ is bit-for-bit identical to the current lock (the `[light]` resolved set must no
 
 ### Installation documentation
 
-The `docs/docs/installation.mdx` (or equivalent) must add a compatibility matrix:
+The `docs/docs/installation.mdx` (or equivalent) must **lead its light-tier install section
+with the Serverless-default positioning** — in user-facing voice — *before* the matrix, so a
+reader immediately understands the default and when they must deviate. Required framing (copy,
+adapt to page voice):
+
+> **GeoBrix Light defaults to Databricks Serverless environments (currently environment v5).**
+> On Serverless, `%pip install geobrix[light]` installs cleanly with no further thought.
+> **When running on a *classic* DBR cluster, additional dependencies must be accounted for** —
+> each classic DBR generation ships a different base runtime (different `protobuf`/`grpcio-status`,
+> `idna`, `typing_extensions`, …), so the default `[light]` can conflict there (notably DBR 19).
+> On classic, pin the extra that matches your DBR version from the table below.
+
+Then the per-runtime compatibility matrix:
 
 | Runtime | Install command | Notes |
 |---|---|---|

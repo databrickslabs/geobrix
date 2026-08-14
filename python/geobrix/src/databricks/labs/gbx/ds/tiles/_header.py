@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable
 
-from pmtiles.tile import Compression, TileType
-
 from databricks.labs.gbx.ds.tiles.grid import BBox, Grid, TileKey
 
 
 def sniff_tile_type(data: bytes) -> TileType:
     """Detect tile encoding from magic bytes; default MVT for vector payloads."""
+    from pmtiles.tile import TileType
+
     if data[:8] == b"\x89PNG\r\n\x1a\n":
         return TileType.PNG
     if data[:3] == b"\xff\xd8\xff":
@@ -38,6 +38,8 @@ class HeaderInfo:
     metadata: Dict[str, object]
 
     def header_dict(self) -> Dict[str, object]:
+        from pmtiles.tile import Compression
+
         minlon, minlat, maxlon, maxlat = self.bbox
         clon = (minlon + maxlon) / 2.0
         clat = (minlat + maxlat) / 2.0

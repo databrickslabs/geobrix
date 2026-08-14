@@ -10,7 +10,6 @@ import shutil
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional
 
-from pmtiles.tile import Compression, TileType, zxy_to_tileid
 from pyspark.sql.datasource import (
     DataSource,
     DataSourceReader,
@@ -40,20 +39,6 @@ INPUT_SCHEMA = StructType(
     ]
 )
 
-_COMPRESSION = {
-    "none": Compression.NONE,
-    "gzip": Compression.GZIP,
-    "brotli": Compression.BROTLI,
-    "zstd": Compression.ZSTD,
-}
-_TILETYPE = {
-    "png": TileType.PNG,
-    "jpeg": TileType.JPEG,
-    "jpg": TileType.JPEG,
-    "webp": TileType.WEBP,
-    "avif": TileType.AVIF,
-    "mvt": TileType.MVT,
-}
 _CATALOGS = {"stac": STACManifestCatalog, "tilejson": TileJSONCatalog}
 
 
@@ -108,6 +93,27 @@ class PMTilesGbxDataSource(DataSource):
 
 class PMTilesGbxWriter(DataSourceWriter):
     def __init__(self, path: str, options: Dict[str, str], overwrite: bool):
+        # Lazy import: pmtiles is only needed when actually writing PMTiles output.
+        # Keeping it at module level would force the pmtiles package to be installed
+        # even on raster-only paths that import ds/register.py (e.g. a bench run that
+        # never writes PMTiles). The import is cheap after the first call (cached by
+        # the Python module system) and only runs when a PMTiles write is initiated.
+        from pmtiles.tile import Compression, TileType
+
+        _compression_map = {
+            "none": Compression.NONE,
+            "gzip": Compression.GZIP,
+            "brotli": Compression.BROTLI,
+            "zstd": Compression.ZSTD,
+        }
+        _tiletype_map = {
+            "png": TileType.PNG,
+            "jpeg": TileType.JPEG,
+            "jpg": TileType.JPEG,
+            "webp": TileType.WEBP,
+            "avif": TileType.AVIF,
+            "mvt": TileType.MVT,
+        }
         # PySpark DataSource V2 lowercases all option keys (e.g. shardZoom → shardzoom).
         # Normalise once so the rest of the class uses consistent names.
         from databricks.labs.gbx.ds._listing import to_local_path
@@ -124,8 +130,8 @@ class PMTilesGbxWriter(DataSourceWriter):
         if self.catalog_kind not in _CATALOGS and self.catalog_kind != "none":
             raise ValueError(f"unknown catalog {self.catalog_kind!r}")
         tt = opts.get("tiletype")
-        self.tile_type_override = _TILETYPE[tt.lower()] if tt else None
-        self.tile_compression = _COMPRESSION[
+        self.tile_type_override = _tiletype_map[tt.lower()] if tt else None
+        self.tile_compression = _compression_map[
             opts.get("tilecompression", "none").lower()
         ]
         self.metadata = json.loads(opts["metadata"]) if opts.get("metadata") else {}
@@ -173,6 +179,8 @@ class PMTilesGbxWriter(DataSourceWriter):
 
     # ---- executor: stream bytes to indexed scratch ----
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        from pmtiles.tile import zxy_to_tileid
+
         writer = _shard.ScratchWriter(self.scratch_dir)
         for row in iterator:
             z, x, y, data = int(row[0]), int(row[1]), int(row[2]), bytes(row[3])

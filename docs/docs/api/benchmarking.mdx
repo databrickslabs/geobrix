@@ -200,6 +200,49 @@ it is the trade for running where the heavyweight tier can't (Serverless, ARM, n
 init script). At scale the read still parallelizes across the cluster (~23 ms/tile here,
 spread over the workers).
 
+### Reader plan-time listing
+
+Before any tile is read, the reader must **enumerate the source directory** and open
+each file header to determine tile windows. On a UC Volume with thousands of files this
+driver-side walk is the dominant planning cost — and it runs every time a job starts,
+even when `virtualTiles=true` (the directory walk still happens; only the per-file
+`rasterio.open` is skipped by virtual-tile planning).
+
+Measured on a **10,002-file corpus** on a dogfood workspace (driver-side microbenchmark,
+warm run):
+
+| Method | Median (s) | vs. baseline |
+|---|---|---|
+| `os.walk` enumeration (default) | 1.357 | — |
+| Pre-computed manifest / tile table | **0.037** | **~37× faster** |
+
+The manifest path skips the directory walk and header opens entirely — planning
+reduces to a single file or table read regardless of tile count.
+
+:::tip Use a manifest or tile table for large directories
+When a directory contains thousands of rasters, supply a pre-computed tile list
+instead of loading the directory directly:
+
+```python
+# Option 1 — manifest (JSON or Parquet: path + window per tile)
+df = spark.read.format("raster_gbx") \
+    .option("manifest", "/Volumes/catalog/schema/vol/tiles.json") \
+    .option("virtualTiles", "true") \
+    .load("/Volumes/catalog/schema/vol/rasters")
+
+# Option 2 — Delta tile table (built by your ingest pipeline)
+df = spark.read.format("raster_gbx") \
+    .option("tilesTable", "geospatial.myschema.tile_index") \
+    .option("virtualTiles", "true") \
+    .load("/")
+```
+
+Both options reduce planning from an `os.walk` over the Volume FUSE mount (1.4 s at
+10K files, growing linearly) to a single file or table read (**~37× faster** at that
+scale). The benefit is purely at plan time and is independent of which functions run
+on the tiles.
+:::
+
 ### NetCDF readers
 
 The NetCDF reader benchmark has **two legs**, matching the two data shapes each reader supports:
@@ -793,6 +836,14 @@ The result splits cleanly along the `Disposition`:
 
 #### FILE byte-range vs FUSE: large-COG multi-window corpus {#file-capability-cog-multiwindow}
 
+This is a **how-to-measure** section. No results table is provided here: the FILE
+byte-range benefit is COG-size-dependent, and a representative measurement requires
+a file size that matches your workload. An earlier run on an 18 MB COG showed FILE
+**~5% slower** than FUSE — the per-window `FileRef` minting overhead dominated at that
+size. The benefit grows as the COG grows: FUSE stages the **entire file** to local disk
+before each window read; FILE fetches **only the COG tile blocks** that cover the window.
+Measure on a COG that represents your real files.
+
 The standard bench corpus uses many small whole-file tiles. To measure the
 Databricks FILE byte-range benefit directly, use the COG multi-window corpus:
 K large Cloud-Optimized GeoTIFFs, each referenced by M narrow window rows.
@@ -813,15 +864,18 @@ subprocess.run([
 
 **Run FILE-on vs FILE-off:**
 
+Use `warmup=0, measured=1` for spark-path legs — one full iteration already averages
+over all windows, so extra measured passes add noise without improving the estimate.
+
 ```python
 from databricks.labs.gbx.bench.readers import run_virtual_tile_pixel_read
 
 results_on  = run_virtual_tile_pixel_read(spark, path="<corpus_dir>",
                 manifest="<manifest_path>",
-                run_id="cog-file-on",  disable_file=False, where="cluster", warmup=1, measured=3)
+                run_id="cog-file-on",  disable_file=False, where="cluster", warmup=0, measured=1)
 results_off = run_virtual_tile_pixel_read(spark, path="<corpus_dir>",
                 manifest="<manifest_path>",
-                run_id="cog-file-off", disable_file=True,  where="cluster", warmup=1, measured=3)
+                run_id="cog-file-off", disable_file=True,  where="cluster", warmup=0, measured=1)
 ```
 
 Set `GBX_DISABLE_FILE=1` in the cluster environment to disable FILE globally

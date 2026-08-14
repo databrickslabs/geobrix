@@ -352,6 +352,76 @@ def validity_gate(root, corpus: m.Corpus, nodata_warn_threshold: float = 0.9):
     return problems
 
 
+def generate_cog_multiwindow_corpus(
+    out_dir,
+    seed: int,
+    cog_count: int,
+    windows_per_cog: int,
+    cog_px: int,
+    bands: int,
+    dtype: str,
+    srid: int,
+) -> Path:
+    """Write K large COGs + a JSON manifest of M (path, window) rows per COG.
+
+    Each COG uses ``driver='COG'`` (internally tiled at 256 px) so Databricks
+    FILE can issue byte-range requests against the COG tile grid.  The manifest
+    is a JSON array of ``{"path": "cogs/cog_N.tif", "window": [off_x, off_y,
+    win_w, win_h]}`` rows — same format as ``_read_manifest_rows`` in ds/raster.py.
+    Returns the ``Path`` to ``<out_dir>/cog_multiwindow_manifest.json``.
+    """
+    import json as _json
+
+    out_dir = Path(out_dir)
+    cogs_dir = out_dir / "cogs"
+    cogs_dir.mkdir(parents=True, exist_ok=True)
+
+    tile_size = 256  # COG internal block size
+    rng = np.random.default_rng(seed)
+    manifest_rows = []
+
+    for i in range(cog_count):
+        cog_seed = int(rng.integers(0, 2 ** 31))
+        tile_bytes = make_tile_bytes(
+            tile_px=cog_px,
+            bands=bands,
+            dtype=dtype,
+            srid=srid,
+            nodata_frac=0.0,
+            seed=cog_seed,
+        )
+        rel_path = f"cogs/cog_{i}.tif"
+        dest = out_dir / rel_path
+        # Re-encode plain GTiff -> COG (driver="COG" = internally tiled,
+        # overview-capable). Memory note: driver=COG uses ~2.8x peak RAM vs
+        # rio-cogeo's ~10x -- acceptable for the tile sizes used here.
+        with MemoryFile(tile_bytes) as mf:
+            with mf.open() as src:
+                cog_profile = src.profile.copy()
+                cog_profile.update(
+                    driver="COG",
+                    blockxsize=tile_size,
+                    blockysize=tile_size,
+                )
+                with rasterio.open(str(dest), "w", **cog_profile) as dst:
+                    dst.write(src.read())
+
+        # Partition cog_px columns into windows_per_cog equal strips (full height).
+        win_w = max(1, cog_px // windows_per_cog)
+        for j in range(windows_per_cog):
+            off_x = j * win_w
+            if off_x >= cog_px:
+                break
+            actual_w = min(win_w, cog_px - off_x)
+            manifest_rows.append(
+                {"path": rel_path, "window": [off_x, 0, actual_w, cog_px]}
+            )
+
+    manifest_path = out_dir / "cog_multiwindow_manifest.json"
+    manifest_path.write_text(_json.dumps(manifest_rows, indent=2))
+    return manifest_path
+
+
 def _parse_int_list(s: str):
     return [int(x) for x in s.split(",") if x.strip()]
 
@@ -377,7 +447,28 @@ def main(argv=None):
     ap.add_argument("--row-bands", type=int, default=4)
     ap.add_argument("--row-dtype", default="float32")
     ap.add_argument("--nodata-warn-threshold", type=float, default=0.9)
+    ap.add_argument("--cog-multiwindow", action="store_true", default=False)
+    ap.add_argument("--cog-count", type=int, default=3)
+    ap.add_argument("--windows-per-cog", type=int, default=10)
+    ap.add_argument("--cog-px", type=int, default=1024)
     a = ap.parse_args(argv)
+
+    if a.cog_multiwindow:
+        manifest_path = generate_cog_multiwindow_corpus(
+            out_dir=a.out,
+            seed=a.seed,
+            cog_count=a.cog_count,
+            windows_per_cog=a.windows_per_cog,
+            cog_px=a.cog_px,
+            bands=_parse_int_list(a.bands)[0],
+            dtype=a.dtypes.split(",")[0],
+            srid=_parse_int_list(a.srids)[0],
+        )
+        print(json.dumps(
+            {"manifest": str(manifest_path), "rows": a.cog_count * a.windows_per_cog},
+            indent=2,
+        ))
+        return
 
     corpus = generate_corpus(
         out_dir=a.out,

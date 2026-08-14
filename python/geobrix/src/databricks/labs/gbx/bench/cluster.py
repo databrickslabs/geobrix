@@ -152,6 +152,28 @@ def _cell(source: str, kind: str = "code", collapsed: bool = False) -> dict:
 
 _PREAMBLE = """import json
 import os
+import importlib as _importlib
+import sys as _sys
+
+# DBR ships databricks/__init__.py that pre-sets databricks.__path__ to specific
+# system directories, excluding the %pip virtual-env site-packages where
+# geobrix just landed. Extend the path before any geobrix imports so that
+# `databricks.labs.gbx` resolves correctly.
+try:
+    import databricks as _db_pkg
+    for _p in _sys.path:
+        _db_dir = _p + "/databricks"
+        if (
+            _db_dir not in _db_pkg.__path__
+            and not os.path.exists(_db_dir + "/__init__.py")
+            and os.path.isdir(_db_dir)
+        ):
+            _db_pkg.__path__.append(_db_dir)
+    _importlib.invalidate_caches()
+    del _p, _db_dir, _db_pkg
+except Exception:
+    pass
+del _importlib, _sys
 
 from databricks.labs.gbx.bench import compare, results, runner
 from databricks.labs.gbx.bench import cluster as _cl
@@ -2908,21 +2930,19 @@ def build_bench_notebook(cfg: dict) -> dict:
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
     # (light, heavy) then spark-path (light, heavy).
     cells = [
-        # Ensure BOTH fresh geobrix code AND the full [light] dep set every run. The wheel
-        # version is a fixed 0.5.0 string, so on a WARM cluster that already has geobrix
-        # installed, a bare `pip install '<wheel>[light]'` no-ops: pip sees geobrix==0.5.0
-        # satisfied and skips the install ENTIRELY -- including resolving the [light] extra
-        # deps. So the cluster can end up running STALE code (e.g. a freshly added DataSource
-        # -> DATA_SOURCE_NOT_FOUND) OR missing a [light] dep (e.g. shapely -> ModuleNotFound
-        # at `import bench.spec`). The old fix (`--force-reinstall --no-deps`) swapped the
-        # code but, by skipping deps, LEFT geobrix present without its extras -> the next
-        # warm run's [light] install then no-ops on those deps. Uninstalling first forces the
-        # install to actually run: fresh code from the wheel FILE + resolved [light] extras
-        # (shapely/rasterio/pyogrio/...). Deps come from pip's cache (fast); only the small
-        # geobrix wheel is re-read. `markdown` powers the displayHTML summaries (_show_md).
-        _cell("%pip uninstall -y geobrix"),
-        _cell(f"%pip install --quiet '{cfg['wheel']}[light]' markdown"),
-        _cell("dbutils.library.restartPython()"),
+        # Ensure BOTH fresh geobrix code AND the full [light] dep set every run. Use the
+        # PEP 508 URL-reference form `"geobrix[light] @ file:///path"` which pins the
+        # exact wheel file and resolves [light] extras from it -- even when the same
+        # version is already cached. The plain `'path[light]'` form is not valid pip
+        # syntax for extras from a local file and fails silently, leaving the env
+        # without geobrix after the kernel restart.
+        # NOTE: single %pip cell = ONE kernel restart. The earlier pattern
+        # (%pip uninstall + %pip install + dbutils.library.restartPython()) triggered three
+        # restarts and caused kernel startup failures on DBR 19.x-snapshot. The explicit
+        # dbutils.library.restartPython() is omitted here because %pip install already
+        # restarts the Python environment; a second restart after it is redundant and
+        # causes kernel crash on DBR 19.x. `markdown` powers the displayHTML summaries.
+        _cell('%pip install --quiet "geobrix[light] @ file://{wheel}" markdown'.format(wheel=cfg['wheel'])),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),

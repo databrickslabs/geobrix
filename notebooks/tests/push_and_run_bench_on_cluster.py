@@ -685,11 +685,20 @@ def main() -> int:
             )
             _pool = len(_cj.get("row_pool", {}).get("tiles", []))
         except Exception as _e:
-            print(
-                f"ERROR: cannot read {corpus}/corpus.json to validate the row pool size: {_e}",
-                file=sys.stderr,
-            )
-            return 2
+            _e_str = str(_e)
+            if "disabled for users without account admin" in _e_str or "API is disabled" in _e_str:
+                print(
+                    f"WARNING: cannot read {corpus}/corpus.json (Files API admin-gated on this workspace); "
+                    f"skipping pool-size validation. Ensure --row-counts <= corpus pool size.",
+                    file=sys.stderr,
+                )
+                _pool = _max_rc  # bypass the size check below
+            else:
+                print(
+                    f"ERROR: cannot read {corpus}/corpus.json to validate the row pool size: {_e}",
+                    file=sys.stderr,
+                )
+                return 2
         if _max_rc > _pool:
             print(
                 f"ERROR: spark-path --row-counts max ({_max_rc}) exceeds the corpus row pool "

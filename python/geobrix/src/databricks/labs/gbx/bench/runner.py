@@ -511,38 +511,75 @@ def _tile_aggregate_df(spark, root, corpus, fs):
     per-band split. Each synthesized tile becomes ONE group row; frombands rows
     additionally carry a 0-based ``band_index`` (the ascending-sort key both tiers
     rely on). Returns ``(df, has_band_index)`` -- df has columns tile[, band_index].
-    """
-    from pyspark.sql import functions as F
 
-    recipe = _spec.agg_synth_recipe(fs.name)
-    array_root = corpus.row_pool.tiles[0].path
-    out_dir = _synth.synth_dir(root, array_root, recipe)
-    paths = _synth.synthesize(str(root / array_root), recipe, out_dir)
-    rows = []
-    for i, p in enumerate(paths):
-        d = _serde.build_tile(Path(p).read_bytes(), "GTiff", 0)
-        rows.append((d["cellid"], d["raster"], d["metadata"], i))
+    Implementation note: rows are built as path-based virtual tile structs (V2
+    with path+window set, raster=None) rather than embedding GTiff bytes directly.
+    Embedding bytes in a LocalRelation / Spark plan literal is fine for small tiles
+    but fails for large tiles (1024px ~ 8 MB / tile) because the plan binary
+    exceeds Spark's task broadcast ceiling, causing executors to receive corrupt or
+    truncated bytes and raise "Cannot open TIFF image".  Path-based virtual tiles
+    avoid this: only small strings and ints are serialized in the plan; executors
+    read the bytes from the synth file paths at runtime.
+    """
+    import rasterio as _rasterio
+
+    from pyspark.sql import functions as F
     from pyspark.sql.types import (
-        BinaryType,
         IntegerType,
         LongType,
-        MapType,
         StringType,
         StructField,
         StructType,
     )
 
-    schema = StructType(
+    recipe = _spec.agg_synth_recipe(fs.name)
+    array_root = corpus.row_pool.tiles[0].path
+    out_dir = _synth.synth_dir(root, array_root, recipe)
+    paths = _synth.synthesize(str(root / array_root), recipe, out_dir)
+
+    # Build rows with only the path, tile dimensions, and band_index — no bytes.
+    # The tile struct is assembled as a path-based virtual tile (V2) below.
+    path_rows = []
+    for i, p in enumerate(paths):
+        abs_p = str(Path(p).resolve())
+        with _rasterio.open(abs_p) as ds:
+            w, h = ds.width, ds.height
+        path_rows.append((abs_p, w, h, i))
+
+    path_schema = StructType(
         [
-            StructField("cellid", LongType(), False),
-            StructField("raster", BinaryType(), False),
-            StructField("metadata", MapType(StringType(), StringType()), True),
+            StructField("abs_path", StringType(), False),
+            StructField("tile_width", IntegerType(), False),
+            StructField("tile_height", IntegerType(), False),
             StructField("band_index", IntegerType(), False),
         ]
     )
-    base = spark.createDataFrame(rows, schema=schema)
+    base = spark.createDataFrame(path_rows, schema=path_schema)
+
+    # Build a V2 virtual tile struct: path+window set, raster=None.
+    # The agg UDF opens each tile via its path on the executor (_tile_raster_bytes
+    # materializes virtual tiles through ot.materialize_to_bytes), so the bytes
+    # are read from disk on demand rather than shipped through the plan.
     df = base.select(
-        F.struct("cellid", "raster", "metadata").alias("tile"),
+        F.struct(
+            F.lit(0).cast(LongType()).alias("cellid"),
+            F.lit(None).cast("binary").alias("raster"),
+            F.col("abs_path").alias("path"),
+            F.struct(
+                F.lit(0).cast(IntegerType()).alias("col_off"),
+                F.lit(0).cast(IntegerType()).alias("row_off"),
+                F.col("tile_width").alias("width"),
+                F.col("tile_height").alias("height"),
+            ).alias("window"),
+            F.lit(None).cast("binary").alias("clip_polygon"),
+            F.lit(None).cast(StringType()).alias("clip_crs"),
+            F.lit(None).cast(StringType()).alias("crs"),
+            F.create_map(
+                F.lit("driver"), F.lit("GTiff"),
+                F.lit("width"), F.col("tile_width").cast(StringType()),
+                F.lit("height"), F.col("tile_height").cast(StringType()),
+            ).alias("metadata"),
+        ).alias("tile"),
         F.col("band_index"),
     )
     return df, (fs.name == "rst_frombands_agg")
@@ -1602,21 +1639,42 @@ def run_spark_path(  # noqa: C901
     _array_root = pool.tiles[0].path if pool.tiles else None
 
     def _synth_array_col(fn: str):
-        """ARRAY<tile> literal column of the synthesized tiles for a tile_array fn."""
+        """ARRAY<tile> column of the synthesized tiles for a tile_array fn.
+
+        Builds path-based virtual tile structs (V2 with path+window set,
+        raster=None) so executors read the bytes from the synth file paths at
+        runtime.  Embedding GTiff bytes as F.lit literals is fine for small
+        corpus tiles but fails for large tiles (1024px ~ 8 MB / tile) because
+        the plan binary exceeds Spark's task broadcast ceiling, causing executors
+        to receive corrupt or truncated bytes and raise "Cannot open TIFF image".
+        """
+        import rasterio as _rasterio
+
         paths = _synthesized_paths(root, _array_root, fn)
         elems = []
         for p in paths:
-            d = _serde.build_tile(Path(p).read_bytes(), "GTiff", 0)
+            abs_p = str(Path(p).resolve())
+            with _rasterio.open(abs_p) as ds:
+                w, h, cnt = ds.width, ds.height, ds.count
             elems.append(
                 F.struct(
-                    F.lit(d["cellid"]).cast("long").alias("cellid"),
-                    F.lit(d["raster"]).alias("raster"),
+                    F.lit(0).cast("long").alias("cellid"),
+                    F.lit(None).cast("binary").alias("raster"),
+                    F.lit(abs_p).alias("path"),
+                    F.struct(
+                        F.lit(0).cast("int").alias("col_off"),
+                        F.lit(0).cast("int").alias("row_off"),
+                        F.lit(w).cast("int").alias("width"),
+                        F.lit(h).cast("int").alias("height"),
+                    ).alias("window"),
+                    F.lit(None).cast("binary").alias("clip_polygon"),
+                    F.lit(None).cast("string").alias("clip_crs"),
+                    F.lit(None).cast("string").alias("crs"),
                     F.create_map(
-                        *[
-                            x
-                            for k, v in d["metadata"].items()
-                            for x in (F.lit(k), F.lit(v))
-                        ]
+                        F.lit("driver"), F.lit("GTiff"),
+                        F.lit("width"), F.lit(str(w)),
+                        F.lit("height"), F.lit(str(h)),
+                        F.lit("count"), F.lit(str(cnt)),
                     ).alias("metadata"),
                 )
             )

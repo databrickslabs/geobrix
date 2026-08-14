@@ -206,3 +206,156 @@ def test_partitions_from_tile_rows_unlisted_file_never_opened(tmp_path, monkeypa
         assert "not_in_manifest" not in c, (
             f"Unlisted file was opened: {c}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — full partitions() routing via RasterGbxReader
+# ---------------------------------------------------------------------------
+
+def test_partitions_manifest_json_end_to_end(tmp_path, monkeypatch):
+    """RasterGbxReader with manifest= option → correct partitions, 0 rasterio.open."""
+    _write_sample(tmp_path / "r0.tif", width=4, height=3)
+    _write_sample(tmp_path / "r1.tif", width=8, height=6)
+
+    manifest = [
+        {"path": str(tmp_path / "r0.tif"), "window": [0, 0, 4, 3]},
+        {"path": str(tmp_path / "r1.tif"), "window": [0, 0, 8, 6]},
+    ]
+    manifest_file = str(tmp_path / "tiles.json")
+    with open(manifest_file, "w") as f:
+        json.dump(manifest, f)
+
+    open_calls = []
+    real_open = rasterio.open
+
+    def _mock_open(p, *a, **kw):
+        open_calls.append(str(p))
+        return real_open(p, *a, **kw)
+    monkeypatch.setattr(rasterio, "open", _mock_open)
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    reader = RasterGbxReader({
+        "path": str(tmp_path),
+        "manifest": manifest_file,
+        "virtualTiles": "true",
+    })
+    parts = reader.partitions()
+
+    assert len(open_calls) == 0, f"Expected 0 rasterio.open during partitions(); got {open_calls}"
+    assert len(parts) == 2
+    assert parts[0].file_path == str(tmp_path / "r0.tif")
+    assert parts[0].window == (0, 0, 4, 3)
+    assert parts[1].file_path == str(tmp_path / "r1.tif")
+    assert parts[1].window == (0, 0, 8, 6)
+
+
+def test_partitions_manifest_mutual_exclusion_error():
+    """Supplying both manifest and tilesTable raises ValueError."""
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        RasterGbxReader({
+            "path": "/tmp/x",
+            "manifest": "/tmp/m.json",
+            "tilesTable": "catalog.schema.tiles",
+        })
+
+
+def test_partitions_tiles_table_flat_columns(tmp_path, spark):
+    """tilesTable with flat col_off/row_off/width/height columns (not nested window).
+
+    This exercises the flat-column layout branch in _partitions_from_tile_rows:
+    when a tilesTable query result carries window fields as separate top-level
+    columns (common for Delta tables built by ingest pipelines), partitions()
+    must build _TilePartition objects without any rasterio.open calls.
+    """
+    _write_sample(tmp_path / "raster.tif", width=4, height=3)
+
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([
+        StructField("path", StringType(), False),
+        StructField("col_off", IntegerType(), True),
+        StructField("row_off", IntegerType(), True),
+        StructField("width", IntegerType(), True),
+        StructField("height", IntegerType(), True),
+    ])
+    tile_data = [(str(tmp_path / "raster.tif"), 0, 0, 4, 3)]
+    spark.createDataFrame(tile_data, schema=schema).createOrReplaceTempView(
+        "_test_tile_rows_flat_gbx"
+    )
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    reader = RasterGbxReader({
+        "path": str(tmp_path),
+        "tilesTable": "_test_tile_rows_flat_gbx",
+        "virtualTiles": "true",
+    })
+    parts = reader.partitions()
+
+    assert len(parts) == 1
+    assert parts[0].file_path == str(tmp_path / "raster.tif")
+    # Flat cols col_off/row_off/width/height → whole-file window (0,0,4,3)
+    assert parts[0].window == (0, 0, 4, 3)
+    assert parts[0].emit_virtual is True
+
+
+def test_partitions_tiles_table_end_to_end(tmp_path, spark):
+    """RasterGbxReader with tilesTable= option reads tile rows from a Spark temp view."""
+    _write_sample(tmp_path / "raster.tif", width=4, height=3)
+
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([
+        StructField("path", StringType(), False),
+        StructField("col_off", IntegerType(), True),
+        StructField("row_off", IntegerType(), True),
+        StructField("width", IntegerType(), True),
+        StructField("height", IntegerType(), True),
+    ])
+    tile_data = [(str(tmp_path / "raster.tif"), 0, 0, 4, 3)]
+    spark.createDataFrame(tile_data, schema=schema).createOrReplaceTempView(
+        "_test_tile_rows_gbx"
+    )
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    reader = RasterGbxReader({
+        "path": str(tmp_path),
+        "tilesTable": "_test_tile_rows_gbx",
+        "virtualTiles": "true",
+    })
+    parts = reader.partitions()
+
+    assert len(parts) == 1
+    assert parts[0].file_path == str(tmp_path / "raster.tif")
+    assert parts[0].window == (0, 0, 4, 3)
+
+
+def test_partitions_manifest_full_spark_read(tmp_path, spark):
+    """End-to-end Spark read with manifest option emits correct virtual tiles."""
+    from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+
+    _write_sample(tmp_path / "raster.tif", width=4, height=3)
+    manifest = [{"path": str(tmp_path / "raster.tif"), "window": [0, 0, 4, 3]}]
+    manifest_file = str(tmp_path / "manifest.json")
+    with open(manifest_file, "w") as f:
+        json.dump(manifest, f)
+
+    spark.dataSource.register(RasterGbxDataSource)
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("manifest", manifest_file)
+        .option("virtualTiles", "true")
+        .load(str(tmp_path))
+        .collect()
+    )
+
+    assert len(rows) == 1
+    tile = rows[0]["tile"]
+    assert tile["raster"] is None  # virtual: no bytes
+    assert tile["path"] == str(tmp_path / "raster.tif")
+    assert tile["window"]["width"] == 4
+    assert tile["window"]["height"] == 3

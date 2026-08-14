@@ -861,15 +861,46 @@ class RasterGbxReader(DataSourceReader):
             )
         self.emit_virtual = str(options.get("virtualTiles", "true")).lower() == "true"
 
-    def partitions(self) -> Sequence[InputPartition]:
-        files = _listing.list_files(self.path, self.filter_regex)
-        # Resolve the decoded-memory budget ONCE at the driver.
-        # sizeInMB > 0 is a power-user byte-level override; it wins over strategy.
-        if self.size_mib > 0:
-            resolved_budget = self.size_mib * 1024 * 1024
-        else:
-            resolved_budget = budget.decoded_budget_bytes(self.strategy)
+        # Approach 1 — pre-computed tile input.
+        # When manifest or tilesTable is present, partitions() reads tile rows
+        # from those sources instead of walking self.path.
+        self.manifest = options.get("manifest")
+        self.tiles_table = options.get("tilesTable")
+        if self.manifest and self.tiles_table:
+            raise ValueError(
+                "raster_gbx: 'manifest' and 'tilesTable' are mutually exclusive; "
+                "supply at most one."
+            )
 
+    def partitions(self) -> Sequence[InputPartition]:
+        resolved_budget = _resolved_budget(self.size_mib, self.strategy)
+
+        # Approach 1: pre-computed tile input bypasses os.walk + per-file header opens.
+        if self.manifest or self.tiles_table:
+            if self.manifest:
+                tile_rows = _read_manifest_rows(self.manifest)
+            else:
+                from pyspark.sql import SparkSession
+
+                spark = SparkSession.getActiveSession()
+                if spark is None:
+                    raise RuntimeError(
+                        "raster_gbx: 'tilesTable' requires an active SparkSession."
+                    )
+                tile_rows = spark.table(self.tiles_table).collect()
+            return _partitions_from_tile_rows(
+                tile_rows,
+                emit_virtual=self.emit_virtual,
+                budget_bytes=resolved_budget,
+                clip_polygons=self.clip_polygons,
+                clip_crs=self.clip_crs,
+                windows=self.windows,
+                tile_size=self.tile_size,
+                overlap_percent=self.overlap_percent,
+            )
+
+        # Default path: walk self.path and plan partitions per file.
+        files = _listing.list_files(self.path, self.filter_regex)
         result: list = []
         for f in files:
             result.extend(

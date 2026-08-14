@@ -32,11 +32,18 @@ The `[light]` variant's combined constraint for `mapbox-vector-tile` resolves to
 The `[light_dbr19]` variant omits the `<2.2` cap, allowing `mapbox-vector-tile>=2.2`, which
 requires `protobuf>=6.31.1` — matching classic DBR 19's `grpcio-status` expectation.
 
-CI lock structure expands from one file (`requirements-pyrx-ci.*`) to two:
+CI lock structure expands from one file (`requirements-pyrx-ci.*`) to four:
 - `requirements-light-ci.*` — Serverless (env v5) + classic DBR ≤18 (renamed from `pyrx`)
 - `requirements-light-dbr19-ci.*` — classic DBR 19 (new)
+- `requirements-light-all-ci.*` — `[light_all]` umbrella, Serverless/DBR ≤18 (new)
+- `requirements-light-dbr19-all-ci.*` — `[light_dbr19_all]` umbrella, DBR 19 (new)
 
-Both are hash-pinned via `uv pip compile --generate-hashes`.
+All are hash-pinned via `uv pip compile --generate-hashes`.
+
+**`_all` umbrella extras** — `light_all` and `light_dbr19_all` are feature-complete extras that
+reference `[light]` / `[light_dbr19]` plus `[stac]` + `[vizx]` + `[overture]`, removing the
+reasoning burden of hand-picking partial installs and preventing the `pmtiles`-omission class
+of failure. `[databricks]` is excluded — it is not a geo feature; compute already provides its runtime.
 
 ---
 
@@ -106,14 +113,22 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
 
 | File | Change type | Description |
 |---|---|---|
-| `python/geobrix/pyproject.toml` | Edit | Add `_light_base`; redefine `light`; add `light_dbr19`; leave all other extras unchanged |
+| `python/geobrix/pyproject.toml` | Edit | Add `_light_base`; redefine `light`; add `light_dbr19`, `light_all`, `light_dbr19_all`; leave all other extras unchanged |
 | `python/geobrix/requirements-pyrx-ci.in` | Rename → `requirements-light-ci.in` | Update header comment only; all package pins identical |
 | `python/geobrix/requirements-pyrx-ci.txt` | Rename → `requirements-light-ci.txt` | Regenerate from renamed `.in`; hash set must be identical |
 | `python/geobrix/requirements-light-dbr19-ci.in` | New file | Copy of `requirements-light-ci.in` with updated header + explicit `mapbox-vector-tile>=2.2.0` comment |
 | `python/geobrix/requirements-light-dbr19-ci.txt` | New file (generated) | `uv pip compile --generate-hashes` output from `requirements-light-dbr19-ci.in` |
+| `python/geobrix/requirements-light-all-ci.in` | New file | Lock source for `[light_all]` umbrella (Serverless/DBR ≤18) |
+| `python/geobrix/requirements-light-all-ci.txt` | New file (generated) | `uv pip compile --generate-hashes` output for `[light_all]` |
+| `python/geobrix/requirements-light-dbr19-all-ci.in` | New file | Lock source for `[light_dbr19_all]` umbrella (DBR 19) |
+| `python/geobrix/requirements-light-dbr19-all-ci.txt` | New file (generated) | `uv pip compile --generate-hashes` output for `[light_dbr19_all]`; transitive-safety check for protobuf conflict |
 | `.github/actions/pyrx_build/action.yml` | Edit | `requirements-pyrx-ci.txt` → `requirements-light-ci.txt` (comment + install line) |
-| `docs/docs/installation.mdx` | Edit | Insert Serverless-default framing paragraph + compat matrix at top of lightweight tab section |
-| `~/.claude/projects/-Users-mjohns-IdeaProjects-geobrix/memory/geobrix-version-bump-checklist.md` | Edit | Add per-variant lock regeneration steps |
+| `.github/actions/python_build/action.yml` | Edit (comment only) | Update comment on line 120 from `requirements-pyrx-ci.txt` → `requirements-light-ci.txt` |
+| `python/geobrix/requirements-dev-container.in` | Edit (comment only) | Update cross-reference on line 53 from `requirements-pyrx-ci.in` → `requirements-light-ci.in` |
+| `python/geobrix/test/conftest.py` | Edit (docstring only) | Update reference on line 7 from `requirements-pyrx-ci.txt` → `requirements-light-ci.txt` |
+| `docs/docs/security.mdx` | Edit | Update row link + prose from `requirements-pyrx-ci.txt` → `requirements-light-ci.txt` (user-facing link; would 404 after rename otherwise) |
+| `docs/docs/installation.mdx` | Edit | Insert Serverless-default framing paragraph + compat matrix at top of lightweight tab section; include `_all` options in matrix |
+| `~/.claude/projects/-Users-mjohns-IdeaProjects-geobrix/memory/geobrix-version-bump-checklist.md` | Edit | Add per-variant lock regeneration steps for all 4 lock files |
 
 ---
 
@@ -177,19 +192,26 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
   ```toml
   # Classic DBR 19 variant: grpcio-status on DBR 19 requires protobuf>=6.31.1,
   # which conflicts with the <2.2 cap on mapbox-vector-tile (2.2.0 requires
-  # protobuf>=6.31.1). Drop the cap here so pip can select 2.2.x and satisfy
-  # DBR 19's protobuf>=6 requirement. See spec §7 + the pyproject [light] comment
-  # for the full analysis of why these two runtimes need separate extras.
+  # protobuf>=6.31.1). Dropping that cap is the SOLE structurally necessary
+  # change from [light]. The idna cap removal and rio-tiler relaxation are
+  # OPTIONAL cleanliness changes; they are gated on on-cluster validation
+  # (Task 6 — on-cluster smoke test) confirming they do not regress DBR 19 imports. Spec §7.
   light_dbr19 = [
       "geobrix[_light_base]",
       # --- Classic DBR 19 runtime-sensitive pins ---
       "typing_extensions>=4.13",  # DBR 19 certainly ships 4.13+; floor harmless
-      "rio-tiler>=9.0,<9.4",      # <9.3 cap is a Serverless/Python 3.12 issue;
-                                  # conservative relaxation to <9.4 pending OQ2 verification
+      # OPTIONAL: relaxed from <9.3 to <9.4; the 9.3.x typing regression is a
+      # Serverless/Python 3.12 issue — unverified on DBR 19. Apply only if Task 6
+      # confirms rio-tiler 9.3.x imports cleanly on DBR 19 Python 3.12; revert
+      # to <9.3 here if validation fails (conservative fallback, OQ2).
+      "rio-tiler>=9.0,<9.4",
       "httpcore>=1.0.9",          # DBR 19 ships >=1.0.9; floor harmless
-      # idna cap omitted: DBR 19 base manages its own idna; no Serverless
-      # notebook-change warning risk on classic compute.
-      "mapbox-vector-tile>=2.2",  # No <2.2 cap; protobuf>=6.31.1 is expected/required on DBR 19
+      # OPTIONAL: idna cap dropped (cleanliness). DBR 19 manages its own idna;
+      # the Serverless notebook-change warning does not apply on classic compute.
+      # Gated on Task 6 confirming idna>=3.8 does not cause import errors on DBR 19.
+      # REQUIRED: Drop <2.2 cap — protobuf>=6.31.1 is expected/required on DBR 19.
+      # This is the SOLE structurally necessary delta from [light].
+      "mapbox-vector-tile>=2.2",
   ]
   ```
 
@@ -228,9 +250,11 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
   ```
   The compile must succeed with exit code 0 and no `ResolutionImpossible` or conflict output.
 
+- [ ] **Note — CI-lock vs runtime:** The per-variant hashed locks (Tasks 2 and 3) are for **CI reproducibility**. CI resolves both variants against PyPI with no Serverless `grpcio-status` constraint, so both `requirements-light-ci.txt` and `requirements-light-dbr19-ci.txt` currently pin `protobuf 6.x` (because `mapbox-vector-tile 2.2.0` requires it and PyPI has no Serverless restriction). This is correct: the lock captures what pip selects in a clean CI environment, not what a Serverless cluster installs. The **real runtime protobuf** is set at cluster install time: `geobrix[light]` constrains `mapbox-vector-tile<2.2` → Serverless installs `protobuf 5.x`; `geobrix[light_dbr19]` allows `>=2.2` → DBR 19 installs `protobuf 6.x`. **The on-cluster gate (Task 6) is the true acceptance test for the runtime constraint; the CI lock is a reproducibility tool only.**
+
 - [ ] Commit: `chore(packaging): Option B extras — _light_base + light_dbr19 variant`
 
-  Body: explain that `[light]`'s resolved set is unchanged (verified by diff), `light_dbr19` drops the `<2.2` mapbox-vector-tile cap to allow protobuf 6 on DBR 19, and `_light_base` is an internal composition tool not for direct install.
+  Body: explain that `[light]`'s resolved set is unchanged (verified by diff), `light_dbr19` drops the `<2.2` mapbox-vector-tile cap to allow protobuf 6 on DBR 19, `_light_base` is an internal composition tool not for direct install, and the idna/rio-tiler relaxations in `light_dbr19` are OPTIONAL pending on-cluster validation in Task 6.
 
 ---
 
@@ -301,15 +325,35 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
   - Line ~46 install command: `requirements-pyrx-ci.txt` → `requirements-light-ci.txt`
   - No other changes to this file.
 
-- [ ] **Verify — no remaining stale references to the old lock name:**
+- [ ] Edit `.github/actions/python_build/action.yml`:
+  - Line ~120 comment: `requirements-pyrx-ci.txt` → `requirements-light-ci.txt`
+  - Comment only; no functional change.
+
+- [ ] Edit `python/geobrix/requirements-dev-container.in`:
+  - Line ~53 comment: `requirements-pyrx-ci.in` → `requirements-light-ci.in`
+  - Comment only; all package pins and the rest of the file unchanged.
+
+- [ ] Edit `python/geobrix/test/conftest.py`:
+  - Line ~7 docstring: `requirements-pyrx-ci.txt` → `requirements-light-ci.txt`
+  - Docstring only; no code change.
+
+- [ ] Edit `docs/docs/security.mdx`:
+  - Line ~60: update the table row's hyperlink target from `requirements-pyrx-ci.txt` to `requirements-light-ci.txt` (the hyperlink points to the file on GitHub; after the rename, the old URL 404s)
+  - Line ~60: update the row label from "CI (lightweight pyrx build)" to "CI (lightweight build)"
+  - Line ~69: update the prose reference from `requirements-pyrx-ci.txt` to `requirements-light-ci.txt`
+  - Do not modify any other content in `security.mdx`.
+
+- [ ] **Verify — no remaining stale references to the old lock name in committed files:**
   ```bash
   grep -rn "requirements-pyrx-ci" \
       /Users/mjohns/IdeaProjects/geobrix/.github \
       /Users/mjohns/IdeaProjects/geobrix/scripts \
-      /Users/mjohns/IdeaProjects/geobrix/docs \
+      /Users/mjohns/IdeaProjects/geobrix/docs/docs \
+      /Users/mjohns/IdeaProjects/geobrix/python/geobrix/test \
+      /Users/mjohns/IdeaProjects/geobrix/python/geobrix/requirements-dev-container.in \
       2>/dev/null
   ```
-  Must return nothing.
+  Must return nothing. (Old plan docs under `docs/superpowers/plans/` and `prompts/` reference the old name as historical prose — those are acceptable and not updated here.)
 
 - [ ] Commit: `chore(ci): rename pyrx-ci lock → light-ci; add light-dbr19-ci lock`
 
@@ -317,7 +361,141 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
 
 ---
 
-## Task 3 — Installation docs update
+## Task 3 — Umbrella `_all` extras + locks
+
+**Files:**
+- `python/geobrix/pyproject.toml`
+- `python/geobrix/requirements-light-all-ci.in` (new)
+- `python/geobrix/requirements-light-all-ci.txt` (new, generated)
+- `python/geobrix/requirements-light-dbr19-all-ci.in` (new)
+- `python/geobrix/requirements-light-dbr19-all-ci.txt` (new, generated)
+
+**Interfaces changed:**
+- `[project.optional-dependencies]` gains `light_all` and `light_dbr19_all` (both new)
+- No existing extras modified; no Python source changes
+
+**Steps:**
+
+- [ ] Read `python/geobrix/pyproject.toml` to confirm the `stac`, `vizx`, and `overture` extras
+  are still as-read in Task 1 (no changes since that task). Note their exact entry names.
+
+- [ ] Add `light_all` immediately after `light_dbr19` in `[project.optional-dependencies]`:
+  ```toml
+  # Feature-complete umbrella for Serverless (env v5) and classic DBR <=18.
+  # Installs [light] + all optional feature extras ([stac], [vizx], [overture]).
+  # [databricks] is NOT included — it is a Databricks SDK integration, not a geo
+  # feature, and Databricks compute already provides its runtime.
+  # Use this for the "don't reason about deps" full install on Serverless/DBR <=18.
+  light_all = [
+      "geobrix[light]",
+      "geobrix[stac]",
+      "geobrix[vizx]",
+      "geobrix[overture]",
+  ]
+  ```
+
+- [ ] Add `light_dbr19_all` immediately after `light_all`:
+  ```toml
+  # Feature-complete umbrella for classic DBR 19. Same as [light_all] but uses
+  # [light_dbr19] so the protobuf constraint is DBR-19-correct.
+  # [databricks] excluded for the same reason as [light_all].
+  light_dbr19_all = [
+      "geobrix[light_dbr19]",
+      "geobrix[stac]",
+      "geobrix[vizx]",
+      "geobrix[overture]",
+  ]
+  ```
+
+- [ ] Confirm `test`, `dev`, `databricks`, `overture`, `stac`, `vizx`, `light`, `light_dbr19`,
+  and `_light_base` are byte-for-byte identical to their pre-edit state.
+
+- [ ] **Verify — `light_all` resolves cleanly:**
+  ```bash
+  uv pip compile --generate-hashes --python-version 3.12 \
+      --extra light_all \
+      --output-file /tmp/light-all.txt \
+      python/geobrix/pyproject.toml
+  echo "Exit: $?"  # must be 0
+  grep "mapbox-vector-tile" /tmp/light-all.txt  # must be <2.2.x (e.g., ==2.1.x)
+  grep "^protobuf==" /tmp/light-all.txt          # must be 5.x (Serverless-safe)
+  ```
+
+- [ ] **Verify — `light_dbr19_all` resolves without protobuf conflict (transitive-safety check):**
+  ```bash
+  uv pip compile --generate-hashes --python-version 3.12 \
+      --extra light_dbr19_all \
+      --output-file /tmp/light-dbr19-all.txt \
+      python/geobrix/pyproject.toml
+  echo "Exit: $?"  # must be 0; a non-zero exit indicates a stac/vizx/overture
+                   # transitive dep conflicts with light_dbr19's protobuf>=6
+  grep "mapbox-vector-tile" /tmp/light-dbr19-all.txt  # must be >=2.2.x
+  grep "^protobuf==" /tmp/light-dbr19-all.txt          # must be 6.x
+  ```
+  If this compile fails with `ResolutionImpossible`, one of `stac` / `vizx` / `overture`
+  carries a transitive protobuf-adjacent constraint. In that case: identify the conflicting
+  dep, add a `_dbr19` variant for that feature extra on the same base-plus-delta pattern,
+  and update `light_dbr19_all` to reference it. Do NOT merge the plan step; fix the issue
+  first and document the finding.
+
+- [ ] Create `python/geobrix/requirements-light-all-ci.in` with content modelled on
+  `requirements-light-ci.in` but targeting `[light_all]`. Header comment:
+  ```
+  # Source of truth for the light_all umbrella CI job's Python deps
+  # (Serverless env v5 / classic DBR 17–18, full feature set).
+  # Consumed by CI via: pip install --require-hashes -r python/geobrix/requirements-light-all-ci.txt
+  #
+  # Regenerate:
+  #   cd python/geobrix
+  #   uv pip compile --generate-hashes --python-version 3.12 \
+  #       --output-file requirements-light-all-ci.txt requirements-light-all-ci.in
+  #
+  # Note: CI resolves without Serverless grpcio-status constraints; both _all variants
+  # will resolve protobuf 6.x in CI (stac/vizx/overture have no protobuf conflict).
+  # The real runtime protobuf is set at cluster install time. See Task 1 CI-lock note.
+  ```
+  Dependency section: a single `geobrix[light_all]` entry pointing at the local pyproject
+  (or list the full union of `[light]`+`[stac]`+`[vizx]`+`[overture]` pins explicitly —
+  use the same style as `requirements-light-ci.in` for the individual packages; do NOT
+  reference `geobrix` as a package name if the CI runner installs from the local wheel).
+  Follow the exact style of the existing `.in` file (direct package pins matching the
+  resolved set from the verify step above).
+
+- [ ] Generate `requirements-light-all-ci.txt`:
+  ```bash
+  cd python/geobrix
+  uv pip compile --generate-hashes --python-version 3.12 \
+      --output-file requirements-light-all-ci.txt requirements-light-all-ci.in
+  ```
+  Verify: `grep -c "sha256:" requirements-light-all-ci.txt` must be > 0.
+
+- [ ] Create `python/geobrix/requirements-light-dbr19-all-ci.in` with the same structure,
+  targeting `[light_dbr19_all]`. Header comment mirrors `requirements-light-all-ci.in` but
+  says "DBR 19, full feature set."
+
+- [ ] Generate `requirements-light-dbr19-all-ci.txt`:
+  ```bash
+  cd python/geobrix
+  uv pip compile --generate-hashes --python-version 3.12 \
+      --output-file requirements-light-dbr19-all-ci.txt requirements-light-dbr19-all-ci.in
+  ```
+  Verify:
+  ```bash
+  grep -c "sha256:" python/geobrix/requirements-light-dbr19-all-ci.txt  # must be > 0
+  grep "^protobuf==" python/geobrix/requirements-light-dbr19-all-ci.txt  # must be 6.x
+  grep "mapbox-vector-tile" python/geobrix/requirements-light-dbr19-all-ci.txt  # must be >=2.2.x
+  ```
+
+- [ ] Commit: `chore(packaging): add light_all + light_dbr19_all umbrella extras + locks`
+
+  Body: umbrella extras reference `[light]`/`[light_dbr19]` + `[stac]` + `[vizx]` + `[overture]`
+  to give users a single no-reasoning-required install per runtime. `[databricks]` excluded
+  by design (not a geo feature). Both `_all` locks resolve with no protobuf conflict —
+  verified by `uv pip compile` exit code and grep for protobuf/mapbox-vector-tile pins.
+
+---
+
+## Task 4 — Installation docs update
 
 **Files:** `docs/docs/installation.mdx`
 
@@ -338,11 +516,13 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
   particular, installing `geobrix[light]` triggers a protobuf conflict that causes hangs and
   kernel crashes. On classic compute, use the extra that matches your runtime from the table below.
 
-  | Runtime | Install command | Notes |
+  | Runtime | Install command | Full feature set |
   |---|---|---|
-  | Serverless (env v5+) | `%pip install "geobrix[light] @ file:///Volumes/…"` | Default; protobuf 5.x base |
-  | Classic DBR 17.3–18.x | `%pip install "geobrix[light] @ file:///Volumes/…"` | Same as Serverless |
-  | Classic DBR 19+ | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | protobuf 6.x base; use this variant |
+  | Serverless (env v5+) | `%pip install "geobrix[light] @ file:///Volumes/…"` | `geobrix[light_all]` |
+  | Classic DBR 17.3–18.x | `%pip install "geobrix[light] @ file:///Volumes/…"` | `geobrix[light_all]` |
+  | Classic DBR 19+ | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | `geobrix[light_dbr19_all]` |
+
+  *(Full feature set = `[light/_dbr19]` + `[stac]` + `[vizx]` + `[overture]` in one install. `[databricks]` is added separately if needed.)*
 
   The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
   the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting
@@ -370,17 +550,17 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
 
 - [ ] **Verify — compat matrix present and correct:**
   ```bash
-  grep -n "light_dbr19\|DBR 19" docs/docs/installation.mdx
+  grep -n "light_dbr19\|DBR 19\|light_all\|light_dbr19_all" docs/docs/installation.mdx
   ```
-  Must return at least the two lines added in this task.
+  Must return at least the rows added in this task (both runtime variant rows and `_all` column entries).
 
-- [ ] Commit: `docs(installation): lead with Serverless-default framing + DBR-19 compat matrix`
+- [ ] Commit: `docs(installation): lead with Serverless-default framing + DBR-19 compat matrix + _all column`
 
-  Body: "No sidebar change needed — installation.mdx is already wired in sidebars.js. Adds the `_light_base`-invisible framing paragraph and per-runtime compat table per spec §9."
+  Body: "No sidebar change needed — installation.mdx is already wired in sidebars.js. Adds the `_light_base`-invisible framing paragraph and per-runtime compat table including the `_all` umbrella column per spec §9 + §4d."
 
 ---
 
-## Task 4 — Version-bump checklist + CI wiring notes
+## Task 5 — Version-bump checklist + CI wiring notes
 
 **Files:** `~/.claude/projects/-Users-mjohns-IdeaProjects-geobrix/memory/geobrix-version-bump-checklist.md`
 
@@ -399,20 +579,27 @@ Both are hash-pinned via `uv pip compile --generate-hashes`.
       cd python/geobrix
       uv pip compile --generate-hashes --python-version 3.12 \
           --output-file requirements-light-dbr19-ci.txt requirements-light-dbr19-ci.in
-  - For each future light_dbrN variant: add its .in/.txt pair to this checklist
-    and add its lock to .github/actions/pyrx_build/action.yml (or a new CI action
-    if a lower-cadence DBR-N job is created).
+  - Regenerate light_all umbrella lock:
+      cd python/geobrix
+      uv pip compile --generate-hashes --python-version 3.12 \
+          --output-file requirements-light-all-ci.txt requirements-light-all-ci.in
+  - Regenerate light_dbr19_all umbrella lock:
+      cd python/geobrix
+      uv pip compile --generate-hashes --python-version 3.12 \
+          --output-file requirements-light-dbr19-all-ci.txt requirements-light-dbr19-all-ci.in
+  - For each future light_dbrN variant: add its .in/.txt pair AND its _all equivalent
+    to this checklist; add both locks to CI (or a new CI action for lower-cadence DBR-N jobs).
   ```
 
 - [ ] Also note the one-time rename: "`requirements-pyrx-ci.*` was renamed to `requirements-light-ci.*` in 0.5.0; update any external references."
 
-- [ ] Note on secondary CI job: the spec §9 mentions that `requirements-light-dbr19-ci.txt` "can run on a lower cadence if DBR 19 clusters are expensive to provision." Wiring a dedicated DBR-19 CI job (e.g., a new `.github/actions/light_dbr19_build/action.yml`) is a follow-on task once DBR-19 cluster access is confirmed in the CI environment. The lock file is ready; the job wiring is deferred.
+- [ ] Note on secondary CI jobs: the spec §9 mentions that `requirements-light-dbr19-ci.txt` "can run on a lower cadence if DBR 19 clusters are expensive to provision." Wiring a dedicated DBR-19 CI job (e.g., a new `.github/actions/light_dbr19_build/action.yml`) and a `light_all`/`light_dbr19_all` CI job are follow-on tasks once DBR-19 cluster access is confirmed. All 4 lock files are ready; the job wiring is deferred.
 
 - [ ] Commit: `chore(memory): version-bump checklist — per-variant light-tier lock regeneration`
 
 ---
 
-## Task 5 — Manual on-cluster validation gate
+## Task 6 — Manual on-cluster validation gate
 
 **No files changed. This task is a manual gate executed by the lead agent or user.**
 
@@ -444,9 +631,26 @@ Requires: the updated wheel staged to the `oauth-fe` Volume via `gbx:data:push-w
   pyvx.register(spark)
   result = spark.sql("SELECT gbx_st_asmvt(collect_list(named_struct('geom', ST_Point(0.5, 0.5))), 'test', 256)")
   result.show()  # must return a non-null BINARY row
+  import idna; print(idna.__version__)  # must import cleanly (validates OPTIONAL idna cap drop)
+  import rio_tiler; print(rio_tiler.__version__)  # must import cleanly (validates OPTIONAL <9.4 cap)
   ```
 
+- [ ] **Gate on OPTIONAL deltas.** Based on DBR-19 smoke test results:
+  - If `import idna` and `import rio_tiler` both succeed without errors → the OPTIONAL deltas
+    (idna cap dropped, rio-tiler relaxed to `<9.4`) are confirmed safe. No pyproject change needed.
+  - If either import fails → revert the failing OPTIONAL delta in `pyproject.toml` (restore
+    `idna<3.8` or restore `rio-tiler<9.3` for `light_dbr19`), regenerate `requirements-light-dbr19-ci.txt`
+    and `requirements-light-dbr19-all-ci.txt`, and commit the revert before shipping.
+  - The `mapbox-vector-tile>=2.2` REQUIRED delta is not gated — it stays regardless.
+
+- [ ] **Note on `_all` variants.** The `light_all` / `light_dbr19_all` umbrellas are validated
+  indirectly: if `[light]` passes on Serverless and `[light_dbr19]` passes on DBR 19, and the
+  Task 3 `uv pip compile` exits 0 for both `_all` variants, the umbrellas are safe. A dedicated
+  `_all` on-cluster smoke (installing `[light_dbr19_all]` and verifying stac/vizx/overture imports)
+  is optional but recommended for the first 0.5.x release that ships to DBR-19 users.
+
 - [ ] Record pass/fail (and pip output if fail) in `prompts/testing/2026-08-14-light-dbr-runtime-extras-cluster-smoke.md`.
+  Note which OPTIONAL deltas were confirmed or reverted.
 
 ---
 
@@ -460,22 +664,35 @@ Requires: the updated wheel staged to the `oauth-fe` Volume via `gbx:data:push-w
 | §4a additive-extras mechanic | Global Constraints §1 + Task 1 comment | ✓ |
 | §4c Option B TOML sketch | Task 1 steps implement the exact TOML structure from spec | ✓ |
 | §4c `[light]` resolved set unchanged | Task 1 verify: `uv pip compile` diff before/after | ✓ |
+| §4d `_all` umbrella extras | Task 3: `light_all` + `light_dbr19_all` + 4 lock files + docs matrix `_all` column | ✓ |
+| §4d `[databricks]` excluded from `_all` | Task 3 pyproject snippet omits it; comment explains rationale | ✓ |
+| §4d transitive-safety check | Task 3 verify: `uv pip compile --extra light_dbr19_all` + grep for protobuf/mvt pins | ✓ |
 | §5 pyspark not pip-installed | Global Constraint §3; Task 1 leaves `[project.dependencies]` unchanged | ✓ |
-| §6 per-variant hashed locks | Task 2: two locks; `uv pip compile --generate-hashes` command exact | ✓ |
+| §6 per-variant hashed locks | Tasks 2 + 3: four locks; `uv pip compile --generate-hashes` command exact | ✓ |
 | §6 `_light_base` not locked | Task 2 does not create a `_light_base` lock | ✓ |
-| §7 `light_dbr19` concrete delta | Task 1: exact three-change delta (mvt cap drop; idna cap drop; `<9.3`→`<9.4`) | ✓ |
-| §7 validation checklist | Task 5: 5-step on-cluster smoke maps to spec §7's list | ✓ |
-| §9 docs lead framing | Task 3: framing paragraph + compat matrix required text adapted from spec | ✓ |
-| §9 `_light_base` not in user docs | Task 3 step explicitly prohibits it; verify grep | ✓ |
-| §9 version-bump checklist | Task 4 | ✓ |
+| §7 `light_dbr19` concrete delta | Task 1: mvt cap drop required; idna + rio-tiler marked OPTIONAL, gated on Task 6 | ✓ |
+| §7 validation checklist | Task 6: 5-step on-cluster smoke maps to spec §7's list | ✓ |
+| §9 docs lead framing | Task 4: framing paragraph + compat matrix + `_all` column per spec §9 + §4d | ✓ |
+| §9 `_light_base` not in user docs | Task 4 step explicitly prohibits it; verify grep | ✓ |
+| §9 version-bump checklist | Task 5: all 4 lock files covered | ✓ |
 | §9 CI wiring | Task 2: `pyrx_build/action.yml` updated; secondary DBR-19 CI job deferred per spec | ✓ |
-| §10 rollout order | Tasks 1→2→3→4→5 match spec §10 phases (a)(b)(c) | ✓ |
+| §10 rollout order | Tasks 1→2→3→4→5→6 match spec §10 phases (a)(b)(c) | ✓ |
+
+### Ground-check verdicts
+
+| Claim | Verdict |
+|---|---|
+| Lock rename blast radius | DEFECT FIXED — 4 files missed by original plan; all added to Task 2: `python_build/action.yml`, `requirements-dev-container.in`, `test/conftest.py`, `docs/docs/security.mdx` (user-facing link would 404). Task 2 verify grep widened accordingly. |
+| Recompile command `cd python/geobrix && uv pip compile --generate-hashes --python-version 3.12 ...` | CONFIRMED — `.in` header + `action.yml` line 43 both match exactly. |
+| Extras self-reference: `setuptools>=61.2` in build-system | CONFIRMED — `python/geobrix/pyproject.toml` line 193: `requires = ["setuptools>=61.2", "wheel"]`. |
+| `uv pip compile --extra light` diff proves resolved set unchanged | CONFIRMED — `uv pip compile` expands self-referential extras from the same pyproject; the before/after diff is a valid proof. |
+| `docs/docs/installation.mdx` path + already in `sidebars.js` | CONFIRMED — file exists (19.5K); `sidebars.js` line 19 contains `'installation'`. No sidebar change needed. |
 
 ### Placeholder scan
 
 No `TODO`, `TBD`, `FIXME`, or `???` in this plan. All open questions from the spec (OQ1–OQ5) are referenced by number and handled as:
 - OQ1: Option B chosen and justified; `_` convention documented in the pyproject comment
-- OQ2: `rio-tiler<9.4` (conservative) pending cluster verification in Task 5
+- OQ2: `rio-tiler<9.4` marked OPTIONAL in Task 1; gated on Task 6 cluster validation
 - OQ3: Future `light_dbr20` deferred; pattern is established
 - OQ4: `test` extra unchanged; separate workstream noted
 - OQ5: `pyproj<4` remains in `_light_base` (no-op today; monitored)
@@ -484,11 +701,12 @@ No `TODO`, `TBD`, `FIXME`, or `???` in this plan. All open questions from the sp
 
 - All 17 functional deps listed in Task 1 match the spec §3 "Functional" classification exactly.
 - The 5 runtime-sensitive deps (`typing_extensions`, `rio-tiler` cap, `httpcore` floor, `idna` cap, `mapbox-vector-tile` cap) match spec §3 "Runtime-base-compat" exactly.
-- Lock file names (`requirements-light-ci.*`, `requirements-light-dbr19-ci.*`) match spec §6 and the grounding rename from `requirements-pyrx-ci.*`.
-- Recompile command in Task 2 and Task 4 checklist exactly matches the command in `requirements-pyrx-ci.in` header (confirmed by direct read).
+- Lock file names (`requirements-light-ci.*`, `requirements-light-dbr19-ci.*`, `requirements-light-all-ci.*`, `requirements-light-dbr19-all-ci.*`) match spec §6 + §4d and the grounding rename from `requirements-pyrx-ci.*`.
+- Recompile command in Tasks 2, 3, and 5 checklist exactly matches the command in `requirements-pyrx-ci.in` header (confirmed by direct read).
 - CI action file line numbers are grounding-verified (`.github/actions/pyrx_build/action.yml` line 43/46).
 - Installation doc path `docs/docs/installation.mdx` confirmed by `ls`; already in `sidebars.js` — no sidebar edit needed.
-- `_LIGHT_TEST_DIRS` in `test/conftest.py` is not touched (no new test dirs added).
+- `_LIGHT_TEST_DIRS` in `test/conftest.py` is not touched as a code change (docstring-only update in Task 2; no new test dirs added).
 - `test` extra unchanged (spec §1c: separate workstream, explicitly out of scope).
 - No Python/Scala source changes in any task. Global Constraint §9 satisfied.
-- Grounding surprise (current CI lock already has `mapbox-vector-tile==2.2.0` + `protobuf==6.33.6`) explained in Task 2 and in the Grounding Findings table — does not invalidate any task step.
+- Grounding surprise (current CI lock already has `mapbox-vector-tile==2.2.0` + `protobuf==6.33.6`) explained in Task 1 CI-lock-vs-runtime note and Task 2 — does not invalidate any task step; confirms the CI-lock is a reproducibility artifact, not a runtime constraint proof.
+- `_all` extras exclude `[databricks]` per spec §4d ruling (confirmed).

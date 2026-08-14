@@ -1,0 +1,19 @@
+# Source of truth for the light_all umbrella CI job's Python deps
+# (Serverless env v5 / classic DBR 17–18, full feature set).
+# Consumed by CI via: pip install --require-hashes -r python/geobrix/requirements-light-all-ci.txt
+#
+# Regenerate (from python/geobrix/):
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#       --output-file requirements-light-all-ci.txt requirements-light-all-ci.in
+#
+# This .in uses a local-package-with-extra reference so uv expands [light_all]
+# directly from pyproject.toml. The [light_all] extra pulls [light]+[stac]+[vizx]+[overture].
+# [light] caps mapbox-vector-tile<2.2 (protobuf 5.x; Serverless env v5 / classic DBR <=18).
+# [light_dbr19_all] is the DBR-19 twin: see requirements-light-dbr19-all-ci.in.
+#
+# Note: CI resolves without Serverless grpcio-status constraints; the protobuf version
+# in this lock (5.x) reflects the [light] cap on mapbox-vector-tile, NOT a CI grpcio
+# constraint. The real runtime protobuf is set at cluster install time.
+
+# Local package — expands geobrix[light_all] from pyproject.toml
+.[light_all]

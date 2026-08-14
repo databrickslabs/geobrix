@@ -161,6 +161,26 @@ light_dbr19 = [
     # This is the SOLE structurally necessary delta from [light].
     "mapbox-vector-tile>=2.2",
 ]
+# Feature-complete umbrella for Serverless (env v5) and classic DBR <=18.
+# Installs [light] + all optional feature extras ([stac], [vizx], [overture]).
+# [databricks] is NOT included — it is a Databricks SDK integration, not a geo
+# feature, and Databricks compute already provides its runtime.
+# Use this for the "don't reason about deps" full install on Serverless/DBR <=18.
+light_all = [
+    "geobrix[light]",
+    "geobrix[stac]",
+    "geobrix[vizx]",
+    "geobrix[overture]",
+]
+# Feature-complete umbrella for classic DBR 19. Same as [light_all] but uses
+# [light_dbr19] so the protobuf constraint is DBR-19-correct.
+# [databricks] excluded for the same reason as [light_all].
+light_dbr19_all = [
+    "geobrix[light_dbr19]",
+    "geobrix[stac]",
+    "geobrix[vizx]",
+    "geobrix[overture]",
+]
 # For sample-data bundle uploads to Unity Catalog Volumes and gbx:test:bundle-databricks
 databricks = [
     "databricks-sdk",

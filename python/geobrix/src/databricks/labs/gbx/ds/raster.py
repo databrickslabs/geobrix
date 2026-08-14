@@ -681,6 +681,145 @@ def _as_window_list(val) -> list:
     return [tuple(int(v) for v in w) for w in val]  # list of windows
 
 
+# ---------------------------------------------------------------------------
+# Budget resolution helper (shared by partitions() and _partitions_from_tile_rows)
+# ---------------------------------------------------------------------------
+
+def _resolved_budget(size_mib: int, strategy) -> int:
+    """Return the decoded-memory budget in bytes.
+
+    ``size_mib > 0`` is a power-user override that wins over ``strategy``.
+    ``size_mib <= 0`` defers to the strategy-derived budget (0 = no split).
+    """
+    if size_mib > 0:
+        return size_mib * 1024 * 1024
+    return budget.decoded_budget_bytes(strategy)
+
+
+# ---------------------------------------------------------------------------
+# Manifest / tile-table helpers (Approach 1 — pre-computed tile input)
+# ---------------------------------------------------------------------------
+
+def _read_manifest_rows(manifest_path: str) -> list:
+    """Read tile rows from a JSON or Parquet manifest file.
+
+    JSON: a list of dicts; each must have ``path`` (str) and optionally
+    ``window`` ([col_off, row_off, width, height]), ``width``, ``height``,
+    ``bands``, ``dtype``, ``srid``.
+
+    Parquet: read via ``spark.table()`` / ``spark.read.parquet(...)`` on the
+    driver (Connect-safe); returns a list of ``pyspark.sql.Row`` objects.
+    """
+    import os as _os
+
+    local = _listing.to_local_path(manifest_path)
+    if not _os.path.exists(local):
+        raise FileNotFoundError(
+            f"raster_gbx: manifest not found: {manifest_path!r}"
+        )
+    if local.endswith(".parquet"):
+        from pyspark.sql import SparkSession
+
+        spark = SparkSession.getActiveSession()
+        if spark is None:
+            raise RuntimeError(
+                "raster_gbx: reading a Parquet manifest requires an active SparkSession."
+            )
+        return spark.read.parquet(local).collect()
+    # JSON (default)
+    with open(local) as fh:
+        return json.load(fh)
+
+
+def _row_to_window(w) -> Optional[Tuple[int, int, int, int]]:
+    """Normalise a manifest row's ``window`` value to a 4-int tuple or None.
+
+    Accepts: None, a 4-element list/tuple [c, r, w, h], or a Spark Row /
+    namedtuple with fields ``col_off``, ``row_off``, ``width``, ``height``.
+    """
+    if w is None:
+        return None
+    if isinstance(w, (list, tuple)):
+        return tuple(int(v) for v in w)  # type: ignore[return-value]
+    # Spark Row / namedtuple
+    return (int(w.col_off), int(w.row_off), int(w.width), int(w.height))
+
+
+def _partitions_from_tile_rows(
+    rows,
+    *,
+    emit_virtual: bool,
+    budget_bytes: int,
+    clip_polygons: Sequence = (),
+    clip_crs: Optional[str] = None,
+    windows: Sequence = (),
+    tile_size=None,
+    overlap_percent: int = 0,
+) -> list:
+    """Build ``_TilePartition`` objects from pre-computed tile rows.
+
+    Each row is a dict (JSON manifest) or a ``pyspark.sql.Row`` (Parquet /
+    table). Required field: ``path``. Optional fields: ``window`` (4-element),
+    ``width``, ``height`` (whole-file dims when window absent).
+
+    Decision tree per row:
+    - Row has ``window``  → build ``_TilePartition`` directly; NO rasterio.open.
+    - Row has ``width`` + ``height`` (no window) → use ``(0, 0, w, h)``; NO open.
+    - Row has only ``path`` → call ``_plan_partitions_for_file``; header read
+      for that file only (still skips ``os.walk`` over the full directory).
+    """
+    result: list = []
+    for row in rows:
+        r: dict = row.asDict() if hasattr(row, "asDict") else dict(row)
+        path = str(r.get("path") or "")
+        if not path:
+            raise ValueError(
+                f"raster_gbx manifest/table: row missing 'path' field: {r!r}"
+            )
+
+        win = _row_to_window(r.get("window"))
+
+        # Also handle flat column layout: col_off/row_off/width/height at top level
+        # (common for tilesTable results that store window fields as separate columns).
+        if win is None and all(k in r for k in ("col_off", "row_off", "width", "height")):
+            win = (int(r["col_off"]), int(r["row_off"]), int(r["width"]), int(r["height"]))
+
+        if win is None:
+            # Try whole-file dims as fallback
+            w_val = r.get("width")
+            h_val = r.get("height")
+            if w_val is not None and h_val is not None:
+                win = (0, 0, int(w_val), int(h_val))
+
+        if win is not None:
+            # Window is known → build partition directly, no header open
+            result.append(
+                _TilePartition(
+                    file_path=path,
+                    window=win,
+                    is_passthrough=False,
+                    is_whole=True,
+                    emit_fmt="gtiff",
+                    emit_virtual=emit_virtual,
+                )
+            )
+        else:
+            # Path only → open header for this specific file
+            result.extend(
+                _plan_partitions_for_file(
+                    file_path=path,
+                    budget_bytes=budget_bytes,
+                    clip_polygons=clip_polygons,
+                    clip_crs=clip_crs,
+                    windows=list(windows),
+                    tile_size=tile_size,
+                    overlap_percent=overlap_percent,
+                    emit_virtual=emit_virtual,
+                )
+            )
+    return result
+
+
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
         self.path = options.get("path")

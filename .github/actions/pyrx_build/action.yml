@@ -40,10 +40,10 @@ runs:
         # Hash-pinned supply chain (matches requirements-ci.txt / dev-container
         # discipline; see docs/docs/security.mdx): every wheel is sha256-verified,
         # so a compromised mirror serving same-version-different-bytes fails closed.
-        # Regenerate via: uv pip compile --generate-hashes python/geobrix/requirements-pyrx-ci.in
+        # Regenerate via: uv pip compile --generate-hashes python/geobrix/requirements-light-ci.in
         # No GDAL exception here — rasterio's bundled-GDAL binary wheel is pinned
         # in the lock too (the lightweight API installs no native GDAL, no JAR).
-        pip install --require-hashes -r python/geobrix/requirements-pyrx-ci.txt
+        pip install --require-hashes -r python/geobrix/requirements-light-ci.txt
         # Install the in-repo package itself with --no-deps; every dependency is
         # already in the hash-pinned closure above.
         pip install --no-deps python/geobrix

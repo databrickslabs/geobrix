@@ -4,7 +4,7 @@ WHY: The light-tier test dirs import packages whose import chain pulls in
 light-tier deps -- ``rasterio``, ``shapely``, ``h3``, ``quadbin``, ``pmtiles``,
 ``pandas``, ``numpy``, ``scipy`` -- that are NOT installed in the remote
 heavyweight CI Python environment (``requirements-ci.txt`` ships none of them;
-the lightweight CI uses ``requirements-pyrx-ci.txt``). pytest imports a test
+the lightweight CI uses ``requirements-light-ci.txt``). pytest imports a test
 module at COLLECTION time to read it, so a bare ``-m "not bench"`` marker filter
 does not help: the import (and its ``ModuleNotFoundError``) fires before the
 marker is ever seen, turning into a collection ERROR that fails the build.
@@ -15,7 +15,7 @@ canonical signal for the light-tier dependency set; ``pmtiles``/``pandas``/
 ``shapely`` et al. ship in the same locks):
 
   * Remote heavyweight CI (no rasterio) -> every light dir ignored -> skipped.
-  * Local / Docker / pyrx CI (rasterio present) -> not ignored -> collected and run.
+  * Local / Docker / light CI (rasterio present) -> not ignored -> collected and run.
   * Explicit ``gbx:test:python --path test/<dir>/...`` in Docker -> deps present,
     so nothing is ignored and the targeted tests still run.
 

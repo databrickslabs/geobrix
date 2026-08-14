@@ -50,7 +50,7 @@ pystac>=1.9,<2
 rasterio==1.5.0
 rioxarray==0.22.0
 # NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P, ERA5).
-# Keep in lockstep with requirements-pyrx-ci.in and the pyproject [light] floor.
+# Keep in lockstep with requirements-light-ci.in and the pyproject [light] floor.
 netcdf4==1.7.2
 pdal==3.5.3
 rio-tiler==9.0.6

@@ -382,6 +382,10 @@ _uf_max = _pixel_accessor_udf_file(accessors.maximum, ArrayType(DoubleType()))
 _uf_median = _pixel_accessor_udf_file(accessors.median, ArrayType(DoubleType()))
 _uf_pixelcount = _pixel_accessor_udf_file(accessors.pixelcount, ArrayType(LongType()))
 
+# Group 1 header accessors — FILE-aware 2-arg singletons.
+_uf_type = _header_accessor_udf_file(accessors.type, ArrayType(StringType()))
+_uf_getnodata = _header_accessor_udf_file(accessors.getnodata, ArrayType(DoubleType()))
+
 
 # metadata: HEADER-ONLY, MapType return (plain @f.udf; pandas_udf rejects
 # MapType on some Arrow builds).  2-arg FILE-aware variant for Python bindings.
@@ -4562,12 +4566,18 @@ def rst_isempty(tile: ColLike) -> Column:
 
 def rst_type(tile: ColLike) -> Column:
     """Return the GDAL data-type name per band (e.g. ['Float32', 'Float32'])."""
-    return _u_type(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_type(tc, file_ref_arg(tc))
 
 
 def rst_getnodata(tile: ColLike) -> Column:
     """Return the NoData value per band as an array of doubles, or null if not set."""
-    return _u_getnodata(_col(tile))
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _uf_getnodata(tc, file_ref_arg(tc))
 
 
 # --- Tier 1: coordinate transforms -----------------------------------------

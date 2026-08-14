@@ -20,26 +20,29 @@
 
 The single `[light]` extra today must satisfy every DBR runtime simultaneously. That forces
 all pins to the **lowest-common-denominator**: whichever runtime imposes the tightest
-constraint wins, and every other runtime inherits it. This is currently Serverless env v5 /
-DBR 17.3.
+constraint wins, and every other runtime inherits it. Currently, Serverless (environment v5)
+sets this floor; classic DBR 17.3 shares the same constraint set.
 
 There are two classes of harm:
 
 ### 1a. Lowest-common-denominator correctness cost
 
 Pins like `idna<3.8`, `rio-tiler<9.3`, and `typing_extensions>=4.13` exist solely to
-match Serverless/DBR-17.3 base-package state. A classic DBR 19 cluster doesn't need these
+match the base-package state common to Serverless (environment v5) and classic DBR 17.3. A classic DBR 19 cluster doesn't need these
 constraints — they just keep the user on older packages unnecessarily.
 
 ### 1b. Disjoint-constraint unsatisfiability (the crash case)
 
 The `mapbox-vector-tile` constraint is in direct conflict across runtime generations:
 
-- **Serverless env v5 / DBR ≤ 18:** `grpcio-status` pins `protobuf<6`. Installing
+- **Serverless (environment v5):** `grpcio-status` pins `protobuf<6`. Installing
   `mapbox-vector-tile>=2.2` drags in `protobuf>=6.31.1`, which violates this constraint.
   The Serverless `%pip` magic treats the resulting `ERROR:`-prefixed conflict report as a
   hard install failure. The current `mapbox-vector-tile>=2.1,<2.2` pin keeps protobuf at
   the base 5.29.4 and installs cleanly.
+
+- **Classic DBR ≤ 18:** `grpcio-status` also pins `protobuf<6`. The same
+  `mapbox-vector-tile>=2.2` conflict applies; the `>=2.1,<2.2` cap is required here too.
 
 - **DBR 19:** `grpcio-status` now *requires* `protobuf>=6.31.1`. The `<2.2` cap forces
   protobuf to stay at 5.x, which conflicts with what DBR 19's grpcio-status demands. The
@@ -47,7 +50,7 @@ The `mapbox-vector-tile` constraint is in direct conflict across runtime generat
   leaving an inconsistent state — **observed in the field as hangs and kernel crashes** on
   DBR 19 clusters when `geobrix[light]` is installed.
 
-No single `mapbox-vector-tile` pin can satisfy both `protobuf<6` (Serverless/DBR≤18) and
+No single `mapbox-vector-tile` pin can satisfy both `protobuf<6` (required by Serverless (environment v5) and by classic DBR ≤ 18) and
 `protobuf>=6.31.1` (DBR 19). These constraints are provably disjoint.
 
 ### 1c. The `test` extra mirrors the same root problem
@@ -65,7 +68,7 @@ out of scope for this spec.
 
 - Allow `geobrix[light_dbr19]` to install on DBR 19 without triggering protobuf conflicts,
   hangs, or kernel crashes.
-- Keep `geobrix[light]` (Serverless/env-v5 default) **entirely unchanged** — zero change to
+- Keep `geobrix[light]` (Serverless env v5 default) **entirely unchanged** — zero change to
   its resolved set.
 - Establish the pattern and naming convention for future DBR-variant extras.
 - Produce an architecture that is maintainable: each variant's divergence from the base is
@@ -106,7 +109,7 @@ match a runtime's immutable base state or to express a GeoBrix functional requir
 | `pmtiles` | `>=3.4,<4` | **Functional** | PMTiles archive writer/reader; 3.x API. |
 | `pyogrio` | `>=0.12,<1` | **Functional** | OGR-free vector reading for `*_gbx` vector DataSources; bundles its own libgdal. |
 | `pyproj` | `>=3.6,<4` | **Mixed** | *Floor:* functional (CRS→srid/proj4, needed by pyogrio). *Cap:* runtime-base-compat — "same float-and-break risk as rio-tiler 9.3.0" (comment); no 4.x exists today so `<4` is a no-op but future-proofs against Serverless float-and-break. |
-| `mapbox-vector-tile` | `>=2.1,<2.2` | **Runtime-base-compat** | *Serverless/DBR≤18 protobuf<6 constraint.* 2.2.0 hard-requires `protobuf>=6.31.1`, conflicting with Serverless grpcio-status's `protobuf<6` pin. 2.1.x keeps protobuf at base 5.29.4. Functionally, the 2.x encode API (native-typed attributes) is present in both 2.1 and 2.2; the 2.1 floor is the real functional requirement, not the `<2.2` cap. |
+| `mapbox-vector-tile` | `>=2.1,<2.2` | **Runtime-base-compat** | *Serverless (environment v5) and classic DBR ≤ 18: protobuf<6 constraint.* 2.2.0 hard-requires `protobuf>=6.31.1`, conflicting with Serverless grpcio-status's `protobuf<6` pin. 2.1.x keeps protobuf at base 5.29.4. Functionally, the 2.x encode API (native-typed attributes) is present in both 2.1 and 2.2; the 2.1 floor is the real functional requirement, not the `<2.2` cap. |
 | `scikit-image` | `>=0.22,<1` | **Functional** | Image processing ops in pyrx; 0.22 API floor. `<1` is precautionary. |
 | `xarray-spatial` | `>=0.4,<1` | **Functional** | Spatial raster interpolation (slope, hillshade); 0.4 API. |
 | `netcdf4` | `>=1.6,<2` | **Functional** | NetCDF-3/4/HDF5 reading (S5P, ERA5). `<2` is precautionary defensive cap. Comment flags it should be tightened if a future 1.x breaks on Serverless/Py 3.12. |
@@ -184,7 +187,7 @@ _light_base = [
     "netcdf4>=1.6,<2",
 ]
 
-# Serverless / env-v5 / DBR 17–18 (primary target — unchanged resolved set)
+# Serverless (env v5) — primary target, resolved set unchanged; classic DBR 17–18 also use [light]
 light = [
     "geobrix[_light_base]",
     "typing_extensions>=4.13",
@@ -262,7 +265,7 @@ The current lock structure (one file, `requirements-pyrx-ci.txt`) maps to the cu
 single `[light]` extra. Option B adds one lock file per variant:
 
 ```
-requirements-light-ci.in        # Serverless / env-v5 (current, renamed for clarity)
+requirements-light-ci.in        # Serverless (env v5) (current, renamed for clarity)
 requirements-light-ci.txt       # generated, hashed
 requirements-light-dbr19-ci.in  # DBR 19 variant
 requirements-light-dbr19-ci.txt # generated, hashed
@@ -287,7 +290,7 @@ kernel crashes). This is the only currently confirmed disjoint-constraint case.
 |---|---|---|---|
 | `mapbox-vector-tile` | `>=2.1,<2.2` | `>=2.2` (no upper cap) | DBR 19 grpcio-status requires protobuf>=6.31.1; 2.2+ enables that. |
 | `idna` | `<3.8` | *(omit cap)* | DBR 19 base manages idna; notebook-change warning doesn't apply. |
-| `rio-tiler` | `>=9.0,<9.3` | `>=9.0` | The 9.3.x typing regression is a Serverless/Python-3.12 env-v5 issue; verify on DBR 19's Python before removing entirely. Initially relax to `>=9.0,<9.4` to stay conservative. |
+| `rio-tiler` | `>=9.0,<9.3` | `>=9.0` | The 9.3.x typing regression is a Serverless (environment v5) / Python 3.12 issue; verify on DBR 19's Python before removing entirely. Initially relax to `>=9.0,<9.4` to stay conservative. |
 | `typing_extensions` | `>=4.13` | `>=4.13` | DBR 19 certainly ships 4.13+; floor is harmless and keeps rio_tiler import clean. Keep. |
 | `httpcore` | `>=1.0.9` | `>=1.0.9` | DBR 19 ships a newer httpcore; floor is safe and harmless. Keep. |
 
@@ -352,7 +355,7 @@ composition tool.
 ### Version-bump checklist
 
 The `[[geobrix-version-bump-checklist]]` memory entry must be updated to include:
-- Regenerate `requirements-light-ci.txt` (Serverless/env-v5 lock)
+- Regenerate `requirements-light-ci.txt` (Serverless env v5 lock)
 - Regenerate `requirements-light-dbr19-ci.txt` (DBR 19 lock)
 - For each new DBR-N variant added in the future: add its lock to the checklist.
 

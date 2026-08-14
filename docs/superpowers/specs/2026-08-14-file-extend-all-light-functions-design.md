@@ -33,7 +33,11 @@ The MVP FILE-wired 9 accessors. This extends FILE/FILEREF to **all remaining til
 
 **Group 3 — multi-input / array / aggregator ops**: `rst_frombands` (tile *array* input), `rst_merge`, `rst_combineavg`, `rst_mapalgebra` (multi-input), `rst_*_agg` (grouped agg). Inject a FileRef **per input** — for an array input, `F.transform(tiles_col, lambda t: F.call_function("try_to_file", t['path']))`; for multi-arg ops, one `file_ref_arg` per input tile column; for aggregators, the read happens over many tiles per group (design the per-tile FileRef threading in this group). **Highest complexity.**
 
-**Validation gate between groups:** (a) local CI unit tests (fallback + stub-FileRef): byte-range-equals-fallback for pixel ops; clip/warp-equivalence per C1 for tile-producing ops; the single-arg SQL registry entries still map to `_u_*`. (b) A dogfood spot-check on a FILE-enabled DBR 19 dedicated cluster (a couple of the group's ops read FILE == fallback pixel-equal). Do not start the next group until both are green.
+**Validation gate between groups (all three must pass before the next group starts):**
+- (a) **local CI unit tests** (fallback + stub-FileRef): byte-range-equals-fallback for pixel ops; clip/warp-equivalence per C1 for tile-producing ops; the single-arg SQL registry entries still map to `_u_*`.
+- (b) **dogfood correctness spot-check** on a FILE-enabled DBR 19 dedicated cluster (a couple of the group's ops read FILE == fallback, pixel-equal).
+- (c) **scoped FILE-vs-Volume A/B** for the group's FILE-benefiting ops (pixel accessors / tile-producing input-reads / aggregators), run on the fixed 20-worker DBR 19 dedicated cluster via the same 3-leg harness scoped with `--functions <group's ops>` (materialized / virtual FILE-off / virtual FILE-on), over the `bench-corpus-1024-1k` corpus, into `bench_results`. This **flags the byte-range win/regression early** — a group showing ~no win is a signal to reprioritize before investing in the next group. Spin the 20-worker cluster up for the bench and shrink/terminate it after (don't hold 20 workers across the whole rollout).
+Do not start the next group until (a)+(b)+(c) are green/measured.
 
 ## 5. The tile-producing FILE factory (crux, Group 2+)
 Add a factory that produces a UDF taking `(input_tile, file_ref, *op_args)`:

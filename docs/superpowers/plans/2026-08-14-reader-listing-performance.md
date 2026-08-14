@@ -550,6 +550,320 @@ FILE accelerates the executor-side pixel READ via the existing `_open(file_ref=.
 
 ---
 
+### Task 2b — COG multi-window corpus generator (local, TDD)
+
+**Purpose:** Extend `datagen.py` with a `generate_cog_multiwindow_corpus` function and a `--cog-multiwindow` CLI mode. This produces K large COGs plus a `cog_multiwindow_manifest.json` listing M `{"path", "window"}` rows per COG — the same JSON format that `_read_manifest_rows` (Task 3) already parses, so Task 2c can feed it to `run_virtual_tile_pixel_read` via the `manifest` reader option without additional plumbing.
+
+**COG generation rationale:** A narrow `window` out of a large COG lets FILE issue a byte-range request against the COG's internal tile grid; only the IFD header and the tile blocks covering the window are transferred. The FUSE fallback opens and seeks the full file for each window. On whole-file small-tile corpora (Task 2) these costs are a wash; on large-COG-multi-window corpora the byte-range win is expected to be measurable. This is the canonical virtual-tile-by-reference case: one COG, many `(path, window)` references.
+
+**Datagen state today:** `make_tile_bytes()` uses `driver="GTiff"` (plain GeoTIFF, not COG). `generate_corpus()` writes one file per `TileEntry` with no multi-window concept. `Corpus`/`TileEntry` in `manifest.py` do not model multiple windows into one file. There are no `--cog-multiwindow`, `--cog-count`, `--windows-per-cog`, or `--cog-px` CLI flags. **This task adds all of that** rather than calling a pre-existing function.
+
+**Files:**
+- Modify: `python/geobrix/src/databricks/labs/gbx/bench/datagen.py` — add `generate_cog_multiwindow_corpus` after `validity_gate`; add `--cog-multiwindow` branch in `main()`
+- Create: `python/geobrix/test/bench/test_datagen_cog_multiwindow.py`
+
+**Interfaces:**
+- Produces: `generate_cog_multiwindow_corpus(out_dir, seed, cog_count, windows_per_cog, cog_px, bands, dtype, srid) -> Path` — writes `out_dir/cogs/cog_{i}.tif` (driver=COG, blockxsize=blockysize=256) + `out_dir/cog_multiwindow_manifest.json`; returns the manifest path
+- CLI: `python -m databricks.labs.gbx.bench.datagen --out <dir> --cog-multiwindow [--cog-count K] [--windows-per-cog M] [--cog-px N] [--bands 1] [--dtypes float32] [--srids 4326] [--seed S]`
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `python/geobrix/test/bench/test_datagen_cog_multiwindow.py`:
+
+```python
+"""Tests for generate_cog_multiwindow_corpus in bench/datagen.py."""
+
+import json
+from collections import defaultdict
+
+import pytest
+import rasterio
+
+
+def test_cog_multiwindow_manifest_shape(tmp_path):
+    """Two-COG, three-windows corpus: manifest row count and path grouping are correct."""
+    from databricks.labs.gbx.bench.datagen import generate_cog_multiwindow_corpus
+
+    manifest_path = generate_cog_multiwindow_corpus(
+        out_dir=tmp_path,
+        seed=42,
+        cog_count=2,
+        windows_per_cog=3,
+        cog_px=256,
+        bands=1,
+        dtype="float32",
+        srid=4326,
+    )
+
+    rows = json.loads(manifest_path.read_text())
+    assert len(rows) == 6  # 2 COGs × 3 windows
+
+    by_path = defaultdict(list)
+    for r in rows:
+        by_path[r["path"]].append(tuple(r["window"]))
+    assert len(by_path) == 2  # two distinct COG files
+
+    # Windows within each COG are distinct
+    for path, windows in by_path.items():
+        assert len(windows) == len(set(windows)), f"{path}: duplicate windows"
+
+
+def test_cog_multiwindow_file_is_valid_cog(tmp_path):
+    """Generated COG is internally tiled (blockxsize in profile)."""
+    from databricks.labs.gbx.bench.datagen import generate_cog_multiwindow_corpus
+
+    manifest_path = generate_cog_multiwindow_corpus(
+        out_dir=tmp_path,
+        seed=7,
+        cog_count=1,
+        windows_per_cog=2,
+        cog_px=256,
+        bands=1,
+        dtype="float32",
+        srid=32618,
+    )
+
+    rows = json.loads(manifest_path.read_text())
+    cog_path = tmp_path / rows[0]["path"]
+    with rasterio.open(cog_path) as ds:
+        assert ds.width == 256
+        assert ds.count == 1
+        # driver="COG" writes internally tiled blocks
+        assert ds.profile.get("blockxsize") is not None, "expected tiled COG (blockxsize missing)"
+
+
+def test_cog_multiwindow_windows_are_within_bounds(tmp_path):
+    """Every manifest window fits within [0, 0, cog_px, cog_px]."""
+    from databricks.labs.gbx.bench.datagen import generate_cog_multiwindow_corpus
+
+    cog_px = 256
+    manifest_path = generate_cog_multiwindow_corpus(
+        out_dir=tmp_path,
+        seed=99,
+        cog_count=1,
+        windows_per_cog=5,
+        cog_px=cog_px,
+        bands=1,
+        dtype="uint8",
+        srid=4326,
+    )
+
+    rows = json.loads(manifest_path.read_text())
+    for r in rows:
+        off_x, off_y, win_w, win_h = r["window"]
+        assert off_x >= 0 and off_y >= 0
+        assert off_x + win_w <= cog_px
+        assert off_y + win_h <= cog_px
+        assert win_w > 0 and win_h > 0
+```
+
+Run (expect `ImportError: cannot import name 'generate_cog_multiwindow_corpus'`):
+
+```bash
+cd /Users/mjohns/IdeaProjects/geobrix && .venv-pyrx/bin/python -m pytest python/geobrix/test/bench/test_datagen_cog_multiwindow.py -q 2>&1 | head -20
+```
+
+- [ ] **Step 2: Implement `generate_cog_multiwindow_corpus`**
+
+Add after `validity_gate` in `python/geobrix/src/databricks/labs/gbx/bench/datagen.py`:
+
+```python
+def generate_cog_multiwindow_corpus(
+    out_dir,
+    seed: int,
+    cog_count: int,
+    windows_per_cog: int,
+    cog_px: int,
+    bands: int,
+    dtype: str,
+    srid: int,
+) -> Path:
+    """Write K large COGs + a JSON manifest of M (path, window) rows per COG.
+
+    Each COG uses ``driver='COG'`` (internally tiled at 256 px) so Databricks
+    FILE can issue byte-range requests against the COG tile grid.  The manifest
+    is a JSON array of ``{"path": "cogs/cog_N.tif", "window": [off_x, off_y,
+    win_w, win_h]}`` rows — same format as ``_read_manifest_rows`` in ds/raster.py.
+    Returns the ``Path`` to ``<out_dir>/cog_multiwindow_manifest.json``.
+    """
+    import json as _json
+
+    out_dir = Path(out_dir)
+    cogs_dir = out_dir / "cogs"
+    cogs_dir.mkdir(parents=True, exist_ok=True)
+
+    tile_size = 256  # COG internal block size
+    rng = np.random.default_rng(seed)
+    manifest_rows = []
+
+    for i in range(cog_count):
+        cog_seed = int(rng.integers(0, 2 ** 31))
+        tile_bytes = make_tile_bytes(
+            tile_px=cog_px,
+            bands=bands,
+            dtype=dtype,
+            srid=srid,
+            nodata_frac=0.0,
+            seed=cog_seed,
+        )
+        rel_path = f"cogs/cog_{i}.tif"
+        dest = out_dir / rel_path
+        # Re-encode plain GTiff → COG (driver="COG" = internally tiled,
+        # overview-capable). Memory note: driver=COG uses ~2.8× peak RAM vs
+        # rio-cogeo's ~10× — acceptable for the tile sizes used here.
+        with rasterio.io.MemoryFile(tile_bytes) as mf:
+            with mf.open() as src:
+                cog_profile = src.profile.copy()
+                cog_profile.update(
+                    driver="COG",
+                    blockxsize=tile_size,
+                    blockysize=tile_size,
+                )
+                with rasterio.open(str(dest), "w", **cog_profile) as dst:
+                    dst.write(src.read())
+
+        # Partition cog_px columns into windows_per_cog equal strips (full height).
+        win_w = max(1, cog_px // windows_per_cog)
+        for j in range(windows_per_cog):
+            off_x = j * win_w
+            if off_x >= cog_px:
+                break
+            actual_w = min(win_w, cog_px - off_x)
+            manifest_rows.append(
+                {"path": rel_path, "window": [off_x, 0, actual_w, cog_px]}
+            )
+
+    manifest_path = out_dir / "cog_multiwindow_manifest.json"
+    manifest_path.write_text(_json.dumps(manifest_rows, indent=2))
+    return manifest_path
+```
+
+- [ ] **Step 3: Add CLI branch in `main()`**
+
+In `datagen.py:main()`, add to the `argparse` block (after existing `ap.add_argument` calls):
+
+```python
+ap.add_argument("--cog-multiwindow", action="store_true", default=False)
+ap.add_argument("--cog-count", type=int, default=3)
+ap.add_argument("--windows-per-cog", type=int, default=10)
+ap.add_argument("--cog-px", type=int, default=1024)
+```
+
+Then add a branch **before** the `generate_corpus(...)` call:
+
+```python
+if a.cog_multiwindow:
+    manifest_path = generate_cog_multiwindow_corpus(
+        out_dir=a.out,
+        seed=a.seed,
+        cog_count=a.cog_count,
+        windows_per_cog=a.windows_per_cog,
+        cog_px=a.cog_px,
+        bands=_parse_int_list(a.bands)[0],
+        dtype=a.dtypes.split(",")[0],
+        srid=_parse_int_list(a.srids)[0],
+    )
+    print(json.dumps(
+        {"manifest": str(manifest_path), "rows": a.cog_count * a.windows_per_cog},
+        indent=2,
+    ))
+    return
+```
+
+- [ ] **Step 4: Run tests green**
+
+```bash
+cd /Users/mjohns/IdeaProjects/geobrix && .venv-pyrx/bin/python -m pytest python/geobrix/test/bench/test_datagen_cog_multiwindow.py -q
+```
+
+All three tests should pass. If `blockxsize` is absent from the COG profile (rasterio version quirk), check `ds.is_tiled` as an alternative assertion.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add python/geobrix/src/databricks/labs/gbx/bench/datagen.py \
+        python/geobrix/test/bench/test_datagen_cog_multiwindow.py
+git commit -m "feat(bench): cog-multiwindow corpus generator for FILE byte-range bench
+
+Adds generate_cog_multiwindow_corpus() + --cog-multiwindow CLI mode.
+Writes K large COGs (driver=COG, internally tiled) + a manifest JSON of
+M (path,window) rows per COG. Manifest format matches _read_manifest_rows
+so the corpus feeds run_virtual_tile_pixel_read in the FILE-capability bench."
+```
+
+---
+
+### Task 2c — COG multi-window FILE-capability bench (cluster, manual)
+
+**Purpose:** Measure the FILE byte-range win on the corpus that best exposes it: large COGs + many narrow window references per file. FILE-on vs FILE-off here tests whether byte-range requests against COG tile grids reduce `iter_median_s` relative to full-file FUSE opens. This is the canonical virtual-tile-by-reference scenario.
+
+**Prerequisite:** Task 2b green and committed; bench cluster available.
+
+**Deferred until:** Task 2b is green AND a cluster session is open. Do not attempt on a workstation — the FILE path is a Databricks cluster capability (absent from `.venv-pyrx`).
+
+- [ ] **Generate the corpus on dogfood (oauth-fe, e2-demo-field-eng)**
+
+  ```python
+  # Notebook cell on the bench cluster:
+  import subprocess, json
+  result = subprocess.run([
+      "python", "-m", "databricks.labs.gbx.bench.datagen",
+      "--out", "/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow",
+      "--cog-multiwindow",
+      "--cog-count", "5",
+      "--windows-per-cog", "200",
+      "--cog-px", "4096",
+      "--bands", "4",
+      "--dtypes", "float32",
+      "--srids", "4326",
+      "--seed", "2025",
+  ], capture_output=True, text=True, check=True)
+  print(result.stdout)
+  # Expected: {"manifest": ".../cog_multiwindow_manifest.json", "rows": 1000}
+  # 5 COGs × 4096×4096 float32 4-band ≈ 256 MB each; 200 windows per COG = 1000 rows.
+  # Narrow strips (4096 px tall × ~20 px wide) — FILE byte-ranges ~20-40 KB per window.
+  ```
+
+- [ ] **Run FILE-on (default):**
+
+  ```python
+  from databricks.labs.gbx.bench.readers import run_virtual_tile_pixel_read
+
+  results_cog_on = run_virtual_tile_pixel_read(
+      spark,
+      path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+      run_id="phase1-cog-file-on",
+      warmup=1,
+      measured=3,
+      where="cluster",
+      disable_file=False,
+  )
+  ```
+
+  > **LATERAL VIEW note (inherited from Task 2):** `run_virtual_tile_pixel_read` returns a DOUBLE scalar; `.count()` forces the UDF without LATERAL VIEW. If you extend this to array-returning ops, use `df.select(F.explode(...)).count()` to force the Generate op.
+
+- [ ] **Run FILE-off:**
+
+  ```python
+  results_cog_off = run_virtual_tile_pixel_read(
+      spark,
+      path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+      run_id="phase1-cog-file-off",
+      warmup=1,
+      measured=3,
+      where="cluster",
+      disable_file=True,
+  )
+  ```
+
+- [ ] **Compare `iter_median_s` and `throughput_rows_s`**
+
+  **Expected:** A sharper FILE win than on the Task 2 whole-file corpus. FILE byte-ranges only the COG tile blocks covering each narrow window; FUSE opens and seeks the full ~256 MB file per window. Record the ratio `results_cog_off.iter_median_s / results_cog_on.iter_median_s` alongside the Task 2 ratio.
+
+  **If the win does NOT materialize:** That is a documented finding, not a failure. It may indicate FILE does not yet issue byte-range requests against COG tile grids on this cluster/environment, or that per-window scheduling overhead dominates at these strip widths. Record the numbers and disposition in the Phase 1 comparison table (alongside Task 2 results).
+
+---
+
 ## Phase 2 — Listing-rake remedies
 
 Implement each remedy and benchmark it against the Phase 0 baseline. Explore and refine best approaches based on alternative benchmarking.
@@ -1612,13 +1926,15 @@ Compare `plan_s` vs Phase 0 baseline. Lazy planning should reduce `plan_s` to ne
 
 ## Phase 3 — Docs note
 
-### Task 6 — Docs note: many-small-files performance guidance
+### Task 6 — Docs: many-small-files note + COG multi-window FILE-capability callout
 
-Add a concise note to the raster readers page and the Virtual Tiles page steering callers toward `manifest`/`tilesTable` (or fewer larger COGs) when loading large numbers of small files. User-facing voice; no internal vocabulary.
+Add a many-small-files performance note to the raster readers page and the Virtual Tiles page. Add a COG multi-window FILE-capability callout — distinct from the many-small-files note — to three pages: `large-rasters.mdx`, `virtual-tiles.mdx`, and `benchmarking.mdx`. Also add a **stock-Spark-reader underscore-file note** to `raster.mdx` (Step 1b): stock readers (`binaryFile` etc.) silently skip `_`-prefixed files via Spark's hidden-file filter — `pathGlobFilter` does NOT bypass it — and some GeoBrix heavy-writer tile names start with `_`; document the driver-side-listing workaround. DOC-ONLY: do not change any reader default (per user — flipping to include `_*` risks ingesting `_SUCCESS`/`_committed_*` metadata). User-facing voice; no internal vocabulary.
 
 **Files:**
 - Modify: `docs/docs/readers/raster.mdx`
 - Modify: `docs/docs/api/virtual-tiles.mdx`
+- Modify: `docs/docs/api/large-rasters.mdx`
+- Modify: `docs/docs/api/benchmarking.mdx`
 
 **Interfaces:**
 - Consumes: nothing from code; doc-only change.
@@ -1651,6 +1967,38 @@ For large tile counts, prefer one of:
 :::
 ```
 
+- [ ] **Step 1b: Add the stock-Spark-reader underscore-file note to `docs/docs/readers/raster.mdx`**
+
+After the "Loading many small files" tip (Step 1), add a second tip. This documents a
+real interop gotcha: stock Spark file readers skip `_`-prefixed files, and some GeoBrix
+heavy-writer tiles are named with a leading `_`. This is DOC-ONLY — no reader-default
+change. Add:
+
+```mdx
+:::tip Reading GeoBrix output with a stock Spark reader
+Stock Spark file readers (`spark.read.format("binaryFile")`, `text`, `parquet`, …)
+silently skip any file whose name starts with `_` or `.` — Spark's hidden-file filter,
+applied during directory listing. Some GeoBrix raster tiles are written with a leading
+`_` in their (hashed) name, so a stock reader can miss a large fraction of a directory.
+Note that **`.option("pathGlobFilter", "*.tif")` does not override this filter** — the
+filter runs before the glob, so `_`-prefixed files stay excluded (an explicit `_*` glob,
+explicit `_`-file paths, and `recursiveFileLookup` do not help either).
+
+To read every tile, enumerate the paths on the driver (which does not apply the filter)
+and build the DataFrame explicitly — ideal when you only need the file list, e.g. to feed
+a VRT builder:
+
+```python
+from pathlib import Path
+paths = [str(p) for p in Path(output_dir).rglob("*.tif")]
+files_df = spark.createDataFrame([(p,) for p in paths], ["path"])
+```
+
+GeoBrix's own raster readers (`raster_gbx` / `gtiff_gbx` / `cog_gbx`) list files directly
+and are **not** affected — this applies only to stock Spark file readers.
+:::
+```
+
 - [ ] **Step 2: Add performance note to `docs/docs/api/virtual-tiles.mdx`**
 
 Find the section on loading directories (likely the "Using the light reader" or equivalent section) and add:
@@ -1666,7 +2014,62 @@ See [Raster Reader performance](../readers/raster#loading-many-small-files).
 :::
 ```
 
-- [ ] **Step 3: Verify no internal vocabulary leaked**
+- [ ] **Step 3: Add FILE-capability callout to `docs/docs/api/large-rasters.mdx`**
+
+Find the section discussing large COG files (COG standardization / `cog_gbx` writer) and add, in user-facing voice:
+
+```mdx
+:::tip Virtual tiles + large COGs: byte-range reads
+When virtual tiles reference **windows** of a large Cloud-Optimized GeoTIFF,
+Databricks FILE can fetch only the bytes covering each window's COG tile blocks —
+rather than opening and seeking the full file. For large COGs (hundreds of MB),
+this is where the virtual-tile model pays off most: many narrow window references
+into one large COG are substantially cheaper with FILE than with the FUSE fallback.
+See [FILE-on vs FILE-off](../api/benchmarking#file-capability-cog-multiwindow) for measured results.
+:::
+```
+
+- [ ] **Step 4: Add FILE-capability callout to `docs/docs/api/benchmarking.mdx`**
+
+Add a subsection (or note within the virtual-tile bench section) covering the COG multi-window corpus and how to reproduce the FILE comparison. User-facing voice; GBX_DISABLE_FILE is a public env var:
+
+```mdx
+#### FILE byte-range vs FUSE: large-COG multi-window corpus {#file-capability-cog-multiwindow}
+
+The standard bench corpus uses many small whole-file tiles. To measure the
+Databricks FILE byte-range benefit directly, use the COG multi-window corpus:
+K large Cloud-Optimized GeoTIFFs, each referenced by M narrow window rows.
+FILE fetches only the COG tile blocks covering each window; the FUSE fallback
+opens and seeks the full file per window.
+
+**Generate the corpus:**
+
+```python
+import subprocess
+subprocess.run([
+    "python", "-m", "databricks.labs.gbx.bench.datagen",
+    "--out", "/Volumes/<catalog>/<schema>/<vol>/bench-corpus-cog-multiwindow",
+    "--cog-multiwindow", "--cog-count", "5", "--windows-per-cog", "200",
+    "--cog-px", "4096",
+], check=True)
+```
+
+**Run FILE-on vs FILE-off:**
+
+```python
+from databricks.labs.gbx.bench.readers import run_virtual_tile_pixel_read
+
+results_on  = run_virtual_tile_pixel_read(spark, path="<manifest_path>",
+                run_id="cog-file-on",  disable_file=False, where="cluster", warmup=1, measured=3)
+results_off = run_virtual_tile_pixel_read(spark, path="<manifest_path>",
+                run_id="cog-file-off", disable_file=True,  where="cluster", warmup=1, measured=3)
+```
+
+Set `GBX_DISABLE_FILE=1` in the cluster environment to disable FILE globally
+instead of using the `disable_file` parameter.
+```
+
+- [ ] **Step 5: Verify no internal vocabulary leaked**
 
 ```bash
 grep -rniE "wave [0-9]+|wave-[0-9]+" /Users/mjohns/IdeaProjects/geobrix/docs/docs/
@@ -1674,21 +2077,27 @@ grep -rniE "wave [0-9]+|wave-[0-9]+" /Users/mjohns/IdeaProjects/geobrix/docs/doc
 
 Expected: no output.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add docs/docs/readers/raster.mdx docs/docs/api/virtual-tiles.mdx
-git commit -m "docs(readers): add many-small-files performance guidance
+git add docs/docs/readers/raster.mdx docs/docs/api/virtual-tiles.mdx \
+        docs/docs/api/large-rasters.mdx docs/docs/api/benchmarking.mdx
+git commit -m "docs(readers): many-small-files note + COG multi-window FILE callout
 
-Steer callers toward manifest/tilesTable or fewer larger COGs when
-loading large numbers of small tiles. User-facing voice; no internal vocab."
+Add performance guidance for large tile counts (manifest/tilesTable/fewer
+larger COGs). Add FILE byte-range callout to large-rasters, virtual-tiles,
+and benchmarking pages for the large-COG multi-window scenario."
 ```
 
 ---
 
-## Final gate — 10K corpus
+## Final gate — 10K corpus + COG multi-window corpus
 
-Re-run the winning approach from Phase 2 on `bench-corpus-reader-10k` to confirm the listing rake is solved at scale.
+Two confirmation runs are required before merging.
+
+**Gate A — listing-rake fix (10K whole-file corpus)**
+
+Re-run the winning Phase 2 remedy on `bench-corpus-reader-10k` to confirm the listing rake is solved at scale.
 
 **Corpus:** `bench-corpus-reader-10k` — 10,000 tiny 256px / 1-band / float32 tiles at `/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-reader-10k` (generated separately). The 1K corpus is too small to confirm a listing-rake fix; 10K is the minimum gate.
 
@@ -1708,7 +2117,38 @@ results_final = run_spark_path_reader(
 # iter_median_s must not regress vs Phase 0 (executor read time unchanged).
 ```
 
-The remedy is considered confirmed when `plan_s` on `bench-corpus-reader-10k` shows the expected reduction vs Phase 0. Only then merge and document.
+Gate A is confirmed when `plan_s` on `bench-corpus-reader-10k` shows the expected reduction vs Phase 0.
+
+**Gate B — FILE-capability distinction (COG multi-window corpus)**
+
+Re-run the Task 2c comparison (FILE-on vs FILE-off) on `bench-corpus-cog-multiwindow` after the Phase 2 remedy is staged, to confirm that the listing-rake fix does not affect the executor-side FILE byte-range win.
+
+```python
+# After Phase 2 remedy is staged; corpus generated in Task 2c:
+results_cog_final_on = run_virtual_tile_pixel_read(
+    spark,
+    path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+    run_id="final-gate-cog-file-on",
+    warmup=1,
+    measured=3,
+    where="cluster",
+    disable_file=False,
+)
+results_cog_final_off = run_virtual_tile_pixel_read(
+    spark,
+    path="/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow/cog_multiwindow_manifest.json",
+    run_id="final-gate-cog-file-off",
+    warmup=1,
+    measured=3,
+    where="cluster",
+    disable_file=True,
+)
+# iter_median_s(FILE-off) / iter_median_s(FILE-on) should match or exceed the
+# Task 2c ratio. A regression here means the Phase 2 change inadvertently altered
+# the executor-side read path — investigate before merging.
+```
+
+Gate B is confirmed when the FILE-on/off ratio on the COG multi-window corpus is consistent with (or better than) the Task 2c pre-remedy measurement. Only after both Gate A and Gate B are confirmed should the branch be merged and documented.
 
 ---
 
@@ -1733,12 +2173,20 @@ The remedy is considered confirmed when `plan_s` on `bench-corpus-reader-10k` sh
 | §7b virtual-tile pixel-read leg | Task 1 (`run_virtual_tile_pixel_read`) + Task 2 (execution) |
 | §7b FILE-on vs FILE-off (`GBX_DISABLE_FILE`) | Task 2 (`disable_file` param + comparison steps) |
 | §7b runbook steps documented | Task 1 (docstring in `run_virtual_tile_pixel_read`) + Task 2 steps |
+| COG multi-window corpus generator | Task 2b (`generate_cog_multiwindow_corpus` + `--cog-multiwindow` CLI) |
+| COG multi-window FILE bench (cluster) | Task 2c (FILE-on vs FILE-off on `bench-corpus-cog-multiwindow`) |
+| FILE-capability callout — large-rasters page | Task 6 Step 3 (`docs/docs/api/large-rasters.mdx`) |
+| FILE-capability callout — virtual-tiles page | Task 6 Step 2 + callout addition (`docs/docs/api/virtual-tiles.mdx`) |
+| FILE-capability callout — benchmarking page | Task 6 Step 4 (`docs/docs/api/benchmarking.mdx`) |
+| Final gate: COG multi-window corpus confirmed | Gate B (`final-gate-cog-file-on/off` ratio consistent with Task 2c) |
 
 No gaps found.
 
 **2. Placeholder scan:**
 
 No "TBD", "TODO", or "similar to Task N" patterns. Every code block contains real implementation. The `run_virtual_tile_pixel_read` function (Task 1 Step 5) includes `iter_total_wall_clock_s` and `avg_wall_clock_s` in both the success and error return paths — verify these are present in the implementation copy.
+
+Task 2b: `generate_cog_multiwindow_corpus` uses real rasterio `MemoryFile` + `driver="COG"` round-trip. The window-strip arithmetic is exact (no placeholder). COG block size is hardcoded at `tile_size = 256` to match typical COG internal tile grids. The test file `test_datagen_cog_multiwindow.py` has three distinct assertion sets — shape, COG profile, window bounds — none delegated to a "similar to" helper. Task 2c bench paths reference the real Volume path produced by Task 2b's CLI. Task 6 Steps 3 and 4 include real MDX blocks (admonition + subsection) with real Python snippets; the `#file-capability-cog-multiwindow` anchor in `large-rasters.mdx` matches the target fragment in `benchmarking.mdx`'s cross-link.
 
 **3. Type consistency:**
 

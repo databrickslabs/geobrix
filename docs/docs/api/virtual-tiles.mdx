@@ -99,12 +99,12 @@ The diagram above traces the four stages:
 
 ## Virtual Tiles + FILE
 
-FILE is a Databricks data type that provides **governed access to files on compute without a FUSE mount**, and enables **byte-range reads** from cloud storage. GeoBrix detects FILE availability and uses it transparently when present, enabling faster windowed reads. This acceleration is **optional and fully backward-compatible** — if FILE is not available, virtual tiles work exactly as before via FUSE staging + rasterio windowed reads.
+FILE is a [Databricks data type](https://docs.databricks.com/aws/en/pyspark/reference/file-type) that provides **governed access to files on compute without a FUSE mount**, and enables **byte-range reads** from cloud storage. GeoBrix detects FILE availability and uses it transparently when present, enabling faster windowed reads. This acceleration is **optional and fully backward-compatible** — if FILE is not available, virtual tiles work exactly as before via FUSE staging + rasterio windowed reads.
 
 When FILE is available (primarily on Databricks Runtime 19 dedicated clusters with `fileReferenceCreationMode=MANAGED`), GeoBrix:
 
 - Mints a `FileRef` column from the tile path in the Spark plan.
-- Passes the `FileRef` to the read UDF alongside the tile struct.
+- Passes the `FileRef` to the read UDF — a [file UDF](https://docs.databricks.com/aws/en/unstructured/file-udfs) — alongside the tile struct.
 - Reads only the exact window bytes via `fref.open()` (byte-range read), rather than staging the whole file to local disk first.
 - Falls back gracefully to the traditional FUSE path if any step fails.
 
@@ -120,11 +120,12 @@ When FILE is available (primarily on Databricks Runtime 19 dedicated clusters wi
 
 :::tip Virtual tiles + large COGs: byte-range reads
 When virtual tiles reference **windows** of a large Cloud-Optimized GeoTIFF,
-Databricks FILE can fetch only the bytes covering each window's COG tile blocks —
-rather than opening and seeking the full file. For large COGs (hundreds of MB),
-this is where the virtual-tile model pays off most: many narrow window references
-into one large COG are substantially cheaper with FILE than with the FUSE fallback.
-See [FILE-on vs FILE-off](../api/benchmarking#file-capability-cog-multiwindow) for measured results.
+Databricks FILE can fetch only the bytes covering each window's COG tile blocks,
+rather than opening and seeking the full file via FUSE. Whether this beats the
+FUSE fallback depends on file size — the byte-range advantage grows as the COG
+grows (FUSE stages the whole file per read), while for moderate-sized files the
+per-window `FileRef` overhead can cancel it out. Measure it on representative
+data with the [FILE byte-range benchmark](../api/benchmarking#file-capability-cog-multiwindow).
 :::
 
 ## Reader selection surface

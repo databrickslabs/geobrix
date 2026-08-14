@@ -2942,19 +2942,20 @@ def build_bench_notebook(cfg: dict) -> dict:
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
     # (light, heavy) then spark-path (light, heavy).
     cells = [
-        # Ensure BOTH fresh geobrix code AND the full [light] dep set every run. Use the
-        # PEP 508 URL-reference form `"geobrix[light] @ file:///path"` which pins the
-        # exact wheel file and resolves [light] extras from it -- even when the same
-        # version is already cached. The plain `'path[light]'` form is not valid pip
-        # syntax for extras from a local file and fails silently, leaving the env
-        # without geobrix after the kernel restart.
+        # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.
+        # [light-dbr19] is the classic DBR 19 variant of [light]: it drops the
+        # mapbox-vector-tile<2.2 cap that conflicts with DBR 19's protobuf>=6.31.1.
+        # Use the PEP 508 URL-reference form `"geobrix[light-dbr19] @ file:///path"`
+        # which pins the exact wheel file and resolves extras from it -- even when the
+        # same version is already cached. The plain `'path[extra]'` form is not valid
+        # pip syntax for extras from a local file and fails silently.
         # NOTE: single %pip cell = ONE kernel restart. The earlier pattern
         # (%pip uninstall + %pip install + dbutils.library.restartPython()) triggered three
         # restarts and caused kernel startup failures on DBR 19.x-snapshot. The explicit
         # dbutils.library.restartPython() is omitted here because %pip install already
         # restarts the Python environment; a second restart after it is redundant and
         # causes kernel crash on DBR 19.x. `markdown` powers the displayHTML summaries.
-        _cell('%pip install --quiet "geobrix[light] @ file://{wheel}" markdown'.format(wheel=cfg['wheel'])),
+        _cell('%pip install --quiet "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(wheel=cfg['wheel'])),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),

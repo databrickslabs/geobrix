@@ -12,8 +12,10 @@ The cluster + artifacts must be provisioned by the operator (see the installatio
 - heavyweight: x86 DBR 17.3 or 18 LTS with the init script + bundle + geobrix wheel + the bench
   geobrix-*-tests.jar staged on a Volume (the tests.jar is attached here as a job library;
   the production fat JAR is installed by the heavyweight init script, NOT attached here).
-- lightweight (incl. ARM): just the [light] wheel (installed by the notebook's %pip cell).
-  On ARM clusters use --lightweight-only (heavyweight is x86-only by design).
+- lightweight (incl. ARM): the [light-dbr19] wheel (installed by the notebook's %pip cell).
+  [light-dbr19] is the classic DBR 19 variant; it drops the mapbox-vector-tile<2.2 cap
+  that conflicts with DBR 19's protobuf>=6.31.1. On ARM clusters use --lightweight-only
+  (heavyweight is x86-only by design).
 
 Requires: databricks-sdk, and env config (see databricks_cluster_config.example.env).
 

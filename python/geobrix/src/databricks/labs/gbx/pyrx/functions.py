@@ -3160,8 +3160,12 @@ def _mapalgebra_bytes(tiles, expression):
     """Shared map-algebra body: collect each input tile's GTiff bytes (array
     order preserved), evaluate the expression, return the produced GTiff bytes.
 
-    Materialized inputs pass their ORIGINAL bytes verbatim (no re-encode); only
-    a VIRTUAL input (raster None) is materialized via the front-door."""
+    Materialized inputs pass their ORIGINAL bytes verbatim (no re-encode).
+    Virtual inputs use ``_tile_to_bytes`` (one ZSTD encode) instead of
+    ``materialize_to_bytes`` (two ZSTD encode/decode cycles), avoiding the
+    redundant compress→decompress→compress round-trip that ``materialize_to_bytes``
+    performs when the caller only needs bytes for a downstream open (e.g.
+    mapalgebra_core opens each input with its own MemoryFile)."""
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
@@ -3171,10 +3175,7 @@ def _mapalgebra_bytes(tiles, expression):
     rasters = []
     for t in elems:
         vt = ot._to_virtual_tile(t)
-        if vt.is_virtual():
-            rasters.append(ot.materialize_to_bytes(vt).raster)
-        else:
-            rasters.append(bytes(vt.raster))
+        rasters.append(ot._tile_to_bytes(vt))
     return mapalgebra_core.mapalgebra(rasters, str(expression))
 
 

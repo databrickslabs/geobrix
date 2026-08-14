@@ -669,6 +669,71 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     )
 
 
+def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
+    """Return GTiff bytes for a tile, avoiding the double-encode of materialize_to_bytes.
+
+    For materialized tiles (``raster`` set), returns ``bytes(vt.raster)`` unchanged.
+    For virtual tiles (``raster`` None), produces bytes via the local-path pipeline
+    (``_window_dataset_bytes`` / ``_warp_window_bytes`` / clip) and returns them
+    **directly** — without the ``_open_bytes`` → ``ds.read()`` → re-encode cycle
+    that ``materialize_to_bytes`` performs.
+
+    Compared to ``materialize_to_bytes(vt).raster``, this saves one ZSTD compress
+    + one ZSTD decompress per virtual input tile in the common case (no clip / no
+    warp).  The bytes returned are semantically identical: same pixels, same
+    georeference, same nodata, same compression.
+
+    **Constraints**:
+    - ``file_ref=None`` only (local-path branch; the FILE path is not needed here
+      because callers that use FILE already go through ``_uf_*`` variants).
+    - Use when only the pixel bytes matter and the full ``VirtualTile`` provenance
+      returned by ``materialize_to_bytes`` is not needed.
+    """
+    if not vt.is_virtual():
+        return bytes(vt.raster) if vt.raster is not None else None
+
+    with ExitStack() as stack:
+        pending = _parse_pending(vt.metadata)
+        local_path = _resolve_local_or_windowed(vt, None, stack)
+
+        c, r, w, h = vt.window
+        window = Window(c, r, w, h)
+        _, _, pending_srid, _ = pending
+
+        with rasterio.open(local_path) as src:
+            src_epsg = src.crs.to_epsg() if src.crs else None
+            want = _epsg_of(vt.crs) if vt.crs else None
+            effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
+            if want is not None and want != effective_src_epsg:
+                tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
+            elif vt.crs is not None and want is None:
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                want_crs = resolve_crs(vt.crs)
+                effective_src_crs = (
+                    resolve_crs(pending_srid) if pending_srid is not None else src.crs
+                )
+                if effective_src_crs is None or effective_src_crs != want_crs:
+                    tile_bytes = _warp_window_bytes_crs(
+                        src, window, want_crs, pending=pending
+                    )
+                else:
+                    tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+            else:
+                tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+
+        if vt.clip_polygon is None:
+            return tile_bytes
+
+        # Clip path: open tile_bytes temporarily to clip, return clipped bytes directly.
+        with MemoryFile(tile_bytes) as mf:
+            with mf.open() as wds:
+                clipped = _clip.clip_dataset(wds, vt.clip_polygon, vt.clip_crs)
+                if clipped is None:
+                    return _empty_dataset_bytes(wds)
+                return clipped
+
+
 def materialize_array(tile: VirtualTile) -> Tuple[np.ndarray, "rasterio.Affine", dict]:
     """Convenience wrapper: (array, transform, profile) from open_tile."""
     with open_tile(tile) as ds:

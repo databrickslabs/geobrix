@@ -5,6 +5,8 @@ from __future__ import annotations
 import concurrent.futures
 import itertools
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -438,8 +440,20 @@ def generate_cog_multiwindow_corpus(
                     driver="COG",
                     BLOCKSIZE=tile_size,
                 )
-                with rasterio.open(str(dest), "w", **cog_profile) as dst:
-                    dst.write(src.read())
+                # Write COG to a local temp file, then copy to dest sequentially.
+                # The GDAL COG driver does backward seeks during finalization;
+                # FUSE-mounted Volumes (/Volumes/…) reject backward seeks with
+                # "Input/output error".  Writing locally first, then shutil.copy,
+                # keeps the Volume write sequential — same pattern as the
+                # tile-pool write_bytes path, which is already FUSE-safe.
+                fd, tmp_cog = tempfile.mkstemp(suffix=".tif")
+                os.close(fd)
+                try:
+                    with rasterio.open(tmp_cog, "w", **cog_profile) as dst:
+                        dst.write(src.read())
+                    shutil.copy(tmp_cog, str(dest))
+                finally:
+                    os.unlink(tmp_cog)
 
         # Partition cog_px columns into windows_per_cog equal strips (full height).
         win_w = max(1, cog_px // windows_per_cog)

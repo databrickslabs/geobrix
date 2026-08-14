@@ -9,6 +9,15 @@
 
 ## 1. Problem and Motivation
 
+> **Positioning — the principle this design encodes.** GeoBrix Light targets, and **defaults
+> to, Databricks Serverless environments (currently environment v5)**: the default
+> `geobrix[light]` extra is pinned to match the Serverless base and installs cleanly there
+> with no user thought. **When running on a *classic* DBR cluster instead, additional
+> dependencies must be accounted for** — each classic DBR generation (17 / 18 / 19 …) ships a
+> different immutable base (different `grpcio-status`/`protobuf`, `idna`, `typing_extensions`,
+> …), so a classic user pins the opt-in variant matching their runtime (`geobrix[light_dbr19]`).
+> Serverless remains the zero-config default; classic is an explicit, per-DBR opt-in.
+
 The single `[light]` extra today must satisfy every DBR runtime simultaneously. That forces
 all pins to the **lowest-common-denominator**: whichever runtime imposes the tightest
 constraint wins, and every other runtime inherits it. This is currently Serverless env v5 /

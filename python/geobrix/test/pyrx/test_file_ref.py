@@ -149,3 +149,104 @@ def test_open_windowed_via_fileref_raises_on_non_seekable(gtiff_bytes):
     with pytest.raises(FileRefReadError):
         with open_windowed_via_fileref(stub_fref, window, pending):
             pass
+
+
+# ---------------------------------------------------------------------------
+# Tests for open_tile file_ref integration (Task 3)
+# ---------------------------------------------------------------------------
+
+
+def test_open_tile_file_ref_none_backward_compatible(gtiff_bytes):
+    """open_tile(tile) with no file_ref arg uses today's path-read code path."""
+    from databricks.labs.gbx.pyrx.core.open_tile import open_tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    tif_bytes = gtiff_bytes
+    fd, tmp_path = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(tif_bytes)
+
+        tile = VirtualTile(
+            cellid=0,
+            path=tmp_path,
+            window=(0, 0, 4, 3),
+        )
+
+        with open_tile(tile) as ds:
+            pixels = ds.read(1)
+            expected = np.arange(12, dtype="float32").reshape(3, 4)
+            np.testing.assert_array_equal(pixels, expected)
+    finally:
+        os.remove(tmp_path)
+
+
+def test_open_tile_uses_file_ref_when_provided(gtiff_bytes):
+    """FILE branch: open_tile reads via FileRef even when tile.path is bogus."""
+    from databricks.labs.gbx.pyrx.core.open_tile import open_tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    class StubFileRef:
+        def __init__(self, data_bytes):
+            self.data_bytes = data_bytes
+
+        def open(self):
+            return io.BytesIO(self.data_bytes)
+
+        def as_local_file(self):
+            raise AssertionError("Should not degrade — FILE branch should succeed")
+
+    stub_fref = StubFileRef(gtiff_bytes)
+
+    tile = VirtualTile(
+        cellid=0,
+        path="/nonexistent/path.tif",
+        window=(0, 0, 4, 3),
+    )
+
+    with open_tile(tile, file_ref=stub_fref) as ds:
+        pixels = ds.read(1)
+        expected = np.arange(12, dtype="float32").reshape(3, 4)
+        np.testing.assert_array_equal(pixels, expected)
+
+
+def test_open_tile_file_ref_degrades_to_fallback(gtiff_bytes):
+    """Degradation: failing FileRef.open() → falls back via as_local_file()."""
+    from databricks.labs.gbx.pyrx.core.open_tile import open_tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    class FailingStubFileRef:
+        def __init__(self, data_bytes):
+            self._data_bytes = data_bytes
+
+        def open(self):
+            raise IOError("FileRef stream failed")
+
+        def as_local_file(self):
+            fd, tmp = tempfile.mkstemp(suffix=".tif")
+            os.close(fd)
+            with open(tmp, "wb") as f:
+                f.write(self._data_bytes)
+            return tmp
+
+    stub_fref = FailingStubFileRef(gtiff_bytes)
+
+    fd, fallback_path = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    try:
+        with open(fallback_path, "wb") as f:
+            f.write(gtiff_bytes)
+
+        tile = VirtualTile(
+            cellid=0,
+            path=fallback_path,
+            window=(0, 0, 4, 3),
+        )
+
+        with open_tile(tile, file_ref=stub_fref) as ds:
+            pixels = ds.read(1)
+            expected = np.arange(12, dtype="float32").reshape(3, 4)
+            np.testing.assert_array_equal(pixels, expected)
+    finally:
+        os.remove(fallback_path)

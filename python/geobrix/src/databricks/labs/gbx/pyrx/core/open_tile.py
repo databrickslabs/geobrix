@@ -255,7 +255,7 @@ def _open_bytes(stack: ExitStack, raster_bytes: bytes) -> DatasetReader:
 
 
 @contextmanager
-def open_tile(tile: VirtualTile) -> Iterator[DatasetReader]:
+def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
     # 1. raster present: the bytes ARE the result; provenance fields are ignored
     #    (including any bogus path). Delegate to the v1 bytes contextmanager.
     if tile.raster is not None:
@@ -263,15 +263,34 @@ def open_tile(tile: VirtualTile) -> Iterator[DatasetReader]:
             yield ds
         return
 
-    # 2. virtual: stage path, read exactly the window, optional warp + clip.
+    # 2. virtual: try FILE windowed-read first (if file_ref provided), else stage
+    #    path locally and read the window with optional warp + clip.
     with ExitStack() as stack:
-        local_path, is_temp = _stage_local_if_needed(tile.path)
-        if is_temp:
-            stack.callback(_safe_remove, local_path)
+        pending = _parse_pending(tile.metadata)
+
+        # FILE branch: try windowed read via FileRef (avoids staging the full file).
+        # On success yield the DatasetReader directly; warp/clip are skipped because
+        # the FileRef already delivers the correctly-projected window from the source.
+        # On FileRefReadError fall through to the local-path branch below.
+        if file_ref is not None:
+            try:
+                from databricks.labs.gbx.pyrx._file_ref import (
+                    FileRefReadError,
+                    open_windowed_via_fileref,
+                )
+
+                with open_windowed_via_fileref(file_ref, tile.window, pending) as ds:
+                    yield ds
+                return
+            except FileRefReadError:
+                pass  # fall through to local-path branch
+
+        # Local-path branch: shared helper handles file_ref degradation
+        # (as_local_file → tile.path) and today's plain tile.path read (file_ref=None).
+        local_path = _resolve_local_or_windowed(tile, file_ref, stack)
 
         c, r, w, h = tile.window
         window = Window(c, r, w, h)
-        pending = _parse_pending(tile.metadata)
         bands, _nodata, pending_srid, _pending_crs_str = pending
         with rasterio.open(local_path) as src:
             src_epsg = src.crs.to_epsg() if src.crs else None
@@ -323,6 +342,34 @@ def _safe_remove(path: str) -> None:
         pass
 
 
+def _resolve_local_or_windowed(tile: VirtualTile, file_ref, stack: ExitStack) -> str:
+    """Shared local-path resolver for open_tile, _open, and open_header.
+
+    Returns a staged local path ready for rasterio.open, registering cleanup on
+    ``stack`` if ``_stage_local_if_needed`` produced a temp file:
+
+    - ``file_ref`` provided: try ``file_ref.as_local_file()`` first; fall back to
+      ``tile.path`` if ``as_local_file`` raises.
+    - ``file_ref`` is None: ``tile.path`` directly (today's behavior, unchanged).
+
+    This helper covers the *fallback / degradation* path.  The FILE-first windowed
+    read (``open_windowed_via_fileref``) is handled inline by ``open_tile`` before
+    this helper is called; if the FILE attempt succeeds, this helper is never
+    reached.
+    """
+    if file_ref is not None:
+        try:
+            raw = file_ref.as_local_file()
+        except Exception:
+            raw = tile.path
+    else:
+        raw = tile.path
+    local_path, is_temp = _stage_local_if_needed(raw)
+    if is_temp:
+        stack.callback(_safe_remove, local_path)
+    return local_path
+
+
 def _to_virtual_tile(tile) -> VirtualTile:
     """Normalize any tile shape to VirtualTile.
 
@@ -343,7 +390,7 @@ def _to_virtual_tile(tile) -> VirtualTile:
 
 
 @contextmanager
-def _open(tile):
+def _open(tile, file_ref=None):
     """Context manager that yields an open ``DatasetReader`` for any tile shape.
 
     Accepts a ``VirtualTile``, raw bytes/bytearray, a v1 dict/Row
@@ -351,8 +398,11 @@ def _open(tile):
     Normalises to ``VirtualTile`` via ``_to_virtual_tile`` then delegates to
     ``open_tile``; all lifecycle management (MemoryFile, staged temps) is
     handled there.
+
+    ``file_ref``: optional FileRef for FILE-type windowed reads; threaded through
+    to ``open_tile``.  Defaults to None (today's behaviour, unchanged).
     """
-    with open_tile(_to_virtual_tile(tile)) as ds:
+    with open_tile(_to_virtual_tile(tile), file_ref=file_ref) as ds:
         yield ds
 
 
@@ -489,7 +539,7 @@ def _is_full_extent(window, src) -> bool:
 
 
 @contextmanager
-def open_header(tile) -> Iterator[DatasetReader]:
+def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
     """Context manager yielding an open dataset for **header/metadata access only**.
 
     Unlike ``open_tile`` / ``_open``, this function never materialises a pixel
@@ -501,15 +551,22 @@ def open_header(tile) -> Iterator[DatasetReader]:
     - bytes / bytearray / v1 dict (``raster`` set) → open the bytes via the
       MemoryFile path (``_open``).  The bytes already contain the full result so
       header is trivially available; no window read is performed by this call.
-    - virtual dict / v2 struct / VirtualTile (``raster`` None) → stage the path
-      local if needed (e.g. /Volumes FUSE), open the source file with a plain
-      ``rasterio.open`` (lazy, no pixel I/O). If the tile carries a sub-window
-      (present AND not the full source extent), yield a read-free
-      ``_WindowHeaderView`` whose ``width``/``height``/``transform``/``bounds``/
-      ``profile`` reflect the WINDOW (consistent with the pixel path and the
-      materialized-equivalent tile) while other fields proxy the source. For a
-      whole-file window (None or == full extent) yield the source dataset
-      directly. The ExitStack cleans up the staged temp on exit.
+    - virtual dict / v2 struct / VirtualTile (``raster`` None) → resolve local
+      path via ``_resolve_local_or_windowed`` (uses ``file_ref.as_local_file()``
+      if provided, else ``tile.path``; handles staging for /Volumes paths), then
+      open the source file with a plain ``rasterio.open`` (lazy, no pixel I/O).
+      If the tile carries a sub-window (present AND not the full source extent),
+      yield a read-free ``_WindowHeaderView`` whose
+      ``width``/``height``/``transform``/``bounds``/``profile`` reflect the WINDOW
+      (consistent with the pixel path and the materialized-equivalent tile) while
+      other fields proxy the source. For a whole-file window (None or == full
+      extent) yield the source dataset directly. The ExitStack cleans up the
+      staged temp on exit.
+
+    ``file_ref``: optional FileRef for FILE-type reads.  For header-only reads,
+    ``file_ref.as_local_file()`` is tried (avoids re-implementing pixel
+    materialisation); falls back to ``tile.path`` if that raises.  Defaults to
+    None (today's behaviour, unchanged).
     """
     vt = _to_virtual_tile(tile)
 
@@ -521,9 +578,7 @@ def open_header(tile) -> Iterator[DatasetReader]:
 
     # Virtual path: open the source header — no window read in either branch.
     with ExitStack() as stack:
-        local_path, is_temp = _stage_local_if_needed(vt.path)
-        if is_temp:
-            stack.callback(_safe_remove, local_path)
+        local_path = _resolve_local_or_windowed(vt, file_ref, stack)
         src = stack.enter_context(rasterio.open(local_path))
 
         # Parse pending instructions to reflect band-select / setsrid / nodata in header.

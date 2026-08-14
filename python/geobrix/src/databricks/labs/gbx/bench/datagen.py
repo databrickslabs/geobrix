@@ -399,6 +399,8 @@ def generate_cog_multiwindow_corpus(
     bands: int,
     dtype: str,
     srid: int,
+    window_px: int | None = None,
+    compress: str = "DEFLATE",
 ) -> Path:
     """Write K large COGs + a JSON manifest of M (path, window) rows per COG.
 
@@ -406,6 +408,27 @@ def generate_cog_multiwindow_corpus(
     FILE can issue byte-range requests against the COG tile grid.  The manifest
     is a JSON array of ``{"path": "cogs/cog_N.tif", "window": [off_x, off_y,
     win_w, win_h]}`` rows — same format as ``_read_manifest_rows`` in ds/raster.py.
+
+    When *window_px* is given, windows are a row-major grid of
+    ``window_px``×``window_px`` squares (last row/column clamped to the COG
+    edge).  This is the decisive FILE byte-range benchmark shape: many small
+    windows each touching only a few COG internal blocks.  The first
+    *windows_per_cog* grid cells are emitted.
+
+    When *window_px* is ``None`` (default), the legacy full-height column-strip
+    behaviour is preserved for back-compatibility.
+
+    *compress* is passed directly to the GDAL COG driver as the ``COMPRESS``
+    creation option (default ``"DEFLATE"``; use ``"NONE"`` for a predictable
+    uncompressed on-disk size).
+
+    Sizing note (for reference — do not hardcode these values):
+      ~500 MB on disk, 1 band float32, COMPRESS=NONE:
+        cog_px ≈ 11264  (11264² × 4 ≈ 507 MB).
+      With DEFLATE on smooth synthetic data (~3–4× compression), a larger
+      cog_px is needed to hit ~500 MB compressed; use COMPRESS=NONE for a
+      fully predictable 500 MB corpus on the cluster.
+
     Returns the ``Path`` to ``<out_dir>/cog_multiwindow_manifest.json``.
     """
     import json as _json
@@ -439,6 +462,7 @@ def generate_cog_multiwindow_corpus(
                 cog_profile.update(
                     driver="COG",
                     BLOCKSIZE=tile_size,
+                    COMPRESS=compress,
                 )
                 # Write COG to a local temp file, then copy to dest sequentially.
                 # The GDAL COG driver does backward seeks during finalization;
@@ -455,16 +479,41 @@ def generate_cog_multiwindow_corpus(
                 finally:
                     os.unlink(tmp_cog)
 
-        # Partition cog_px columns into windows_per_cog equal strips (full height).
-        win_w = max(1, cog_px // windows_per_cog)
-        for j in range(windows_per_cog):
-            off_x = j * win_w
-            if off_x >= cog_px:
-                break
-            actual_w = min(win_w, cog_px - off_x)
-            manifest_rows.append(
-                {"path": str(dest.resolve()), "window": [off_x, 0, actual_w, cog_px]}
-            )
+        disk_bytes = dest.stat().st_size
+        print(
+            f"COG {i}: {dest}  "
+            f"{disk_bytes:,} bytes ({disk_bytes / 1024 ** 2:.1f} MB)"
+        )
+
+        if window_px is not None:
+            # 2D grid of square window_px×window_px windows, row-major.
+            # The last row/column is clamped so windows never exceed the COG edge.
+            # This is the realistic "many narrow windows into one large COG"
+            # shape that exercises FILE byte-range reads at the block granularity.
+            count = 0
+            for iy in range(0, cog_px, window_px):
+                for ix in range(0, cog_px, window_px):
+                    if count >= windows_per_cog:
+                        break
+                    w = min(window_px, cog_px - ix)
+                    h = min(window_px, cog_px - iy)
+                    manifest_rows.append(
+                        {"path": str(dest.resolve()), "window": [ix, iy, w, h]}
+                    )
+                    count += 1
+                if count >= windows_per_cog:
+                    break
+        else:
+            # Legacy: full-height column strips (back-compat when window_px is None).
+            win_w = max(1, cog_px // windows_per_cog)
+            for j in range(windows_per_cog):
+                off_x = j * win_w
+                if off_x >= cog_px:
+                    break
+                actual_w = min(win_w, cog_px - off_x)
+                manifest_rows.append(
+                    {"path": str(dest.resolve()), "window": [off_x, 0, actual_w, cog_px]}
+                )
 
     manifest_path = out_dir / "cog_multiwindow_manifest.json"
     manifest_path.write_text(_json.dumps(manifest_rows, indent=2))
@@ -509,6 +558,27 @@ def main(argv=None):
     ap.add_argument("--cog-count", type=int, default=3)
     ap.add_argument("--windows-per-cog", type=int, default=10)
     ap.add_argument("--cog-px", type=int, default=1024)
+    ap.add_argument(
+        "--window-px",
+        type=int,
+        default=None,
+        help=(
+            "Square window edge in pixels for 2D-grid window mode.  "
+            "When set, windows are a row-major grid of window_px×window_px "
+            "squares (last row/col clamped to COG edge), and the first "
+            "--windows-per-cog cells are emitted.  "
+            "Omit to keep legacy full-height-strip mode."
+        ),
+    )
+    ap.add_argument(
+        "--cog-compress",
+        default="DEFLATE",
+        help=(
+            "GDAL COMPRESS creation option for the COG "
+            "(default: DEFLATE; use NONE for a predictable uncompressed "
+            "~cog_px²×bands×4 bytes on disk)."
+        ),
+    )
     a = ap.parse_args(argv)
 
     if a.cog_multiwindow:
@@ -521,9 +591,12 @@ def main(argv=None):
             bands=_parse_int_list(a.bands)[0],
             dtype=a.dtypes.split(",")[0],
             srid=_parse_int_list(a.srids)[0],
+            window_px=a.window_px,
+            compress=a.cog_compress,
         )
+        actual_rows = len(json.loads(manifest_path.read_text()))
         print(json.dumps(
-            {"manifest": str(manifest_path), "rows": a.cog_count * a.windows_per_cog},
+            {"manifest": str(manifest_path), "rows": actual_rows},
             indent=2,
         ))
         return

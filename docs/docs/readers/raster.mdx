@@ -107,7 +107,7 @@ For large tile counts, prefer one of:
       .option("virtualTiles", "true") \
       .load("/Volumes/catalog/schema/vol/rasters")
   ```
-- **`tilesTable` option** — point to a Delta table (e.g. one built by your ingest pipeline) that has a `path` column and optionally `window` / dimension columns.
+- **`tilesTable` option** — point to a Delta table that serves as a **tile index**: one row per tile with a `path` column (+ optional `window` / dimension columns). It is a catalog of file *references*, **not** the tile pixels — the reader still opens each referenced file and extracts its window; it only skips discovering the files by walking the directory.
   ```python
   spark.read.format("raster_gbx") \
       .option("tilesTable", "geospatial.myschema.tile_index") \
@@ -116,7 +116,9 @@ For large tile counts, prefer one of:
   ```
 - **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog); the reader then opens a small number of large files whose headers are comparatively cheap.
 
-The planning overhead grows linearly with file count; at 10K+ files a manifest or tile table is the most effective remedy. See [Benchmarking → Reader plan-time listing](../api/benchmarking#reader-plan-time-listing) for the methodology.
+**A tile index is not a materialized-tile table.** `manifest` / `tilesTable` catalog *where the rasters are* (paths, plus optional windows) — essentially a saved file listing. The raster bytes stay in files and are read lazily (especially with `virtualTiles=true`); the index only lets the reader skip re-walking the directory. That is different from an ingest that has already **decoded** rasters into a Delta table with a tile-struct/bytes column — if you have that, read it directly with `spark.table(...)`; you don't need a reader at all.
+
+The planning overhead grows linearly with file count; at 10K+ files a manifest or tile index is the most effective remedy. See [Benchmarking → Reader plan-time listing](../api/benchmarking#reader-plan-time-listing) for the methodology.
 :::
 
 :::tip Reading GeoBrix output with a stock Spark reader

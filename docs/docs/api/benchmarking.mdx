@@ -230,7 +230,8 @@ df = spark.read.format("raster_gbx") \
     .option("virtualTiles", "true") \
     .load("/Volumes/catalog/schema/vol/rasters")
 
-# Option 2 — Delta tile table (built by your ingest pipeline)
+# Option 2 — tile INDEX in a Delta table: path (+ optional window) per tile —
+#            a saved file listing, NOT tile pixels; the reader still reads the files
 df = spark.read.format("raster_gbx") \
     .option("tilesTable", "geospatial.myschema.tile_index") \
     .option("virtualTiles", "true") \

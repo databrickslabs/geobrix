@@ -15,8 +15,8 @@
 # Unlike requirements-ci.txt (heavyweight), this lock needs NO GDAL exception:
 # the lightweight API uses rasterio's bundled-GDAL binary wheel, which is itself
 # hash-pinned here. There is no separate native GDAL install and no JAR.
-# Versions track Serverless env v5 / DBR 17.3–18 LTS / the dev container
-# (requirements-dev-container.in) where applicable; bump in lockstep and regenerate the lock.
+# Versions track classic DBR 19 / the dev container where applicable; bump in lockstep
+# and regenerate the lock.
 
 # --- build backend (for `python -m build` lightweight wheel) ---
 build==1.4.4

@@ -77,8 +77,10 @@ def test_rst_avg_public_binding_uses_file_ref_arg(spark):
     # The column wraps a UDF call. The UDF must accept 2 args (tile, file_ref).
     # _uf_avg is a 2-arg UDF; _u_avg is a 1-arg UDF.
     # Check the number of args in the column's children as a proxy.
+    # NOTE: repr(col) shows "_udf" (closure name inside the factory), never "_uf_avg".
+    # The right operand is trivially true but the left is always false; see A4 in fix report.
+    # TODO: replace with an arity-based check once a reliable introspection path is found.
     assert "_uf_avg" in repr(col) or len(col._jc.toString()) > 0  # column built without error
-    # More directly: check that _uf_avg exists and is a 2-arg UDF.
     assert hasattr(prx, "_uf_avg"), "_uf_avg singleton must exist"
 
 
@@ -159,13 +161,7 @@ def test_rst_histogram_binding_uses_uf_histogram_udf():
 # Group 2 — Single-input tile-producing ops
 # ---------------------------------------------------------------------------
 
-# Task 5 — _tile_producing_udf_file factory + rst_initnodata
-
-
-def test_tile_producing_udf_file_factory_exists():
-    import databricks.labs.gbx.pyrx.functions as prx
-    assert hasattr(prx, "_tile_producing_udf_file"), "_tile_producing_udf_file factory must exist"
-    assert hasattr(prx, "_uf_initnodata"), "_uf_initnodata must exist"
+# Task 5 — rst_initnodata
 
 
 def test_rst_initnodata_file_ref_equals_fallback(gtiff_bytes):
@@ -470,7 +466,6 @@ def test_group2_singletons_exist():
     import databricks.labs.gbx.pyrx.functions as prx
 
     expected = [
-        "_tile_producing_udf_file",
         "_uf_initnodata",
         "_uf_clip",
         "_uf_resample",
@@ -638,7 +633,6 @@ def test_rst_merge_agg_file_ref_unit(gtiff_bytes):
     """Unit test: _merge_agg_file_udf processes tiles correctly with stub FileRefs."""
     import pandas as pd
     from rasterio.io import MemoryFile
-    import numpy as np
 
     fd, tmp = tempfile.mkstemp(suffix=".tif")
     os.close(fd)
@@ -660,9 +654,7 @@ def test_rst_merge_agg_file_ref_unit(gtiff_bytes):
         assert result_bytes is not None
         with MemoryFile(bytes(result_bytes)) as mf, mf.open() as ds:
             assert ds.count == 1
-            np.testing.assert_array_equal(
-                ds.read(1).shape, (3, 4)  # height=3, width=4
-            )
+            assert ds.read(1).shape == (3, 4)  # height=3, width=4
     finally:
         os.remove(tmp)
 
@@ -697,6 +689,179 @@ def test_rst_frombands_agg_file_ref_unit(gtiff_bytes):
         os.remove(tmp)
 
 
+# ---------------------------------------------------------------------------
+# Group 4 — FILE integration: coord fns and warp/pending-instruction ops
+# ---------------------------------------------------------------------------
+
+
+def test_rst_rastertoworldcoord_file_ref_equals_fallback(gtiff_bytes):
+    """rst_rastertoworldcoordx/y: header-only FILE branch produces same world coords as fallback.
+
+    Both fns resolve via open_header (no pixel read); the StubHeaderFileRef's
+    as_local_file() satisfies the virtual-tile path.
+    """
+    from databricks.labs.gbx.pyrx.core import coords
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        tile_row = VirtualTile(cellid=0, path=tmp, window=(0, 0, 4, 3)).to_row()
+
+        class _StubHeaderFileRef:
+            def __init__(self, path):
+                self._path = path
+
+            def open(self):
+                return open(self._path, "rb")
+
+            def as_local_file(self):
+                return self._path
+
+        with ot.open_header(tile_row, file_ref=None) as ds:
+            expected_x = coords.raster_to_world_x(ds, 1, 1)
+            expected_y = coords.raster_to_world_y(ds, 1, 1)
+
+        with ot.open_header(tile_row, file_ref=_StubHeaderFileRef(tmp)) as ds:
+            got_x = coords.raster_to_world_x(ds, 1, 1)
+            got_y = coords.raster_to_world_y(ds, 1, 1)
+
+        assert got_x == expected_x, (
+            f"worldcoordx FILE branch diverged: {got_x!r} != {expected_x!r}"
+        )
+        assert got_y == expected_y, (
+            f"worldcoordy FILE branch diverged: {got_y!r} != {expected_y!r}"
+        )
+    finally:
+        os.remove(tmp)
+
+
+def test_rst_transform_file_ref_equals_fallback(gtiff_bytes):
+    """rst_transform: FILE branch produces pixel-equal reprojection to fallback."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import warp
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        tile_row = VirtualTile(cellid=0, path=tmp, window=(0, 0, 4, 3)).to_row()
+
+        with ot._open(tile_row, file_ref=None) as ds:
+            expected_bytes = warp.reproject_to_srid(ds, 32632)
+
+        with ot._open(tile_row, file_ref=_StubFileRef(gtiff_bytes)) as ds:
+            got_bytes = warp.reproject_to_srid(ds, 32632)
+
+        with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+            with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+                np.testing.assert_allclose(exp_ds.read(), got_ds.read(), atol=1e-5)
+    finally:
+        os.remove(tmp)
+
+
+def test_rst_to_webmercator_file_ref_equals_fallback(gtiff_bytes):
+    """rst_to_webmercator: FILE branch pixel-equals fallback for EPSG:3857 reproject."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import warp
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        tile_row = VirtualTile(cellid=0, path=tmp, window=(0, 0, 4, 3)).to_row()
+
+        with ot._open(tile_row, file_ref=None) as ds:
+            expected_bytes = warp.reproject_to_srid(ds, 3857)
+
+        with ot._open(tile_row, file_ref=_StubFileRef(gtiff_bytes)) as ds:
+            got_bytes = warp.reproject_to_srid(ds, 3857)
+
+        with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+            with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+                np.testing.assert_allclose(exp_ds.read(), got_ds.read(), atol=1e-5)
+    finally:
+        os.remove(tmp)
+
+
+def test_rst_transformcrs_file_ref_equals_fallback(gtiff_bytes):
+    """rst_transformcrs: FILE branch pixel-equals fallback for CRS-string reproject."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import warp
+
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    with open(tmp, "wb") as fh:
+        fh.write(gtiff_bytes)
+    try:
+        tile_row = VirtualTile(cellid=0, path=tmp, window=(0, 0, 4, 3)).to_row()
+
+        with ot._open(tile_row, file_ref=None) as ds:
+            expected_bytes = warp.reproject_to_crs(ds, "EPSG:3857")
+
+        with ot._open(tile_row, file_ref=_StubFileRef(gtiff_bytes)) as ds:
+            got_bytes = warp.reproject_to_crs(ds, "EPSG:3857")
+
+        with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+            with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+                np.testing.assert_allclose(exp_ds.read(), got_ds.read(), atol=1e-5)
+    finally:
+        os.remove(tmp)
+
+
+def test_rst_setsrid_file_ref_equals_fallback(gtiff_bytes):
+    """rst_setsrid: FILE branch (materialized tile) produces same result as fallback.
+
+    For materialized tiles (raster=bytes), ot._open reads from bytes regardless of
+    file_ref.  This test verifies the code path is consistent and error-free.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import edit
+
+    tile_row = VirtualTile(cellid=0, raster=gtiff_bytes).to_row()
+
+    with ot._open(tile_row, file_ref=None) as ds:
+        expected_bytes = edit.set_srid(ds, 32632)
+
+    with ot._open(tile_row, file_ref=_StubFileRef(gtiff_bytes)) as ds:
+        got_bytes = edit.set_srid(ds, 32632)
+
+    with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+        with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+            np.testing.assert_array_equal(exp_ds.read(), got_ds.read())
+            assert exp_ds.crs == got_ds.crs
+
+
+def test_rst_setcrs_file_ref_equals_fallback(gtiff_bytes):
+    """rst_setcrs: FILE branch (materialized tile) produces same result as fallback.
+
+    For materialized tiles (raster=bytes), ot._open reads from bytes regardless of
+    file_ref.  This test verifies the code path is consistent and error-free.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from databricks.labs.gbx.pyrx.core import edit
+
+    tile_row = VirtualTile(cellid=0, raster=gtiff_bytes).to_row()
+
+    with ot._open(tile_row, file_ref=None) as ds:
+        expected_bytes = edit.set_crs(ds, "EPSG:32632")
+
+    with ot._open(tile_row, file_ref=_StubFileRef(gtiff_bytes)) as ds:
+        got_bytes = edit.set_crs(ds, "EPSG:32632")
+
+    with MemoryFile(expected_bytes) as mf, mf.open() as exp_ds:
+        with MemoryFile(got_bytes) as mf2, mf2.open() as got_ds:
+            np.testing.assert_array_equal(exp_ds.read(), got_ds.read())
+
+
 def test_group3_sql_registry_unchanged():
     """SQL registry must still point at single-arg UDFs for Group 3 ops."""
     import databricks.labs.gbx.pyrx.functions as prx
@@ -709,8 +874,12 @@ def test_group3_sql_registry_unchanged():
     assert "gbx_rst_mapalgebra" in registry, "gbx_rst_mapalgebra must be in SQL_REGISTRY"
     # Agg ops: single-arg UDFs must be present in registry.
     assert "gbx_rst_merge_agg" in registry, "gbx_rst_merge_agg must be in SQL_REGISTRY"
+    assert "gbx_rst_combineavg_agg" in registry, "gbx_rst_combineavg_agg must be in SQL_REGISTRY"
+    assert "gbx_rst_frombands_agg" in registry, "gbx_rst_frombands_agg must be in SQL_REGISTRY"
     # Confirm the registry entries are not the FILE variants.
     assert registry["gbx_rst_merge"] is prx._merge_udf
     assert registry["gbx_rst_combineavg"] is prx._combineavg_udf
     assert registry["gbx_rst_frombands"] is prx._frombands_udf
     assert registry["gbx_rst_mapalgebra"] is prx._mapalgebra_udf
+    assert registry["gbx_rst_combineavg_agg"] is prx._combineavg_agg_sql_udf
+    assert registry["gbx_rst_frombands_agg"] is prx._frombands_agg_udf

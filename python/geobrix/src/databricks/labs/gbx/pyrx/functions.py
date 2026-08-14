@@ -326,35 +326,6 @@ def _pixel_accessor_udf_file(core_fn, return_type):
     return _udf
 
 
-def _tile_producing_udf_file(core_fn):
-    """FILE-aware tile-producing UDF factory for ops with NO extra args.
-
-    Signature: (tile: Struct, file_ref: FileRef|null) → V2_TILE_SCHEMA
-    Reads input via ot._open(tile, file_ref=file_ref).  C1 guard (clip-polygon
-    and warp checks) is handled inside open_tile; on FileRefReadError it degrades
-    silently to the local-path branch.  core_fn(ds) must return GTiff bytes.
-
-    SQL registry keeps the single-arg ``_u_*`` / ``_<name>_udf`` entry unchanged.
-    Only the public Python Column binding uses the 2-arg ``_uf_*`` UDF.
-    """
-
-    @f.udf(V2_TILE_SCHEMA)
-    def _udf(tile, file_ref):
-        if _tile_is_empty(tile):
-            return None
-        try:
-            from databricks.labs.gbx.pyrx import _env
-
-            _env.configure_gdal_env()
-            with ot._open(tile, file_ref=file_ref) as ds:
-                new_bytes = core_fn(ds)
-            return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-        except Exception:  # noqa: BLE001
-            return None
-
-    return _udf
-
-
 # --- Module-level UDF singletons (built once at import) ---------------------
 # Header-only accessors (open_header — answer from the header, no pixel read;
 # a virtual tile is resolved from its ``path``).
@@ -1911,17 +1882,14 @@ def _uf_initnodata(tile, file_ref):
         vt.metadata = md
         return vt.to_row()
     # Materialized: apply eagerly; file_ref is passed through open_tile.
-    try:
-        from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
-        with ot._open(tile, file_ref=file_ref) as ds:
-            new_bytes = edit.init_nodata(ds)
-        return VirtualTile(
-            cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
-        ).to_row()
-    except Exception:  # noqa: BLE001
-        return None
+    _env.configure_gdal_env()
+    with ot._open(tile, file_ref=file_ref) as ds:
+        new_bytes = edit.init_nodata(ds)
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+    ).to_row()
 
 
 def rst_clip(
@@ -2092,17 +2060,14 @@ def _uf_setsrid(tile, file_ref, srid):
         md.pop(ot.PENDING_CRS, None)
         vt.metadata = md
         return vt.to_row()
-    try:
-        from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
-        with ot._open(tile, file_ref=file_ref) as ds:
-            new_bytes = edit.set_srid(ds, s)
-        return VirtualTile(
-            cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
-        ).to_row()
-    except Exception:  # noqa: BLE001
-        return None
+    _env.configure_gdal_env()
+    with ot._open(tile, file_ref=file_ref) as ds:
+        new_bytes = edit.set_srid(ds, s)
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+    ).to_row()
 
 
 # --- rst_setcrs: string-taking CRS relabel (pending-instruction on virtual) --
@@ -2152,17 +2117,14 @@ def _uf_setcrs(tile, file_ref, crs_value):
         vt.metadata = md
         return vt.to_row()
     # Materialized: apply eagerly via file_ref.
-    try:
-        from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx import _env
 
-        _env.configure_gdal_env()
-        with ot._open(tile, file_ref=file_ref) as ds:
-            new_bytes = edit.set_crs(ds, str(crs_value))
-        return VirtualTile(
-            cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
-        ).to_row()
-    except Exception:  # noqa: BLE001
-        return None
+    _env.configure_gdal_env()
+    with ot._open(tile, file_ref=file_ref) as ds:
+        new_bytes = edit.set_crs(ds, str(crs_value))
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata=dict(vt.metadata or {})
+    ).to_row()
 
 
 # --- rst_transformcrs: string-taking reproject (non-EPSG targets) -------------
@@ -2188,15 +2150,12 @@ def _transformcrs_udf(tile, crs_value):
 def _uf_transformcrs(tile, file_ref, crs_value):
     if _tile_is_empty(tile) or crs_value is None:
         return None
-    try:
-        new_bytes = _transformcrs_bytes(tile, crs_value, file_ref=file_ref)
-        if new_bytes is None:
-            return None
-        return VirtualTile(
-            cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
-        ).to_row()
-    except Exception:  # noqa: BLE001
+    new_bytes = _transformcrs_bytes(tile, crs_value, file_ref=file_ref)
+    if new_bytes is None:
         return None
+    return VirtualTile(
+        cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
+    ).to_row()
 
 
 def _band_bytes(tile, band_index):
@@ -3252,6 +3211,12 @@ def _uf_mapalgebra(tiles, file_refs, expression):
     ``tiles`` is ARRAY<tile struct>; ``file_refs`` is a parallel ARRAY<FileRef|null>
     minted in the plan via F.transform.  Materialized elements (file_refs[i]=None)
     fall through to verbatim bytes.
+
+    Deliberately no per-element try/except (unlike _uf_merge/_uf_combineavg/_uf_frombands
+    which drop corrupt elements and continue): mapalgebra requires ALL inputs because a
+    missing element shifts the band-index mapping (A[0] changes meaning when the array
+    is shorter).  A corrupt input raises rather than silently changing the expression
+    semantics.
     """
     if tiles is None or expression is None:
         return None

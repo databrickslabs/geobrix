@@ -8,18 +8,29 @@ Covers:
 
 import os
 
-import pytest
-
 from databricks.labs.gbx.pyrx._file_ref import file_supported
 
 
 def test_file_supported_respects_env_override(spark):
-    """GBX_DISABLE_FILE=1 short-circuits before Spark is touched."""
+    """GBX_DISABLE_FILE=1 short-circuits before Spark is touched — spark.sql never called."""
+    from databricks.labs.gbx.pyrx import _file_ref
+
+    _file_ref._FILE_SUPPORT_CACHE.clear()
     os.environ["GBX_DISABLE_FILE"] = "1"
+    call_count = [0]
+    original_sql = spark.sql
+
+    def counting_sql(query):
+        call_count[0] += 1
+        return original_sql(query)
+
     try:
+        spark.sql = counting_sql
         result = file_supported()
         assert result is False
+        assert call_count[0] == 0, f"Expected 0 spark.sql calls, got {call_count[0]}"
     finally:
+        spark.sql = original_sql
         os.environ.pop("GBX_DISABLE_FILE", None)
 
 

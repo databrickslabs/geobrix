@@ -187,7 +187,32 @@ Goal: quantify the byte-range win. Mirror the recent **virtual-tile Volume** ben
 > read path). An optional early **raw-mechanism micro-bench** (`fref.open()` windowed read vs
 > whole-file stage, outside GeoBrix) can de-risk the hypothesis before the build if desired.
 
-## 8. Rollout / support-readiness
+## 8. Documentation & supported-versions matrix
+
+FILE support ships **with user-facing docs**, not just code:
+
+- **Virtual Tiles page** (`docs/docs/api/virtual-tiles.mdx` — today has no FILE mention): add a crisp
+  **"Virtual Tiles + FILE"** section covering what FILE adds (UC-governed access + `fref.open()`
+  byte-range windowed reads), that it is **feature-detected and fully optional** (virtual tiles work
+  today on plain Volume paths; FILE is a transparent acceleration/governance layer with graceful
+  fallback — no `try_to_file` boilerplate for the user), and that a FileRef is kept **behind the
+  scenes** (never displayed). State plainly that **Virtual Tiles + FILE is primarily for DBR 19
+  environments** (FILE enabled, on dedicated/single-user — i.e. non-Spark-Connect — compute), and
+  that this is **broadening to all environments soon** as the DBR 19 FILE fixes roll out (including
+  serverless-GC once its DB-Connect client is upgraded).
+- **Supported-versions matrix — add DBR 19** in all three places that carry it: `README.md`
+  (§Supported Databricks Runtimes, line ~46), `docs/docs/intro.mdx` (~84), `docs/docs/installation.mdx`
+  (~15). Promote the current "DBR 19 LTS is coming soon" note into a **matrix row** (lightweight tier,
+  Spark 4.2.0), annotated that **Virtual Tiles + FILE targets DBR 19**; keep the heavyweight-tier
+  caveat (native GDAL/OGR must be rebuilt for the new Ubuntu 26.04 base). Refresh the DBR examples in
+  `docs/docs/support.mdx` (bug-report template) to include DBR 19.
+- **Voice:** user-facing docs only — no internal planning vocabulary (QC `internals-leak` check).
+
+These docs land **with** the feature in the 0.5.x release so the matrix reflects shipped reality —
+don't advertise DBR 19 / FILE as "supported" ahead of the code. (The lightweight tier itself is
+DBR-19-ready independent of FILE; the FILE acceleration is the DBR-19-primary, soon-broadening piece.)
+
+## 9. Rollout / support-readiness
 - Ships in a 0.5.x release. On today's reachable compute it runs the **fallback** (plain path); the
   FILE branch is dormant until `_file_supported` returns `True`.
 - Lights up automatically on FILE-enabled classic DBR 19.x now, and on **serverless-GC** once its
@@ -195,7 +220,7 @@ Goal: quantify the byte-range win. Mirror the recent **virtual-tile Volume** ben
   team is tracking; FILE hotfix is in DBR 19.2.5+).
 - No user action or API change required for either state.
 
-## 9. Risks & open questions
+## 10. Risks & open questions
 - **Feature-detect sentinel** (§4.2): pick a fixture-free sentinel so detect needs no
   pre-provisioned Volume file. (Plan detail.)
 - **rasterio ↔ `fref.open()` integration**: seekability is proven; confirm rasterio consumes the
@@ -207,7 +232,7 @@ Goal: quantify the byte-range win. Mirror the recent **virtual-tile Volume** ben
 - **e2-demo not FILE-enabled**: development/validation of the FILE path happens on dogfood (or any
   FILE-enabled workspace) until e2-demo's preview is turned on.
 
-## 10. Next step
+## 11. Next step
 On spec approval, proceed to the implementation plan (writing-plans skill): central `open_tile`
 + feature-detect + binding helper, MVP-scoped, TDD with the fallback path fully covered in CI and the
 FILE path validated on a FILE-enabled classic DBR 19.x cluster; then the FILE-vs-Volume bench leg.

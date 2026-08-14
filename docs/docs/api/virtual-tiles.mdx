@@ -97,6 +97,27 @@ The diagram above traces the four stages:
 4. **Write.** Persist to files (COG, GeoTIFF, NetCDF, …) with a writer, or save a
    tile DataFrame to a **Databricks SQL table**.
 
+## Virtual Tiles + FILE
+
+FILE is a Databricks data type that provides **governed access to files on compute without a FUSE mount**, and enables **byte-range reads** from cloud storage. GeoBrix detects FILE availability and uses it transparently when present, enabling faster windowed reads. This acceleration is **optional and fully backward-compatible** — if FILE is not available, virtual tiles work exactly as before via FUSE staging + rasterio windowed reads.
+
+When FILE is available (primarily on Databricks Runtime 19 dedicated clusters with `fileReferenceCreationMode=MANAGED`), GeoBrix:
+
+- Mints a `FileRef` column from the tile path in the Spark plan.
+- Passes the `FileRef` to the read UDF alongside the tile struct.
+- Reads only the exact window bytes via `fref.open()` (byte-range read), rather than staging the whole file to local disk first.
+- Falls back gracefully to the traditional FUSE path if any step fails.
+
+**Key point:** A `FileRef` is never displayed or stored as a DataFrame column — it is minted and consumed within each operation, then discarded. This keeps the tile surface clean and compatible with all downstream pipelines.
+
+### Supported environments
+
+- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE acceleration lights up automatically. Virtual tiles use byte-range windowed reads.
+- **Local development, CI, Serverless Compute** (FILE not available): Virtual tiles work via the traditional FUSE + rasterio path. Behavior is identical; read latency is slightly higher (whole-file staging).
+- **Databricks Runtime 18, DBR LTS classic:** Virtual tiles work via the traditional FUSE path. No FILE acceleration.
+
+**Broadening:** As Databricks extends FILE support to serverless-GC and other environments, GeoBrix will transparently accelerate reads there as well — no user code changes required.
+
 ## Reader selection surface
 
 The lightweight readers expose the windowing surface as read options:

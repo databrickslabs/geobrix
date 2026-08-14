@@ -89,9 +89,10 @@ GeoBrix supports both current Databricks Runtime LTS releases — a **single whe
 |---|---|---|---|---|---|---|
 | **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
 | **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
+| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported (light tier) |
 
-:::note DBR 19 LTS is coming soon
-**DBR 19 LTS is coming soon**, built on **Ubuntu 26.04**. The **lightweight** tier (pure-Python, rasterio's bundled GDAL) will be unaffected; the **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so they will need to be rebuilt for the new base image.
+:::note DBR 19 LTS — heavy tier coming soon
+**DBR 19 LTS** (Ubuntu 26.04) is now supported by the **lightweight** tier. The **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so heavyweight on DBR 19 requires a GDAL rebuild for the new base image — not yet available.
 :::
 
 ## Background

@@ -843,6 +843,8 @@ The result splits cleanly along the `Disposition`:
 | Leg | Setup | FILE-on | FUSE (FILE-off) | FUSE advantage |
 |---|---|---|---|---|
 | High reuse | 1 × 648 MB COG, 1 000 windows | 27.4 s | 13.1 s | **2.1×** |
+| High reuse, misaligned window | 1 × 648 MB COG, ~840 × 384 px windows (straddle 256px blocks) | 26.7 s | 18.9 s | **1.42×** |
+| High reuse, 2.5 GB COG | 1 × 2.58 GB COG, 1 000 × 256 px windows | 22.8 s | 16.7 s | **1.37×** |
 | Low reuse | 25 × 648 MB COG copies, 1 window each | 16.2 s | 1.4 s | **11.4×** |
 
 **Conclusion:** FILE is not a throughput win for virtual-tile reads. The bottleneck is

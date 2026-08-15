@@ -6,7 +6,9 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 
 **Usage:** `bash scripts/commands/gbx-bench-cluster.sh [options]`
 
-**Options:** `--cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--no-wait`, `--help`.
+**Options:** `--cluster-id`, `--existing-cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--no-wait`, `--help`.
+
+`--existing-cluster-id <id>` attaches the run to a warm all-purpose cluster, skipping the 4-8 min job-cluster startup. Passed through to the Python launcher; equivalent to setting `CLUSTER_ID` in the env file. (`--cluster-id` in the shell command sets the same env var for back-compat.)
 
 `--set` chooses the tier (`core` default, or `full`). An explicit `--functions` overrides `--set`.
 

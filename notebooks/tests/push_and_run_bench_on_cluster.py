@@ -27,6 +27,8 @@ Usage:
   4. Run: python push_and_run_bench_on_cluster.py [options]
      Options: --no-wait, --heavyweight-only, --lightweight-only, --run-id, --functions,
               --modes, --row-counts, --warmup, --measured,
+              --existing-cluster-id <id> (attach to a warm all-purpose cluster; skips
+                4-8 min job-cluster startup; overrides the CLUSTER_ID env var),
               --truncate-results (clear only this run_id + this invocation's tier(s)),
               --truncate-all (empty the whole table -> only the current run remains)
 """
@@ -431,10 +433,15 @@ def main() -> int:
         )
         return 2
 
-    cluster_id = _strip_invisible(os.environ.get("CLUSTER_ID") or "")
+    # --existing-cluster-id <id>: attach to this all-purpose cluster (overrides CLUSTER_ID env).
+    # Skips the 4-8 min job-cluster startup by reusing a warm persistent cluster.
+    cluster_id = _strip_invisible(
+        _arg("--existing-cluster-id", "") or os.environ.get("CLUSTER_ID") or ""
+    )
     if not cluster_id:
         print(
-            "Set CLUSTER_ID (existing cluster to run the benchmark on)", file=sys.stderr
+            "Set CLUSTER_ID env var or pass --existing-cluster-id <id>",
+            file=sys.stderr,
         )
         return 2
 

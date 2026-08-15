@@ -348,3 +348,73 @@ def test_cog_convert_file_rejects_bad_bigtiff(tmp_path):
         assert False, "expected ValueError for bad bigtiff"
     except ValueError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# _stage_local_if_needed — probe-then-stage tests
+# ---------------------------------------------------------------------------
+
+
+def test_stage_local_passthrough_plain_local(tmp_path):
+    """A plain local path (no FUSE prefix) passes through unchanged with is_temp=False."""
+    from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
+
+    f = tmp_path / "local.tif"
+    _write_src(str(f))
+    path, is_temp = _stage_local_if_needed(str(f))
+    assert path == str(f)
+    assert is_temp is False
+
+
+def test_stage_local_volumes_probe_success_no_copy(tmp_path, monkeypatch):
+    """/Volumes-classified path where rasterio probe succeeds → (path, False), no copy."""
+    from databricks.labs.gbx.pyrx.core import preparer as m
+
+    f = tmp_path / "src.tif"
+    _write_src(str(f))  # real GeoTIFF; probe will open it via rasterio for real
+
+    # Treat the real tmp_path file as if it were a /Volumes path.
+    monkeypatch.setattr(m, "_is_fuse_path", lambda p: True)
+
+    path, is_temp = m._stage_local_if_needed(str(f))
+    assert path == str(f), "expected direct-read passthrough"
+    assert is_temp is False
+
+
+def _probe_raiser(p):
+    raise OSError("simulated FUSE probe failure")
+
+
+def test_stage_local_volumes_probe_fails_falls_back_to_copy(tmp_path, monkeypatch):
+    """/Volumes path where probe fails → falls back to sequential copy → (temp, True)."""
+    from databricks.labs.gbx.pyrx.core import preparer as m
+
+    f = tmp_path / "src.tif"
+    _write_src(str(f))  # real, readable file for the copy fallback
+
+    monkeypatch.setattr(m, "_is_fuse_path", lambda p: True)
+    # Make the probe fail immediately (no retry sleep).
+    monkeypatch.setattr(m, "_probe_direct_open", _probe_raiser)
+
+    path, is_temp = m._stage_local_if_needed(str(f))
+    assert is_temp is True, "expected temp copy after probe failure"
+    assert path != str(f)
+    assert os.path.exists(path)
+    os.remove(path)
+
+
+def test_stage_local_force_stage_env_always_copies(tmp_path, monkeypatch):
+    """GBX_FORCE_STAGE=1 bypasses probe and always copies even when direct access works."""
+    from databricks.labs.gbx.pyrx.core import preparer as m
+
+    f = tmp_path / "src.tif"
+    _write_src(str(f))
+
+    monkeypatch.setattr(m, "_is_fuse_path", lambda p: True)
+    monkeypatch.setenv("GBX_FORCE_STAGE", "1")
+
+    path, is_temp = m._stage_local_if_needed(str(f))
+    assert is_temp is True, "GBX_FORCE_STAGE=1 must force a copy"
+    assert path != str(f)
+    assert os.path.exists(path)
+    os.remove(path)

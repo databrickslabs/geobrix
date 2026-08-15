@@ -242,17 +242,75 @@ def _resolve_sources(
     return out
 
 
-def _stage_local_if_needed(path: str) -> Tuple[str, bool]:
-    """Return (local_path, is_temp). If path is already a plain local file, pass
-    it through (is_temp=False). Otherwise (or always, for FUSE safety) copy it to
-    a local temp via sequential copyfileobj and return (temp, True).
+def _is_fuse_path(path: str) -> bool:
+    """Return True if *path* lives under a Databricks FUSE mount.
 
-    GDAL cannot open a /Volumes FUSE striped TIFF directly; staging to local disk
-    first is required. Heuristic: stage anything under /Volumes or /dbfs.
+    Checks the /Volumes (UC Volume) and /dbfs (legacy DBFS) prefixes.
+    Extracted so tests can monkeypatch the detection without resorting to
+    real /Volumes paths on the developer's machine.
     """
-    needs_stage = path.startswith("/Volumes") or path.startswith("/dbfs")
-    if not needs_stage:
+    return path.startswith("/Volumes") or path.startswith("/dbfs")
+
+
+def _probe_direct_open(path: str) -> None:
+    """Confirm that rasterio can open *path* for direct windowed reads.
+
+    Opens the file and reads a 1×1 pixel window from band 1 — enough to
+    verify real random-access, not just header parsing.  The attempt is
+    wrapped in ``_retry_transient`` so transient UC Volume eventual-
+    consistency misses (``FileNotFoundError`` / ``OSError``) do not
+    immediately trigger a full-file copy.
+
+    Raises on failure after retries; returns ``None`` on success.
+    """
+    import rasterio
+    from rasterio.windows import Window
+
+    from databricks.labs.gbx.ds._listing import _retry_transient
+
+    def _do() -> None:
+        with rasterio.open(path) as ds:
+            ds.read(1, window=Window(0, 0, 1, 1))
+
+    _retry_transient(_do)
+
+
+def _stage_local_if_needed(path: str) -> Tuple[str, bool]:
+    """Return ``(local_path, is_temp)``.
+
+    Probe-then-stage strategy:
+
+    1. **Plain local file** (not under ``/Volumes`` or ``/dbfs``) →
+       passthrough ``(path, False)``, unchanged.
+    2. **``/Volumes`` or ``/dbfs`` path** → **probe**: try to open the file
+       directly with rasterio (open + tiny 1×1 window read) to confirm real
+       windowed access works over the FUSE mount.  The probe is wrapped in
+       ``_retry_transient`` so a transient ``FileNotFoundError`` / ``OSError``
+       from UC Volume eventual-consistency does not trigger an unnecessary
+       copy.
+
+       - Probe **succeeds** → ``(path, False)`` — read directly, no copy.
+       - Probe **fails** after retries → fall back to the sequential
+         ``copyfileobj`` path → ``(temp, True)``.
+
+    3. **Escape hatch**: ``GBX_FORCE_STAGE=1`` env var → always copy even
+       when direct access would work.  Use this in environments where direct
+       FUSE random-access is unreliable under executor concurrency.
+
+    The return contract ``(local_path, is_temp)`` is unchanged; callers
+    (``open_tile`` / ``_uf_*`` tile-read paths) are unaffected.
+    """
+    if not _is_fuse_path(path):
         return path, False
+
+    if not os.environ.get("GBX_FORCE_STAGE"):
+        try:
+            _probe_direct_open(path)
+            return path, False
+        except Exception:
+            pass  # probe failed — fall through to copy
+
+    # Copy fallback: stage to a local temp (original behavior).
     fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".tif")
     os.close(fd)
     try:

@@ -846,15 +846,25 @@ The result splits cleanly along the `Disposition`:
 | High reuse, misaligned window | 1 × 648 MB COG, ~840 × 384 px windows (straddle 256px blocks) | 26.7 s | 18.9 s | **1.42×** |
 | High reuse, 2.5 GB COG | 1 × 2.58 GB COG, 1 000 × 256 px windows | 22.8 s | 16.7 s | **1.37×** |
 | Low reuse | 25 × 648 MB COG copies, 1 window each | 16.2 s | 1.4 s | **11.4×** |
+| Real COG — NAIP (DEFLATE, 512px blocks) | 324 MB, 1 000 × 256 px windows | 23.4 s | 16.2 s | **1.44×** |
+| Real COG — Sentinel-2 (DEFLATE, 1024px blocks) | 22 MB, 1 000 × 256 px windows | 19.4 s | 17.7 s | **0.91× (wash)** |
 
-**Conclusion:** FILE is not a throughput win for virtual-tile reads. The bottleneck is
-per-tile HTTP stream setup and COG-header parsing over HTTP — each tile opens a new
-`FileRef` HTTP connection and re-parses the COG header before reading the window bytes.
-GDAL windowed reads over FUSE use block-level I/O against the OS page cache, which wins
-regardless of reuse pattern. FUSE does **not** stage the whole file; it reads only the
-256px COG blocks covering each window, the same data volume as FILE, but without the
-per-tile HTTP overhead. FILE remains useful for governed file access on clusters without a
-FUSE mount; it is not a raster read optimization.
+**Conclusion:** FILE is not a throughput win for virtual-tile reads — it never wins, in any
+configuration tested. The bottleneck is per-tile HTTP stream setup and COG-header parsing
+over HTTP — each tile opens a new `FileRef` connection and re-parses the COG header before
+reading the window bytes. GDAL windowed reads over FUSE use block-level I/O against the OS
+page cache, which reuses each decompressed block across the windows that touch it — FUSE
+does **not** stage the whole file.
+
+The **margin** depends on the COG's internal structure. FUSE wins by ~2× on 256px-tiled
+COGs (where a 256px window maps to exactly one block), but the advantage **shrinks toward a
+wash on real production COGs**: when the internal block is larger than the read window
+(512px for NAIP, 1024px for Sentinel-2), *both* FILE and FUSE must fetch and decompress the
+whole block, so FILE's byte-range selectivity is neutralized and only the per-tile HTTP
+overhead separates them. The one regime where FILE loses badly (11×) is **low reuse** — many
+distinct files read once each — because the per-open HTTP cost dominates with no block reuse
+to amortize it. Net: **FILE is a governed file-access mechanism for clusters without a FUSE
+mount, not a raster read optimization.**
 
 The standard bench corpus uses many small whole-file tiles. To reproduce these results,
 use the COG multi-window corpus: K large Cloud-Optimized GeoTIFFs, each referenced by M

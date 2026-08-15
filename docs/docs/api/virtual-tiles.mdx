@@ -99,33 +99,30 @@ The diagram above traces the four stages:
 
 ## Virtual Tiles + FILE
 
-FILE is a [Databricks data type](https://docs.databricks.com/aws/en/pyspark/reference/file-type) that provides **governed access to files on compute without a FUSE mount**, and enables **byte-range reads** from cloud storage. GeoBrix detects FILE availability and uses it transparently when present, enabling faster windowed reads. This acceleration is **optional and fully backward-compatible** — if FILE is not available, virtual tiles work exactly as before via FUSE staging + rasterio windowed reads.
+FILE is a [Databricks data type](https://docs.databricks.com/aws/en/pyspark/reference/file-type) that provides **governed access to files on compute without a FUSE mount**. GeoBrix detects FILE availability and can use it when present. FILE is **not a performance optimization for virtual-tile reads** — benchmarks show FUSE is measurably faster for windowed COG reads (see the [FILE benchmark results](../api/benchmarking#file-capability-cog-multiwindow)). If FILE is not available, virtual tiles work via the FUSE path unchanged.
 
 When FILE is available (primarily on Databricks Runtime 19 dedicated clusters with `fileReferenceCreationMode=MANAGED`), GeoBrix:
 
 - Mints a `FileRef` column from the tile path in the Spark plan.
 - Passes the `FileRef` to the read UDF — a [file UDF](https://docs.databricks.com/aws/en/unstructured/file-udfs) — alongside the tile struct.
-- Reads only the exact window bytes via `fref.open()` (byte-range read), rather than staging the whole file to local disk first.
+- Opens the file via `fref.open()` rather than through the FUSE mount.
 - Falls back gracefully to the traditional FUSE path if any step fails.
 
 **Key point:** A `FileRef` is never displayed or stored as a DataFrame column — it is minted and consumed within each operation, then discarded. This keeps the tile surface clean and compatible with all downstream pipelines.
 
 ### Supported environments
 
-- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE acceleration engages where the runtime feature-detect succeeds — FILE must be enabled on the workspace/cluster and its prerequisite path readable. It is not guaranteed on every DBR 19 cluster. Where it succeeds, virtual tiles use byte-range windowed reads; where it does not, tiles fall back to the traditional FUSE path automatically.
-- **Local development, CI, Serverless Compute** (FILE not available): Virtual tiles work via the traditional FUSE + rasterio path. Behavior is identical; read latency is slightly higher (whole-file staging).
-- **Databricks Runtime 18, DBR LTS classic:** Virtual tiles work via the traditional FUSE path. No FILE acceleration.
+- **Databricks Runtime 19 dedicated clusters** (single-user, with `fileReferenceCreationMode=MANAGED` in cluster config): FILE engages where the runtime feature-detect succeeds — FILE must be enabled on the workspace/cluster and its prerequisite path readable. It is not guaranteed on every DBR 19 cluster. Where FILE does not engage, tiles use the FUSE path automatically.
+- **Local development, CI, Serverless Compute** (FILE not available): Virtual tiles work via the traditional FUSE + rasterio path.
+- **Databricks Runtime 18, DBR LTS classic:** Virtual tiles work via the traditional FUSE path. FILE is not available.
 
-**Broadening:** As Databricks extends FILE support to additional environments, GeoBrix will transparently accelerate reads there as well — no user code changes required.
-
-:::tip Virtual tiles + large COGs: byte-range reads
-When virtual tiles reference **windows** of a large Cloud-Optimized GeoTIFF,
-Databricks FILE can fetch only the bytes covering each window's COG tile blocks,
-rather than opening and seeking the full file via FUSE. Whether this beats the
-FUSE fallback depends on file size — the byte-range advantage grows as the COG
-grows (FUSE stages the whole file per read), while for moderate-sized files the
-per-window `FileRef` overhead can cancel it out. Measure it on representative
-data with the [FILE byte-range benchmark](../api/benchmarking#file-capability-cog-multiwindow).
+:::note FILE is not faster than FUSE for windowed raster reads
+Benchmarks on a 648 MB COG with `fileReferenceCreationMode=MANAGED` (dogfood DBR-19.5,
+`i3.xlarge`): FUSE is **2.1× faster** in a high-reuse case (1 000 windows into one file)
+and **11.4× faster** in a low-reuse case (25 distinct copies, 1 window each). The
+bottleneck is per-tile HTTP stream setup and COG-header parsing over HTTP; GDAL windowed
+reads over FUSE use block-level I/O from the OS page cache, which wins at both ends of
+the reuse spectrum. See the [full results and method](../api/benchmarking#file-capability-cog-multiwindow).
 :::
 
 ## Reader selection surface

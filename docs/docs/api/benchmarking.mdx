@@ -835,21 +835,28 @@ The result splits cleanly along the `Disposition`:
 
 **The takeaway:** virtual tiles are a lazy-load win precisely for the operations that never touch pixels — metadata reads and the set-CRS / set-SRID / nodata / band-select edits that defer until a later terminal step. A pipeline that chains several of those deferred edits before one materializing step pays the pixel I/O **once, at the end**, instead of at every step. For pixel-generating or pixel-reading work the raster must be read regardless, so a materialized input is marginally cheaper there. (`rst_rastertoworldcoord` is the one `deferred` row that doesn't win: it derives a full per-pixel coordinate grid from the georeferencing, so it is compute-bound, not I/O-bound.)
 
-#### FILE byte-range vs FUSE: large-COG multi-window corpus {#file-capability-cog-multiwindow}
+#### FILE vs FUSE: large-COG multi-window results {#file-capability-cog-multiwindow}
 
-This is a **how-to-measure** section. No results table is provided here: the FILE
-byte-range benefit is COG-size-dependent, and a representative measurement requires
-a file size that matches your workload. An earlier run on an 18 MB COG showed FILE
-**~5% slower** than FUSE — the per-window `FileRef` minting overhead dominated at that
-size. The benefit grows as the COG grows: FUSE stages the **entire file** to local disk
-before each window read; FILE fetches **only the COG tile blocks** that cover the window.
-Measure on a COG that represents your real files.
+> **Environment:** dogfood DBR-19.5 snapshot · `fileReferenceCreationMode=MANAGED` ·
+> i3.xlarge · `file_supported()=True` · 1 measured iteration, `warmup=0`.
 
-The standard bench corpus uses many small whole-file tiles. To measure the
-Databricks FILE byte-range benefit directly, use the COG multi-window corpus:
-K large Cloud-Optimized GeoTIFFs, each referenced by M narrow window rows.
-FILE fetches only the COG tile blocks covering each window; the FUSE fallback
-opens and seeks the full file per window.
+| Leg | Setup | FILE-on | FUSE (FILE-off) | FUSE advantage |
+|---|---|---|---|---|
+| High reuse | 1 × 648 MB COG, 1 000 windows | 27.4 s | 13.1 s | **2.1×** |
+| Low reuse | 25 × 648 MB COG copies, 1 window each | 16.2 s | 1.4 s | **11.4×** |
+
+**Conclusion:** FILE is not a throughput win for virtual-tile reads. The bottleneck is
+per-tile HTTP stream setup and COG-header parsing over HTTP — each tile opens a new
+`FileRef` HTTP connection and re-parses the COG header before reading the window bytes.
+GDAL windowed reads over FUSE use block-level I/O against the OS page cache, which wins
+regardless of reuse pattern. FUSE does **not** stage the whole file; it reads only the
+256px COG blocks covering each window, the same data volume as FILE, but without the
+per-tile HTTP overhead. FILE remains useful for governed file access on clusters without a
+FUSE mount; it is not a raster read optimization.
+
+The standard bench corpus uses many small whole-file tiles. To reproduce these results,
+use the COG multi-window corpus: K large Cloud-Optimized GeoTIFFs, each referenced by M
+narrow window rows.
 
 **Generate the corpus:**
 

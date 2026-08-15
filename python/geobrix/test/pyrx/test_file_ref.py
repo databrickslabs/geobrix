@@ -101,6 +101,9 @@ def test_file_supported_returns_true_when_probe_succeeds(spark):
         assert call_count[0] == 1, f"Expected 1 spark.sql call, got {call_count[0]}"
     finally:
         spark.sql = original_sql
+        # Belt-and-suspenders: clear the True entry so no downstream test sees
+        # file_supported()→True via the cached value from this monkeypatch.
+        _file_ref._FILE_SUPPORT_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------

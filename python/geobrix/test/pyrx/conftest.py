@@ -23,6 +23,23 @@ os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 
 @pytest.fixture(autouse=True)
+def _clear_file_support_cache():
+    """Clear _FILE_SUPPORT_CACHE before and after every test.
+
+    file_supported() caches its result in _FILE_SUPPORT_CACHE keyed by
+    id(spark).  Tests that monkeypatch spark.sql to force True/False must
+    not pollute later tests that share the same Spark session (same id(spark)).
+    Without this fixture, test_file_supported_returns_true_when_probe_succeeds
+    caches True and causes ~55 order-dependent failures in the full suite.
+    """
+    from databricks.labs.gbx.pyrx._file_ref import _FILE_SUPPORT_CACHE
+
+    _FILE_SUPPORT_CACHE.clear()
+    yield
+    _FILE_SUPPORT_CACHE.clear()
+
+
+@pytest.fixture(autouse=True)
 def _isolate_gdal_env():
     """Snapshot and restore GDAL/PROJ env vars around every test.
 

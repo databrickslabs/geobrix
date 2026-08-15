@@ -520,6 +520,148 @@ def generate_cog_multiwindow_corpus(
     return manifest_path
 
 
+def write_large_raster_streamed(
+    dest,
+    *,
+    width: int,
+    height: int,
+    bands: int = 1,
+    dtype: str = "float32",
+    srid: int = 4326,
+    tiled: bool = True,
+    block_size: int = 512,
+    compress: str = "DEFLATE",
+    seed: int = 42,
+) -> Path:
+    """Write a large raster to *dest* in constant-memory streaming blocks.
+
+    Generates one block at a time using ``rng.random((bands, bh, bw)).astype(dtype)``
+    so peak RAM is proportional to one block (e.g. 512×512×4×bands bytes ≈ 1 MB for
+    1 float32 band), regardless of the total raster size.
+
+    Two output modes:
+
+    *tiled=True* (COG):
+      Writes a tiled GeoTIFF block-by-block to a local temp, then re-encodes as a
+      COG via GDAL's ``driver='COG'`` (adds overviews; block_shapes are
+      ``(block_size, block_size)``).  GDAL handles COG finalization at close() time
+      using block-level I/O — it does not load the full raster array into RAM.  A
+      second local temp is used for the COG driver's backward-seek finalisation,
+      then ``shutil.copy`` writes to *dest* sequentially (FUSE-safe).
+
+    *tiled=False* (striped GTiff):
+      Writes a plain GeoTIFF with default row-strip layout (no tiling, no overviews).
+      Strips are full-width horizontal bands of ``block_size`` rows each.  Striped
+      GeoTIFF writes are sequential so no backward-seek re-ordering is needed; the
+      output temp is ``shutil.copy``-ed to *dest* for the same FUSE-safe guarantee.
+
+    Returns the ``Path`` to the written file.
+    """
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+    ox, oy, px = _CRS_GEO.get(srid, (-73.99, 40.75, 0.0001))
+    transform = from_origin(ox, oy, px, px)
+    nodata_val = _NODATA.get(dtype)
+
+    def _make_block(n_bands: int, bh: int, bw: int) -> np.ndarray:
+        """One random block; peak allocation = bh*bw*n_bands*itemsize bytes."""
+        if np.issubdtype(np.dtype(dtype), np.floating):
+            return rng.random((n_bands, bh, bw)).astype(dtype)
+        lo, hi = _DTYPE_RANGE.get(dtype, (0, 255))
+        return (lo + rng.random((n_bands, bh, bw)) * (hi - lo)).astype(dtype)
+
+    common_profile: dict = dict(
+        width=width,
+        height=height,
+        count=bands,
+        dtype=dtype,
+        crs=rasterio.crs.CRS.from_epsg(srid),
+        transform=transform,
+    )
+    if nodata_val is not None:
+        common_profile["nodata"] = nodata_val
+
+    if tiled:
+        # Step 1: write tiled GeoTIFF block-by-block to a local temp.
+        # Peak RAM at this stage = one block = block_size² × bands × itemsize bytes.
+        fd1, tmp_tif = tempfile.mkstemp(suffix="_lrst_tiled.tif")
+        os.close(fd1)
+        fd2, tmp_cog = tempfile.mkstemp(suffix="_lrst_cog.tif")
+        os.close(fd2)
+        try:
+            tiled_profile = {
+                **common_profile,
+                "driver": "GTiff",
+                "tiled": True,
+                "blockxsize": block_size,
+                "blockysize": block_size,
+            }
+            with rasterio.open(tmp_tif, "w", **tiled_profile) as dst:
+                for y_off in range(0, height, block_size):
+                    bh = min(block_size, height - y_off)
+                    for x_off in range(0, width, block_size):
+                        bw = min(block_size, width - x_off)
+                        block = _make_block(bands, bh, bw)
+                        dst.write(
+                            block,
+                            window=rasterio.windows.Window(x_off, y_off, bw, bh),
+                        )
+            # Step 2: re-encode as COG.  GDAL reads the tiled GTiff block-by-block
+            # and builds overviews at close() — no full-array allocation in our code.
+            cog_profile = {
+                **common_profile,
+                "driver": "COG",
+                "BLOCKSIZE": block_size,
+                "COMPRESS": compress,
+            }
+            with rasterio.open(tmp_tif) as src:
+                with rasterio.open(tmp_cog, "w", **cog_profile) as dst:
+                    for _, window in src.block_windows(1):
+                        dst.write(src.read(window=window), window=window)
+            # Step 3: sequential copy to dest (FUSE-safe; no backward seeks).
+            shutil.copy(tmp_cog, str(dest))
+        finally:
+            for p in (tmp_tif, tmp_cog):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+    else:
+        # Striped GTiff: write full-width horizontal strips, no overview step.
+        # GTiff strip writes are sequential so we can copy the temp directly.
+        strip_rows = max(1, block_size)
+        fd, tmp_tif = tempfile.mkstemp(suffix="_lrst_striped.tif")
+        os.close(fd)
+        try:
+            strip_profile = {
+                **common_profile,
+                "driver": "GTiff",
+                "compress": compress,
+            }
+            with rasterio.open(tmp_tif, "w", **strip_profile) as dst:
+                for y_off in range(0, height, strip_rows):
+                    bh = min(strip_rows, height - y_off)
+                    block = _make_block(bands, bh, width)
+                    dst.write(
+                        block,
+                        window=rasterio.windows.Window(0, y_off, width, bh),
+                    )
+            shutil.copy(tmp_tif, str(dest))
+        finally:
+            try:
+                os.unlink(tmp_tif)
+            except OSError:
+                pass
+
+    disk_bytes = dest.stat().st_size
+    print(
+        f"{'Tiled COG' if tiled else 'Striped GTiff'}: {dest}  "
+        f"{disk_bytes:,} bytes ({disk_bytes / 1024 ** 2:.1f} MB)"
+    )
+    return dest
+
+
 def _parse_int_list(s: str):
     return [int(x) for x in s.split(",") if x.strip()]
 
@@ -579,7 +721,120 @@ def main(argv=None):
             "~cog_px²×bands×4 bytes on disk)."
         ),
     )
+    # Large-raster streamed generator — constant-memory block writes.
+    # --large-raster  : tiled COG (block-by-block write + GDAL COG encode)
+    # --striped       : striped plain GTiff (no overviews, no tiling)
+    ap.add_argument(
+        "--large-raster",
+        action="store_true",
+        default=False,
+        help="Write a large tiled COG using constant-memory streaming blocks.",
+    )
+    ap.add_argument(
+        "--striped",
+        action="store_true",
+        default=False,
+        help="Write a large striped plain GeoTIFF (no tiling, no overviews).",
+    )
+    ap.add_argument(
+        "--large-raster-size-gb",
+        type=float,
+        default=None,
+        metavar="GB",
+        help=(
+            "Target on-disk size in GB (uncompressed).  Used to derive a square "
+            "width/height; ignored if --large-raster-width is set."
+        ),
+    )
+    ap.add_argument(
+        "--large-raster-width",
+        type=int,
+        default=None,
+        metavar="PX",
+        help="Explicit pixel width for the large raster (overrides --large-raster-size-gb).",
+    )
+    ap.add_argument(
+        "--large-raster-height",
+        type=int,
+        default=None,
+        metavar="PX",
+        help="Explicit pixel height (defaults to --large-raster-width if omitted).",
+    )
+    ap.add_argument(
+        "--large-raster-block-size",
+        type=int,
+        default=512,
+        metavar="PX",
+        help=(
+            "Block/strip edge in pixels: tile size for COG mode, rows-per-strip "
+            "for striped mode (default: 512)."
+        ),
+    )
+    ap.add_argument(
+        "--large-raster-out",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Output file path.  Defaults to <--out>/large_cog.tif or "
+            "<--out>/large_striped.tif."
+        ),
+    )
     a = ap.parse_args(argv)
+
+    if a.large_raster or a.striped:
+        import math
+
+        tiled = not a.striped
+        bands_val = _parse_int_list(a.bands)[0]
+        dtype_val = a.dtypes.split(",")[0]
+        srid_val = _parse_int_list(a.srids)[0]
+
+        if a.large_raster_width:
+            width = a.large_raster_width
+            height = a.large_raster_height or width
+        elif a.large_raster_size_gb is not None:
+            size_bytes = int(a.large_raster_size_gb * 1024 ** 3)
+            bpp = bands_val * np.dtype(dtype_val).itemsize
+            side = int(math.isqrt(size_bytes // bpp))
+            width = height = side
+        else:
+            ap.error("--large-raster / --striped requires --large-raster-size-gb or "
+                     "--large-raster-width")
+
+        if a.large_raster_out:
+            out_path = Path(a.large_raster_out)
+        else:
+            fname = "large_cog.tif" if tiled else "large_striped.tif"
+            out_path = Path(a.out) / fname
+
+        dest = write_large_raster_streamed(
+            out_path,
+            width=width,
+            height=height,
+            bands=bands_val,
+            dtype=dtype_val,
+            srid=srid_val,
+            tiled=tiled,
+            block_size=a.large_raster_block_size,
+            compress=a.cog_compress,
+            seed=a.seed,
+        )
+        print(
+            json.dumps(
+                {
+                    "out": str(dest),
+                    "width": width,
+                    "height": height,
+                    "bands": bands_val,
+                    "dtype": dtype_val,
+                    "tiled": tiled,
+                    "block_size": a.large_raster_block_size,
+                    "compress": a.cog_compress,
+                },
+                indent=2,
+            )
+        )
+        return
 
     if a.cog_multiwindow:
         manifest_path = generate_cog_multiwindow_corpus(

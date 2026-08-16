@@ -85,11 +85,13 @@ GridX's 40 functions break down as **BNG (23)**, **Quadbin (10)**, and **custom 
 
 GeoBrix supports the current Databricks Runtime LTS releases — a **single wheel + single JAR** runs on **17.3 and 18 LTS** (Scala 2.13.16 matches both runtimes, the JAR is Java-17 bytecode that loads on both JVMs, and Spark is a `provided` dependency); the **lightweight tier** additionally runs on **DBR 19 LTS**:
 
-| DBR LTS | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
-|---|---|---|---|---|---|---|
-| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
-| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
-| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported (light tier) |
+| DBR LTS | Ubuntu | Spark | Python | Scala | Java | Serverless env | GeoBrix |
+|---|---|---|---|---|---|---|---|
+| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | **5+** (Py 3.12) | ✅ Supported |
+| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | **5+** (Py 3.12) | ✅ Supported |
+| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | (n/a yet) | ✅ Supported (light tier) |
+
+The **Serverless env** column is the minimum Serverless environment version for the lightweight tier: **version 5+** provides Python 3.12, which the `[light]` dependencies require (Python ≥ 3.11). Older environment versions (Python 3.10) can't install `geobrix[light]`. Env v5 release notes: [AWS](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/five) · [Azure](https://learn.microsoft.com/azure/databricks/release-notes/serverless/environment-version/five) · [GCP](https://docs.databricks.com/gcp/en/release-notes/serverless/environment-version/five).
 
 :::note DBR 19 LTS — heavy tier coming soon
 **DBR 19 LTS** (Ubuntu 26.04) is now supported by the **lightweight** tier. The **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so heavyweight on DBR 19 requires a GDAL rebuild for the new base image — not yet available.

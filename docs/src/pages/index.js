@@ -71,7 +71,7 @@ function HomepageFeatures() {
           <Feature
             title="Powerful Readers & Writers"
             description="Automatically registered Spark readers and writers for Shapefile, GeoJSON, GeoPackage, GeoTIFF, PMTiles, and more."
-            link="/docs/readers/overview"
+            link="/docs/readers-writers"
           />
           <Feature
             title="Multi-Language APIs"

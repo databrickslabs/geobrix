@@ -131,7 +131,7 @@ const config = {
             position: 'left'
           },
           {
-            to: '/docs/readers/overview',
+            to: '/docs/readers-writers',
             label: 'Readers & Writers',
             position: 'left'
           },

@@ -370,8 +370,12 @@ Builds a Delaunay TIN from mass-point geometries (with Z values) and optional br
   pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
   pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
+
+:::note `mode='conforming'` is heavyweight-only
+The `'constrained'` mode (default) is available in **both** tiers. The `'conforming'` mode — which inserts Steiner points along breakline segments for a smoother mesh — is **heavyweight-only**: the lightweight `pyvx` tier raises `NotImplementedError` if you pass `mode='conforming'`. The examples on all tabs use the default `'constrained'` mode.
+:::
 
 ---
 
@@ -402,7 +406,7 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
   pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
   pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
 ---
@@ -435,7 +439,7 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
   pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
   pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
 ---

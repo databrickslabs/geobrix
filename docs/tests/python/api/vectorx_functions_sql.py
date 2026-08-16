@@ -81,16 +81,21 @@ st_asmvt_pyramid_sql_example_output = """
 
 
 def st_triangulate_sql_example():
-    """Build a Delaunay triangulation from mass-point and breakline geometries (SQL).
+    """Build a Delaunay triangulation from mass-point geometries (SQL).
 
-    Accepts a column of mass-point geometries (`masspoints`), a column of breakline
-    geometries (`breaklines`), a snap tolerance, a minimum triangle area, a
-    conforming-mesh strategy, and a triangulation `mode` (`'constrained'` default,
-    available in both tiers; `'conforming'` is heavyweight-only). Returns one
-    triangle geometry per row.
+    Reads the ``tin_survey`` fixture view — one row with ``pts ARRAY<BINARY>``
+    (4 WKB POINT Z forming a 10×10 m square with elevations 0, 0, 10, 5 m) and
+    ``bl ARRAY<BINARY>`` (empty breaklines array).  Constrained Delaunay
+    triangulation of a quadrilateral produces exactly 2 triangle polygons.
+    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
+    (inserts Steiner points) is heavyweight-only.
+    Uses ``LATERAL VIEW`` (Hive-style generator syntax); the lightweight tier
+    supports the SQL-standard ``LATERAL`` form.
     """
     return """
-SELECT gbx_st_triangulate(masspoints, breaklines, 0.01, 0.01, 'NONENCROACHING', 'constrained') AS triangle FROM survey;
+SELECT t.triangle
+FROM tin_survey
+LATERAL VIEW gbx_st_triangulate(pts, bl, 0, 0, 'NONENCROACHING', 'constrained') t AS triangle
 """
 
 
@@ -98,55 +103,73 @@ st_triangulate_sql_example_output = """
 +--------+
 |triangle|
 +--------+
-|[BINARY]|
+|[binary]|
+|[binary]|
 +--------+
+... (WKB binary — 2 Delaunay triangle polygons)
 """
 
 
 def st_interpolateelevationbbox_sql_example():
     """Interpolate elevation on a regular grid covering a bounding box from a TIN (SQL).
 
-    Builds a triangulated irregular network from mass points and breaklines, then
-    samples it on a grid of `cols x rows` cells within the specified bounding box
-    (xmin, ymin, xmax, ymax) in the given SRID. A trailing `mode` argument selects
-    the triangulation strategy (`'constrained'` default, both tiers; `'conforming'`
-    heavyweight-only). Returns one point-with-Z geometry per grid cell.
+    Reads the ``tin_survey`` fixture view (same 4-corner POINT Z fixture as
+    ``st_triangulate``).  Samples the TIN on a 3×3 grid spanning the full 10×10 m
+    extent (0–10 in both X and Y, SRID=0).  All 9 cell centres fall inside the TIN
+    convex hull, so the generator emits 9 rows.
+    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
+    (inserts Steiner points) is heavyweight-only.
+    Uses ``LATERAL VIEW`` (Hive-style generator syntax); the lightweight tier
+    supports the SQL-standard ``LATERAL`` form.
     """
     return """
-SELECT gbx_st_interpolateelevationbbox(masspoints, breaklines, 0.0, 0.01, 'NONENCROACHING', 530000, 180000, 531000, 181000, 100, 100, 27700, 'constrained') AS elev_point FROM survey;
+SELECT t.elevation_point
+FROM tin_survey
+LATERAL VIEW gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t AS elevation_point
 """
 
 
 st_interpolateelevationbbox_sql_example_output = """
-+----------+
-|elev_point|
-+----------+
-|[BINARY]  |
-+----------+
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 elevation grid, 9 rows)
 """
 
 
 def st_interpolateelevationgeom_sql_example():
-    """Interpolate elevation at locations derived from a geometry's bounding box (SQL).
+    """Interpolate elevation on a grid anchored to a geometry origin (SQL).
 
-    Builds a triangulated irregular network from mass points and breaklines, then
-    samples it on a grid anchored to the bounding box of the supplied geometry.
-    `cell_width` and `cell_height` control the grid resolution (negative height
-    steps downward). A trailing `mode` argument selects the triangulation strategy
-    (`'constrained'` default, both tiers; `'conforming'` heavyweight-only). Returns
-    one point-with-Z geometry per grid cell.
+    Reads the ``tin_survey`` fixture view (same 4-corner POINT Z fixture).  The
+    grid is anchored to POINT(0, 10) — top-left corner of the TIN extent — with
+    3 columns, 3 rows, and cell sizes of 3.0 m × 3.0 m (negative Y steps
+    downward per raster convention).  All 9 cell centres fall inside the TIN hull
+    and the SRID of the output points is 0 (plain WKB origin carries no SRID).
+    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
+    (inserts Steiner points) is heavyweight-only.
+    Uses ``LATERAL VIEW`` (Hive-style generator syntax); the lightweight tier
+    supports the SQL-standard ``LATERAL`` form.
     """
     return """
-SELECT gbx_st_interpolateelevationgeom(masspoints, breaklines, 0.0, 0.01, 'NONENCROACHING', ST_Point(530000, 181000), 100, 100, 10.0, -10.0, 'constrained') AS elev_point FROM survey;
+SELECT t.elevation_point
+FROM tin_survey
+LATERAL VIEW gbx_st_interpolateelevationgeom(pts, bl, 0, 0, 'NONENCROACHING', unhex('010100000000000000000000000000000000002440'), 3, 3, 3, -3, 'constrained') t AS elevation_point
 """
 
 
 st_interpolateelevationgeom_sql_example_output = """
-+----------+
-|elev_point|
-+----------+
-|[BINARY]  |
-+----------+
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 origin-anchored grid, 9 rows)
 """
 
 

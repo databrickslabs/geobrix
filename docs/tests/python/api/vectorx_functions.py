@@ -90,6 +90,128 @@ One row per input legacy geometry; wkb column contains binary WKB.
 
 
 # ---------------------------------------------------------------------------
+# TIN family — heavy (vectorx) Python examples
+# Fixture: ``tin_survey`` view — 1 row: pts ARRAY<BINARY> (4 WKB POINT Z),
+#          bl ARRAY<BINARY> (empty). The 4 points form a 10×10 m square:
+#          (0,0,0), (10,0,0), (10,10,10), (0,10,5) → 2 Delaunay triangles.
+# ---------------------------------------------------------------------------
+
+# WKB POINT(0, 10) — plain 2D, used as grid_origin for st_interpolateelevationgeom.
+# Little-endian: 01 01000000 0000000000000000 0000000000002440
+_WKB_POINT_0_10 = "010100000000000000000000000000000000002440"
+
+
+def st_triangulate_python_heavy_example(spark):
+    """Build a Delaunay TIN and emit one triangle polygon per row (heavy vectorx tier).
+
+    Reads the ``tin_survey`` setup view (4 POINT Z corners of a 10×10 m square).
+    Constrained Delaunay triangulation of 4 points produces 2 triangle polygons.
+    The generator Column is available in the heavyweight tier only; in the
+    lightweight tier call the registered UDTF via SQL ``LATERAL`` instead.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("tin_survey")
+    result = df.select(
+        vx.st_triangulate(
+            f.col("pts"), f.col("bl"),
+            f.lit(0), f.lit(0), f.lit("NONENCROACHING"),
+            "constrained",
+        ).alias("triangle")
+    )
+    rows = result.collect()
+    return rows[0]["triangle"] if rows else None
+
+
+st_triangulate_python_heavy_example_output = """
++--------+
+|triangle|
++--------+
+|[binary]|
+|[binary]|
++--------+
+... (WKB binary — 2 Delaunay triangle polygons)
+"""
+
+
+def st_interpolateelevationbbox_python_heavy_example(spark):
+    """Sample TIN elevation on a regular bounding-box grid (heavy vectorx tier).
+
+    Reads the ``tin_survey`` setup view and interpolates elevation on a 3×3 grid
+    spanning the full 10×10 m extent (SRID=0).  All 9 cell centres fall inside
+    the TIN convex hull, so the generator emits 9 ``STRUCT<elevation_point BINARY>``
+    rows — one WKB POINT Z per cell.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("tin_survey")
+    result = df.select(
+        vx.st_interpolateelevationbbox(
+            f.col("pts"), f.col("bl"),
+            f.lit(0), f.lit(0), f.lit("NONENCROACHING"),
+            f.lit(0), f.lit(0), f.lit(10), f.lit(10),
+            f.lit(3), f.lit(3), f.lit(0),
+            "constrained",
+        ).alias("elevation_point")
+    )
+    rows = result.collect()
+    return rows[0]["elevation_point"] if rows else None
+
+
+st_interpolateelevationbbox_python_heavy_example_output = """
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 elevation grid, 9 rows)
+"""
+
+
+def st_interpolateelevationgeom_python_heavy_example(spark):
+    """Sample TIN elevation on a grid anchored to a geometry origin (heavy vectorx tier).
+
+    Reads the ``tin_survey`` setup view and interpolates elevation on a 3×3 grid
+    anchored to POINT(0, 10) — top-left corner of the TIN extent.  Cell sizes are
+    3.0 m × 3.0 m (negative Y steps downward per raster convention).  The grid
+    origin is added as a derived ``origin`` column from a WKB literal.  All 9 cell
+    centres fall inside the TIN hull; output SRID is 0 (plain WKB origin).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("tin_survey").withColumn(
+        "origin", f.expr(f"unhex('{_WKB_POINT_0_10}')")
+    )
+    result = df.select(
+        vx.st_interpolateelevationgeom(
+            f.col("pts"), f.col("bl"),
+            f.lit(0), f.lit(0), f.lit("NONENCROACHING"),
+            f.col("origin"), f.lit(3), f.lit(3), f.lit(3), f.lit(-3),
+            "constrained",
+        ).alias("elevation_point")
+    )
+    rows = result.collect()
+    return rows[0]["elevation_point"] if rows else None
+
+
+st_interpolateelevationgeom_python_heavy_example_output = """
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 origin-anchored grid, 9 rows)
+"""
+
+
+# ---------------------------------------------------------------------------
 # Vector-tile family — heavy (vectorx) Python examples
 # Fixture: ``mvt_features`` view — 2 rows: tile-local WKB POINTs in (z=0,x=0,y=0)
 # ---------------------------------------------------------------------------

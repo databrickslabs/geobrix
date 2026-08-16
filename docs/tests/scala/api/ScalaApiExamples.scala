@@ -2918,6 +2918,102 @@ result.show()
 ... (MVT binary — one row per intersecting tile across zoom levels 0–2)""".trim
 
   // =========================================================================
+  // VectorX TIN family — st_triangulate, st_interpolateelevationbbox,
+  //                       st_interpolateelevationgeom
+  //
+  // Fixture: ``tin_survey`` view — 1 row: pts ARRAY<BINARY> (4 WKB POINT Z),
+  //          bl ARRAY<BINARY> (empty).  The 4 points form a 10×10 m square:
+  //          (0,0,z=0), (10,0,z=0), (10,10,z=10), (0,10,z=5) → 2 triangles.
+  //
+  // These are Generator Column functions in the heavyweight (vectorx) tier.
+  // In the lightweight (pyvx) tier, invoke the registered UDTF via SQL LATERAL.
+  // mode='constrained' (default) is both-tier; mode='conforming' is heavy-only.
+  // =========================================================================
+
+  val st_triangulate_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.table("tin_survey")
+val result = df.select(
+  vx.st_triangulate(col("pts"), col("bl"), lit(0), lit(0), lit("NONENCROACHING"), "constrained").alias("triangle")
+)
+result.show()
+""".trim
+
+  val st_triangulate_scala_example_output: String =
+    """
++--------+
+|triangle|
++--------+
+|[binary]|
+|[binary]|
++--------+
+... (WKB binary — 2 Delaunay triangle polygons)""".trim
+
+  val st_interpolateelevationbbox_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.table("tin_survey")
+val result = df.select(
+  vx.st_interpolateelevationbbox(
+    col("pts"), col("bl"),
+    lit(0), lit(0), lit("NONENCROACHING"),
+    lit(0), lit(0), lit(10), lit(10),
+    lit(3), lit(3), lit(0),
+    "constrained"
+  ).alias("elevation_point")
+)
+result.show()
+""".trim
+
+  val st_interpolateelevationbbox_scala_example_output: String =
+    """
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 elevation grid, 9 rows)""".trim
+
+  val st_interpolateelevationgeom_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val origin = expr("unhex('010100000000000000000000000000000000002440')")
+val df = spark.table("tin_survey")
+val result = df.select(
+  vx.st_interpolateelevationgeom(
+    col("pts"), col("bl"),
+    lit(0), lit(0), lit("NONENCROACHING"),
+    origin, lit(3), lit(3), lit(3), lit(-3),
+    "constrained"
+  ).alias("elevation_point")
+)
+result.show()
+""".trim
+
+  val st_interpolateelevationgeom_scala_example_output: String =
+    """
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 origin-anchored grid, 9 rows)""".trim
+
+  // =========================================================================
   // VectorX CRS family — st_crs, st_setcrs, st_transformcrs
   // Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
   // =========================================================================

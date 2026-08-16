@@ -75,6 +75,63 @@ def test_st_asmvt_pyramid_sql_example(vectorx_registered):
         assert len(row["mvt_bytes"]) > 0
 
 
+def test_st_triangulate_sql_example(vectorx_registered):
+    """Run the ``gbx_st_triangulate`` SQL example against the ``tin_survey`` fixture view.
+
+    4 POINT Z corners of a 10×10 m square → exactly 2 Delaunay triangle polygons.
+    Each ``triangle`` column value is a WKB-encoded polygon (non-null, non-empty bytes).
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_triangulate_sql_example()
+    result = spark.sql(_statement(sql)).collect()
+    assert len(result) == 2, f"Expected 2 triangles from 4-corner fixture, got {len(result)}"
+    for row in result:
+        assert row["triangle"] is not None, "triangle should be non-null WKB bytes"
+        assert isinstance(
+            row["triangle"], (bytes, bytearray)
+        ), f"Expected bytes (WKB polygon), got {type(row['triangle'])}"
+        assert len(row["triangle"]) > 0, "triangle WKB bytes should be non-empty"
+
+
+def test_st_interpolateelevationbbox_sql_example(vectorx_registered):
+    """Run the ``gbx_st_interpolateelevationbbox`` SQL example against ``tin_survey``.
+
+    3×3 grid over the 10×10 m extent (SRID=0) → 9 POINT Z rows (all cell centres
+    fall inside the TIN convex hull for this fixture).
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_interpolateelevationbbox_sql_example()
+    result = spark.sql(_statement(sql)).collect()
+    assert len(result) == 9, (
+        f"Expected 9 elevation points (3×3 grid, all in hull), got {len(result)}"
+    )
+    for row in result:
+        assert row["elevation_point"] is not None, "elevation_point should be non-null"
+        assert isinstance(
+            row["elevation_point"], (bytes, bytearray)
+        ), f"Expected bytes (WKB POINT Z), got {type(row['elevation_point'])}"
+        assert len(row["elevation_point"]) > 0, "elevation_point WKB bytes should be non-empty"
+
+
+def test_st_interpolateelevationgeom_sql_example(vectorx_registered):
+    """Run the ``gbx_st_interpolateelevationgeom`` SQL example against ``tin_survey``.
+
+    3×3 origin-anchored grid → 9 POINT Z rows (all cell centres inside the TIN hull).
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_interpolateelevationgeom_sql_example()
+    result = spark.sql(_statement(sql)).collect()
+    assert len(result) == 9, (
+        f"Expected 9 elevation points (3×3 origin-anchored grid), got {len(result)}"
+    )
+    for row in result:
+        assert row["elevation_point"] is not None, "elevation_point should be non-null"
+        assert isinstance(
+            row["elevation_point"], (bytes, bytearray)
+        ), f"Expected bytes (WKB POINT Z), got {type(row['elevation_point'])}"
+        assert len(row["elevation_point"]) > 0, "elevation_point WKB bytes should be non-empty"
+
+
 def test_st_crs_sql_example(vectorx_registered):
     """Run the ``gbx_st_crs`` SQL example; asserts EPSG:4326 for the SRID=4326 fixture."""
     spark = vectorx_registered

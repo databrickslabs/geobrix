@@ -196,6 +196,115 @@ st_asmvt_pyramid_python_light_example_output = """
 
 
 # ---------------------------------------------------------------------------
+# TIN family — st_triangulate, st_interpolateelevationbbox,
+#              st_interpolateelevationgeom
+# Fixture: ``tin_survey`` view — 1 row: pts ARRAY<BINARY> (4 WKB POINT Z),
+#          bl ARRAY<BINARY> (empty).
+#
+# These three functions are Python UDTFs in the lightweight tier: they have
+# NO Python DataFrame Column form.  The Python (light) tab for each invokes
+# the registered UDTF via SQL LATERAL (identical in behavior to the SQL tab,
+# just wrapped in spark.sql()).
+#
+# mode='constrained' is the default and is available in BOTH tiers.
+# mode='conforming' is HEAVYWEIGHT-ONLY (NotImplementedError in pyvx).
+# ---------------------------------------------------------------------------
+
+# WKB POINT(0, 10) — plain 2D, used as grid_origin for st_interpolateelevationgeom.
+# Little-endian: 01 01000000 0000000000000000 0000000000002440
+_WKB_POINT_0_10 = "010100000000000000000000000000000000002440"
+
+
+def st_triangulate_python_light_example(spark):
+    """Build a Delaunay TIN and emit one triangle polygon per row (light pyvx tier).
+
+    The lightweight tier exposes ``gbx_st_triangulate`` as a registered SQL UDTF
+    (no Python DataFrame Column form).  Reads the ``tin_survey`` setup view — 4
+    WKB POINT Z corners of a 10×10 m square — and materialises the 2-triangle
+    Delaunay mesh via SQL ``LATERAL``.  Returns the first triangle's WKB bytes.
+    ``mode='constrained'`` is both-tier; ``mode='conforming'`` is heavyweight-only.
+    """
+    result = spark.sql("""
+        SELECT t.triangle
+        FROM tin_survey, LATERAL gbx_st_triangulate(pts, bl, 0, 0, 'NONENCROACHING', 'constrained') t
+    """)
+    rows = result.collect()
+    return rows[0]["triangle"] if rows else None
+
+
+st_triangulate_python_light_example_output = """
++--------+
+|triangle|
++--------+
+|[binary]|
+|[binary]|
++--------+
+... (WKB binary — 2 Delaunay triangle polygons)
+"""
+
+
+def st_interpolateelevationbbox_python_light_example(spark):
+    """Sample TIN elevation on a regular bounding-box grid (light pyvx tier).
+
+    The lightweight tier exposes ``gbx_st_interpolateelevationbbox`` as a
+    registered SQL UDTF (no Python DataFrame Column form).  Reads the
+    ``tin_survey`` setup view and samples the TIN on a 3×3 grid spanning
+    the full 10×10 m extent (SRID=0).  All 9 cell centres fall inside the
+    TIN convex hull, so the generator emits 9 elevation rows.
+    Returns the first row's WKB POINT Z bytes.
+    """
+    result = spark.sql("""
+        SELECT t.elevation_point
+        FROM tin_survey, LATERAL gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t
+    """)
+    rows = result.collect()
+    return rows[0]["elevation_point"] if rows else None
+
+
+st_interpolateelevationbbox_python_light_example_output = """
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 elevation grid, 9 rows)
+"""
+
+
+def st_interpolateelevationgeom_python_light_example(spark):
+    """Sample TIN elevation on a grid anchored to a geometry origin (light pyvx tier).
+
+    The lightweight tier exposes ``gbx_st_interpolateelevationgeom`` as a
+    registered SQL UDTF (no Python DataFrame Column form).  Reads the
+    ``tin_survey`` setup view and samples on a 3×3 grid anchored to
+    POINT(0, 10) — top-left corner of the TIN extent.  Cell sizes are
+    3.0 m × 3.0 m (negative Y steps downward per raster convention).
+    All 9 cell centres fall inside the TIN hull; output SRID is 0
+    (plain WKB origin carries no SRID).  Returns the first row's WKB bytes.
+    """
+    result = spark.sql(f"""
+        SELECT t.elevation_point
+        FROM tin_survey, LATERAL gbx_st_interpolateelevationgeom(pts, bl, 0, 0, 'NONENCROACHING', unhex('{_WKB_POINT_0_10}'), 3, 3, 3, -3, 'constrained') t
+    """)
+    rows = result.collect()
+    return rows[0]["elevation_point"] if rows else None
+
+
+st_interpolateelevationgeom_python_light_example_output = """
++---------------+
+|elevation_point|
++---------------+
+|[binary]       |
+|[binary]       |
+|...            |
++---------------+
+... (WKB binary — POINT Z geometries, 3×3 origin-anchored grid, 9 rows)
+"""
+
+
+# ---------------------------------------------------------------------------
 # CRS family — st_crs, st_setcrs, st_transformcrs
 # Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
 # POINT(13, 42) is in central Italy, inside UTM zone 33N's area of use

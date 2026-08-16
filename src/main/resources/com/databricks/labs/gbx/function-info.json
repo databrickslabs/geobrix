@@ -1544,17 +1544,23 @@
       ]
     },
     "gbx_st_interpolateelevationbbox": {
-      "examples": "Examples:\n      > SELECT gbx_st_interpolateelevationbbox(masspoints, breaklines, 0.0, 0.01, 'NONENCROACHING', 530000, 180000, 531000, 181000, 100, 100, 27700, 'constrained') AS elev_point FROM survey;",
+      "examples": "Examples:\n      > SELECT t.elevation_point FROM tin_survey LATERAL VIEW gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t AS elevation_point;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_st_interpolateelevationgeom": {
-      "examples": "Examples:\n      > SELECT gbx_st_interpolateelevationgeom(masspoints, breaklines, 0.0, 0.01, 'NONENCROACHING', ST_Point(530000, 181000), 100, 100, 10.0, -10.0, 'constrained') AS elev_point FROM survey;",
+      "examples": "Examples:\n      > SELECT t.elevation_point FROM tin_survey LATERAL VIEW gbx_st_interpolateelevationgeom(pts, bl, 0, 0, 'NONENCROACHING', unhex('010100000000000000000000000000000000002440'), 3, 3, 3, -3, 'constrained') t AS elevation_point;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_st_legacyaswkb": {
@@ -1584,10 +1590,13 @@
       ]
     },
     "gbx_st_triangulate": {
-      "examples": "Examples:\n      > SELECT gbx_st_triangulate(masspoints, breaklines, 0.01, 0.01, 'NONENCROACHING', 'constrained') AS triangle FROM survey;",
+      "examples": "Examples:\n      > SELECT t.triangle FROM tin_survey LATERAL VIEW gbx_st_triangulate(pts, bl, 0, 0, 'NONENCROACHING', 'constrained') t AS triangle;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "_package_pmtiles": "--- pmtiles ---",

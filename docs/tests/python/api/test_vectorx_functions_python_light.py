@@ -79,6 +79,51 @@ def test_vectorx_light_setup_views_created(spark):
 
 
 # ---------------------------------------------------------------------------
+# T4: TIN family — st_triangulate, st_interpolateelevationbbox,
+#                  st_interpolateelevationgeom
+# Fixture view: ``tin_survey`` — 1 row: pts ARRAY<BINARY> (4 WKB POINT Z),
+#               bl ARRAY<BINARY> (empty). Created by autouse fixture above.
+# ---------------------------------------------------------------------------
+
+
+def test_st_triangulate_python_light_example(spark):
+    """st_triangulate LATERAL emits 2 non-null WKB triangle bytes for the 4-corner fixture."""
+    assert light_examples is not None
+    result = light_examples.st_triangulate_python_light_example(spark)
+    assert result is not None, "st_triangulate should return non-null triangle bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB polygon), got {type(result)}"
+    assert len(result) > 0, "triangle WKB bytes should be non-empty"
+
+
+def test_st_interpolateelevationbbox_python_light_example(spark):
+    """st_interpolateelevationbbox LATERAL emits non-null POINT Z bytes for the 3×3 grid."""
+    assert light_examples is not None
+    result = light_examples.st_interpolateelevationbbox_python_light_example(spark)
+    assert result is not None, (
+        "st_interpolateelevationbbox should return non-null elevation_point bytes"
+    )
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB POINT Z), got {type(result)}"
+    assert len(result) > 0, "elevation_point WKB bytes should be non-empty"
+
+
+def test_st_interpolateelevationgeom_python_light_example(spark):
+    """st_interpolateelevationgeom LATERAL emits non-null POINT Z bytes for the origin grid."""
+    assert light_examples is not None
+    result = light_examples.st_interpolateelevationgeom_python_light_example(spark)
+    assert result is not None, (
+        "st_interpolateelevationgeom should return non-null elevation_point bytes"
+    )
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB POINT Z), got {type(result)}"
+    assert len(result) > 0, "elevation_point WKB bytes should be non-empty"
+
+
+# ---------------------------------------------------------------------------
 # T3: Vector-tile family — st_asmvt, st_asmvt_pyramid
 # ---------------------------------------------------------------------------
 

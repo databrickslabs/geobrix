@@ -364,24 +364,14 @@ Builds a Delaunay TIN from mass-point geometries (with Z values) and optional br
 
 **Generator:** Emits one row per output triangle. Use with SQL `LATERAL` to materialize the triangles; the output schema column is `triangle` (`BINARY` WKB polygon).
 
-**SQL** (works in both tiers after `vx.register(spark)`):
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_triangulate_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_triangulate_sql_example_output" />
-
-**PySpark** (heavyweight DataFrame Column form):
-
-```python
-from databricks.labs.gbx.vectorx import functions as vx
-from pyspark.sql import functions as F
-
-df.select(
-    vx.st_triangulate(
-        F.col("masspoints"), F.col("breaklines"), 0.01, 0.01, "NONENCROACHING"
-    ).alias("t")
-).select("t.triangle")
-```
-
-In the lightweight tier, call the registered UDTF via SQL `LATERAL` (shown above) — there is no `vx.st_triangulate(...)` Column form.
+<FunctionExamples
+  name="st_triangulate"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 
@@ -406,9 +396,14 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 
 **Generator:** Emits one row per in-hull grid cell (cells whose centers fall outside the TIN convex hull are dropped). The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 
-**SQL** (works in both tiers):
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_interpolateelevationbbox_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_interpolateelevationbbox_sql_example_output" />
+<FunctionExamples
+  name="st_interpolateelevationbbox"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 
@@ -434,9 +429,14 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 
 **Generator:** Emits one row per in-hull grid cell. The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 
-**SQL** (works in both tiers):
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_interpolateelevationgeom_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_interpolateelevationgeom_sql_example_output" />
+<FunctionExamples
+  name="st_interpolateelevationgeom"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 

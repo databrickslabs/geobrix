@@ -28,6 +28,8 @@ def _example_modules():
         os.path.join(_HERE, "*_sql.py"),
         os.path.join(_HERE, "rasterx_*python_light.py"),
         os.path.join(_HERE, "rasterx_functions.py"),
+        os.path.join(_HERE, "vectorx_*python_light.py"),
+        os.path.join(_HERE, "vectorx_functions.py"),
     )
     files = set()
     for p in pats:

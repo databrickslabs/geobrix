@@ -2860,4 +2860,69 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
     """Vector(Vector(Row(OW5575, ...), Row(OW5574, ...), ...), Vector(...), Vector(...))
 (Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
 
+  // =========================================================================
+  // VectorX CRS family — st_crs, st_setcrs, st_transformcrs
+  // Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
+  // =========================================================================
+
+  val st_crs_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.table("vector_geoms")
+val result = df.select(vx.st_crs(col("geom")).alias("crs")).first()
+result.getString(0)
+""".trim
+
+  val st_crs_scala_example_output: String =
+    """
++---------+
+|crs      |
++---------+
+|EPSG:4326|
++---------+
+""".trim
+
+  val st_setcrs_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.table("vector_geoms")
+val result = df.select(vx.st_setcrs(col("geom"), "EPSG:4326").alias("stamped")).first()
+result.getAs[Array[Byte]]("stamped")
+""".trim
+
+  val st_setcrs_scala_example_output: String =
+    """
++---------+
+|stamped  |
++---------+
+|[binary] |
++---------+
+(EWKB binary — coordinates preserved, SRID=4326 embedded)""".trim
+
+  val st_transformcrs_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.table("vector_geoms")
+val result = df.select(vx.st_transformcrs(col("geom"), lit("EPSG:32633")).alias("utm33n")).first()
+result.getAs[Array[Byte]]("utm33n")
+""".trim
+
+  val st_transformcrs_scala_example_output: String =
+    """
++--------+
+|utm33n  |
++--------+
+|[binary]|
++--------+
+(EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)""".trim
+
 }

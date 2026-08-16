@@ -21,9 +21,11 @@ except ImportError:
 # COMMON SETUP
 # ============================================================================
 
+
 def vectorx_setup_example(spark):
     """Common setup: register VectorX (legacy geometry). Run once before examples."""
     from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+
     vx.register(spark)
     return None
 
@@ -42,12 +44,17 @@ def _legacy_point_struct_schema():
         StructField,
         StructType,
     )
-    return StructType([
-        StructField("typeId", IntegerType()),
-        StructField("srid", IntegerType()),
-        StructField("boundaries", ArrayType(ArrayType(ArrayType(DoubleType())))),
-        StructField("holes", ArrayType(ArrayType(ArrayType(ArrayType(DoubleType()))))),
-    ])
+
+    return StructType(
+        [
+            StructField("typeId", IntegerType()),
+            StructField("srid", IntegerType()),
+            StructField("boundaries", ArrayType(ArrayType(ArrayType(DoubleType())))),
+            StructField(
+                "holes", ArrayType(ArrayType(ArrayType(ArrayType(DoubleType()))))
+            ),
+        ]
+    )
 
 
 def st_legacyaswkb_python_example(spark):
@@ -79,4 +86,73 @@ SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_table;
 
 ST_LEGACYASWKB_SQL_EXAMPLE_output = """
 One row per input legacy geometry; wkb column contains binary WKB.
+"""
+
+
+# ---------------------------------------------------------------------------
+# CRS family — heavy (vectorx) Python examples
+# Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
+# ---------------------------------------------------------------------------
+
+
+def st_crs_python_heavy_example(spark):
+    """Return the canonical CRS string for a geometry's embedded SRID (heavy Python)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("vector_geoms")
+    result = df.select(vx.st_crs(f.col("geom")).alias("crs")).first()
+    return result["crs"]
+
+
+st_crs_python_heavy_example_output = """
++---------+
+|crs      |
++---------+
+|EPSG:4326|
++---------+
+"""
+
+
+def st_setcrs_python_heavy_example(spark):
+    """Stamp a CRS on a geometry without reprojecting (heavy Python)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("vector_geoms")
+    result = df.select(
+        vx.st_setcrs(f.col("geom"), "EPSG:4326").alias("stamped")
+    ).first()
+    return result["stamped"]
+
+
+st_setcrs_python_heavy_example_output = """
++---------+
+|stamped  |
++---------+
+|[binary] |
++---------+
+(EWKB binary — coordinates preserved, SRID=4326 embedded)
+"""
+
+
+def st_transformcrs_python_heavy_example(spark):
+    """Reproject a geometry to a target CRS (heavy Python)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("vector_geoms")
+    result = df.select(
+        vx.st_transformcrs(f.col("geom"), "EPSG:32633").alias("utm33n")
+    ).first()
+    return result["utm33n"]
+
+
+st_transformcrs_python_heavy_example_output = """
++--------+
+|utm33n  |
++--------+
+|[binary]|
++--------+
+(EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
 """

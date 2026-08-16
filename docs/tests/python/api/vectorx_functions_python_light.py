@@ -112,3 +112,67 @@ VectorX (light) registered. You can now use gbx_st_* SQL functions via the pyvx 
 # The generate-function-info.py _TIER_SCANS scanner detects these by their
 # def signature; the FunctionExamples MDX component renders the source text.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# CRS family — st_crs, st_setcrs, st_transformcrs
+# Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
+# POINT(13, 42) is in central Italy, inside UTM zone 33N's area of use
+# (12°E–18°E), so st_transformcrs to EPSG:32633 is in-domain (non-null result).
+# ---------------------------------------------------------------------------
+
+
+def st_crs_python_light_example(spark):
+    """Return the canonical CRS string for a geometry's embedded SRID (light pyvx tier)."""
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("vector_geoms")
+    result = df.select(vx.st_crs("geom").alias("crs")).first()
+    return result["crs"]
+
+
+st_crs_python_light_example_output = """
++---------+
+|crs      |
++---------+
+|EPSG:4326|
++---------+
+"""
+
+
+def st_setcrs_python_light_example(spark):
+    """Stamp a CRS on a geometry without reprojecting (light pyvx tier)."""
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("vector_geoms")
+    result = df.select(vx.st_setcrs("geom", "EPSG:4326").alias("stamped")).first()
+    return result["stamped"]
+
+
+st_setcrs_python_light_example_output = """
++---------+
+|stamped  |
++---------+
+|[binary] |
++---------+
+(EWKB binary — coordinates preserved, SRID=4326 embedded)
+"""
+
+
+def st_transformcrs_python_light_example(spark):
+    """Reproject a geometry to a target CRS (light pyvx tier)."""
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("vector_geoms")
+    result = df.select(vx.st_transformcrs("geom", "EPSG:32633").alias("utm33n")).first()
+    return result["utm33n"]
+
+
+st_transformcrs_python_light_example_output = """
++--------+
+|utm33n  |
++--------+
+|[binary]|
++--------+
+(EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
+"""

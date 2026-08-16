@@ -612,9 +612,14 @@ Returns the canonical CRS string for the geometry's embedded SRID, or `NULL`.
 
 An SRID is classified against the authoritative PROJ registries, so an ESRI-range code comes back as `ESRI:<n>` rather than being mislabelled `EPSG:<n>`.
 
-**SQL** (works in both tiers):
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_crs_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_crs_sql_example_output" />
+<FunctionExamples
+  name="st_crs"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 
@@ -639,9 +644,14 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
   This distinction is not academic: a PROJ4 string that resembles a registry CRS is not necessarily equivalent to it. One that omits a datum shift (`+towgs84=0,0,0,0,0,0,0`) can place coordinates **hundreds of metres** from the EPSG code it superficially matches. GeoBrix treats such a definition as its own CRS throughout — including when selecting the transformation used to reproject — rather than silently substituting the near-match. If you want the registry CRS, name it explicitly (`'EPSG:28992'`).
 - **non-numeric authority codes** — `'OGC:CRS84'`, `'IGNF:LAMB93'`: real, resolvable CRSes whose code simply is not an integer.
 
-**SQL** (works in both tiers):
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_setcrs_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_setcrs_sql_example_output" />
+<FunctionExamples
+  name="st_setcrs"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 
@@ -669,9 +679,14 @@ Reprojects a geometry's coordinates into `target_crs`. The counterpart to the bu
 
 Source CRS resolution order: the geometry's embedded SRID first, then `source_crs`, and if neither resolves the geometry is returned unchanged.
 
-**SQL** (works in both tiers):
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_transformcrs_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" outputConstant="st_transformcrs_sql_example_output" />
+<FunctionExamples
+  name="st_transformcrs"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 

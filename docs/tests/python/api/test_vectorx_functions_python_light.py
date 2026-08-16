@@ -47,15 +47,15 @@ def test_vectorx_light_module_imports():
 
 def test_vectorx_light_setup_function_exists():
     """vectorx_light_setup_example() is defined and has an output constant."""
-    assert hasattr(light_examples, "vectorx_light_setup_example"), (
-        "vectorx_light_setup_example function missing from module"
-    )
-    assert callable(light_examples.vectorx_light_setup_example), (
-        "vectorx_light_setup_example is not callable"
-    )
-    assert hasattr(light_examples, "vectorx_light_setup_example_output"), (
-        "vectorx_light_setup_example_output constant missing"
-    )
+    assert hasattr(
+        light_examples, "vectorx_light_setup_example"
+    ), "vectorx_light_setup_example function missing from module"
+    assert callable(
+        light_examples.vectorx_light_setup_example
+    ), "vectorx_light_setup_example is not callable"
+    assert hasattr(
+        light_examples, "vectorx_light_setup_example_output"
+    ), "vectorx_light_setup_example_output constant missing"
 
 
 def test_vectorx_light_setup_executes(spark):
@@ -68,9 +68,49 @@ def test_vectorx_light_setup_views_created(spark):
     """The four VectorX Setup views are accessible via spark.table()."""
     for view in ("tin_survey", "mvt_features", "vector_geoms", "legacy_geoms"):
         df = spark.table(view)
-        assert df.count() >= 1, f"VectorX light view '{view}' is empty after autouse setup"
+        assert (
+            df.count() >= 1
+        ), f"VectorX light view '{view}' is empty after autouse setup"
 
 
 # ---------------------------------------------------------------------------
 # Per-function tests are appended below by T2–T5.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# T2: CRS family — st_crs, st_setcrs, st_transformcrs
+# Fixture view: ``vector_geoms`` — 1 row: geom = 'SRID=4326;POINT (13 42)'
+# ---------------------------------------------------------------------------
+
+
+def test_st_crs_python_light_example(spark):
+    """st_crs returns 'EPSG:4326' for the SRID=4326 EWKT fixture."""
+    assert light_examples is not None
+    result = light_examples.st_crs_python_light_example(spark)
+    assert result == "EPSG:4326", f"Expected EPSG:4326, got {result!r}"
+
+
+def test_st_setcrs_python_light_example(spark):
+    """st_setcrs returns non-null EWKB bytes with SRID=4326 stamped."""
+    assert light_examples is not None
+    result = light_examples.st_setcrs_python_light_example(spark)
+    assert result is not None, "st_setcrs should not return None for in-domain input"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (EWKB), got {type(result)}"
+    assert len(result) > 0, "EWKB bytes should be non-empty"
+
+
+def test_st_transformcrs_python_light_example(spark):
+    """st_transformcrs returns non-null EWKB bytes for in-domain POINT(13,42) -> EPSG:32633."""
+    assert light_examples is not None
+    result = light_examples.st_transformcrs_python_light_example(spark)
+    # POINT(13, 42) is inside UTM zone 33N's area of use — must be non-null.
+    assert (
+        result is not None
+    ), "st_transformcrs with in-domain coords (POINT(13,42) -> EPSG:32633) should not return None"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (EWKB), got {type(result)}"
+    assert len(result) > 0, "EWKB bytes should be non-empty"

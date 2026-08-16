@@ -1,9 +1,12 @@
 """
-VectorX Function Reference Examples (minimal).
+VectorX Function Reference Examples (heavy Python tier).
 
-Single example: convert legacy Mosaic geometry struct to WKB.
+Heavy-Python examples for all 9 VectorX functions: CRS stamping and reprojection
+(st_setcrs, st_transformcrs, st_crs), vector-tile encoding (st_asmvt,
+st_asmvt_pyramid), TIN elevation surface modeling (st_triangulate,
+st_interpolateelevationbbox, st_interpolateelevationgeom), and legacy Mosaic
+geometry migration (st_legacyaswkb).
 Used in docs/docs/api/vectorx-functions.mdx. Tested by test_vectorx_functions.py.
-Legacy format matches InternalGeometry: typeId, srid, boundaries, holes.
 """
 
 try:
@@ -339,7 +342,7 @@ st_setcrs_python_heavy_example_output = """
 +---------+
 |[binary] |
 +---------+
-(EWKB binary — coordinates preserved, SRID=4326 embedded)
+... (EWKB binary — coordinates preserved, SRID=4326 embedded)
 """
 
 
@@ -361,7 +364,7 @@ st_transformcrs_python_heavy_example_output = """
 +--------+
 |[binary]|
 +--------+
-(EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
+... (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
 """
 
 

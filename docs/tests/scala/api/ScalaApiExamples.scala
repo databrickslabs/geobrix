@@ -3056,7 +3056,7 @@ result.getAs[Array[Byte]]("stamped")
 +---------+
 |[binary] |
 +---------+
-(EWKB binary — coordinates preserved, SRID=4326 embedded)""".trim
+... (EWKB binary — coordinates preserved, SRID=4326 embedded)""".trim
 
   val st_transformcrs_scala_example: String =
     """
@@ -3076,7 +3076,7 @@ result.getAs[Array[Byte]]("utm33n")
 +--------+
 |[binary]|
 +--------+
-(EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)""".trim
+... (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)""".trim
 
   // =========================================================================
   // VectorX Legacy Mosaic conversion — st_legacyaswkb

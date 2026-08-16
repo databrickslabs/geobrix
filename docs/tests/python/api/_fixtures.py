@@ -545,7 +545,7 @@ _ELEVATION_DIR = "src/test/resources/binary/elevation"
 ELEVATION_DTM_POINT = f"{_ELEVATION_DIR}/sd46_dtm_point.shp"
 ELEVATION_DTM_BREAKLINE = f"{_ELEVATION_DIR}/sd46_dtm_breakline.shp"
 
-# WKB POINT Z hex constants (little-endian ISO WKB + Z flag):
+# WKB POINT Z hex constants (OGC/PostGIS EWKB (Z flag 0x80000000)):
 #   geometry type = 0x80000001 (POINTZ, LE) → bytes 01 00 00 80
 #   Double = IEEE 754 LE.  10.0 = 0x4024000000000000 BE → 0x0000000000002440 LE
 _WKB_POINTZ_0_0_0 = "0101000080000000000000000000000000000000000000000000000000"
@@ -559,8 +559,6 @@ _WKB_POINT_100_100 = "010100000000000000000059400000000000005940"
 #   POINT(200, 200) — second tile-local point
 _WKB_POINT_200_200 = "010100000000000000000069400000000000006940"
 #   POINT(13, 42) — WGS84 location (used in CRS examples as WKT)
-#   EWKB POINT(13, 42) with SRID=4326
-_EWKB_POINT_13_42_EPSG4326 = "0101000020e61000000000000000002a400000000000004540"
 
 
 def elevation_dtm_point_path() -> Path:
@@ -601,8 +599,7 @@ def tin_df(spark):
     The 4 points form a 10×10 m square with elevations 0, 0, 10, 5 m
     (non-degenerate — 2 Delaunay triangles, elevation range = 10 m).
     """
-    return spark.sql(
-        f"""
+    return spark.sql(f"""
         SELECT array(
             unhex('{_WKB_POINTZ_0_0_0}'),
             unhex('{_WKB_POINTZ_10_0_0}'),
@@ -610,8 +607,7 @@ def tin_df(spark):
             unhex('{_WKB_POINTZ_0_10_5}')
         ) AS pts,
         cast(array() AS array<binary>) AS bl
-        """
-    )
+        """)
 
 
 def tin_df_heavy(spark):
@@ -639,8 +635,7 @@ def mvt_features_df(spark):
     Both rows are in the same (z=0, x=0, y=0) tile with tile-local WKB POINT
     geometries: POINT(100, 100) and POINT(200, 200) in pixel coordinates.
     """
-    return spark.sql(
-        f"""
+    return spark.sql(f"""
         SELECT 0 AS z, 0 AS x, 0 AS y,
                unhex('{_WKB_POINT_100_100}') AS geom_wkb,
                named_struct('name', 'a', 'id', 1L) AS attrs
@@ -648,8 +643,7 @@ def mvt_features_df(spark):
         SELECT 0, 0, 0,
                unhex('{_WKB_POINT_200_200}'),
                named_struct('name', 'b', 'id', 2L)
-        """
-    )
+        """)
 
 
 def mvt_features_df_heavy(spark):
@@ -709,12 +703,16 @@ def legacy_geom_df(spark):
         StructType,
     )
 
-    legacy_schema = StructType([
-        StructField("typeId", IntegerType()),
-        StructField("srid", IntegerType()),
-        StructField("boundaries", ArrayType(ArrayType(ArrayType(DoubleType())))),
-        StructField("holes", ArrayType(ArrayType(ArrayType(ArrayType(DoubleType()))))),
-    ])
+    legacy_schema = StructType(
+        [
+            StructField("typeId", IntegerType()),
+            StructField("srid", IntegerType()),
+            StructField("boundaries", ArrayType(ArrayType(ArrayType(DoubleType())))),
+            StructField(
+                "holes", ArrayType(ArrayType(ArrayType(ArrayType(DoubleType()))))
+            ),
+        ]
+    )
     schema = StructType([StructField("geom_legacy", legacy_schema)])
     row = Row(geom_legacy=(1, 0, [[[13.0, 42.0]]], []))
     return spark.createDataFrame([row], schema)

@@ -345,7 +345,7 @@ st_setcrs_python_light_example_output = """
 +---------+
 |[binary] |
 +---------+
-(EWKB binary — coordinates preserved, SRID=4326 embedded)
+... (EWKB binary — coordinates preserved, SRID=4326 embedded)
 """
 
 
@@ -364,7 +364,7 @@ st_transformcrs_python_light_example_output = """
 +--------+
 |[binary]|
 +--------+
-(EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
+... (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
 """
 
 

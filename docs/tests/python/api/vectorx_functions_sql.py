@@ -30,19 +30,19 @@ def st_asmvt_sql_example():
     the aggregator which tile's blob to build.
     """
     return """
-SELECT z, x, y, length(gbx_st_asmvt(geom_wkb, attrs, 'layer')) AS mvt_bytes_len
+SELECT z, x, y, gbx_st_asmvt(geom_wkb, attrs, 'layer') AS mvt
 FROM mvt_features
 GROUP BY z, x, y;
 """
 
 
 st_asmvt_sql_example_output = """
-+---+---+---+-------------+
-|  z|  x|  y|mvt_bytes_len|
-+---+---+---+-------------+
-|  0|  0|  0|           76|
-+---+---+---+-------------+
-(1 row — both fixture features aggregate into one MVT blob for tile z=0,x=0,y=0)
++---+---+---+---------+
+|  z|  x|  y|      mvt|
++---+---+---+---------+
+|  0|  0|  0|[binary] |
++---+---+---+---------+
+... (MVT binary)
 """
 
 
@@ -62,21 +62,21 @@ WITH feats AS (
     SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb,
            named_struct('name', 'origin', 'id', 1L) AS attrs
 )
-SELECT t.tile.z AS z, t.tile.x AS x, t.tile.y AS y, length(t.tile.mvt_bytes) AS mvt_bytes_len
+SELECT t.tile.z AS z, t.tile.x AS x, t.tile.y AS y, t.tile.mvt_bytes AS mvt_bytes
 FROM feats
 LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t AS tile;
 """
 
 
 st_asmvt_pyramid_sql_example_output = """
-+---+---+---+-------------+
-|  z|  x|  y|mvt_bytes_len|
-+---+---+---+-------------+
-|  0|  0|  0|           55|
-|  1|  1|  1|           53|
-|  2|  2|  2|           53|
-+---+---+---+-------------+
-(3 rows — one per zoom level for POINT(0,0) across zoom 0–2)
++---+---+---+-----------+
+|  z|  x|  y|  mvt_bytes|
++---+---+---+-----------+
+|  0|  0|  0|  [binary] |
+|  1|  1|  1|  [binary] |
+|  2|  2|  2|  [binary] |
++---+---+---+-----------+
+... (MVT binary — one row per intersecting tile across zoom levels 0–2)
 """
 
 

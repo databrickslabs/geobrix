@@ -2903,7 +2903,7 @@ val df = spark.sql(
 val result = df.select(
   vx.st_asmvt_pyramid(col("geom_wkb"), col("attrs"), lit(0), lit(2), lit("layer")).alias("t")
 ).selectExpr("t.z AS z", "t.x AS x", "t.y AS y", "t.mvt_bytes AS mvt_bytes")
-result.count()
+result.show()
 """.trim
 
   val st_asmvt_pyramid_scala_example_output: String =
@@ -2915,7 +2915,7 @@ result.count()
 |  1|  1|  1|  [binary] |
 |  2|  2|  2|  [binary] |
 +---+---+---+-----------+
-... (MVT binary — one row per tile; use t.z, t.x, t.y, t.mvt_bytes for field access)""".trim
+... (MVT binary — one row per intersecting tile across zoom levels 0–2)""".trim
 
   // =========================================================================
   // VectorX CRS family — st_crs, st_setcrs, st_transformcrs

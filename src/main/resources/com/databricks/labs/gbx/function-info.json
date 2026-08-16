@@ -1514,7 +1514,7 @@
     },
     "_package_vectorx": "--- vectorx ---",
     "gbx_st_asmvt": {
-      "examples": "Examples:\n      > SELECT z, x, y, length(gbx_st_asmvt(geom_wkb, attrs, 'layer')) AS mvt_bytes_len FROM mvt_features GROUP BY z, x, y;",
+      "examples": "Examples:\n      > SELECT z, x, y, gbx_st_asmvt(geom_wkb, attrs, 'layer') AS mvt FROM mvt_features GROUP BY z, x, y;",
       "usage_args": "geom, attrs, layer_name",
       "bindings": [
         "sql",
@@ -1524,7 +1524,7 @@
       ]
     },
     "gbx_st_asmvt_pyramid": {
-      "examples": "Examples:\n      > SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb, named_struct('name', 'origin', 'id', 1L) AS attrs ) SELECT t.tile.z AS z, t.tile.x AS x, t.tile.y AS y, length(t.tile.mvt_bytes) AS mvt_bytes_len FROM feats LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t AS tile;",
+      "examples": "Examples:\n      > SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb, named_struct('name', 'origin', 'id', 1L) AS attrs ) SELECT t.tile.z AS z, t.tile.x AS x, t.tile.y AS y, t.tile.mvt_bytes AS mvt_bytes FROM feats LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t AS tile;",
       "usage_args": "geom, attrs, min_z, max_z, layer_name, [extent]",
       "bindings": [
         "sql",

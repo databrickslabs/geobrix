@@ -46,13 +46,16 @@ def test_st_asmvt_sql_example(vectorx_registered):
     """Run the ``gbx_st_asmvt`` SQL example against the ``mvt_features`` fixture view.
 
     The fixture has 2 rows in tile (z=0, x=0, y=0), so one aggregated MVT blob is produced.
+    The SQL returns the raw BINARY (column ``mvt``); we assert non-null and non-empty bytes.
     """
     spark = vectorx_registered
     sql = vectorx_functions_sql.st_asmvt_sql_example()
     result = spark.sql(_statement(sql)).collect()
     # Both fixture rows are in the same tile → exactly 1 MVT blob.
     assert len(result) == 1
-    assert result[0]["mvt_bytes_len"] > 0
+    mvt = result[0]["mvt"]
+    assert mvt is not None, "st_asmvt should return non-null MVT bytes"
+    assert len(mvt) > 0, "MVT bytes should be non-empty"
 
 
 def test_st_asmvt_pyramid_sql_example(vectorx_registered):
@@ -60,6 +63,7 @@ def test_st_asmvt_pyramid_sql_example(vectorx_registered):
 
     POINT(0, 0) WGS-84 at zoom 0–2 intersects exactly 3 tiles:
     (z=0, x=0, y=0), (z=1, x=1, y=1), (z=2, x=2, y=2).
+    The SQL returns raw ``mvt_bytes`` BINARY; we assert non-empty for each tile.
     """
     spark = vectorx_registered
     sql = vectorx_functions_sql.st_asmvt_pyramid_sql_example()
@@ -67,7 +71,8 @@ def test_st_asmvt_pyramid_sql_example(vectorx_registered):
     # POINT(0, 0) at zoom 0–2 → 3 tiles, one per zoom level.
     assert len(result) == 3
     for row in result:
-        assert row["mvt_bytes_len"] > 0
+        assert row["mvt_bytes"] is not None
+        assert len(row["mvt_bytes"]) > 0
 
 
 def test_st_crs_sql_example(vectorx_registered):

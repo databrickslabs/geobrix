@@ -152,7 +152,7 @@ st_asmvt_pyramid_python_heavy_example_output = """
 |  1|  1|  1|  [binary] |
 |  2|  2|  2|  [binary] |
 +---+---+---+-----------+
-... (MVT binary — one row per tile; use t.z, t.x, t.y, t.mvt_bytes for field access)
+... (MVT binary — one row per intersecting tile across zoom levels 0–2)
 """
 
 

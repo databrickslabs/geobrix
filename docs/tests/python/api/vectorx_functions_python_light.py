@@ -168,7 +168,8 @@ def st_asmvt_pyramid_python_light_example(spark):
 
     The lightweight pyramid is a Python UDTF with no Python DataFrame Column form —
     invoke it via SQL ``LATERAL`` only.  POINT(0, 0) WGS-84 at zoom 0–2 intersects
-    3 tiles and emits one ``(z, x, y, mvt_bytes)`` row per tile.
+    3 tiles and emits one ``(z, x, y, mvt_bytes)`` row per tile.  Returns the first
+    tile's ``mvt_bytes`` so the test can verify the MVT encoding path is exercised.
     """
     result = spark.sql(f"""
         WITH feats AS (
@@ -179,7 +180,7 @@ def st_asmvt_pyramid_python_light_example(spark):
         FROM feats, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t
         """)
     rows = result.collect()
-    return rows[0]["z"] if rows else None
+    return rows[0]["mvt_bytes"] if rows else None
 
 
 st_asmvt_pyramid_python_light_example_output = """

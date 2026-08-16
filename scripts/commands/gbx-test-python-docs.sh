@@ -28,6 +28,7 @@ show_help() {
     echo -e "${CYAN}Other options:${NC}"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (use timestamp for tracking: python-docs-\$(date +%Y%m%d-%H%M%S).log)"
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers (e.g. \"not slow\")"
+    echo -e "  ${GREEN}--filter <expr>${NC}        Pytest -k expression: run ONLY matching tests (whole dir still collected so api/ _fixtures resolves). Use with --path api/ to test just the changed functions, e.g. --path api/ --filter 'st_triangulate or st_interpolate'"
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
     echo -e "  ${GREEN}--skip-build${NC}            Skip Maven/Python build (use when already built)"
     echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
@@ -46,6 +47,7 @@ BASE="/root/geobrix/docs/tests/python"
 TEST_PATH="${BASE}/"
 LOG_PATH=""
 MARKERS="-m 'not integration'"
+FILTER=""
 INCLUDE_INTEGRATION=false
 SKIP_BUILD=false
 # Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
@@ -86,6 +88,13 @@ while [[ $# -gt 0 ]]; do
             ;;
         --markers)
             MARKERS="-m '$2'"
+            shift 2
+            ;;
+        --filter)
+            # Pytest -k expression: run ONLY matching tests while still collecting the
+            # whole dir (so the api/ _fixtures sibling import resolves). Use to run only
+            # the changed functions, e.g. --path api/ --filter 'st_triangulate or st_interpolate'.
+            FILTER="-k '$2'"
             shift 2
             ;;
         --include-integration)
@@ -200,7 +209,7 @@ fi
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 echo 'Running tests...'
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
-python3 -m pytest $TEST_PATH -v $MARKERS --tb=short --color=yes $IGNORE_API_ARG
+python3 -m pytest $TEST_PATH -v $MARKERS $FILTER --tb=short --color=yes $IGNORE_API_ARG
 "
 
 docker exec geobrix-dev /bin/bash -c "$RUN_CMD"

@@ -1528,7 +1528,7 @@
       ]
     },
     "gbx_st_crs": {
-      "examples": "Examples:\n      > SELECT gbx_st_crs('SRID=4326;POINT (11 42)')  AS wgs84, gbx_st_crs('SRID=54008;POINT (11 42)') AS sinusoidal, gbx_st_crs('POINT (11 42)')            AS no_srid;",
+      "examples": "Examples:\n      > SELECT gbx_st_crs(geom) AS crs FROM vector_geoms;",
       "usage_args": "geom",
       "bindings": [
         "sql",
@@ -1558,7 +1558,7 @@
       ]
     },
     "gbx_st_setcrs": {
-      "examples": "Examples:\n      > SELECT gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'EPSG:4326'))   AS stamped_wgs84, gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'ESRI:54008'))  AS stamped_esri, gbx_st_crs(gbx_st_setcrs( unhex('010100000000000000000026400000000000004540'), 32633)) AS stamped_from_wkb;",
+      "examples": "Examples:\n      > SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS stamped FROM vector_geoms;",
       "usage_args": "geom, crs",
       "bindings": [
         "sql",
@@ -1568,7 +1568,7 @@
       ]
     },
     "gbx_st_transformcrs": {
-      "examples": "Examples:\n      > SELECT gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (13 42)', 'EPSG:32633')) AS to_utm33n, gbx_st_crs(gbx_st_transformcrs('POINT (13 42)', 'ESRI:54008', 'EPSG:4326')) AS to_sinusoidal, gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (13 42)', '+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs')) AS to_proj4;",
+      "examples": "Examples:\n      > SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS utm33n FROM vector_geoms;",
       "usage_args": "geom, target_crs, [source_crs]",
       "bindings": [
         "sql",

@@ -114,3 +114,17 @@ def test_st_transformcrs_python_light_example(spark):
         result, (bytes, bytearray)
     ), f"Expected bytes (EWKB), got {type(result)}"
     assert len(result) > 0, "EWKB bytes should be non-empty"
+
+
+def test_st_setcrs_stamps_different_crs(spark):
+    """st_setcrs changes the embedded SRID — not a no-op when target differs from source."""
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("vector_geoms")
+    # Stamp EPSG:3857 (not the fixture's 4326) and read back via st_crs.
+    result = df.select(
+        vx.st_crs(vx.st_setcrs("geom", "EPSG:3857")).alias("new_crs")
+    ).first()
+    assert (
+        result["new_crs"] == "EPSG:3857"
+    ), f"Expected EPSG:3857 after stamping (not a no-op), got {result['new_crs']!r}"

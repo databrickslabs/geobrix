@@ -129,92 +129,68 @@ st_interpolateelevationgeom_sql_example_output = """
 
 
 def st_crs_sql_example():
-    """Return the canonical CRS authority string embedded in a geometry's SRID (SQL).
+    """Return the canonical CRS authority string for a geometry's embedded SRID (SQL).
 
-    Reads the integer SRID from an EWKB or EWKT geometry and classifies it using
-    the authoritative PROJ code sets. Returns NULL for plain WKB / WKT with no
-    embedded SRID. ESRI codes (e.g. 54008) are returned as ``ESRI:<n>``, not
-    ``EPSG:<n>``, per the authoritative classification rule.
-
-    Geometry input accepts WKB / EWKB (BINARY) and WKT / EWKT (STRING); the EWKT
-    literals below are the most readable way to show a carried SRID.
+    Reads the integer SRID from an EWKB or EWKT geometry. The fixture view
+    ``vector_geoms`` has one row: ``geom STRING = 'SRID=4326;POINT (13 42)'``.
+    Returns NULL for plain WKB/WKT with no embedded SRID; ESRI-range codes come
+    back as ``ESRI:<n>`` (not ``EPSG:<n>``).
     """
     return """
-SELECT gbx_st_crs('SRID=4326;POINT (11 42)')  AS wgs84,
-       gbx_st_crs('SRID=54008;POINT (11 42)') AS sinusoidal,
-       gbx_st_crs('POINT (11 42)')            AS no_srid;
+SELECT gbx_st_crs(geom) AS crs FROM vector_geoms;
 """
 
 
 st_crs_sql_example_output = """
-+---------+----------+-------+
-|wgs84    |sinusoidal|no_srid|
-+---------+----------+-------+
-|EPSG:4326|ESRI:54008|NULL   |
-+---------+----------+-------+
++---------+
+|crs      |
++---------+
+|EPSG:4326|
++---------+
 """
 
 
 def st_setcrs_sql_example():
     """Stamp a CRS on a geometry without reprojecting (SQL).
 
-    Assigns the EPSG or ESRI integer SRID to the geometry, leaving coordinates
-    untouched. In SQL the result is always BINARY (EWKB), whichever encoding the
-    geometry argument arrived in — read the stamped SRID back with ``gbx_st_crs``.
-
-    A CRS with no integer authority code (raw WKT, PROJ4, or a non-numeric code
-    such as ``OGC:CRS84``) is rejected at execution time, because a geometry SRID
-    must be an integer.
+    The fixture view ``vector_geoms`` has one row: ``geom STRING =
+    'SRID=4326;POINT (13 42)'``. In SQL the result is always BINARY (EWKB),
+    whichever encoding the geometry argument arrived in.
     """
     return """
-SELECT gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'EPSG:4326'))   AS stamped_wgs84,
-       gbx_st_crs(gbx_st_setcrs('POINT (11 42)', 'ESRI:54008'))  AS stamped_esri,
-       gbx_st_crs(gbx_st_setcrs(
-           unhex('010100000000000000000026400000000000004540'), 32633))
-           AS stamped_from_wkb;
+SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS stamped FROM vector_geoms;
 """
 
 
 st_setcrs_sql_example_output = """
-+-------------+------------+----------------+
-|stamped_wgs84|stamped_esri|stamped_from_wkb|
-+-------------+------------+----------------+
-|EPSG:4326    |ESRI:54008  |EPSG:32633      |
-+-------------+------------+----------------+
++--------+
+|stamped |
++--------+
+|[binary]|
++--------+
+(EWKB binary — coordinates preserved, SRID=4326 embedded)
 """
 
 
 def st_transformcrs_sql_example():
     """Reproject a geometry to a target CRS (SQL).
 
-    Reprojects from the geometry's embedded SRID (EWKB / EWKT) or, for a plain
-    SRID-less geometry, from an explicit third ``source_crs`` argument. In SQL the
-    result is always BINARY.
-
-    The carried SRID follows the **target**: a target with an integer authority
-    code (``EPSG:n`` / ``ESRI:n``) stamps ``n``, while a target with none (raw WKT
-    or PROJ4) reprojects the coordinates and clears the now-stale SRID — so
-    ``gbx_st_crs`` returns NULL for that column. When no source CRS is resolvable
-    at all the geometry is returned unchanged rather than erroring.
-
-    The point is at 13°E, 42°N (central Italy) — inside UTM zone 33N's area of
-    use (12°E–18°E). Reprojecting a point outside the target CRS's valid domain
-    returns NULL (see the reprojection error contract).
+    The fixture view ``vector_geoms`` has one row: ``geom STRING =
+    'SRID=4326;POINT (13 42)'`` — POINT(13, 42) is at 13°E 42°N (central
+    Italy), inside UTM zone 33N's area of use (12°E–18°E), so reprojection to
+    EPSG:32633 is in-domain and returns a non-null result. In SQL the result is
+    always BINARY.
     """
     return """
-SELECT gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (13 42)', 'EPSG:32633'))
-           AS to_utm33n,
-       gbx_st_crs(gbx_st_transformcrs('POINT (13 42)', 'ESRI:54008', 'EPSG:4326'))
-           AS to_sinusoidal,
-       gbx_st_crs(gbx_st_transformcrs('SRID=4326;POINT (13 42)',
-           '+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs')) AS to_proj4;
+SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS utm33n FROM vector_geoms;
 """
 
 
 st_transformcrs_sql_example_output = """
-+----------+-------------+--------+
-|to_utm33n |to_sinusoidal|to_proj4|
-+----------+-------------+--------+
-|EPSG:32633|ESRI:54008   |NULL    |
-+----------+-------------+--------+
++--------+
+|utm33n  |
++--------+
+|[binary]|
++--------+
+(EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
 """

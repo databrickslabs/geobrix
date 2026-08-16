@@ -43,6 +43,10 @@ This is the right shape for **per-row (1→1) tile and geometry transforms**: op
 Functions that return `MapType` columns use a plain `@f.udf` for SQL registration (Arrow does not support `MapType` in all `pandas_udf` builds); the Python Column API routes through the `pandas_udf` path for all tile-returning operations.
 :::
 
+### Chaining functions
+
+Compose light-tier tile functions in **one expression** — `rx.rst_slope(rx.rst_setcrs(col("tile"), "EPSG:32633"))` — rather than materializing intermediates across separate `.select()` / `.withColumn()` steps. Spark **fuses chained Column-API calls into a single Python worker**, so the intermediate tile passes from the inner function to the outer one as a live in-worker object: the JVM↔Python boundary is crossed **once for the whole chain instead of once per function**. Splitting the same pipeline into separate steps sends each intermediate tile back to the JVM and re-serializes it at the next step — paying the per-batch boundary cost at every stage instead of once. Chaining is strictly the lighter path, and it composes with virtual-tile deferral (see [Choosing an Execution Tier](./execution-tiers)): chained deferrable ops both defer materialization *and* stay in one worker.
+
 ### Vectorized cores
 
 The compute underneath each UDF shape comes from best-in-class Python libraries rather than partial reimplementations:

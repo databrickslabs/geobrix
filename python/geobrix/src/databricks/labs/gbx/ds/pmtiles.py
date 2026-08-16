@@ -140,8 +140,20 @@ class PMTilesGbxWriter(DataSourceWriter):
         # fileName option (case-insensitively received as 'filename') lets callers
         # control the output name independently of the path argument.
         file_name = opts.get("filename")
-        ext = ".pmtiles" if self.shard_zoom == 0 else ""
-        self.path = _resolve_single_file_output(raw_path, file_name, ext)
+        if self.shard_zoom == 0:
+            # Single-archive mode: name a .pmtiles FILE via the 3-case single-file
+            # naming contract (parent dir / after-dir / file-like).
+            self.path = _resolve_single_file_output(raw_path, file_name, ".pmtiles")
+        else:
+            # Sharded mode: the save path IS the output-root DIRECTORY -- tileset/,
+            # overview.pmtiles, and the catalog live directly under it. Do NOT route
+            # through _resolve_single_file_output: its existing-dir naming (case 2)
+            # would nest the output under an extra <basename> subdir (a user's
+            # .save("/out") would land at /out/out/tileset/... instead of
+            # /out/tileset/...). fileName, if given, names a subdirectory root.
+            root = raw_path.rstrip("/")
+            self.path = os.path.join(root, file_name) if file_name else root
+            os.makedirs(self.path, exist_ok=True)
         # For single-archive mode path is a .pmtiles file; scratch must live
         # beside it (in parent dir), not inside it. Use a per-write unique scratch
         # dir under the hidden, self-GC'ing .gbx_scratch container so concurrent

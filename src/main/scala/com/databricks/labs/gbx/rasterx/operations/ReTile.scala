@@ -1,9 +1,12 @@
 package com.databricks.labs.gbx.rasterx.operations
 
+import org.apache.spark.internal.Logging
 import org.gdal.gdal.{Dataset, gdal}
 
+import scala.jdk.CollectionConverters.CollectionHasAsScala
+
 /** Splits a raster into non-overlapping tiles (windows); supports retile and getTile. */
-object ReTile {
+object ReTile extends Logging {
 
     /** Returns a sequence of (xMin, yMin, xSize, ySize) windows covering the dataset. */
     def generateWindows(
@@ -80,6 +83,7 @@ object ReTile {
             private var fetched = false
             private var closed = false
             private var nextTile: (Dataset, Map[String, String]) = _
+            private var yieldedAny = false
 
             /** Fetches the next tile into nextTile or closes and nulls it when exhausted. */
             private def advance(): Unit = {
@@ -90,7 +94,24 @@ object ReTile {
                     i += 1
                     nextTile = getTile(_ds, options, xs, ys, xo, yo) // returns null if empty
                 }
-                if (i >= windows.length && nextTile == null) close()
+                if (nextTile != null) yieldedAny = true
+                if (i >= windows.length && nextTile == null) {
+                    // All windows scanned and none produced a non-empty tile: the
+                    // source raster is entirely empty/NoData. Log it so a 0-tile
+                    // result does not fall through silently (it otherwise looks
+                    // identical to a legitimate "no rows" downstream).
+                    if (!yieldedAny && windows.nonEmpty) {
+                        val sourcePath = Option(_ds)
+                            .flatMap(d => Option(d.GetFileList()))
+                            .flatMap(_.asScala.headOption.map(_.toString))
+                            .getOrElse("unknown source path")
+                        logInfo(
+                            s"ReTile produced 0 non-empty tiles from ${windows.length} " +
+                            s"window(s); source raster is entirely empty/NoData: $sourcePath"
+                        )
+                    }
+                    close()
+                }
             }
 
             /** Overrides Iterator.hasNext: true until advance() exhausts windows or close() called. */

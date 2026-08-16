@@ -85,7 +85,7 @@ The examples on this page read from **four canonical DataFrames**, one per funct
 | `vector_geoms` | `geom STRING` | EWKT literal `'SRID=4326;POINT (13 42)'` | CRS examples: `st_crs`, `st_setcrs`, `st_transformcrs` |
 | `legacy_geoms` | `geom_legacy STRUCT<typeId,srid,boundaries,holes>` | Legacy Mosaic struct for POINT(13, 42) | Migration: `st_legacyaswkb` |
 
-The committed fixtures backing these views live under [`src/test/resources/binary/elevation/`](https://github.com/databrickslabs/geobrix/tree/main/src/test/resources/binary/elevation) (inline WKB) and as inline WKB in the fixture helpers (MVT, CRS, legacy geometry).
+All four views are built from inline literals in the doc-test fixture helpers (no external files or `/Volumes` dependency, so the examples run anywhere): WKB `POINT Z` mass points for `tin_survey`, tile-local WKB points for `mvt_features`, an EWKT string for `vector_geoms`, and a legacy Mosaic struct for `legacy_geoms`.
 
 ---
 

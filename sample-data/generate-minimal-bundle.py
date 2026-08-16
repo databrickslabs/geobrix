@@ -159,6 +159,54 @@ def _wgs84_bbox_to_crs(minx: float, miny: float, maxx: float, maxy: float, epsg:
         return (minx, miny, maxx, maxy)
 
 
+def _ensure_raster_has_valid_pixels(out: Path) -> None:
+    """Guarantee the raster at `out` has at least one valid (non-NoData) pixel.
+
+    A bbox clip can land entirely on NoData (e.g. Sentinel-2 tile edges), producing a
+    100%-NoData raster that reads back as 0 rows / degenerate examples downstream. This
+    fills such a raster with a viewable gradient IN PLACE, preserving its CRS, geotransform,
+    size, band count, and dtype (so header/coord examples stay valid — unlike swapping in a
+    fresh WGS84 synthetic raster, which would change the CRS)."""
+    try:
+        import numpy as np
+        from osgeo import gdal
+    except ImportError:
+        return
+    ds = gdal.Open(str(out), gdal.GA_Update)
+    if ds is None:
+        return
+    try:
+        bands = [ds.GetRasterBand(i + 1) for i in range(ds.RasterCount)]
+        # Valid if ANY band has ANY pixel that is neither NoData nor NaN.
+        for band in bands:
+            nodata = band.GetNoDataValue()
+            arr = band.ReadAsArray()
+            if arr is None:
+                continue
+            valid = np.isfinite(arr) if np.issubdtype(arr.dtype, np.floating) else np.ones(arr.shape, bool)
+            if nodata is not None:
+                valid &= (arr != nodata)
+            if valid.any():
+                return  # already has real data; leave untouched
+        # All bands are 100% NoData -> paint a viewable gradient (values != NoData).
+        for band in bands:
+            nodata = band.GetNoDataValue()
+            h, w = band.YSize, band.XSize
+            info = np.iinfo(arr.dtype) if np.issubdtype(arr.dtype, np.integer) else None
+            hi = 255.0 if info is None else float(min(info.max, 255))
+            lo = 1.0 if (nodata is not None and float(nodata) == 0.0) else 0.0
+            x_ramp = np.linspace(lo, hi, w)
+            y_ramp = np.linspace(lo, hi, h)
+            grad = ((np.add.outer(y_ramp, x_ramp)) / 2.0).astype(arr.dtype)
+            if nodata is not None:
+                grad[grad == arr.dtype.type(nodata)] = arr.dtype.type(hi)
+            band.WriteArray(grad)
+            band.FlushCache()
+        ds.FlushCache()
+    finally:
+        ds = None
+
+
 def clip_raster_to_bbox(src: Path, out: Path, minx: float, miny: float, maxx: float, maxy: float) -> bool:
     """Clip raster to bbox (all data within bounds). Bbox is in WGS84; if raster is in another CRS
     (e.g. London BNG 27700), the bbox is transformed to the raster CRS for -projwin. Output keeps source CRS."""
@@ -197,6 +245,7 @@ def clip_raster_to_bbox(src: Path, out: Path, minx: float, miny: float, maxx: fl
             "gdal_translate", "-q", "-projwin", str(projwin[0]), str(projwin[1]), str(projwin[2]), str(projwin[3]),
             str(src), str(out)
         ]):
+            _ensure_raster_has_valid_pixels(out)
             return True
     except Exception as e:
         print(f"Raster clip error {src}: {e}", file=sys.stderr)

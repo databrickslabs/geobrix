@@ -362,7 +362,7 @@
       ]
     },
     "gbx_rst_fromfile": {
-      "examples": "Examples:\n      > SELECT gbx_rst_fromfile('/data/raster.tif', 'GTiff') as tile;",
+      "examples": "Examples:\n      > SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/nyc/sentinel2.tif', 'GTiff') AS tile;",
       "bindings": [
         "sql",
         "python-light",
@@ -390,7 +390,7 @@
       ]
     },
     "gbx_rst_getsubdataset": {
-      "examples": "Examples:\n      > SELECT gbx_rst_width(gbx_rst_getsubdataset(tile, 'prAdjust')) AS width FROM netcdf_rasters;",
+      "examples": "Examples:\n      > SELECT gbx_rst_getsubdataset(tile, 'prAdjust') AS subdataset FROM netcdf_rasters;",
       "usage_args": "tile, subset_name",
       "bindings": [
         "sql",

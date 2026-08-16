@@ -375,14 +375,24 @@ def _base_for_spark_name(spark_name: str) -> str:
 
 # tier -> (doc-test source path relative to docs/, symbol template, binding label)
 # Missing files are tolerated; their tier is simply absent from bindings for all functions.
+# Glob patterns (containing '*') expand to all matching files; their text is concatenated.
 _TIER_SCANS = [
     (
-        "tests/python/api/rasterx_*_python_light.py",
+        # Covers rasterx_*_python_light.py (RasterX family files) AND
+        # vectorx_functions_python_light.py (VectorX, created in T1).
+        "tests/python/api/*_python_light.py",
         "def {base}_python_light_example",
         "python-light",
     ),
     (
         "tests/python/api/rasterx_functions.py",
+        "def {base}_python_heavy_example",
+        "python-heavy",
+    ),
+    (
+        # VectorX heavy examples live in vectorx_functions.py (T2-T5 add
+        # *_python_heavy_example functions here; scanned alongside rasterx).
+        "tests/python/api/vectorx_functions.py",
         "def {base}_python_heavy_example",
         "python-heavy",
     ),

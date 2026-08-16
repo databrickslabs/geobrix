@@ -536,6 +536,240 @@ def multi_band_tiles_df_heavy(spark):
     return b1.union(b2).union(b3).withColumn("region", f.lit("R1"))
 
 
+# ---------------------------------------------------------------------------
+# VectorX fixture constants (committed binary under src/test/resources/binary/)
+# ---------------------------------------------------------------------------
+
+# Elevation shapefile fixtures (BNG EPSG:27700, ~96 k points with Z)
+_ELEVATION_DIR = "src/test/resources/binary/elevation"
+ELEVATION_DTM_POINT = f"{_ELEVATION_DIR}/sd46_dtm_point.shp"
+ELEVATION_DTM_BREAKLINE = f"{_ELEVATION_DIR}/sd46_dtm_breakline.shp"
+
+# WKB POINT Z hex constants (little-endian ISO WKB + Z flag):
+#   geometry type = 0x80000001 (POINTZ, LE) → bytes 01 00 00 80
+#   Double = IEEE 754 LE.  10.0 = 0x4024000000000000 BE → 0x0000000000002440 LE
+_WKB_POINTZ_0_0_0 = "0101000080000000000000000000000000000000000000000000000000"
+_WKB_POINTZ_10_0_0 = "0101000080000000000000244000000000000000000000000000000000"
+_WKB_POINTZ_10_10_10 = "0101000080000000000000244000000000000024400000000000002440"
+_WKB_POINTZ_0_10_5 = "0101000080000000000000000000000000000024400000000000001440"
+
+# WKB POINT hex constants (2D, no Z):
+#   POINT(100, 100) — tile-local coords for MVT examples
+_WKB_POINT_100_100 = "010100000000000000000059400000000000005940"
+#   POINT(200, 200) — second tile-local point
+_WKB_POINT_200_200 = "010100000000000000000069400000000000006940"
+#   POINT(13, 42) — WGS84 location (used in CRS examples as WKT)
+#   EWKB POINT(13, 42) with SRID=4326
+_EWKB_POINT_13_42_EPSG4326 = "0101000020e61000000000000000002a400000000000004540"
+
+
+def elevation_dtm_point_path() -> Path:
+    """Absolute path to the committed sd46_dtm_point.shp mass-points shapefile.
+
+    96 k+ POINT Z geometries in BNG (EPSG:27700) with real survey elevations.
+    Used as the canonical TIN mass-point fixture.
+    """
+    repo_root = Path(__file__).parents[4]
+    return repo_root / ELEVATION_DTM_POINT
+
+
+def elevation_dtm_breakline_path() -> Path:
+    """Absolute path to the committed sd46_dtm_breakline.shp breaklines shapefile.
+
+    BNG (EPSG:27700) breakline geometries for constrained Delaunay triangulation.
+    """
+    repo_root = Path(__file__).parents[4]
+    return repo_root / ELEVATION_DTM_BREAKLINE
+
+
+# ---------------------------------------------------------------------------
+# VectorX TIN fixture builders
+# One row: pts = array<binary> of 4 WKB POINT Z; bl = empty array<binary>.
+# The 4 points form a 10×10 square with varying Z (0, 0, 10, 5 m):
+#   (0,0,0), (10,0,0), (10,10,10), (0,10,5)  →  2 Delaunay triangles (verified).
+# Elevations are genuinely non-flat: range = 10 m.
+# ---------------------------------------------------------------------------
+
+
+def tin_df(spark):
+    """Light-tier single-row DataFrame for TIN function examples.
+
+    Columns: ``pts ARRAY<BINARY>`` (4 WKB POINT Z), ``bl ARRAY<BINARY>`` (empty).
+    Suitable for ``st_triangulate``, ``st_interpolateelevationbbox``,
+    ``st_interpolateelevationgeom`` in the ``constrained`` mode (both tiers).
+
+    The 4 points form a 10×10 m square with elevations 0, 0, 10, 5 m
+    (non-degenerate — 2 Delaunay triangles, elevation range = 10 m).
+    """
+    return spark.sql(
+        f"""
+        SELECT array(
+            unhex('{_WKB_POINTZ_0_0_0}'),
+            unhex('{_WKB_POINTZ_10_0_0}'),
+            unhex('{_WKB_POINTZ_10_10_10}'),
+            unhex('{_WKB_POINTZ_0_10_5}')
+        ) AS pts,
+        cast(array() AS array<binary>) AS bl
+        """
+    )
+
+
+def tin_df_heavy(spark):
+    """Heavy-tier single-row DataFrame for TIN function examples.
+
+    Same schema and data as ``tin_df``; the heavy-tier column API is used in
+    examples but the fixture data itself is tier-agnostic.
+    """
+    return tin_df(spark)
+
+
+# ---------------------------------------------------------------------------
+# VectorX MVT fixture builders
+# Two rows: (z=0, x=0, y=0, geom_wkb BINARY, name STRING, id LONG)
+# Geometries are tile-local WKB POINT (pixel space 0..4096 by default).
+# ---------------------------------------------------------------------------
+
+
+def mvt_features_df(spark):
+    """Light-tier 2-row DataFrame for MVT function examples.
+
+    Columns: ``z INT``, ``x INT``, ``y INT``, ``geom_wkb BINARY``,
+    ``attrs STRUCT<name STRING, id LONG>``.
+
+    Both rows are in the same (z=0, x=0, y=0) tile with tile-local WKB POINT
+    geometries: POINT(100, 100) and POINT(200, 200) in pixel coordinates.
+    """
+    return spark.sql(
+        f"""
+        SELECT 0 AS z, 0 AS x, 0 AS y,
+               unhex('{_WKB_POINT_100_100}') AS geom_wkb,
+               named_struct('name', 'a', 'id', 1L) AS attrs
+        UNION ALL
+        SELECT 0, 0, 0,
+               unhex('{_WKB_POINT_200_200}'),
+               named_struct('name', 'b', 'id', 2L)
+        """
+    )
+
+
+def mvt_features_df_heavy(spark):
+    """Heavy-tier 2-row DataFrame for MVT function examples.
+
+    Same schema and data as ``mvt_features_df``; heavy tier uses
+    ``vectorx.functions`` but the fixture data is tier-agnostic.
+    """
+    return mvt_features_df(spark)
+
+
+# ---------------------------------------------------------------------------
+# VectorX geometry / CRS fixture builders
+# Single row: geom STRING (EWKT) for CRS function examples.
+# ---------------------------------------------------------------------------
+
+
+def geom_ewkt_df(spark):
+    """Single-row DataFrame with an EWKT geometry column for CRS examples.
+
+    Column: ``geom STRING`` — ``'SRID=4326;POINT (13 42)'``.
+    POINT(13, 42) is in central Italy, inside UTM zone 33N's area of use
+    (12°E–18°E), so ``st_transformcrs`` to ``EPSG:32633`` is in-domain.
+    """
+    return spark.sql("SELECT 'SRID=4326;POINT (13 42)' AS geom")
+
+
+def geom_ewkt_df_heavy(spark):
+    """Heavy-tier single-row DataFrame with EWKT geometry for CRS examples."""
+    return geom_ewkt_df(spark)
+
+
+# ---------------------------------------------------------------------------
+# VectorX legacy Mosaic geometry fixture builders
+# Single row: geom_legacy STRUCT (InternalGeometry) for st_legacyaswkb.
+# ---------------------------------------------------------------------------
+
+
+def legacy_geom_df(spark):
+    """Single-row DataFrame with a legacy Mosaic geometry struct.
+
+    Column: ``geom_legacy STRUCT<typeId INT, srid INT,
+    boundaries ARRAY<ARRAY<ARRAY<DOUBLE>>>, holes ARRAY<ARRAY<ARRAY<ARRAY<DOUBLE>>>>>``
+
+    Encodes POINT(13, 42): ``typeId=1`` (POINT), ``srid=0`` (no CRS),
+    ``boundaries=[[[13.0, 42.0]]]``, ``holes=[]``.
+
+    ``st_legacyaswkb`` converts this to ISO WKB for
+    POINT(13, 42) = ``unhex('01010000000000000000002a400000000000004540')``.
+    """
+    from pyspark.sql import Row  # noqa: PLC0415
+    from pyspark.sql.types import (  # noqa: PLC0415
+        ArrayType,
+        DoubleType,
+        IntegerType,
+        StructField,
+        StructType,
+    )
+
+    legacy_schema = StructType([
+        StructField("typeId", IntegerType()),
+        StructField("srid", IntegerType()),
+        StructField("boundaries", ArrayType(ArrayType(ArrayType(DoubleType())))),
+        StructField("holes", ArrayType(ArrayType(ArrayType(ArrayType(DoubleType()))))),
+    ])
+    schema = StructType([StructField("geom_legacy", legacy_schema)])
+    row = Row(geom_legacy=(1, 0, [[[13.0, 42.0]]], []))
+    return spark.createDataFrame([row], schema)
+
+
+def legacy_geom_df_heavy(spark):
+    """Heavy-tier single-row DataFrame with a legacy Mosaic geometry struct."""
+    return legacy_geom_df(spark)
+
+
+# ---------------------------------------------------------------------------
+# VectorX Setup views
+# Maps view name -> builder function. Mirrors the rasterx setup view pattern.
+#
+# View assignments:
+#   tin_survey   — TIN mass-points + breaklines for st_triangulate family
+#   mvt_features — tile-local features for st_asmvt / st_asmvt_pyramid
+#   vector_geoms — EWKT geometries for st_crs / st_setcrs / st_transformcrs
+#   legacy_geoms — legacy Mosaic structs for st_legacyaswkb
+# ---------------------------------------------------------------------------
+
+_SETUP_VIEWS_VECTORX_LIGHT = {
+    "tin_survey": tin_df,
+    "mvt_features": mvt_features_df,
+    "vector_geoms": geom_ewkt_df,
+    "legacy_geoms": legacy_geom_df,
+}
+_SETUP_VIEWS_VECTORX_HEAVY = {
+    "tin_survey": tin_df_heavy,
+    "mvt_features": mvt_features_df_heavy,
+    "vector_geoms": geom_ewkt_df_heavy,
+    "legacy_geoms": legacy_geom_df_heavy,
+}
+
+
+def create_setup_views_vectorx_light(spark):
+    """Create the four light-tier VectorX Setup views. Idempotent (createOrReplace).
+
+    Views: ``tin_survey``, ``mvt_features``, ``vector_geoms``, ``legacy_geoms``.
+    Register pyvx *before* calling this so SQL examples can use ``gbx_st_*``.
+    """
+    for view, builder in _SETUP_VIEWS_VECTORX_LIGHT.items():
+        builder(spark).createOrReplaceTempView(view)
+
+
+def create_setup_views_vectorx_heavy(spark):
+    """Create the four heavy-tier VectorX Setup views. Idempotent.
+
+    Views: ``tin_survey``, ``mvt_features``, ``vector_geoms``, ``legacy_geoms``.
+    Register vectorx *before* calling this so SQL examples can use ``gbx_st_*``.
+    """
+    for view, builder in _SETUP_VIEWS_VECTORX_HEAVY.items():
+        builder(spark).createOrReplaceTempView(view)
+
+
 if __name__ == "__main__":
     out = make_multiband_fixture()
     print(f"Written: {out}")

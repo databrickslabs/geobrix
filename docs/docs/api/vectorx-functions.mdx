@@ -6,8 +6,11 @@ title: VectorX Function Reference
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
+import FunctionExamples from '@site/src/components/FunctionExamples';
 import vectorxFunctionsExamples from '!!raw-loader!../../tests/python/api/vectorx_functions.py';
 import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
+import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
+import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import quickstartCode from '!!raw-loader!../../tests/python/quickstart/examples.py';
 import Tier from '@site/src/components/Tier';
 import { Impl } from '@site/src/components/Tier';
@@ -42,6 +45,118 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 | `st_setcrs` | Supported | Supported |
 | `st_transformcrs` | Supported | Supported |
 | `st_legacyaswkb` | Supported | Supported |
+
+---
+
+## Setup {#setup}
+
+With GeoBrix already [installed](../installation), register VectorX in your session before running any example. Both tiers alias the module as `vx`, so every example below is identical regardless of tier — only this import line differs.
+
+<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
+<TabItem value="lightweight" label="Lightweight (pyvx)">
+
+```python
+from databricks.labs.gbx.pyvx import functions as vx
+vx.register(spark)
+```
+
+</TabItem>
+<TabItem value="heavyweight" label="Heavyweight (vectorx)">
+
+```python
+from databricks.labs.gbx.vectorx import functions as vx
+vx.register(spark)
+```
+
+For the legacy conversion function (`st_legacyaswkb`), use:
+
+```python
+from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+vx.register(spark)
+```
+
+</TabItem>
+</Tabs>
+
+The examples on this page read from **four canonical DataFrames**, one per function family. Each is available as a temp view for SQL examples. Point the placeholders at your own data to reproduce the examples:
+
+| View / DataFrame | Schema | Backed by | Backs |
+|---|---|---|---|
+| `tin_survey` | `pts ARRAY<BINARY>`, `bl ARRAY<BINARY>` | 4 WKB POINT Z forming a 10×10 m square (elevations 0, 0, 10, 5 m) | TIN examples: `st_triangulate`, `st_interpolateelevationbbox`, `st_interpolateelevationgeom` |
+| `mvt_features` | `z INT`, `x INT`, `y INT`, `geom_wkb BINARY`, `attrs STRUCT<name,id>` | 2 tile-local WKB POINTs in tile (z=0, x=0, y=0) | Vector-tile examples: `st_asmvt`, `st_asmvt_pyramid` |
+| `vector_geoms` | `geom STRING` | EWKT literal `'SRID=4326;POINT (13 42)'` | CRS examples: `st_crs`, `st_setcrs`, `st_transformcrs` |
+| `legacy_geoms` | `geom_legacy STRUCT<typeId,srid,boundaries,holes>` | Legacy Mosaic struct for POINT(13, 42) | Migration: `st_legacyaswkb` |
+
+The committed fixtures backing these views live under [`src/test/resources/binary/elevation/`](https://github.com/databrickslabs/geobrix/tree/main/src/test/resources/binary/elevation) (shapefile mass points for TIN) and as inline WKB in the fixture helpers (MVT, CRS, legacy geometry).
+
+---
+
+## Examples — Conventions {#conventions}
+
+### How to read the four tabs
+
+Every function on this page shows **one example**, expressed identically across four tabs:
+
+| Tab | Tier | Badge |
+|---|---|---|
+| **SQL** | Both (default) | — |
+| **Python (light)** | `pyvx` lightweight tier | — |
+| **Python (heavy)** | `vectorx` heavyweight tier | Blue |
+| **Scala** | `vectorx` heavyweight tier | Blue |
+
+All four tabs operate on the **same input fixture** with the **same arguments**. Where a genuine tier difference exists — a diverging output schema or a mode available only in one tier — the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
+
+In each Python example, `df = spark.table("<view>")` or an equivalent inline `spark.sql(...)` call loads the canonical fixture. Each SQL example reads `FROM <view>` or uses an inline CTE — no separate `CREATE TEMP VIEW` step is shown.
+
+### Output representation
+
+The output cells in every function table follow a uniform convention so readers can compare tabs at a glance without decoding byte strings.
+
+**Binary geometry ([E]WKB)** — geometry returned as `BINARY` is elided with one token and a format annotation. Use `(WKB binary)` when the output carries no embedded SRID; `(EWKB binary)` when an SRID is embedded:
+
+```
+... (WKB binary)
+... (EWKB binary)
+```
+
+The WKB bytes are always the canonical output. Decode with `ST_GeomFromWKB`, `ST_GeomFromEWKB`, or any ISO WKB reader.
+
+**MVT bytes** — `st_asmvt` and `st_asmvt_pyramid` return Mapbox Vector Tile protobufs (BINARY). Output is shown as:
+
+```
+... (MVT binary)
+```
+
+**WKT / EWKT strings** — short strings are shown in full; longer strings are truncated with a type annotation:
+
+```
+POINT (13 42)
+MULTIPOLYGON (((... (WKT)
+```
+
+**CRS strings** — short authority strings (`EPSG:4326`, `ESRI:54008`) are shown in full; long WKT CRS definitions are truncated:
+
+```
+PROJCS["British National Grid", ...] (CRS)
+```
+
+**Cell width** — output cells are capped at approximately 60 characters. A longer value is truncated with `...` and annotated with its type.
+
+**Identical-across-tier values** — when all four tabs produce the same result (e.g. `EPSG:4326` from `st_crs`), each tab shows that value identically with the same annotation. Genuine tier differences are called out in a labeled `:::note`.
+
+### CRS-family functions return BINARY
+
+`gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB or EWKB) in **all input encodings and both tiers** — a STRING (WKT/EWKT) input still yields BINARY output. Only `gbx_st_crs` returns `STRING`. The clickable pointer to the CRS contract: [Coordinate Reference Systems](./coordinate-reference-systems).
+
+### Light tab for light-only UDTF generators
+
+`gbx_st_asmvt_pyramid`, `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` are Python UDTFs in the lightweight tier — they have **no Python DataFrame Column form**. The Python (light) tab for these functions shows:
+
+```python
+spark.sql("SELECT t.* FROM <view>, LATERAL gbx_<fn>(...) t")
+```
+
+This is the same invocation as the SQL tab, driven via Python. SQL `LATERAL` works for **both** tiers; the Python DataFrame Column form (`.select(vx.fn(...))`) is heavyweight-only for these generators.
 
 ---
 

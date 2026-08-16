@@ -43,23 +43,30 @@ def vectorx_registered(spark):
 
 
 def test_st_asmvt_sql_example(vectorx_registered):
-    """Run the ``gbx_st_asmvt`` SQL example and assert a non-empty MVT blob."""
+    """Run the ``gbx_st_asmvt`` SQL example against the ``mvt_features`` fixture view.
+
+    The fixture has 2 rows in tile (z=0, x=0, y=0), so one aggregated MVT blob is produced.
+    """
     spark = vectorx_registered
     sql = vectorx_functions_sql.st_asmvt_sql_example()
     result = spark.sql(_statement(sql)).collect()
+    # Both fixture rows are in the same tile → exactly 1 MVT blob.
     assert len(result) == 1
     assert result[0]["mvt_bytes_len"] > 0
 
 
 def test_st_asmvt_pyramid_sql_example(vectorx_registered):
-    """Run the ``gbx_st_asmvt_pyramid`` SQL example and assert one row per tile."""
+    """Run the ``gbx_st_asmvt_pyramid`` SQL example and assert one row per tile.
+
+    POINT(0, 0) WGS-84 at zoom 0–2 intersects exactly 3 tiles:
+    (z=0, x=0, y=0), (z=1, x=1, y=1), (z=2, x=2, y=2).
+    """
     spark = vectorx_registered
     sql = vectorx_functions_sql.st_asmvt_pyramid_sql_example()
     result = spark.sql(_statement(sql)).collect()
-    # The example rectangle straddles the prime meridian at z=2 → two tiles emitted.
-    assert len(result) == 2
+    # POINT(0, 0) at zoom 0–2 → 3 tiles, one per zoom level.
+    assert len(result) == 3
     for row in result:
-        assert row["z"] == 2
         assert row["mvt_bytes_len"] > 0
 
 

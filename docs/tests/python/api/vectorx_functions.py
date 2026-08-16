@@ -90,6 +90,73 @@ One row per input legacy geometry; wkb column contains binary WKB.
 
 
 # ---------------------------------------------------------------------------
+# Vector-tile family — heavy (vectorx) Python examples
+# Fixture: ``mvt_features`` view — 2 rows: tile-local WKB POINTs in (z=0,x=0,y=0)
+# ---------------------------------------------------------------------------
+
+_WKB_POINT_0_0 = "010100000000000000000000000000000000000000"
+
+
+def st_asmvt_python_heavy_example(spark):
+    """Aggregate tile-local features into an MVT protobuf blob per tile (heavy vectorx tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("mvt_features")
+    result = df.groupBy("z", "x", "y").agg(
+        vx.st_asmvt(f.col("geom_wkb"), f.col("attrs"), f.lit("layer")).alias("mvt")
+    )
+    row = result.first()
+    return row["mvt"]
+
+
+st_asmvt_python_heavy_example_output = """
++---+---+---+---------+
+|  z|  x|  y|      mvt|
++---+---+---+---------+
+|  0|  0|  0|[binary] |
++---+---+---+---------+
+... (MVT binary)
+"""
+
+
+def st_asmvt_pyramid_python_heavy_example(spark):
+    """Explode a WGS-84 feature into per-tile MVT rows using the Generator Column API (heavy tier).
+
+    Creates a single-row DataFrame with WGS-84 POINT(0, 0), then invokes
+    ``st_asmvt_pyramid`` as a generator Column.  The generator returns one struct
+    row per intersecting tile; ``selectExpr`` flattens the struct fields into
+    individual columns for readability.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+
+    df = spark.sql(f"""
+        SELECT unhex('{_WKB_POINT_0_0}') AS geom_wkb,
+               named_struct('name', 'origin', 'id', 1L) AS attrs
+        """)
+    result = df.select(
+        vx.st_asmvt_pyramid(
+            f.col("geom_wkb"), f.col("attrs"), f.lit(0), f.lit(2), f.lit("layer")
+        ).alias("t")
+    ).selectExpr("t.z AS z", "t.x AS x", "t.y AS y", "t.mvt_bytes AS mvt_bytes")
+    rows = result.collect()
+    return rows[0]["mvt_bytes"] if rows else None
+
+
+st_asmvt_pyramid_python_heavy_example_output = """
++---+---+---+-----------+
+|  z|  x|  y|  mvt_bytes|
++---+---+---+-----------+
+|  0|  0|  0|  [binary] |
+|  1|  1|  1|  [binary] |
+|  2|  2|  2|  [binary] |
++---+---+---+-----------+
+... (MVT binary — one row per tile; use t.z, t.x, t.y, t.mvt_bytes for field access)
+"""
+
+
+# ---------------------------------------------------------------------------
 # CRS family — heavy (vectorx) Python examples
 # Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
 # ---------------------------------------------------------------------------

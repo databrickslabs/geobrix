@@ -79,6 +79,34 @@ def test_vectorx_light_setup_views_created(spark):
 
 
 # ---------------------------------------------------------------------------
+# T3: Vector-tile family — st_asmvt, st_asmvt_pyramid
+# ---------------------------------------------------------------------------
+
+
+def test_st_asmvt_python_light_example(spark):
+    """st_asmvt returns non-empty MVT BINARY for the tile-local mvt_features fixture."""
+    assert light_examples is not None
+    result = light_examples.st_asmvt_python_light_example(spark)
+    assert result is not None, "st_asmvt should return non-null MVT bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (MVT BINARY), got {type(result)}"
+    assert len(result) > 0, "MVT bytes should be non-empty"
+
+
+def test_st_asmvt_pyramid_python_light_example(spark):
+    """st_asmvt_pyramid LATERAL emits >=1 tile row for WGS-84 POINT(0,0) zoom 0-2."""
+    assert light_examples is not None
+    result = light_examples.st_asmvt_pyramid_python_light_example(spark)
+    # Returns the z value of the first row — should be a non-negative integer.
+    assert (
+        result is not None
+    ), "st_asmvt_pyramid should emit at least one tile for POINT(0,0) zoom 0-2"
+    assert isinstance(result, int), f"Expected int z value, got {type(result)!r}"
+    assert result >= 0, f"Zoom level should be >= 0, got {result!r}"
+
+
+# ---------------------------------------------------------------------------
 # T2: CRS family — st_crs, st_setcrs, st_transformcrs
 # Fixture view: ``vector_geoms`` — 1 row: geom = 'SRID=4326;POINT (13 42)'
 # ---------------------------------------------------------------------------

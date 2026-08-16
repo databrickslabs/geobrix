@@ -57,6 +57,37 @@ def test_st_legacyaswkb_python_example_executes(spark):
 
 
 # ---------------------------------------------------------------------------
+# T3: Vector-tile family heavy-tier tests
+# Fixtures: ``mvt_features`` view (for st_asmvt) and inline WGS-84 data
+#            (for st_asmvt_pyramid) — both created/available via vectorx_heavy_setup.
+# ---------------------------------------------------------------------------
+
+
+def test_st_asmvt_python_heavy_example(vectorx_heavy_setup):
+    """st_asmvt returns non-empty MVT BINARY for the tile-local mvt_features fixture."""
+    spark = vectorx_heavy_setup
+    result = vectorx_functions.st_asmvt_python_heavy_example(spark)
+    assert result is not None, "st_asmvt should return non-null MVT bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (MVT BINARY), got {type(result)}"
+    assert len(result) > 0, "MVT bytes should be non-empty"
+
+
+def test_st_asmvt_pyramid_python_heavy_example(vectorx_heavy_setup):
+    """st_asmvt_pyramid Generator Column emits non-empty MVT bytes for WGS-84 POINT(0,0)."""
+    spark = vectorx_heavy_setup
+    result = vectorx_functions.st_asmvt_pyramid_python_heavy_example(spark)
+    assert (
+        result is not None
+    ), "st_asmvt_pyramid should emit at least one tile for POINT(0,0) zoom 0-2"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (MVT BINARY), got {type(result)}"
+    assert len(result) > 0, "MVT bytes should be non-empty"
+
+
+# ---------------------------------------------------------------------------
 # T2: CRS family heavy-tier tests
 # Fixture: ``vector_geoms`` view via ``vectorx_heavy_setup``.
 # ---------------------------------------------------------------------------

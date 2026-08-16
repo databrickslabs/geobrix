@@ -115,6 +115,86 @@ VectorX (light) registered. You can now use gbx_st_* SQL functions via the pyvx 
 
 
 # ---------------------------------------------------------------------------
+# Vector-tile family — st_asmvt, st_asmvt_pyramid
+# ---------------------------------------------------------------------------
+#
+# st_asmvt
+# Fixture: ``mvt_features`` view — 2 rows: tile-local WKB POINTs in (z=0,x=0,y=0)
+# POINT(100,100) and POINT(200,200) in pixel space; attrs STRUCT<name STRING, id LONG>.
+# The aggregator consumes tile-local coordinates and encodes them as MVT protobufs.
+#
+# st_asmvt_pyramid
+# Input must be WGS-84 lon/lat — the UDTF clips and transforms per tile internally.
+# POINT(0, 0) (equator × prime meridian) at zoom 0–2 intersects 3 tiles:
+# (z=0,x=0,y=0), (z=1,x=1,y=1), (z=2,x=2,y=2).
+# NOTE: The ``mvt_features`` fixture carries tile-local pixel coordinates which
+# are outside valid WGS-84 latitude range; the pyramid UDTF is therefore shown
+# with inline WGS-84 data rather than the ``mvt_features`` view.
+# ---------------------------------------------------------------------------
+
+_WKB_POINT_0_0 = "010100000000000000000000000000000000000000"
+
+
+def st_asmvt_python_light_example(spark):
+    """Aggregate tile-local features into an MVT protobuf blob per tile (light pyvx tier).
+
+    Reads the ``mvt_features`` setup view (2 tile-local WKB POINTs in z=0/x=0/y=0)
+    and groups by ``(z, x, y)`` before aggregating.  The aggregator encodes all
+    features in each group into one MVT blob.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("mvt_features")
+    result = df.groupBy("z", "x", "y").agg(
+        vx.st_asmvt("geom_wkb", f.col("attrs"), "layer").alias("mvt")
+    )
+    row = result.first()
+    return row["mvt"]
+
+
+st_asmvt_python_light_example_output = """
++---+---+---+---------+
+|  z|  x|  y|      mvt|
++---+---+---+---------+
+|  0|  0|  0|[binary] |
++---+---+---+---------+
+... (MVT binary)
+"""
+
+
+def st_asmvt_pyramid_python_light_example(spark):
+    """Explode a WGS-84 feature into per-tile MVT rows via SQL LATERAL (light pyvx tier).
+
+    The lightweight pyramid is a Python UDTF with no Python DataFrame Column form —
+    invoke it via SQL ``LATERAL`` only.  POINT(0, 0) WGS-84 at zoom 0–2 intersects
+    3 tiles and emits one ``(z, x, y, mvt_bytes)`` row per tile.
+    """
+    result = spark.sql(f"""
+        WITH feats AS (
+            SELECT unhex('{_WKB_POINT_0_0}') AS geom_wkb,
+                   named_struct('name', 'origin', 'id', 1L) AS attrs
+        )
+        SELECT t.*
+        FROM feats, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t
+        """)
+    rows = result.collect()
+    return rows[0]["z"] if rows else None
+
+
+st_asmvt_pyramid_python_light_example_output = """
++---+---+---+-----------+
+|  z|  x|  y|  mvt_bytes|
++---+---+---+-----------+
+|  0|  0|  0|  [binary] |
+|  1|  1|  1|  [binary] |
+|  2|  2|  2|  [binary] |
++---+---+---+-----------+
+... (MVT binary — one row per intersecting tile across zoom levels 0–2)
+"""
+
+
+# ---------------------------------------------------------------------------
 # CRS family — st_crs, st_setcrs, st_transformcrs
 # Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
 # POINT(13, 42) is in central Italy, inside UTM zone 33N's area of use

@@ -211,21 +211,19 @@ This means downstream clients (MapLibre GL JS, Mapbox GL JS, deck.gl) receive nu
 
 ### st_asmvt
 
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pyvx)">
-
-<Tier light/> <Impl groupedAgg/>
+<Tier both/> <Impl groupedAgg/>
 
 Aggregator that encodes a group of features into a single MVT protobuf blob for one
-`(z, x, y)` tile. Each call to `groupBy(z, x, y).agg(vx.st_asmvt(...))` produces the
-MVT bytes for exactly one tile.
+`(z, x, y)` tile. Each `groupBy(z, x, y).agg(vx.st_asmvt(...))` call produces the
+MVT bytes for exactly one tile. Both tiers expose the same grouped-aggregate API and
+produce identical output bytes — a one-line swap between `pyvx` and `vectorx`.
 
 **Signature:** `st_asmvt(geom, attrs, layer_name) → BINARY`
 
 **Parameters:**
 
 - `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **tile-local coordinates** (pixel
-  space, 0..extent). Clip and project each feature to the tile coordinate system upstream
+  space, `0..extent`). Clip and project each feature to the tile coordinate system upstream
   before calling this aggregator.
 - `attrs` (`STRUCT<...>`) — Per-feature attribute struct. Integer, float, boolean, and
   string fields are encoded with native MVT protobuf value types.
@@ -234,132 +232,56 @@ MVT bytes for exactly one tile.
 **Returns:** `BINARY` — the MVT protobuf for one tile layer. Feed directly into
 `gbx_pmtiles_agg` or the [PMTiles Writer](../writers/pmtiles).
 
-**PySpark:**
+**Composability:** The `BINARY` output is the natural input to `gbx_pmtiles_agg` for packaging
+multiple `(z, x, y)` tiles into a single PMTiles file.
 
-```python
-from databricks.labs.gbx.pyvx import functions as vx
-from pyspark.sql import functions as F
-
-vx.register(spark)
-
-# features_df: (z, x, y, geom_wkb BINARY in tile-local coords, name STRING, id LONG)
-tiles_df = (
-    features_df
-    .groupBy("z", "x", "y")
-    .agg(
-        vx.st_asmvt(
-            F.col("geom_wkb"),
-            F.struct(F.col("name"), F.col("id")),
-            "roads",          # layer name — plain string becomes a literal Column
-        ).alias("mvt_bytes")
-    )
-)
-# tiles_df: (z INT, x INT, y INT, mvt_bytes BINARY)
-```
-
-**SQL** (after `vx.register(spark)` in the same session):
-
-```sql
-SELECT
-    z, x, y,
-    gbx_st_asmvt(geom_wkb, struct(name, id), 'roads') AS mvt_bytes
-FROM features_with_tile_coords
-GROUP BY z, x, y
-```
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight (vectorx)">
-
-<Tier heavy/>
-
-Aggregator that encodes a group of features into a single MVT protobuf blob for one `(z, x, y)` tile.
-
-**Signature:** `st_asmvt(geom: Column, attrs: Column, layerName: Column): Column`
-
-**Parameters:**
-- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **tile-local coordinates**. Compose any `ST_Intersection` against the tile envelope and coordinate translation upstream.
-- `attrs` (`STRUCT<...>`) — Per-feature attributes. Integer, long, double, and boolean fields are encoded as native MVT value types; other types are encoded as strings.
-- `layerName` (`STRING`) — MVT layer name.
-
-**Returns:** `BINARY` — the MVT protobuf bytes for one layer of the tile.
-
-Typical use: `GROUP BY (z, x, y)` after composing tile-local coordinates upstream, so each group becomes one tile.
-
-**SQL:**
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_asmvt_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" />
-
-**PySpark:**
-
-```python
-from databricks.labs.gbx.vectorx import functions as vx
-from pyspark.sql.functions import col, struct
-
-df.groupBy("z", "x", "y").agg(
-    vx.st_asmvt(col("geom_wkb"), struct(col("name"), col("id")), "roads").alias("mvt")
-)
-```
-
-**Composability:** The `BINARY` output is the natural input to `gbx_pmtiles_agg` for packaging multiple `(z, x, y)` tiles into a single PMTiles file.
-
-**Limitations in 0.4.0:**
-- Caller composes any `ST_Simplify` upstream.
-- Caller composes tile-coordinate transform upstream.
-
-</TabItem>
-</Tabs>
+<FunctionExamples
+  name="st_asmvt"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 
 ### st_asmvt_pyramid
 
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pyvx)">
+<Tier both/> <Impl udtf/>
 
-<Tier light/> <Impl udtf/>
+Generator that explodes one input feature into one row per intersecting `(z, x, y)` tile
+across a zoom range, with MVT bytes already encoded in each row. The per-tile clip and
+coordinate transform happen inside the function — no upstream `ST_Intersection` is needed.
 
-Generator (Python UDTF) that explodes one input feature into one row per intersecting
-`(z, x, y)` tile across a zoom range, with MVT bytes already encoded in each row. The
-per-tile clip and coordinate transform happen inside the function — no upstream
-`ST_Intersection` is needed.
+Input geometry must be in **EPSG:4326 lon/lat**. The function handles per-tile projection
+internally. `max_z ≤ 20`; total tile count across the zoom range capped at 10⁶.
 
-The output schema `(z, x, y, mvt_bytes)` is identical to the heavyweight generator,
-so SQL pipelines built against either tier are interchangeable. In the lightweight
-tier this generator is invoked only via SQL `LATERAL`; it has no Python DataFrame
-Column form (that form is heavy-only).
-
-**Signature (SQL):** `gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, layer_name, extent)`
+**Signature:** `gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, [layer_name], [extent])`
 
 **Parameters:**
 
-- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **EPSG:4326 lon/lat**. The UDTF
-  clips each feature to every intersecting tile and transforms to tile-local coordinates
-  internally.
+- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **EPSG:4326 lon/lat**.
 - `attrs` (`STRUCT<...>`) — Per-feature attributes. Same native-typed encoding as `st_asmvt`.
 - `min_z`, `max_z` (`INT`) — Inclusive zoom range (`0..20`).
 - `layer_name` (`STRING`, optional) — MVT layer name; defaults to `"layer"`.
 - `extent` (`INT`, optional) — MVT tile extent in pixels; defaults to `4096`.
 
-**Returns:** One row per intersecting tile — schema `(z INT, x INT, y INT, mvt_bytes BINARY)`.
-
-**Caps:** `max_z ≤ 20`; total tile count across the zoom range capped at 10⁶.
-
-**SQL — LATERAL table function:**
-
+:::note SQL invocation form differs between tiers
+The **lightweight** tier is a Python UDTF registered via `spark.udtf.register` — invoke it with `LATERAL` (SQL standard table-function syntax):
 ```sql
--- After vx.register(spark):
-SELECT t.*
-FROM features,
-     LATERAL gbx_st_asmvt_pyramid(
-         geom_wkb, struct(name, id), 0, 12, 'roads', 4096
-     ) t
+FROM features, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 12, 'layer', 4096) t
+-- Output columns: t.z, t.x, t.y, t.mvt_bytes (direct)
 ```
+The **heavyweight** tier is a JVM generator expression — invoke it with `LATERAL VIEW` (Hive-style):
+```sql
+FROM features LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 12, 'layer', 4096) t AS tile
+-- Output column: t.tile.z, t.tile.x, t.tile.y, t.tile.mvt_bytes (struct wrapper)
+```
+The Python DataFrame Column form (`vx.st_asmvt_pyramid(col(...), ...)`) is **heavyweight-only**; the lightweight UDTF has no Column API.
+:::
 
-`LATERAL` materializes one `(z, x, y, mvt_bytes)` row per tile the feature intersects.
-Each executor processes its partition's features in parallel — tile fan-out is distributed
-across the cluster, not serialized on the driver.
-
-**Full pipeline — vector pyramid to PMTiles:**
+**Full pipeline — vector pyramid to PMTiles (lightweight):**
 
 ```python
 from databricks.labs.gbx.pyvx    import functions as vx
@@ -394,50 +316,14 @@ with open("/tmp/roads.pmtiles", "wb") as fh:
 For larger pyramids that exceed the Spark cell limit, use the [PMTiles Writer](../writers/pmtiles)
 (`pmtiles_gbx` for the lightweight tier) instead of `pmtiles_agg`.
 
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight (vectorx)">
-
-<Tier heavy/>
-
-Generator that explodes one feature into one row per intersecting `(z, x, y)` tile across a zoom range, with the MVT bytes already encoded per tile. Pairs with `gbx_rst_xyzpyramid` (the raster sibling) and feeds directly into `gbx_pmtiles_agg`.
-
-**Signature:** `st_asmvt_pyramid(geom: Column, attrs: Column, minZoom: Column, maxZoom: Column, layerName: Column): Column`
-
-**Parameters:**
-- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **EPSG:4326 lon/lat**. The function performs the per-tile clip and tile-local coordinate transform; no upstream `ST_Intersection` required.
-- `attrs` (`STRUCT<...>`) — Per-feature attributes. Integer, long, double, and boolean fields are encoded as native MVT value types; other types are encoded as strings.
-- `minZoom`, `maxZoom` (`INT`) — Inclusive zoom-level range (`0..20`).
-- `layerName` (`STRING`) — MVT layer name (constant per call).
-- `extent` (`INT`, optional) — MVT tile extent in pixels; default `4096` (MVT v2 standard).
-
-**Returns:** One row per intersecting tile; each row's `tile` struct exposes `(z INT, x INT, y INT, mvt_bytes BINARY)`. Use `LATERAL VIEW` to materialize rows and pipe `mvt_bytes` into `gbx_pmtiles_agg`.
-
-**SQL:**
-
-<CodeFromTest code={vectorxSqlCode} functionName="st_asmvt_pyramid_sql_example" language="sql" source="docs/tests/python/api/vectorx_functions_sql.py" testFile="docs/tests/python/api/test_vectorx_functions_sql.py" />
-
-**PySpark:**
-
-```python
-from databricks.labs.gbx.vectorx import functions as vx
-from pyspark.sql.functions import col, struct
-
-df.select(
-    vx.st_asmvt_pyramid(
-        col("geom_wkb"), struct(col("name"), col("id")), 0, 8, "roads"
-    ).alias("t")
-).select("t.tile.z", "t.tile.x", "t.tile.y", "t.tile.mvt_bytes")
-```
-
-**Composability:** Output rows compose directly with `gbx_pmtiles_agg` — group by `(z, x, y)`, aggregate `mvt_bytes` to produce a PMTiles blob with `tile_type = mvt`. For multi-feature tiles, pre-explode tile assignments and then `groupBy(z, x, y).agg(st_asmvt(...))` using the aggregator.
-
-**Limitations in 0.4.0:**
-- Single-feature input per row. Multi-feature aggregation per tile requires the aggregator pattern above.
-- `max_z <= 20`; total tile count across the zoom range capped at 10^6 (mirrors `gbx_rst_xyzpyramid`).
-- Inputs must be in EPSG:4326; reproject upstream for other CRS.
-
-</TabItem>
-</Tabs>
+<FunctionExamples
+  name="st_asmvt_pyramid"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
 
 ---
 

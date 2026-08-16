@@ -2861,6 +2861,63 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 (Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
 
   // =========================================================================
+  // VectorX vector-tile family — st_asmvt, st_asmvt_pyramid
+  //
+  // st_asmvt: Fixture ``mvt_features`` view — 2 tile-local WKB POINTs in (z=0,x=0,y=0)
+  // st_asmvt_pyramid: Inline WGS-84 POINT(0,0) — the pyramid UDTF expects lon/lat input;
+  //   tile-local pixel coordinates (used by st_asmvt) exceed Web-Mercator latitude bounds.
+  // =========================================================================
+
+  val st_asmvt_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.table("mvt_features")
+val result = df.groupBy("z", "x", "y").agg(
+  vx.st_asmvt(col("geom_wkb"), col("attrs"), lit("layer")).alias("mvt")
+)
+result.first().getAs[Array[Byte]]("mvt")
+""".trim
+
+  val st_asmvt_scala_example_output: String =
+    """
++---+---+---+---------+
+|  z|  x|  y|      mvt|
++---+---+---+---------+
+|  0|  0|  0|[binary] |
++---+---+---+---------+
+... (MVT binary)""".trim
+
+  val st_asmvt_pyramid_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.sql(
+  "SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb, " +
+  "named_struct('name', 'origin', 'id', 1L) AS attrs"
+)
+val result = df.select(
+  vx.st_asmvt_pyramid(col("geom_wkb"), col("attrs"), lit(0), lit(2), lit("layer")).alias("t")
+).selectExpr("t.z AS z", "t.x AS x", "t.y AS y", "t.mvt_bytes AS mvt_bytes")
+result.count()
+""".trim
+
+  val st_asmvt_pyramid_scala_example_output: String =
+    """
++---+---+---+-----------+
+|  z|  x|  y|  mvt_bytes|
++---+---+---+-----------+
+|  0|  0|  0|  [binary] |
+|  1|  1|  1|  [binary] |
+|  2|  2|  2|  [binary] |
++---+---+---+-----------+
+... (MVT binary — one row per tile; use t.z, t.x, t.y, t.mvt_bytes for field access)""".trim
+
+  // =========================================================================
   // VectorX CRS family — st_crs, st_setcrs, st_transformcrs
   // Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
   // =========================================================================

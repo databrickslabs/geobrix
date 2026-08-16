@@ -461,14 +461,18 @@ def run(
     if not out_sentinel.exists():
         ok &= create_synthetic_raster(out_sentinel, *nyc_bbox)
 
-    # NYC elevation: GeoTIFF only (GDAL supports GTiff everywhere; .hgt/SRTMHGT is optional)
+    # NYC elevation: GeoTIFF only (GDAL supports GTiff everywhere; .hgt/SRTMHGT is optional).
+    # The source SRTM tiles are already small (64x64 synthetic DEMs) and are used as ADJACENT
+    # tiles (e.g. multi-tile mosaic examples), so COPY them wholesale rather than clip to the
+    # tiny NYC bbox. Clipping over-minimizes and -- for n40w073, which covers -73..-72 (east of
+    # the Manhattan bbox) -- produced an all-zero 2x2 degenerate tile. copyfile (not copy) keeps
+    # it FUSE-safe (no chmod) on UC Volumes.
     for tile in ["srtm_n40w073.tif", "srtm_n40w074.tif"]:
         src_tif = source_root / "nyc" / "elevation" / tile
         out_path = out_root / "nyc" / "elevation" / tile
         ensure_dir(out_path.parent)
         if src_tif.exists():
-            if not clip_raster_to_bbox(src_tif, out_path, *nyc_bbox):
-                ok &= create_synthetic_raster(out_path, *nyc_bbox)
+            shutil.copyfile(src_tif, out_path)
         else:
             ok &= create_synthetic_raster(out_path, *nyc_bbox)
 

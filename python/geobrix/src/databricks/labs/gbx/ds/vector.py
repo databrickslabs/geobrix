@@ -1021,9 +1021,13 @@ class VectorGbxWriter(DataSourceWriter):
                 del first_tbl
                 self._write_streaming(frags, local_out, geom_type, crs)
             else:
-                tables = [feather.read_table(f) for f in frags]
-                geom_type, crs = self._infer_geom_crs(tables)
-                self._write_local(tables, local_out, geom_type, crs)
+                # Infer geom/CRS from first fragment only (bounded memory), then
+                # stream remaining fragments via generator (lazy, not list).
+                first_tbl = feather.read_table(frags[0])
+                geom_type, crs = self._infer_geom_crs([first_tbl])
+                del first_tbl
+                tables_gen = (feather.read_table(f) for f in frags)
+                self._write_local(tables_gen, local_out, geom_type, crs)
             # Clear any Spark-created stub at self.path, then copy everything
             # pyogrio produced in local_dir (file, sidecar set, or .gdb dir).
             self._prepare_target()
@@ -1095,17 +1099,27 @@ class VectorGbxWriter(DataSourceWriter):
             # re-raise genuine write errors.
             if "does not support" not in str(e) and not isinstance(e, TypeError):
                 raise
-            tables = [feather.read_table(f) for f in frags]
-            if len(tables) > 1:
-                tables = [pa.concat_tables(tables)]
-            self._write_local(tables, local_out, geom_type, crs)
+            # Fall back to _write_local with lazy generator (bounded memory).
+            tables_gen = (feather.read_table(f) for f in frags)
+            self._write_local(tables_gen, local_out, geom_type, crs)
 
     def _write_local(self, tables, local_out, geom_type, crs) -> None:
         """Write the merged tables to a local path. Use the fast Arrow path; if the
         driver lacks Arrow-write support, fall back to the classic feature-based path.
         OpenFileGDB is NOT routed here; the commit() method calls _write_local_osgeo_gdb
-        directly with fragment paths (streaming + transaction batching)."""
+        directly with fragment paths (streaming + transaction batching).
+
+        Accepts tables as an iterable (list or generator). For generators, the first
+        table is read explicitly to detect Arrow-write support, then remaining tables
+        are streamed to avoid whole-dataset materialization (bounded memory)."""
         import pyogrio
+
+        # Convert to iterator so we can pull the first table explicitly
+        it = iter(tables)
+        try:
+            first_tbl = next(it)
+        except StopIteration:
+            return  # no tables, nothing to write
 
         # Write SQLite-backed formats (GPKG) with a DELETE journal -- no WAL/-shm
         # sidecars -- so the output reads back from read-only object storage (a
@@ -1125,17 +1139,14 @@ class VectorGbxWriter(DataSourceWriter):
             # when it starts with the reserved 'gpkg' prefix; use a safe default.
             kw["layer"] = _default_gpkg_layer(self.path)
         out_geom = _output_geom_name(self.driver, self.geom_col)
+
         try:
-            for n, tbl in enumerate(tables):
-                t = self._drop_meta_cols(tbl)
-                # Rename the input geom column to the format-canonical output name
-                # (e.g. GPKG: geom_0 -> geom) so pyogrio can find the geometry by
-                # the name passed as geometry_name=out_geom.
-                if out_geom != self.geom_col and self.geom_col in t.column_names:
-                    t = t.rename_columns(
-                        [out_geom if c == self.geom_col else c for c in t.column_names]
-                    )
-                pyogrio.write_arrow(t, local_out, append=(n > 0), **kw)
+            # Write the first table to test Arrow-write support; if this raises
+            # "does not support write functionality", catch it and fall back to classic.
+            self._write_one_arrow(first_tbl, local_out, out_geom, kw, append=False)
+            # Arrow write succeeded; stream remaining tables
+            for n, tbl in enumerate(it, start=1):
+                self._write_one_arrow(tbl, local_out, out_geom, kw, append=True)
         except Exception as e:  # noqa: BLE001
             if "does not support write functionality" not in str(e):
                 raise
@@ -1145,7 +1156,28 @@ class VectorGbxWriter(DataSourceWriter):
                 shutil.rmtree(local_out, ignore_errors=True)
             elif os.path.isfile(local_out):
                 os.remove(local_out)
-            self._write_local_classic(tables, local_out, geom_type, crs)
+            # Chain first table + remaining iterator LAZILY. 'it' is pristine here:
+            # "does not support" only fires on the first write (before the loop below
+            # consumes it), so the classic fallback stays bounded (one fragment at a
+            # time) instead of materializing every fragment via list(it).
+            from itertools import chain as _chain
+
+            all_tables = _chain((first_tbl,), it)
+            self._write_local_classic(all_tables, local_out, geom_type, crs)
+
+    def _write_one_arrow(self, tbl, local_out, out_geom, kw, append):
+        """Write one table via the Arrow path, handling geom column rename."""
+        import pyogrio
+
+        t = self._drop_meta_cols(tbl)
+        # Rename the input geom column to the format-canonical output name
+        # (e.g. GPKG: geom_0 -> geom) so pyogrio can find the geometry by
+        # the name passed as geometry_name=out_geom.
+        if out_geom != self.geom_col and self.geom_col in t.column_names:
+            t = t.rename_columns(
+                [out_geom if c == self.geom_col else c for c in t.column_names]
+            )
+        pyogrio.write_arrow(t, local_out, append=append, **kw)
 
     def _write_local_osgeo_gdb(  # noqa: C901
         self, frags, local_out, geom_type, crs
@@ -1278,6 +1310,8 @@ class VectorGbxWriter(DataSourceWriter):
             ds = None  # flush + close
 
     def _write_local_classic(self, tables, local_out, geom_type, crs) -> None:
+        """Write tables via the classic (non-Arrow) OGR path. Accepts an iterable
+        (list or generator) and streams one table at a time (bounded memory)."""
         import numpy as np
         import pyogrio.raw
 

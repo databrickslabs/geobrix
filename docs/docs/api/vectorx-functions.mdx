@@ -344,39 +344,6 @@ The lightweight tier raises `NotImplementedError` on `mode='conforming'` — it 
 In the **lightweight** tier these TIN generators are PySpark UDTFs with **no Python DataFrame Column form** — invoke them via SQL `LATERAL` (e.g. `... , LATERAL gbx_st_triangulate(...) t`), the same pattern as `gbx_st_asmvt_pyramid`. In the **heavyweight** tier they are exposed as generator Columns (usable in `select(...)`) and via SQL `LATERAL VIEW`. SQL `LATERAL` works for **both** tiers; the Python DataFrame Column form is heavyweight-only for these generators.
 :::
 
-### st_triangulate
-
-<Tier both/> <Impl udtf/>
-
-Builds a Delaunay TIN from mass-point geometries (with Z values) and optional breakline geometries, emitting one triangle polygon per row. Use this when you need the raw triangulation — e.g., to inspect mesh quality, clip triangles to an area of interest, or feed a custom sampler.
-
-**Signature:** `gbx_st_triangulate(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode])`
-
-**Parameters:**
-- `points_array` — Array column of point geometries with Z values (the mass points that define the surface). Accepts WKB/EWKB/WKT/EWKT.
-- `breaklines_array` — Array column of linestring geometries that the mesh must honor as edges (e.g., ridge lines, drainage channels). Pass an empty array if no breaklines are needed.
-- `merge_tolerance` (`DOUBLE`) — Distance below which coincident points are merged before triangulation.
-- `snap_tolerance` (`DOUBLE`) — Distance within which points are snapped to breakline vertices.
-- `split_point_finder` (`STRING`) — Conforming-mesh refinement strategy. Use `'NONENCROACHING'` for a mesh that avoids encroaching on breakline segments; `'MIDPOINT'` is also valid (heavyweight `conforming` mode).
-- `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only). See [Triangulation modes](#triangulation-modes-constrained-vs-conforming) above.
-
-**Generator:** Emits one row per output triangle. Use with SQL `LATERAL` to materialize the triangles; the output schema column is `triangle` (`BINARY` WKB polygon).
-
-<FunctionExamples
-  name="st_triangulate"
-  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
-/>
-
-:::note `mode='conforming'` is heavyweight-only
-The `'constrained'` mode (default) is available in **both** tiers. The `'conforming'` mode — which inserts Steiner points along breakline segments for a smoother mesh — is **heavyweight-only**: the lightweight `pyvx` tier raises `NotImplementedError` if you pass `mode='conforming'`. The examples on all tabs use the default `'constrained'` mode.
-:::
-
----
-
 ### st_interpolateelevationbbox
 
 <Tier both/> <Impl udtf/>
@@ -439,6 +406,39 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
+
+---
+
+### st_triangulate
+
+<Tier both/> <Impl udtf/>
+
+Builds a Delaunay TIN from mass-point geometries (with Z values) and optional breakline geometries, emitting one triangle polygon per row. Use this when you need the raw triangulation — e.g., to inspect mesh quality, clip triangles to an area of interest, or feed a custom sampler.
+
+**Signature:** `gbx_st_triangulate(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode])`
+
+**Parameters:**
+- `points_array` — Array column of point geometries with Z values (the mass points that define the surface). Accepts WKB/EWKB/WKT/EWKT.
+- `breaklines_array` — Array column of linestring geometries that the mesh must honor as edges (e.g., ridge lines, drainage channels). Pass an empty array if no breaklines are needed.
+- `merge_tolerance` (`DOUBLE`) — Distance below which coincident points are merged before triangulation.
+- `snap_tolerance` (`DOUBLE`) — Distance within which points are snapped to breakline vertices.
+- `split_point_finder` (`STRING`) — Conforming-mesh refinement strategy. Use `'NONENCROACHING'` for a mesh that avoids encroaching on breakline segments; `'MIDPOINT'` is also valid (heavyweight `conforming` mode).
+- `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only). See [Triangulation modes](#triangulation-modes-constrained-vs-conforming) above.
+
+**Generator:** Emits one row per output triangle. Use with SQL `LATERAL` to materialize the triangles; the output schema column is `triangle` (`BINARY` WKB polygon).
+
+<FunctionExamples
+  name="st_triangulate"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+/>
+
+:::note `mode='conforming'` is heavyweight-only
+The `'constrained'` mode (default) is available in **both** tiers. The `'conforming'` mode — which inserts Steiner points along breakline segments for a smoother mesh — is **heavyweight-only**: the lightweight `pyvx` tier raises `NotImplementedError` if you pass `mode='conforming'`. The examples on all tabs use the default `'constrained'` mode.
+:::
 
 ---
 

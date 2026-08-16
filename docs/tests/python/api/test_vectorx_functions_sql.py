@@ -30,14 +30,18 @@ def _statement(sql: str) -> str:
 def vectorx_registered(spark):
     """Register VectorX SQL functions and create the shared fixture views.
 
-    Creates the ``vector_geoms`` temp view (1 row: ``geom STRING =
-    'SRID=4326;POINT (13 42)'``) so SQL examples that reference it via
-    ``FROM vector_geoms`` execute correctly.
+    Registers both the main ``vectorx`` package (TIN, MVT, CRS functions) and the
+    ``vectorx.jts.legacy`` package (``gbx_st_legacyaswkb``), then creates the four
+    canonical fixture views used by the SQL examples on this page.
     """
     from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx.jts.legacy import (
+        functions as legacy_vx,
+    )  # noqa: PLC0415
     from ._fixtures import create_setup_views_vectorx_heavy  # noqa: PLC0415
 
     vx.register(spark)
+    legacy_vx.register(spark)
     create_setup_views_vectorx_heavy(spark)
     yield spark
 
@@ -84,7 +88,9 @@ def test_st_triangulate_sql_example(vectorx_registered):
     spark = vectorx_registered
     sql = vectorx_functions_sql.st_triangulate_sql_example()
     result = spark.sql(_statement(sql)).collect()
-    assert len(result) == 2, f"Expected 2 triangles from 4-corner fixture, got {len(result)}"
+    assert (
+        len(result) == 2
+    ), f"Expected 2 triangles from 4-corner fixture, got {len(result)}"
     for row in result:
         assert row["triangle"] is not None, "triangle should be non-null WKB bytes"
         assert isinstance(
@@ -102,15 +108,17 @@ def test_st_interpolateelevationbbox_sql_example(vectorx_registered):
     spark = vectorx_registered
     sql = vectorx_functions_sql.st_interpolateelevationbbox_sql_example()
     result = spark.sql(_statement(sql)).collect()
-    assert len(result) == 9, (
-        f"Expected 9 elevation points (3×3 grid, all in hull), got {len(result)}"
-    )
+    assert (
+        len(result) == 9
+    ), f"Expected 9 elevation points (3×3 grid, all in hull), got {len(result)}"
     for row in result:
         assert row["elevation_point"] is not None, "elevation_point should be non-null"
         assert isinstance(
             row["elevation_point"], (bytes, bytearray)
         ), f"Expected bytes (WKB POINT Z), got {type(row['elevation_point'])}"
-        assert len(row["elevation_point"]) > 0, "elevation_point WKB bytes should be non-empty"
+        assert (
+            len(row["elevation_point"]) > 0
+        ), "elevation_point WKB bytes should be non-empty"
 
 
 def test_st_interpolateelevationgeom_sql_example(vectorx_registered):
@@ -121,15 +129,17 @@ def test_st_interpolateelevationgeom_sql_example(vectorx_registered):
     spark = vectorx_registered
     sql = vectorx_functions_sql.st_interpolateelevationgeom_sql_example()
     result = spark.sql(_statement(sql)).collect()
-    assert len(result) == 9, (
-        f"Expected 9 elevation points (3×3 origin-anchored grid), got {len(result)}"
-    )
+    assert (
+        len(result) == 9
+    ), f"Expected 9 elevation points (3×3 origin-anchored grid), got {len(result)}"
     for row in result:
         assert row["elevation_point"] is not None, "elevation_point should be non-null"
         assert isinstance(
             row["elevation_point"], (bytes, bytearray)
         ), f"Expected bytes (WKB POINT Z), got {type(row['elevation_point'])}"
-        assert len(row["elevation_point"]) > 0, "elevation_point WKB bytes should be non-empty"
+        assert (
+            len(row["elevation_point"]) > 0
+        ), "elevation_point WKB bytes should be non-empty"
 
 
 def test_st_crs_sql_example(vectorx_registered):
@@ -199,3 +209,30 @@ def test_st_transformcrs_sql_returns_binary_for_text_input(vectorx_registered):
     )
     assert isinstance(df.schema["g"].dataType, BinaryType)
     assert df.first()["g"] is not None
+
+
+def test_st_legacyaswkb_sql_example(vectorx_registered):
+    """Run the ``gbx_st_legacyaswkb`` SQL example against the ``legacy_geoms`` fixture view.
+
+    The fixture has 1 row encoding POINT(13, 42) as a legacy Mosaic InternalGeometry struct.
+    The SQL returns raw BINARY WKB (column ``wkb``); we assert non-null and non-empty bytes,
+    then parse via shapely to confirm the geometry type is a POINT.
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_legacyaswkb_sql_example()
+    result = spark.sql(_statement(sql)).collect()
+    assert (
+        len(result) == 1
+    ), f"Expected 1 row from legacy_geoms fixture, got {len(result)}"
+    wkb = result[0]["wkb"]
+    assert wkb is not None, "st_legacyaswkb should return non-null WKB bytes"
+    assert isinstance(
+        wkb, (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(wkb)}"
+    assert len(wkb) > 0, "WKB bytes should be non-empty"
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    geom = wkb_loads(bytes(wkb))
+    assert (
+        geom.geom_type == "Point"
+    ), f"Expected Point geometry type, got {geom.geom_type}"

@@ -3078,4 +3078,32 @@ result.getAs[Array[Byte]]("utm33n")
 +--------+
 (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)""".trim
 
+  // =========================================================================
+  // VectorX Legacy Mosaic conversion — st_legacyaswkb
+  // Fixture: ``legacy_geoms`` view — 1 row: geom_legacy STRUCT (Mosaic InternalGeometry)
+  // Encodes POINT(13, 42): typeId=1, srid=0, boundaries=[[[13.0, 42.0]]], holes=[].
+  // Import path (heavy): com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
+  // Output: plain WKB — no embedded SRID. Same function, same output bytes, both tiers.
+  // =========================================================================
+
+  val st_legacyaswkb_scala_example: String =
+    """
+import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
+import org.apache.spark.sql.functions._
+
+vx.register(spark)
+val df = spark.table("legacy_geoms")
+val result = df.select(vx.st_legacyaswkb(col("geom_legacy")).alias("wkb")).first()
+result.getAs[Array[Byte]]("wkb")
+""".trim
+
+  val st_legacyaswkb_scala_example_output: String =
+    """
++--------+
+|wkb     |
++--------+
+|[binary]|
++--------+
+... (WKB binary)""".trim
+
 }

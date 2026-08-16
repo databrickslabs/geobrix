@@ -78,7 +78,9 @@ def test_st_interpolateelevationbbox_python_heavy_example(vectorx_heavy_setup):
     """st_interpolateelevationbbox emits 9 POINT Z rows for the 3×3 grid fixture."""
     spark = vectorx_heavy_setup
     result = vectorx_functions.st_interpolateelevationbbox_python_heavy_example(spark)
-    assert result is not None, "st_interpolateelevationbbox should return non-null bytes"
+    assert (
+        result is not None
+    ), "st_interpolateelevationbbox should return non-null bytes"
     assert isinstance(
         result, (bytes, bytearray)
     ), f"Expected bytes (WKB POINT Z), got {type(result)}"
@@ -89,7 +91,9 @@ def test_st_interpolateelevationgeom_python_heavy_example(vectorx_heavy_setup):
     """st_interpolateelevationgeom emits 9 POINT Z rows for the 3×3 origin-anchored grid."""
     spark = vectorx_heavy_setup
     result = vectorx_functions.st_interpolateelevationgeom_python_heavy_example(spark)
-    assert result is not None, "st_interpolateelevationgeom should return non-null bytes"
+    assert (
+        result is not None
+    ), "st_interpolateelevationgeom should return non-null bytes"
     assert isinstance(
         result, (bytes, bytearray)
     ), f"Expected bytes (WKB POINT Z), got {type(result)}"
@@ -163,3 +167,29 @@ def test_st_transformcrs_python_heavy_example(vectorx_heavy_setup):
         result, (bytes, bytearray)
     ), f"Expected bytes (EWKB), got {type(result)}"
     assert len(result) > 0, "EWKB bytes should be non-empty"
+
+
+# ---------------------------------------------------------------------------
+# T5: Legacy Mosaic conversion heavy-tier tests
+# Fixture: ``legacy_geoms`` view — 1 row: geom_legacy STRUCT (POINT(13, 42)).
+# The view is created by create_setup_views_vectorx_heavy (via vectorx_heavy_setup).
+# The example function registers vectorx.jts.legacy internally (idempotent).
+# ---------------------------------------------------------------------------
+
+
+def test_st_legacyaswkb_python_heavy_example(vectorx_heavy_setup):
+    """st_legacyaswkb returns non-null WKB bytes for the legacy POINT(13, 42) fixture."""
+    spark = vectorx_heavy_setup
+    result = vectorx_functions.st_legacyaswkb_python_heavy_example(spark)
+    assert result is not None, "st_legacyaswkb should return non-null WKB bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(result)}"
+    assert len(result) > 0, "WKB bytes should be non-empty"
+    # Round-trip: parse the WKB and verify the geometry type is a POINT.
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    geom = wkb_loads(bytes(result))
+    assert (
+        geom.geom_type == "Point"
+    ), f"Expected Point geometry type, got {geom.geom_type}"

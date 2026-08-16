@@ -5,13 +5,11 @@ title: VectorX Function Reference
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
-import CodeFromTest from '@site/src/components/CodeFromTest';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import vectorxFunctionsExamples from '!!raw-loader!../../tests/python/api/vectorx_functions.py';
 import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
 import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
-import quickstartCode from '!!raw-loader!../../tests/python/quickstart/examples.py';
 import Tier from '@site/src/components/Tier';
 import { Impl } from '@site/src/components/Tier';
 import VectorXIcon from '../../../resources/images/brand/VectorX.png';
@@ -600,28 +598,13 @@ A scalar function in **both** tiers (same registered name, same output bytes), s
 - **SRID is applied separately at ingestion.** The output is plain WKB and carries no SRID; assign the CRS when you read it back, e.g. `ST_GeomFromWKB(gbx_st_legacyaswkb(geom_legacy), 27700)`.
 - **M (measure) values are out of scope** for this conversion.
 
-## Common setup
-
-Run this once before the examples below. It registers VectorX so you can use `st_legacyaswkb` in Python and `gbx_st_legacyaswkb` in SQL.
-
-<CodeFromTest code={vectorxFunctionsExamples} functionName="vectorx_setup_example" language="python" source="docs/tests/python/api/vectorx_functions.py" testFile="docs/tests/python/api/test_vectorx_functions.py" outputConstant="vectorx_setup_example_output" />
-
-**Python:**
-
-<CodeFromTest code={vectorxFunctionsExamples} functionName="st_legacyaswkb_python_example" language="python" source="docs/tests/python/api/vectorx_functions.py" testFile="docs/tests/python/api/test_vectorx_functions.py" outputConstant="st_legacyaswkb_python_example_output" />
-
-**SQL:**
-
-<CodeFromTest code={vectorxFunctionsExamples} functionName="ST_LEGACYASWKB_SQL_EXAMPLE" language="sql" source="docs/tests/python/api/vectorx_functions.py" testFile="docs/tests/python/api/test_vectorx_functions.py" outputConstant="ST_LEGACYASWKB_SQL_EXAMPLE_output" />
-
-**Quick Start example** (point geometry round-trip):
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="USE_VECTORX"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-  outputConstant="USE_VECTORX_output"
+<FunctionExamples
+  name="st_legacyaswkb"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
 ---

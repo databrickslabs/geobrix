@@ -366,3 +366,37 @@ st_transformcrs_python_light_example_output = """
 +--------+
 (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
 """
+
+
+# ---------------------------------------------------------------------------
+# Legacy Mosaic conversion family — st_legacyaswkb
+# Fixture: ``legacy_geoms`` view — 1 row: geom_legacy STRUCT (Mosaic InternalGeometry)
+# Encodes POINT(13, 42): typeId=1, srid=0, boundaries=[[[13.0, 42.0]]], holes=[].
+# Both tiers: same scalar Column form; import path differs between pyvx and
+# vectorx.jts.legacy. Output: plain WKB (no embedded SRID).
+# ---------------------------------------------------------------------------
+
+
+def st_legacyaswkb_python_light_example(spark):
+    """Convert a legacy Mosaic geometry struct to standard WKB (light pyvx tier).
+
+    Uses the ``legacy_geoms`` setup view — one row with a Mosaic InternalGeometry
+    struct encoding POINT(13, 42) — and returns the plain WKB bytes for that point.
+    ``st_legacyaswkb`` is a scalar function in both tiers (same name, same output
+    bytes); the only difference between tiers is the import path.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+
+    df = spark.table("legacy_geoms")
+    result = df.select(vx.st_legacyaswkb("geom_legacy").alias("wkb")).first()
+    return result["wkb"]
+
+
+st_legacyaswkb_python_light_example_output = """
++--------+
+|wkb     |
++--------+
+|[binary]|
++--------+
+... (WKB binary)
+"""

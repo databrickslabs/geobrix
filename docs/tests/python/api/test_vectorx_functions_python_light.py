@@ -101,9 +101,9 @@ def test_st_interpolateelevationbbox_python_light_example(spark):
     """st_interpolateelevationbbox LATERAL emits non-null POINT Z bytes for the 3×3 grid."""
     assert light_examples is not None
     result = light_examples.st_interpolateelevationbbox_python_light_example(spark)
-    assert result is not None, (
-        "st_interpolateelevationbbox should return non-null elevation_point bytes"
-    )
+    assert (
+        result is not None
+    ), "st_interpolateelevationbbox should return non-null elevation_point bytes"
     assert isinstance(
         result, (bytes, bytearray)
     ), f"Expected bytes (WKB POINT Z), got {type(result)}"
@@ -114,9 +114,9 @@ def test_st_interpolateelevationgeom_python_light_example(spark):
     """st_interpolateelevationgeom LATERAL emits non-null POINT Z bytes for the origin grid."""
     assert light_examples is not None
     result = light_examples.st_interpolateelevationgeom_python_light_example(spark)
-    assert result is not None, (
-        "st_interpolateelevationgeom should return non-null elevation_point bytes"
-    )
+    assert (
+        result is not None
+    ), "st_interpolateelevationgeom should return non-null elevation_point bytes"
     assert isinstance(
         result, (bytes, bytearray)
     ), f"Expected bytes (WKB POINT Z), got {type(result)}"
@@ -202,3 +202,28 @@ def test_st_setcrs_stamps_different_crs(spark):
     assert (
         result["new_crs"] == "EPSG:3857"
     ), f"Expected EPSG:3857 after stamping (not a no-op), got {result['new_crs']!r}"
+
+
+# ---------------------------------------------------------------------------
+# T5: Legacy Mosaic conversion — st_legacyaswkb
+# Fixture view: ``legacy_geoms`` — 1 row: geom_legacy STRUCT (POINT(13, 42))
+# Created by the autouse fixture above.
+# ---------------------------------------------------------------------------
+
+
+def test_st_legacyaswkb_python_light_example(spark):
+    """st_legacyaswkb returns non-null WKB bytes for the legacy POINT(13, 42) fixture."""
+    assert light_examples is not None
+    result = light_examples.st_legacyaswkb_python_light_example(spark)
+    assert result is not None, "st_legacyaswkb should return non-null WKB bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(result)}"
+    assert len(result) > 0, "WKB bytes should be non-empty"
+    # Round-trip: parse the WKB and verify the geometry type is a POINT.
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    geom = wkb_loads(bytes(result))
+    assert (
+        geom.geom_type == "Point"
+    ), f"Expected Point geometry type, got {geom.geom_type}"

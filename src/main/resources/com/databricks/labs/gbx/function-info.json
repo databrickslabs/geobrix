@@ -1564,9 +1564,12 @@
       ]
     },
     "gbx_st_legacyaswkb": {
-      "examples": "Examples:\n      > SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_table;",
+      "examples": "Examples:\n      > SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_geoms;",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_st_setcrs": {

@@ -6,9 +6,15 @@ Used by the function-info generator and by docs via CodeFromTest.
 
 
 def st_legacyaswkb_sql_example():
-    """Convert legacy Mosaic geometry to WKB (SQL). Requires table with geom_legacy column."""
+    """Convert a legacy Mosaic geometry struct to standard WKB (SQL).
+
+    Reads the ``legacy_geoms`` setup view — one row with a Mosaic InternalGeometry
+    struct encoding POINT(13, 42): ``typeId=1``, ``srid=0``,
+    ``boundaries=[[[13.0, 42.0]]]``, ``holes=[]``.  Returns the plain WKB bytes
+    for POINT(13, 42); the output carries no embedded SRID.
+    """
     return """
-SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_table;
+SELECT gbx_st_legacyaswkb(geom_legacy) AS wkb FROM legacy_geoms;
 """
 
 
@@ -16,8 +22,9 @@ st_legacyaswkb_sql_example_output = """
 +--------+
 |wkb     |
 +--------+
-|[BINARY]|
+|[binary]|
 +--------+
+... (WKB binary)
 """
 
 

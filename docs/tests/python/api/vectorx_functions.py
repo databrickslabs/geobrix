@@ -115,8 +115,11 @@ def st_triangulate_python_heavy_example(spark):
     df = spark.table("tin_survey")
     result = df.select(
         vx.st_triangulate(
-            f.col("pts"), f.col("bl"),
-            f.lit(0), f.lit(0), f.lit("NONENCROACHING"),
+            f.col("pts"),
+            f.col("bl"),
+            f.lit(0),
+            f.lit(0),
+            f.lit("NONENCROACHING"),
             "constrained",
         ).alias("triangle")
     )
@@ -149,10 +152,18 @@ def st_interpolateelevationbbox_python_heavy_example(spark):
     df = spark.table("tin_survey")
     result = df.select(
         vx.st_interpolateelevationbbox(
-            f.col("pts"), f.col("bl"),
-            f.lit(0), f.lit(0), f.lit("NONENCROACHING"),
-            f.lit(0), f.lit(0), f.lit(10), f.lit(10),
-            f.lit(3), f.lit(3), f.lit(0),
+            f.col("pts"),
+            f.col("bl"),
+            f.lit(0),
+            f.lit(0),
+            f.lit("NONENCROACHING"),
+            f.lit(0),
+            f.lit(0),
+            f.lit(10),
+            f.lit(10),
+            f.lit(3),
+            f.lit(3),
+            f.lit(0),
             "constrained",
         ).alias("elevation_point")
     )
@@ -189,9 +200,16 @@ def st_interpolateelevationgeom_python_heavy_example(spark):
     )
     result = df.select(
         vx.st_interpolateelevationgeom(
-            f.col("pts"), f.col("bl"),
-            f.lit(0), f.lit(0), f.lit("NONENCROACHING"),
-            f.col("origin"), f.lit(3), f.lit(3), f.lit(3), f.lit(-3),
+            f.col("pts"),
+            f.col("bl"),
+            f.lit(0),
+            f.lit(0),
+            f.lit("NONENCROACHING"),
+            f.col("origin"),
+            f.lit(3),
+            f.lit(3),
+            f.lit(3),
+            f.lit(-3),
             "constrained",
         ).alias("elevation_point")
     )
@@ -344,4 +362,40 @@ st_transformcrs_python_heavy_example_output = """
 |[binary]|
 +--------+
 (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
+"""
+
+
+# ---------------------------------------------------------------------------
+# Legacy Mosaic conversion family — heavy (vectorx.jts.legacy) Python examples
+# Fixture: ``legacy_geoms`` view — 1 row: geom_legacy STRUCT (Mosaic InternalGeometry)
+# Encodes POINT(13, 42): typeId=1, srid=0, boundaries=[[[13.0, 42.0]]], holes=[].
+# Import path (heavy): databricks.labs.gbx.vectorx.jts.legacy.functions
+# Import path (light): databricks.labs.gbx.pyvx.functions (same function, same output)
+# ---------------------------------------------------------------------------
+
+
+def st_legacyaswkb_python_heavy_example(spark):
+    """Convert a legacy Mosaic geometry struct to standard WKB (heavy vectorx tier).
+
+    Uses the ``legacy_geoms`` setup view — one row with a Mosaic InternalGeometry
+    struct encoding POINT(13, 42) — and returns the plain WKB bytes for that point.
+    The heavy tier imports from ``vectorx.jts.legacy``; the lightweight tier imports
+    from ``pyvx`` (same function name, same output bytes — a one-line tier swap).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx  # noqa: PLC0415
+
+    vx.register(spark)
+    df = spark.table("legacy_geoms")
+    result = df.select(vx.st_legacyaswkb(f.col("geom_legacy")).alias("wkb")).first()
+    return result["wkb"]
+
+
+st_legacyaswkb_python_heavy_example_output = """
++--------+
+|wkb     |
++--------+
+|[binary]|
++--------+
+... (WKB binary)
 """

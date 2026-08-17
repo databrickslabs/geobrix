@@ -36,6 +36,34 @@ def test_read_projects_plain_columns_into_v2_tile(spark):
     assert rows["/Volumes/main/s/v/a.tif"] == "external"
 
 
+def _make_no_cellid_table(spark, name):
+    """Table without a cellid column — tests absent-field type safety."""
+    spark.sql(f"DROP TABLE IF EXISTS {name}")
+    wh = spark.conf.get("spark.sql.warehouse.dir", "spark-warehouse").replace(
+        "file:", ""
+    )
+    stale = Path(wh) / name
+    if stale.exists():
+        shutil.rmtree(str(stale))
+    df = spark.createDataFrame(
+        [("/Volumes/main/s/v/a.tif", "EPSG:4326")],
+        "path string, crs string",
+    )
+    df.write.saveAsTable(name)
+
+
+def test_cellid_absent_field_is_bigint(spark):
+    # When the table has no cellid column the absent cellid must produce a BIGINT
+    # null (LongType), NOT a STRING null.  A generic null_string fallback would
+    # silently contaminate the tile schema vs V2_TILE_SCHEMA.
+    _make_no_cellid_table(spark, "file_tbl_r3")
+    out = read_file_table(spark, "file_tbl_r3")
+    cellid_field = [
+        f for f in out.schema["tile"].dataType.fields if f.name == "cellid"
+    ][0]
+    assert cellid_field.dataType.simpleString() == "bigint"
+
+
 def test_read_never_selects_star_or_file_column(spark, monkeypatch):
     # guard: the SQL the reader issues must project named plain columns, not *
     import databricks.labs.gbx.pyrx.file_table as ft

@@ -10,7 +10,7 @@ from typing import Optional
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
-from pyspark.sql.types import BinaryType, StringType
+from pyspark.sql.types import BinaryType, LongType, StringType
 
 from . import file_props
 
@@ -37,12 +37,18 @@ def _absent_fields():
     correct DataType before the struct is assembled — no struct-level cast needed.
     """
     return {
+        # Every field that could be absent from the source table gets an explicit
+        # typed null matching its position in V2_TILE_SCHEMA.  cellid uses LongType
+        # (not StringType) — an absent cellid must produce BIGINT null, not STRING null.
+        "cellid": F.lit(None).cast(LongType()),
         "raster": F.lit(None).cast(BinaryType()),
+        "path": F.lit(None).cast(StringType()),
         "window": F.expr(
             "CAST(NULL AS STRUCT<col_off:INT,row_off:INT,width:INT,height:INT>)"
         ),
         "clip_polygon": F.lit(None).cast(BinaryType()),
         "clip_crs": F.lit(None).cast(StringType()),
+        "crs": F.lit(None).cast(StringType()),
         "metadata": F.expr("CAST(NULL AS MAP<STRING,STRING>)"),
     }
 
@@ -53,6 +59,8 @@ def _table_props(spark: SparkSession, table: str) -> dict:
 
 
 def _project_sql(table: str, present: list) -> str:
+    if not present:
+        raise ValueError(f"no plain columns to project from {table!r}")
     cols = ", ".join(present)
     return f"SELECT {cols} FROM {table}"
 
@@ -89,14 +97,15 @@ def read_file_table(
     base = spark.sql(_project_sql(table, present + passthrough))
 
     # Build typed null expressions lazily (requires active SparkContext).
-    absent = _absent_fields()
-    null_string = F.lit(None).cast(StringType())
+    absent = (
+        _absent_fields()
+    )  # every struct field has an explicit V2_TILE_SCHEMA-typed entry
 
-    # Build tile struct with pre-typed null expressions for absent fields so that
-    # no struct-level cast is required (Spark 4 rejects VOID→complex type casts).
+    # field order/types match V2_TILE_SCHEMA
+    # (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode)
     tile_struct = F.struct(
         *[
-            F.col(c).alias(c) if c in present else absent.get(c, null_string).alias(c)
+            F.col(c).alias(c) if c in present else absent[c].alias(c)
             for c in (
                 "cellid",
                 "raster",

@@ -293,6 +293,11 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
         # (as_local_file → tile.path) and today's plain tile.path read (file_ref=None).
         local_path = _resolve_local_or_windowed(tile, file_ref, stack)
 
+        if tile.window is None:
+            raise ValueError(
+                "virtual tile has no window; a windowed read or a file_ref-backed"
+                " source is required"
+            )
         c, r, w, h = tile.window
         window = Window(c, r, w, h)
         bands, _nodata, pending_srid, _pending_crs_str = pending
@@ -398,7 +403,7 @@ def _open(tile, file_ref=None):
     """Context manager that yields an open ``DatasetReader`` for any tile shape.
 
     Accepts a ``VirtualTile``, raw bytes/bytearray, a v1 dict/Row
-    ``{cellid, raster, metadata}``, or a v2 dict/Row (8-field struct).
+    ``{cellid, raster, metadata}``, or a v2 dict/Row (9-field struct).
     Normalises to ``VirtualTile`` via ``_to_virtual_tile`` then delegates to
     ``open_tile``; all lifecycle management (MemoryFile, staged temps) is
     handled there.
@@ -696,6 +701,11 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
         pending = _parse_pending(vt.metadata)
         local_path = _resolve_local_or_windowed(vt, None, stack)
 
+        if vt.window is None:
+            raise ValueError(
+                "virtual tile has no window; a windowed read or a file_ref-backed"
+                " source is required"
+            )
         c, r, w, h = vt.window
         window = Window(c, r, w, h)
         _, _, pending_srid, _ = pending

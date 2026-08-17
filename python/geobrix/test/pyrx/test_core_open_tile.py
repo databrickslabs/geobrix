@@ -111,3 +111,41 @@ def test_materialize_returns_array_transform_profile(layouts):
     )
     assert arr.shape[-2:] == (WINDOW[3], WINDOW[2])
     assert profile["width"] == WINDOW[2]
+
+
+def test_open_tile_windowless_virtual_raises_valueerror(tmp_path):
+    """A windowless virtual tile (path, no window) must raise ValueError at the
+    read site — not a bare TypeError from a None unpack."""
+    import rasterio
+
+    # Write a tiny GeoTIFF so the path exists; the guard must fire before open.
+    p = str(tmp_path / "src.tif")
+    with rasterio.open(
+        p, "w", driver="GTiff", height=4, width=4, count=1, dtype="uint8"
+    ) as ds:
+        import numpy as np
+
+        ds.write(np.zeros((1, 4, 4), dtype="uint8"))
+
+    vt = VirtualTile(cellid=0, path=p)  # no window, path_mode=None
+    with pytest.raises(ValueError, match="windowed read"):
+        with ot.open_tile(vt):
+            pass
+
+
+def test_tile_to_bytes_windowless_virtual_raises_valueerror(tmp_path):
+    """_tile_to_bytes must raise the same descriptive ValueError for a windowless
+    virtual tile."""
+    import rasterio
+
+    p = str(tmp_path / "src.tif")
+    with rasterio.open(
+        p, "w", driver="GTiff", height=4, width=4, count=1, dtype="uint8"
+    ) as ds:
+        import numpy as np
+
+        ds.write(np.zeros((1, 4, 4), dtype="uint8"))
+
+    vt = VirtualTile(cellid=0, path=p)  # no window
+    with pytest.raises(ValueError, match="windowed read"):
+        ot._tile_to_bytes(vt)

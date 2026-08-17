@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable
+from typing import TYPE_CHECKING, Dict, Iterable
 
 from databricks.labs.gbx.ds.tiles.grid import BBox, Grid, TileKey
+
+if TYPE_CHECKING:
+    # Runtime uses are function-local (pmtiles is an optional dep); these imports
+    # exist only so static analysis resolves TileType/Compression in the module-level
+    # annotations below. `from __future__ import annotations` keeps them lazy at runtime.
+    from pmtiles.tile import Compression, TileType
 
 
 def sniff_tile_type(data: bytes) -> TileType:

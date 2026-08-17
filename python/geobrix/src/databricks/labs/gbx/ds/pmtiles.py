@@ -8,7 +8,7 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Dict, Iterator, List, Optional
 
 from pyspark.sql.datasource import (
     DataSource,
@@ -29,6 +29,12 @@ from databricks.labs.gbx.ds.tiles.catalog import (
 )
 from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
 from databricks.labs.gbx.ds.vector import _resolve_single_file_output
+
+if TYPE_CHECKING:
+    # Runtime uses of TileType are function-local (pmtiles is optional); this import
+    # only resolves the name in the module-level annotation on _tile_type(). Lazy at
+    # runtime via `from __future__ import annotations`.
+    from pmtiles.tile import TileType
 
 INPUT_SCHEMA = StructType(
     [

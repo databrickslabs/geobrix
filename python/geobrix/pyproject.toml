@@ -35,11 +35,16 @@ Documentation = "https://databrickslabs.github.io/geobrix/"
 
 [project.optional-dependencies]
 dev = [
-    "isort",
-    "black",
-    "flake8",
-    "flake8-pyproject",
-    "build",
+    # Lint toolchain — pins MUST match python/geobrix/requirements-ci.in so that
+    # `gbx:lint:python --fix` (host .venv) produces byte-identical output to CI and
+    # to the dev container's `--check`. Unpinned here previously let the .venv resolve
+    # to newer black/isort than CI, so host-formatted files failed CI's black --check.
+    # When bumping requirements-ci.in, bump these in the same commit.
+    "isort==8.0.1",
+    "black==26.3.1",
+    "flake8==7.3.0",
+    "flake8-pyproject==1.2.4",
+    "build==1.4.4",
 ]
 test = [
     "pytest>=7.0",

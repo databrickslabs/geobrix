@@ -14,13 +14,16 @@ show_help() {
     echo ""
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--check${NC}         Check only (no edits). Default when run in CI or without --fix."
-    echo -e "  ${GREEN}--fix${NC}            Apply isort and black, then run flake8 (runs on host so files are updated)."
+    echo -e "  ${GREEN}--fix${NC}            Apply isort and black (in Docker, py3.12 — same as CI), then run flake8."
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file."
     echo -e "  ${GREEN}--help${NC}           Show this help."
     echo ""
     echo -e "${CYAN}Modes:${NC}"
     echo -e "  ${YELLOW}--check${NC}  Runs in Docker (same as CI). Fails if imports or format are not clean."
-    echo -e "  ${YELLOW}--fix${NC}    Runs on host. If isort/black/flake8 are missing, uses a venv at ${CYAN}python/geobrix/.venv${NC} and installs dev deps there."
+    echo -e "  ${YELLOW}--fix${NC}    Runs in Docker too (py3.12 + CI-pinned black/isort), so auto-formatted"
+    echo -e "           files are byte-identical to what the CI gate checks. A host Python"
+    echo -e "           (e.g. 3.10) formats some constructs differently even at the same black"
+    echo -e "           version, which then fails CI — so --fix does NOT run on the host."
     echo ""
 }
 
@@ -72,40 +75,27 @@ run_check_docker() {
         isort --check-only src test && black --check src test && flake8 src test"
 }
 
-run_fix_host() {
-    local need_venv=0
-    local isort_cmd="isort"
-    local black_cmd="black"
-    local flake8_cmd="flake8"
-    local venv_dir="$PY_DIR/.venv"
-
-    if ! command -v isort &>/dev/null || ! command -v black &>/dev/null || ! command -v flake8 &>/dev/null; then
-        need_venv=1
-    fi
-
-    if [ "$need_venv" -eq 1 ]; then
-        if [ ! -d "$venv_dir" ] || [ ! -x "$venv_dir/bin/isort" ] || [ ! -x "$venv_dir/bin/black" ] || [ ! -x "$venv_dir/bin/flake8" ]; then
-            echo -e "${CYAN}Creating venv at ${YELLOW}$venv_dir${NC} and installing dev deps..."
-            python3 -m venv "$venv_dir" || { echo -e "${RED}Failed to create venv.${NC}"; exit 1; }
-            # Pin bootstrap to the shared Ubuntu 24.04 noble base (DBR 17.3 / 18 LTS) — keep in sync with .github/actions/{scala,python}_build/action.yml,
-            # scripts/docker/Dockerfile, scripts/geobrix-gdal-init.sh.
-            "$venv_dir/bin/pip" install -q --upgrade pip==25.0.1 setuptools==74.0.0 wheel==0.45.1
-            (cd "$PY_DIR" && "$venv_dir/bin/pip" install -q -e ".[dev]") || { echo -e "${RED}Failed to install python/geobrix[dev].${NC}"; exit 1; }
-            echo -e "${GREEN}Venv ready.${NC}"
-        fi
-        isort_cmd="$venv_dir/bin/isort"
-        black_cmd="$venv_dir/bin/black"
-        flake8_cmd="$venv_dir/bin/flake8"
-    fi
-
-    echo -e "${CYAN}Applying isort and black, then running flake8 (on host)...${NC}"
+run_fix_docker() {
+    check_docker
+    echo -e "${CYAN}Applying isort and black in Docker (py3.12, same as CI), then running flake8...${NC}"
     echo ""
     show_separator
-    (cd "$PY_DIR" && "$isort_cmd" src test && "$black_cmd" src test && "$flake8_cmd" src test)
+    # --fix runs in the SAME container as --check (and therefore the same Python 3.12
+    # and the same CI-pinned black/isort) so auto-formatted files are byte-identical to
+    # what CI's `black --check` gates on. A host Python — even at the identical black
+    # version — can format some constructs differently (black's output is interpreter-
+    # dependent for e.g. multiline-string call args), which then fails the CI gate. That
+    # host/CI drift is exactly what this command exists to prevent, so --fix is Docker-only.
+    # Docker writes to the /root/geobrix bind mount preserve host file ownership.
+    # flake8-pyproject: see run_check_docker — installed idempotently so the container's
+    # flake8 honors [tool.flake8] (ignore=E203,E266,E501,W503; max-line-length=88) like CI.
+    docker exec geobrix-dev /bin/bash -c "cd /root/geobrix/python/geobrix && \
+        { pip show flake8-pyproject >/dev/null 2>&1 || pip install -q 'flake8-pyproject==1.2.4' --break-system-packages; } && \
+        isort src test && black src test && flake8 src test"
 }
 
 if [ "$MODE" = "fix" ]; then
-    run_fix_host
+    run_fix_docker
 else
     run_check_docker
 fi
@@ -116,7 +106,7 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}Python lint passed.${NC}"
 else
     echo -e "${RED}Python lint failed (exit code: $EXIT_CODE).${NC}"
-    [ "$MODE" = "check" ] && echo -e "${CYAN}Tip: run with ${YELLOW}--fix${NC}${CYAN} (on host with dev deps) to auto-fix isort/black.${NC}"
+    [ "$MODE" = "check" ] && echo -e "${CYAN}Tip: run with ${YELLOW}--fix${NC}${CYAN} (in Docker, py3.12 — same as CI) to auto-fix isort/black.${NC}"
 fi
 show_separator
 

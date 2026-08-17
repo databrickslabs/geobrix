@@ -122,3 +122,172 @@ def read_file_table(
     # "raster" is intentionally absent from a FILE table (null BINARY).
     out = base.withColumn("tile", tile_struct)
     return out.select("tile", *passthrough)
+
+
+# ---------------------------------------------------------------------------
+# Writer: SQL builders + orchestration
+# ---------------------------------------------------------------------------
+
+
+def _library_version() -> str:
+    try:
+        from databricks.labs.gbx import __version__
+
+        return str(__version__)
+    except Exception:
+        return "0.0.0"
+
+
+def build_create_sql(
+    table: str,
+    *,
+    plain_cols: list,
+    file_col: str,
+    file_mode: str,
+    filespace: Optional[str],
+    cluster: bool,
+) -> str:
+    """Return a CREATE TABLE … USING DELTA DDL with a typed FILE column.
+
+    Raises ValueError for an invalid ``file_mode`` or a managed table without
+    a ``filespace``.  Never emits PARTITIONED BY or ZORDER.
+    """
+    if file_mode not in ("external", "managed"):
+        raise ValueError(f"file_mode must be external|managed, got {file_mode!r}")
+    if file_mode == "managed" and not filespace:
+        raise ValueError("managed file_mode requires a filespace (/Volumes/...)")
+
+    col_defs = ", ".join(f"{name} {dtype}" for name, dtype in plain_cols)
+    file_kw = "MANAGED" if file_mode == "managed" else "EXTERNAL"
+    layout = "cluster" if cluster else "order"
+
+    props = file_props.build_props(
+        file_mode=file_mode,
+        layout=layout,
+        filespace=filespace,
+        library_version=_library_version(),
+    )
+    props_sql = ", ".join(f"'{k}' = '{v}'" for k, v in props.items())
+
+    ddl = (
+        f"CREATE TABLE {table} ({col_defs}, {file_col} FILE {file_kw}) "
+        f"USING DELTA TBLPROPERTIES ({props_sql})"
+    )
+    if cluster:
+        ddl += " CLUSTER BY (path)"
+    return ddl
+
+
+def build_insert_sql(
+    table: str,
+    src_view: str,
+    *,
+    select_exprs: list,
+    order_by_path: bool,
+) -> str:
+    """Return an INSERT INTO … SELECT statement.
+
+    Pass ``create_file(content => raster) AS <file_col>`` or
+    ``try_to_file(path) AS <file_col>`` as the last element of ``select_exprs``.
+    ``order_by_path=True`` appends ``ORDER BY path`` for locality-aware writes.
+    """
+    exprs = ", ".join(select_exprs)
+    sql = f"INSERT INTO {table} SELECT {exprs} FROM {src_view}"
+    if order_by_path:
+        sql += " ORDER BY path"
+    return sql
+
+
+def write_file_table(
+    spark: SparkSession,
+    df: DataFrame,
+    table: str,
+    *,
+    file_mode: str = "external",
+    filespace: Optional[str] = None,
+    layout: str = "order",
+    overwrite: bool = False,
+    file_col: str = "tile_file",
+) -> None:
+    """Create a typed FILE-column Delta table and INSERT df FILE-aligned.
+
+    The DataFrame must have a ``tile`` column whose struct contains at least
+    ``path`` (external mode) or ``raster`` (managed mode), plus any extra
+    columns to pass through as plain table columns.
+
+    The FILE column is never written via saveAsTable / CTAS — it is materialised
+    through ``create_file`` (managed) or referenced via ``try_to_file`` (external)
+    in the INSERT statement so Databricks can stamp the correct FILE metadata.
+
+    ``file_mode`` defaults to ``"external"`` (portable, no filespace needed).
+    ``layout`` controls clustering: ``"cluster"`` → CLUSTER BY (path);
+    ``"order"`` or ``"plain"`` → no clustering (write still honours ORDER BY path).
+    """
+    view = "_gbx_file_src"
+    df.createOrReplaceTempView(view)
+
+    if overwrite:
+        spark.sql(f"DROP TABLE IF EXISTS {table}")
+
+    # Plain columns: all top-level df fields except the tile struct itself.
+    # Callers typically have a flat df (tile fields already at top level) but
+    # we handle the struct-wrapper case too: project tile.* fields except raster.
+    tile_fields = (
+        {f.name for f in df.schema["tile"].dataType.fields}
+        if "tile" in [f.name for f in df.schema.fields]
+        else set()
+    )
+
+    if tile_fields:
+        # df has a `tile` struct — flatten to top-level for the table schema
+        plain_cols = [
+            (fname, df.schema["tile"].dataType[fname].simpleString())
+            for fname in tile_fields
+            if fname not in ("raster", "path_mode")
+        ]
+        # also include any non-tile top-level columns
+        plain_cols += [
+            (f.name, f.dataType.simpleString())
+            for f in df.schema.fields
+            if f.name != "tile"
+        ]
+    else:
+        # df is already flat
+        plain_cols = [(f.name, f.dataType.simpleString()) for f in df.schema.fields]
+
+    spark.sql(
+        build_create_sql(
+            table,
+            plain_cols=plain_cols,
+            file_col=file_col,
+            file_mode=file_mode,
+            filespace=filespace,
+            cluster=(layout == "cluster"),
+        )
+    )
+
+    file_expr = (
+        f"create_file(content => raster) AS {file_col}"
+        if file_mode == "managed"
+        else f"try_to_file(path) AS {file_col}"
+    )
+
+    if tile_fields:
+        flat_exprs = [
+            f"tile.{fname} AS {fname}"
+            for fname in tile_fields
+            if fname not in ("raster", "path_mode")
+        ]
+        passthrough_exprs = [f.name for f in df.schema.fields if f.name != "tile"]
+        select_exprs = flat_exprs + passthrough_exprs + [file_expr]
+    else:
+        select_exprs = [f.name for f in df.schema.fields] + [file_expr]
+
+    spark.sql(
+        build_insert_sql(
+            table,
+            view,
+            select_exprs=select_exprs,
+            order_by_path=(layout in ("order", "cluster")),
+        )
+    )

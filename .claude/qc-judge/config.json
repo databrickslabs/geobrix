@@ -30,6 +30,15 @@
       "expect_exit": 0,
       "timeout_seconds": 30
     },
+    "param-name-parity": {
+      "name": "Parameter name consistency and arity parity across tiers",
+      "type": "command",
+      "severity": "warn",
+      "enabled": true,
+      "cmd": "[ -f docs/scripts/check-param-names.py ] || { echo 'param-names script absent; skip'; exit 0; }; python3 docs/scripts/check-param-names.py",
+      "expect_exit": 0,
+      "timeout_seconds": 30
+    },
     "docs-examples": {
       "name": "Docs example output tables well-formed + all declared tabs complete",
       "type": "command",

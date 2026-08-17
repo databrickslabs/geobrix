@@ -428,9 +428,9 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
     code = authority_srid_of(c)
     if code is None:
         raise ValueError(
-            "st_setcrs: cannot stamp an authority-less CRS (WKT / PROJ4) onto a "
-            "geometry — a geometry SRID must be an EPSG or ESRI integer code. "
-            f"Resolved CRS: {c.to_wkt()[:120]!r}"
+            "st_setcrs: cannot stamp an authority-less CRS onto a geometry — "
+            "a geometry SRID must be an EPSG or ESRI integer code. "
+            f"Resolved CRS: {c.to_wkt()[:120]}"
         )
     g = set_srid(g, code)
     if text:

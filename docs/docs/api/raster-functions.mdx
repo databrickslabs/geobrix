@@ -834,7 +834,7 @@ The lightweight **Python** binding accepts an optional trailing `out_crs` (strin
 
 **Signature:** `rst_bng_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
-**Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS (typically `27700`)
+**Parameters:** `cellid` — BNG cell ID (STRING); `value` — numeric burn value; `out_srid` — EPSG code for the output CRS (typically `27700`); `pixel_size` — output raster cell size in metres (usually `1.0` for 1km BNG cells); `xmin/ymin/xmax/ymax` — output extent in EPSG:27700 metres; `width/height` — output raster dimensions in pixels; `mode` — aggregation mode for overlapping values (typically `"last"`); `kring_pad` — cell neighbourhood expansion (typically `0`)
 
 _Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 
@@ -1161,7 +1161,7 @@ The lightweight **Python** binding accepts an optional trailing `out_crs` (strin
 
 **Signature:** `rst_quadbin_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
 
-**Parameters:** `geom` — WKB geometry to burn (one per row); `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
+**Parameters:** `cellid` — quadbin cell ID (BIGINT); `value` — numeric burn value; `out_srid` — EPSG code for the output CRS; `pixel_size` — output raster cell size in the target CRS; `xmin/ymin/xmax/ymax` — output extent in the target CRS; `width/height` — output raster dimensions in pixels; `mode` — aggregation mode for overlapping values (typically `"last"`); `kring_pad` — cell neighbourhood expansion (typically `0`)
 
 _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 

@@ -94,6 +94,26 @@ object SpatialRefOps {
         }
     }
 
+    /** Private helper to build and cache a CoordinateTransformation from already-canonical CRS strings.
+      * On cache miss, builds CT with traditional axis order, manages SpatialReference lifecycle,
+      * adds to cache, and evicts oldest on overflow. */
+    private def buildAndCacheTransformer(
+        srcCanonical: String, dstCanonical: String,
+        cache: mutable.LinkedHashMap[String, CoordinateTransformation]
+    ): CoordinateTransformation = {
+        val srcSR = resolveCrs(srcCanonical)
+        val dstSR = resolveCrs(dstCanonical)
+        srcSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+        dstSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
+        val tf = new CoordinateTransformation(srcSR, dstSR)
+        srcSR.delete()
+        dstSR.delete()
+        val key = s"$srcCanonical->$dstCanonical"
+        cache.put(key, tf)
+        if (cache.size > TRANSFORMER_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
+        tf
+    }
+
     /** Thread-local, LRU-bounded CoordinateTransformation keyed by canonical CRS pair.
       * Mirrors the light `crs.get_transformer`: equivalent spellings (`4326` /
       * `"EPSG:4326"`) resolve to the same canonical key and share one transformation.
@@ -115,17 +135,7 @@ object SpatialRefOps {
                 cache.remove(key); cache.put(key, tf) // move-to-end (most-recent)
                 tf
             case None =>
-                // Build CT with traditional axis order so JTS (x=lon, y=lat) input isn't flipped.
-                val srcSR = resolveCrs(srcKey)
-                val dstSR = resolveCrs(dstKey)
-                srcSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
-                dstSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
-                val tf = new CoordinateTransformation(srcSR, dstSR)
-                srcSR.delete()
-                dstSR.delete()
-                cache.put(key, tf)
-                if (cache.size > TRANSFORMER_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
-                tf
+                buildAndCacheTransformer(srcC, dstC, cache)
         }
     }
 
@@ -148,17 +158,7 @@ object SpatialRefOps {
                 cache.remove(key); cache.put(key, tf) // move-to-end (most-recent)
                 tf
             case None =>
-                // Build CT with traditional axis order so JTS (x=lon, y=lat) input isn't flipped.
-                val srcSR = resolveCrs(srcCanonical)
-                val dstSR = resolveCrs(dstCanonical)
-                srcSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
-                dstSR.SetAxisMappingStrategy(osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
-                val tf = new CoordinateTransformation(srcSR, dstSR)
-                srcSR.delete()
-                dstSR.delete()
-                cache.put(key, tf)
-                if (cache.size > TRANSFORMER_CACHE_SIZE) cache.remove(cache.head._1) // evict oldest
-                tf
+                buildAndCacheTransformer(srcCanonical, dstCanonical, cache)
         }
     }
 

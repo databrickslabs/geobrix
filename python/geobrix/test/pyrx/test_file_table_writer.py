@@ -7,7 +7,14 @@ Execution against a real FILE table is verified in Task 9 (dogfood DBR-19).
 from unittest.mock import MagicMock
 
 import pytest
-from pyspark.sql.types import BinaryType, LongType, StringType, StructField, StructType
+from pyspark.sql.types import (
+    BinaryType,
+    IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+)
 
 from databricks.labs.gbx.pyrx import file_table as ft
 
@@ -113,11 +120,21 @@ def test_create_sql_no_cluster():
 # collect SQL strings; createOrReplaceTempView is a no-op.
 # ---------------------------------------------------------------------------
 
+_WINDOW_STRUCT = StructType(
+    [
+        StructField("col_off", IntegerType()),
+        StructField("row_off", IntegerType()),
+        StructField("width", IntegerType()),
+        StructField("height", IntegerType()),
+    ]
+)
+
 _TILE_STRUCT = StructType(
     [
         StructField("cellid", LongType()),
         StructField("raster", BinaryType()),
         StructField("path", StringType()),
+        StructField("window", _WINDOW_STRUCT),
         StructField("crs", StringType()),
         StructField("path_mode", StringType()),
     ]
@@ -134,7 +151,7 @@ def _make_mock_df():
 
 
 def test_write_file_table_external_uses_qualified_path():
-    """tile-struct df + external: INSERT must use tile.path, not bare path."""
+    """tile-struct df + external: INSERT uses tile.path; CREATE DDL has well-formed col defs."""
     captured = []
     spark = MagicMock()
     spark.sql.side_effect = lambda sql: captured.append(sql)
@@ -156,6 +173,20 @@ def test_write_file_table_external_uses_qualified_path():
     assert "try_to_file(path)" not in insert.replace(
         "try_to_file(tile.path)", ""
     ), "bare try_to_file(path) found — still using unqualified reference"
+
+    # CREATE DDL must emit well-formed column defs: "<name> <type>", not "<name> <name>:<type>".
+    # StructField.simpleString() returns "name:type"; .dataType.simpleString() returns just "type".
+    # Using the wrong one yields "window window:struct<...>" → Spark PARSE_SYNTAX_ERROR.
+    create_sqls = [s for s in captured if s.startswith("CREATE")]
+    assert create_sqls, "no CREATE captured"
+    create = create_sqls[0]
+    assert (
+        "window struct<" in create
+    ), f"expected 'window struct<' (well-formed col def) in CREATE DDL; got:\n{create}"
+    assert "window:struct" not in create, (
+        "stray 'window:struct' in CREATE DDL — "
+        "StructField.simpleString() used instead of .dataType.simpleString()"
+    )
 
 
 def test_write_file_table_managed_uses_qualified_raster():

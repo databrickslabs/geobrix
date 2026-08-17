@@ -241,7 +241,7 @@ def write_file_table(
     if tile_fields:
         # df has a `tile` struct — flatten to top-level for the table schema
         plain_cols = [
-            (fname, df.schema["tile"].dataType[fname].simpleString())
+            (fname, df.schema["tile"].dataType[fname].dataType.simpleString())
             for fname in tile_fields
             if fname not in ("raster", "path_mode")
         ]

@@ -4,6 +4,7 @@ The writer stamps these so the reader can branch its handling on the on-table
 format version (geobrix_writer_version): v1 -> today's logic; a future v2+ ->
 new logic, without breaking old-table reads.
 """
+
 from typing import Optional
 
 WRITER_VERSION_KEY = "geobrix_writer_version"
@@ -16,8 +17,9 @@ _FILE_MODES = {"external", "managed"}
 _LAYOUTS = {"plain", "order", "cluster"}
 
 
-def build_props(*, file_mode: str, layout: str, filespace: Optional[str],
-                library_version: str) -> dict:
+def build_props(
+    *, file_mode: str, layout: str, filespace: Optional[str], library_version: str
+) -> dict:
     if file_mode not in _FILE_MODES:
         raise ValueError(f"file_mode must be one of {_FILE_MODES}, got {file_mode!r}")
     if layout not in _LAYOUTS:

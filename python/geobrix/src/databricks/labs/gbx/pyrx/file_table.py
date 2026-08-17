@@ -134,7 +134,7 @@ def _library_version() -> str:
         from databricks.labs.gbx import __version__
 
         return str(__version__)
-    except Exception:
+    except (ImportError, AttributeError):
         return "0.0.0"
 
 
@@ -266,11 +266,22 @@ def write_file_table(
         )
     )
 
-    file_expr = (
-        f"create_file(content => raster) AS {file_col}"
-        if file_mode == "managed"
-        else f"try_to_file(path) AS {file_col}"
-    )
+    # Use qualified struct references so the INSERT SELECT is unambiguous regardless
+    # of whether the view has bare top-level columns.  SELECT-level aliases (like the
+    # `tile.path AS path` in flat_exprs) are NOT visible to sibling expressions in the
+    # same SELECT list — only ORDER BY/HAVING/outer queries see them.
+    if tile_fields:
+        file_expr = (
+            f"create_file(content => tile.raster) AS {file_col}"
+            if file_mode == "managed"
+            else f"try_to_file(tile.path) AS {file_col}"
+        )
+    else:
+        file_expr = (
+            f"create_file(content => raster) AS {file_col}"
+            if file_mode == "managed"
+            else f"try_to_file(path) AS {file_col}"
+        )
 
     if tile_fields:
         flat_exprs = [

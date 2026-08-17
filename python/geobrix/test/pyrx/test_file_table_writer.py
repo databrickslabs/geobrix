@@ -4,7 +4,10 @@ These are pure string assertions — no Spark session required.
 Execution against a real FILE table is verified in Task 9 (dogfood DBR-19).
 """
 
+from unittest.mock import MagicMock
+
 import pytest
+from pyspark.sql.types import BinaryType, LongType, StringType, StructField, StructType
 
 from databricks.labs.gbx.pyrx import file_table as ft
 
@@ -102,3 +105,80 @@ def test_create_sql_no_cluster():
     assert "CLUSTER BY" not in sql
     assert "tile_file FILE EXTERNAL" in sql
     assert "USING DELTA" in sql
+
+
+# ---------------------------------------------------------------------------
+# Capture tests: write_file_table with tile-struct df — qualify refs without
+# executing FILE DDL (which requires DBR-19).  spark.sql is monkeypatched to
+# collect SQL strings; createOrReplaceTempView is a no-op.
+# ---------------------------------------------------------------------------
+
+_TILE_STRUCT = StructType(
+    [
+        StructField("cellid", LongType()),
+        StructField("raster", BinaryType()),
+        StructField("path", StringType()),
+        StructField("crs", StringType()),
+        StructField("path_mode", StringType()),
+    ]
+)
+
+_DF_SCHEMA = StructType([StructField("tile", _TILE_STRUCT)])
+
+
+def _make_mock_df():
+    df = MagicMock()
+    df.schema = _DF_SCHEMA
+    df.createOrReplaceTempView = MagicMock()
+    return df
+
+
+def test_write_file_table_external_uses_qualified_path():
+    """tile-struct df + external: INSERT must use tile.path, not bare path."""
+    captured = []
+    spark = MagicMock()
+    spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    ft.write_file_table(
+        spark,
+        _make_mock_df(),
+        "cat.sch.t",
+        file_mode="external",
+        layout="order",
+    )
+
+    insert_sqls = [s for s in captured if s.startswith("INSERT")]
+    assert insert_sqls, "no INSERT captured"
+    insert = insert_sqls[0]
+    assert (
+        "try_to_file(tile.path)" in insert
+    ), f"expected 'try_to_file(tile.path)' in INSERT; got:\n{insert}"
+    assert "try_to_file(path)" not in insert.replace(
+        "try_to_file(tile.path)", ""
+    ), "bare try_to_file(path) found — still using unqualified reference"
+
+
+def test_write_file_table_managed_uses_qualified_raster():
+    """tile-struct df + managed: INSERT must use tile.raster, not bare raster."""
+    captured = []
+    spark = MagicMock()
+    spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    ft.write_file_table(
+        spark,
+        _make_mock_df(),
+        "cat.sch.t",
+        file_mode="managed",
+        filespace="/Volumes/c/s/v",
+        layout="order",
+    )
+
+    insert_sqls = [s for s in captured if s.startswith("INSERT")]
+    assert insert_sqls, "no INSERT captured"
+    insert = insert_sqls[0]
+    assert (
+        "create_file(content => tile.raster)" in insert
+    ), f"expected 'create_file(content => tile.raster)' in INSERT; got:\n{insert}"
+    assert "create_file(content => raster)" not in insert.replace(
+        "create_file(content => tile.raster)", ""
+    ), "bare create_file(content => raster) found — still using unqualified reference"

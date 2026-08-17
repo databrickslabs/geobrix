@@ -25,9 +25,11 @@ def test_rejects_no_raster_and_no_path():
         vt.VirtualTile(cellid=3)
 
 
-def test_rejects_virtual_without_window():
-    with pytest.raises(ValueError):
-        vt.VirtualTile(cellid=4, path="/Volumes/x.tif")  # no window
+def test_path_only_no_window_is_allowed():
+    # Window is no longer required at construction — managed FILE tiles have a
+    # path but no window; validation is deferred to the reader.
+    t = vt.VirtualTile(cellid=4, path="/Volumes/x.tif")
+    assert t.is_virtual()
 
 
 def test_row_roundtrip_virtual():
@@ -62,11 +64,12 @@ def test_schema_has_v2_fields():
         "clip_crs",
         "crs",
         "metadata",
+        "path_mode",
     }
 
 
 def test_build_tile_returns_v2_materialized_shape():
-    """build_tile emits the 8-field v2 struct: raster set, provenance NULL,
+    """build_tile emits the 9-field v2 struct: raster set, provenance NULL,
     metadata carries driver/width/height/count (computed by opening the raster)."""
     import numpy as np
     import rasterio

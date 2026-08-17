@@ -6,7 +6,7 @@ struct defined in ``pyrx.core.virtual_tile.V2_TILE_SCHEMA``:
     struct<cellid: bigint, raster: binary, path: string,
            window: struct<col_off,row_off,width,height>,
            clip_polygon: binary, clip_crs: string, crs: string,
-           metadata: map<string,string>>
+           metadata: map<string,string>, path_mode: string>
 
 A materialized tile carries raster bytes (``raster`` is not null); the provenance
 fields (``path``, ``window``, ``clip_polygon``, ``clip_crs``, ``crs``) are null for
@@ -63,6 +63,7 @@ def build_error_tile(last_error: str, cellid: int = -1) -> Dict:
         "cellid": int(cellid),
         "raster": None,
         "metadata": {"last_error": last_error},
+        "path_mode": None,
     }
 
 
@@ -70,10 +71,10 @@ def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:
     """Construct a **v2-materialized** tile struct dict from raster BINARY content.
 
     Opens the raster to record driver/width/height/count in ``metadata`` and
-    returns the 8-field ``V2_TILE_SCHEMA`` shape with ``raster`` set and every
-    provenance field (``path``/``window``/``clip_polygon``/``clip_crs``/``crs``)
-    NULL — the canonical materialized tile. Nothing in the light tier emits the
-    legacy 3-field struct anymore.
+    returns the 9-field ``V2_TILE_SCHEMA`` shape with ``raster`` set and every
+    provenance field (``path``/``window``/``clip_polygon``/``clip_crs``/``crs``/
+    ``path_mode``) NULL — the canonical materialized tile. Nothing in the light
+    tier emits the legacy 3-field struct anymore.
     """
     raster = bytes(raster_bytes)
     with open_tile(raster) as ds:

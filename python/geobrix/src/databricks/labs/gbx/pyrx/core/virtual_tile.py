@@ -41,6 +41,7 @@ V2_TILE_SCHEMA = StructType(
         StructField("clip_crs", StringType(), nullable=True),
         StructField("crs", StringType(), nullable=True),
         StructField("metadata", MapType(StringType(), StringType()), nullable=True),
+        StructField("path_mode", StringType(), nullable=True),
     ]
 )
 
@@ -55,12 +56,11 @@ class VirtualTile:
     clip_crs: Optional[str] = None
     crs: Optional[str] = None
     metadata: Dict[str, str] = field(default_factory=dict)
+    path_mode: Optional[str] = None
 
     def __post_init__(self):
         if self.raster is None and self.path is None:
             raise ValueError("VirtualTile needs raster bytes or a path")
-        if self.raster is None and self.window is None:
-            raise ValueError("virtual tile (path, no raster) requires a window")
         if self.window is not None:
             self.window = tuple(int(v) for v in self.window)  # normalize
 
@@ -81,6 +81,7 @@ class VirtualTile:
             "clip_crs": self.clip_crs,
             "crs": self.crs,
             "metadata": dict(self.metadata) if self.metadata else {},
+            "path_mode": self.path_mode,
         }
 
     @classmethod
@@ -109,4 +110,15 @@ class VirtualTile:
             clip_crs=d.get("clip_crs"),
             crs=d.get("crs"),
             metadata=dict(d.get("metadata") or {}),
+            path_mode=d.get("path_mode"),
         )
+
+
+def effective_path_mode(vt: VirtualTile) -> Optional[str]:
+    """Stored path_mode when set; else inferred from tile structure
+    (materialized raster -> None; plain path -> 'external')."""
+    if vt.path_mode is not None:
+        return vt.path_mode
+    if vt.raster is not None:
+        return None
+    return "external"

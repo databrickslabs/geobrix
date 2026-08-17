@@ -39,7 +39,7 @@ These were open in the spec; settled here for the increment-1 build.
 5. **agg / 1:n split (§8.5) → one representative scalar (`rst_memsize`) proves the executor.** `rst_*_agg` and 1:n generators are **deferred**; the group=FILE principle is recorded (they are inherently grouped and reuse the same open-once LRU later). No agg/generator work in increment 1.
 6. **Heavy (Scala) parity (§8.6) → out of scope.** Light only. Recorded as a fast-follow (heavy GDAL dataset-cache honoring `GDALManager`; permissions-flow payoff).
 7. **DBR 17/18 read-compat (§8.7) [SPIKE DONE]:** DBR 17 **cannot read** a FILE-column table at all (schema-parse hard fail `INVALID_JSON_DATA_TYPE`); Serverless GC can `count`/project-plain-columns/build-lazy-DF but cannot fetch a FILE-containing schema or collect a FILE value. This drives the reader's plain-`path` projection (Task 3). Documentation of DBR 17 unreadability is a docs-phase item (non-goal here).
-8. **LRU / staging guardrails (§8.8) → settled in Task 6:** LRU `maxsize=2`, close-on-evict **and** close-at-partition-end (`finally`); local-stage is skipped when the source exceeds a disk budget (`GBX_STAGE_MAX_BYTES`, default 4 GiB) or when free space on `/local_disk0` is below 2× the file size.
+8. **LRU / staging guardrails (§8.8) → settled in Task 6:** the LRU is **byte-budgeted, not count-fixed** — entries (open resources keyed by source path) are held up to a **byte budget** (`GBX_LRU_MAX_BYTES`, default 4 GiB) with a `max_count` handle guard (default 64), oldest-evicted when either is exceeded, and the current (most-recent) entry is never evicted. Each entry carries a **weight**: a local-staged copy weighs its file size (so the LRU byte budget *is* the staged-disk-fill guard, and eviction deletes the staged temp); an open stream/dataset weighs a small nominal (`STREAM_NOMINAL_BYTES`) so the count guard governs. Close-on-evict **and** close-at-partition-end (`finally`). Independently, local-stage is skipped when a single source exceeds `GBX_STAGE_MAX_BYTES` (default 4 GiB) — huge files never stage (they stream or read via FUSE).
 
 ---
 
@@ -610,7 +610,7 @@ Co-authored-by: Isaac"
 - Test: `python/geobrix/test/pyrx/test_open_resource_lru.py`
 
 **Interfaces:**
-- Produces: `OpenResourceLRU(maxsize: int = 2, opener: Callable[[str], Any] = None, closer: Callable[[Any], None] = None)`. Methods: `get(key: str) -> Any` (miss → `opener(key)` + insert; hit → move-to-recent; over `maxsize` → evict LRU and `closer(evicted)`); `close_all()` (close every held resource; call at partition end in a `finally`). Counters `.opens` and `.evictions` for amortization assertions. Settled guardrails: `maxsize=2`; eviction and `close_all` both invoke `closer`.
+- Produces: `OpenResourceLRU(*, max_bytes: int = GBX_LRU_MAX_BYTES, max_count: int = 64, opener: Callable[[str], Any], closer: Callable[[Any], None], weigher: Callable[[Any, str], int])`. Methods: `get(key: str) -> Any` (hit → move-to-recent + return; miss → `opener(key)`, `weigher(res, key)`, insert, then evict-oldest-while `total_bytes > max_bytes` **or** `count > max_count`, **never evicting the current/most-recent entry**, calling `closer` on each evicted); `close_all()` (close every held resource; call at partition end in a `finally`). Counters `.opens`, `.evictions`, `.bytes`. Module constants: `GBX_LRU_MAX_BYTES` (env-overridable, default `4 * 1024**3`), `STREAM_NOMINAL_BYTES` (`16 * 1024**2`).
 
 - [ ] **Step 1: Write the failing test** (pure Python — fully local, no Spark)
 
@@ -618,29 +618,46 @@ Co-authored-by: Isaac"
 # python/geobrix/test/pyrx/test_open_resource_lru.py
 from databricks.labs.gbx.pyrx.grouped_exec import OpenResourceLRU
 
-def test_lru_amortizes_opens_and_evicts():
+def test_byte_budget_evicts_oldest_over_budget():
     closed = []
-    lru = OpenResourceLRU(maxsize=2,
-                          opener=lambda k: {"k": k},
-                          closer=lambda r: closed.append(r["k"]))
-    # a source's windows hit after the first open
-    lru.get("a"); lru.get("a"); lru.get("a")
-    assert lru.opens == 1 and lru.evictions == 0
-    # contiguous second source, maxsize=2 keeps both
-    lru.get("b"); lru.get("b")
-    assert lru.opens == 2
-    # third distinct key evicts the least-recently-used ("a")
-    lru.get("c")
-    assert lru.evictions == 1 and closed == ["a"]
+    lru = OpenResourceLRU(max_bytes=100, max_count=1000,
+                          opener=lambda k: k, closer=lambda r: closed.append(r),
+                          weigher=lambda r, k: 40)
+    lru.get("a"); lru.get("b")     # 80 bytes; both fit
+    assert lru.bytes == 80 and lru.evictions == 0
+    lru.get("c")                    # 120 > 100 -> evict oldest "a" -> back to 80
+    assert closed == ["a"] and lru.bytes == 80 and lru.evictions == 1
+
+def test_many_small_files_stay_warm_under_budget():
+    lru = OpenResourceLRU(max_bytes=4 * 1024**3, max_count=1000,
+                          opener=lambda k: k, closer=lambda r: None,
+                          weigher=lambda r, k: 32 * 1024**2)  # 32 MiB each
+    for i in range(100):
+        lru.get(f"f{i}")           # 100 * 32 MiB = 3.125 GiB < 4 GiB
+    assert lru.evictions == 0 and lru.opens == 100
+
+def test_count_guard_bounds_handles_when_weight_nominal():
+    lru = OpenResourceLRU(max_bytes=10**12, max_count=2,
+                          opener=lambda k: k, closer=lambda r: None,
+                          weigher=lambda r, k: 0)  # streams ~ nominal
+    lru.get("a"); lru.get("b"); lru.get("c")
+    assert lru.evictions == 1      # count guard fired at 3 > 2
+
+def test_never_evicts_the_current_entry():
+    closed = []
+    lru = OpenResourceLRU(max_bytes=10, max_count=1000,
+                          opener=lambda k: k, closer=lambda r: closed.append(r),
+                          weigher=lambda r, k: 999)  # single entry exceeds budget
+    got = lru.get("big")
+    assert got == "big" and closed == []  # current entry kept despite over-budget
 
 def test_close_all_closes_remaining():
     closed = []
-    lru = OpenResourceLRU(maxsize=2, opener=lambda k: k,
-                          closer=lambda r: closed.append(r))
+    lru = OpenResourceLRU(max_bytes=100, opener=lambda k: k,
+                          closer=lambda r: closed.append(r), weigher=lambda r, k: 10)
     lru.get("x"); lru.get("y")
     lru.close_all()
-    assert sorted(closed) == ["x", "y"]
-    assert lru.get.__self__ is lru  # still usable object; internal store emptied
+    assert sorted(closed) == ["x", "y"] and lru.bytes == 0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -652,46 +669,65 @@ Expected: FAIL — `OpenResourceLRU` not defined.
 
 ```python
 # append to grouped_exec.py
+import os
 from collections import OrderedDict
-from typing import Any, Callable, Optional
+from typing import Any, Callable
+
+GBX_LRU_MAX_BYTES = int(os.environ.get("GBX_LRU_MAX_BYTES", 4 * 1024**3))  # 4 GiB
+STREAM_NOMINAL_BYTES = 16 * 1024**2  # resident estimate for an open stream/dataset
 
 
 class OpenResourceLRU:
-    """Per-partition LRU of open resources keyed by source uri/path.
+    """Per-partition BYTE-BUDGETED LRU of open resources keyed by source uri/path.
 
-    Amortizes the OPEN cost across a source's windows. maxsize=2 suffices when
-    tiles are sortWithinPartitions('tile.path') (a source is contiguous, so at
-    most the current + previous source are live). Evicted and remaining
-    resources are always closed (evict + close_all)."""
+    Amortizes the OPEN cost across a source's windows. Instead of a fixed count,
+    entries are held up to a byte budget (default 4 GiB) with a max_count handle
+    guard, so many small sources stay warm (e.g. ~128 x 32 MiB under 4 GiB) while
+    a few huge ones don't blow the budget. Each entry carries a weight: a staged
+    local copy weighs its file size (so this budget IS the staged-disk-fill guard,
+    and eviction deletes the temp); an open stream/dataset weighs a small nominal
+    so the count guard governs. The current (most-recent) entry is never evicted.
+    Evicted and remaining resources are always closed (evict + close_all)."""
 
-    def __init__(self, maxsize: int = 2,
-                 opener: Optional[Callable[[str], Any]] = None,
-                 closer: Optional[Callable[[Any], None]] = None):
-        if maxsize < 1:
-            raise ValueError("maxsize must be >= 1")
-        self.maxsize = maxsize
+    def __init__(self, *, max_bytes: int = GBX_LRU_MAX_BYTES, max_count: int = 64,
+                 opener: Callable[[str], Any], closer: Callable[[Any], None],
+                 weigher: Callable[[Any, str], int]):
+        if max_bytes < 1:
+            raise ValueError("max_bytes must be >= 1")
+        if max_count < 1:
+            raise ValueError("max_count must be >= 1")
+        self.max_bytes = max_bytes
+        self.max_count = max_count
         self._opener = opener
-        self._closer = closer or (lambda r: None)
-        self._store: "OrderedDict[str, Any]" = OrderedDict()
+        self._closer = closer
+        self._weigher = weigher
+        self._store: "OrderedDict[str, tuple]" = OrderedDict()  # key -> (resource, weight)
         self.opens = 0
         self.evictions = 0
+        self.bytes = 0
 
     def get(self, key: str) -> Any:
         if key in self._store:
             self._store.move_to_end(key)
-            return self._store[key]
+            return self._store[key][0]
         res = self._opener(key)
         self.opens += 1
-        self._store[key] = res
-        while len(self._store) > self.maxsize:
-            _, evicted = self._store.popitem(last=False)
+        weight = int(self._weigher(res, key))
+        self._store[key] = (res, weight)
+        self.bytes += weight
+        # evict oldest while over budget, but never the current (most-recent) entry
+        while len(self._store) > 1 and (self.bytes > self.max_bytes
+                                        or len(self._store) > self.max_count):
+            _, (evicted, w) = self._store.popitem(last=False)
+            self.bytes -= w
             self.evictions += 1
             self._closer(evicted)
         return res
 
     def close_all(self) -> None:
         while self._store:
-            _, res = self._store.popitem(last=False)
+            _, (res, w) = self._store.popitem(last=False)
+            self.bytes -= w
             self._closer(res)
 ```
 
@@ -720,7 +756,7 @@ Co-authored-by: Isaac"
 
 **Interfaces:**
 - Consumes: `OpenResourceLRU`; `core.open_tile.open_tile`; `core.virtual_tile.effective_path_mode`; `_file_ref.file_supported`.
-- Produces: `grouped_tile_map(df, core_fn, *, return_field: StructField, tile_col="tile") -> DataFrame`. Runs a partition-scoped `mapInPandas`: for each tile in the partition it gets the source's open resource from a per-partition `OpenResourceLRU` (keyed by `tile.path`), applies `core_fn(ds) -> value`, and closes the LRU in a `finally` at partition end. The opener is **capability-adaptive**: FILE-capable → cache the `.open()` stream via the existing `open_windowed_via_fileref`; non-FILE moderate file + ≥`GBX_STAGE_MIN_WINDOWS` (default 17) → local-stage; non-FILE huge (> `GBX_STAGE_MAX_BYTES`) / few windows → the open dataset via `open_tile`. Output adds a column named `return_field.name`.
+- Produces: `grouped_tile_map(df, core_fn, *, return_field: StructField, tile_col="tile") -> DataFrame`. Runs a partition-scoped `mapInPandas`: for each tile in the partition it gets the source's open resource from a per-partition byte-budgeted `OpenResourceLRU` (keyed by `tile.path`, weighed by the opener), applies `core_fn(ds) -> value`, and closes the LRU in a `finally` at partition end. The opener is **capability-adaptive**: FILE-capable → cache the `.open()` stream via the existing `open_windowed_via_fileref` (weight `STREAM_NOMINAL_BYTES`); non-FILE moderate file + ≥`GBX_STAGE_MIN_WINDOWS` (default 17) → local-stage (weight = staged file size); non-FILE huge (> `GBX_STAGE_MAX_BYTES`) / few windows → the open dataset via `open_tile` (weight `STREAM_NOMINAL_BYTES`). `_make_opener()` returns `(file_ok, opener, closer, weigher)`. Output adds a column named `return_field.name`.
 
 - [ ] **Step 1: Write the failing test** (local Spark, non-FILE materialized tiles — this exercises the executor + LRU end-to-end; `file_supported()` returns False locally so it takes the fallback opener, which is the correct thing to test here)
 
@@ -763,7 +799,7 @@ import pandas as pd
 
 
 def _make_opener(pending_key="tile"):
-    """Capability-adaptive opener factory. Returns opener(key)->('kind', handle).
+    """Capability-adaptive opener factory. Returns (file_ok, opener, closer, weigher).
     Runs on the worker; imports are worker-local (GDAL env configured there)."""
     from . import _file_ref
     file_ok = _file_ref.file_supported()
@@ -781,7 +817,12 @@ def _make_opener(pending_key="tile"):
         cm, _ds = handle
         cm.__exit__(None, None, None)
 
-    return file_ok, opener, closer
+    def weigher(handle, key):
+        # fallback (open dataset) weighs a small nominal so the count guard governs;
+        # the local-stage branch (Task 9 fast-follow) will weigh the staged file size.
+        return STREAM_NOMINAL_BYTES
+
+    return file_ok, opener, closer, weigher
 
 
 def grouped_tile_map(df, core_fn, *, return_field: StructField, tile_col: str = "tile"):
@@ -791,8 +832,8 @@ def grouped_tile_map(df, core_fn, *, return_field: StructField, tile_col: str = 
     def _map(pdf_iter):
         from . import _env
         _env.configure_gdal_env()
-        _file_ok, opener, closer = _make_opener()
-        lru = OpenResourceLRU(maxsize=2, opener=opener, closer=closer)
+        _file_ok, opener, closer, weigher = _make_opener()
+        lru = OpenResourceLRU(opener=opener, closer=closer, weigher=weigher)
         try:
             for pdf in pdf_iter:
                 results = []
@@ -922,6 +963,7 @@ This task validates the FILE round-trip that `local[2]` cannot exercise, and wir
 
 **Preconditions (lead-agent owns; state in the dispatch):**
 - Auth: profile `dogfood` must be `VALID` (checked at session start). The probe runs on the classic cluster **`gbx-file-probe-dogfood-19snap`**, id **`0813-214720-wo95qznu`** (DBR 19.5 snapshot, Scala 2.13, `SINGLE_USER`, `single_user_name=mjohns@databricks.com`) — target it **by id** (the list omits it when terminated; start it by id if needed).
+- **Keep the cluster WARM for the whole of Task 9.** Cluster spin-up is minutes; start it once at the top of Step 2 and **do not terminate it between Steps 2 and 4** (the plan iterates: probe → wire the stream branch → re-probe). Only stop the cluster when the user says (they explicitly asked to keep it warm while iterating on-cluster). If the cluster auto-terminates on idle between iterations, its autotermination window should be widened (or fire a lightweight keep-alive) rather than paying a fresh cold start each round.
 - The wheel must be staged to the cluster or `%pip install`ed from the artifact Volume (light tier, JAR-free). Reuse the wheel-install incantation: force-reinstall `--no-deps geobrix` then `geobrix[light-dbr19]`.
 - Sample corpus: `geospatial_docs.geobrix.sample-data/bench-corpus-*` (already present from the spikes).
 

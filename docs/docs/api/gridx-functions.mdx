@@ -3,11 +3,14 @@ sidebar_position: 6
 title: GridX Function Reference
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
+import FunctionExamples from '@site/src/components/FunctionExamples';
 import gridxFunctionsExamples from '!!raw-loader!../../tests/python/api/gridx_functions.py';
 import gridxFunctionsSqlExamples from '!!raw-loader!../../tests/python/api/gridx_functions_sql.py';
-import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.py';
-import gridxScalaCode from '!!raw-loader!../../tests/scala/packages/GridxPackageExamples.scala';
+import gridxLightCode from '!!raw-loader!../../tests/python/api/gridx_functions_python_light.py';
+import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import Tier from '@site/src/components/Tier';
 import { Impl } from '@site/src/components/Tier';
 import GridXIcon from '../../../resources/images/brand/GridX.png';
@@ -42,54 +45,130 @@ Use `RegisterBatch` with `functions=gridx.quadbin` or `functions=gridx.bng` to r
 - **K-Ring / K-Loop Neighbourhoods**: Filled rings and hollow rings for both grid systems
 - **Polyfill and Tessellation**: Cover geometries with cells; tessellation returns per-cell clipped chip geometries
 
-## Usage Examples
+## Setup {#setup}
 
-### Python/PySpark
+With GeoBrix already [installed](../installation), register GridX in your session before running any example.
 
-<CodeFromTest
-  code={packagesExamples}
-  language="python"
-  source="docs/tests/python/packages/examples.py"
-  testFile="docs/tests/python/packages/test_examples.py"
-  functionName="gridx_basic_usage"
-  outputConstant="gridx_basic_usage_output"
-/>
+<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
+<TabItem value="lightweight" label="Lightweight (pygx)">
 
-### Scala
+```python
+from databricks.labs.gbx.pygx import functions as gx
+gx.register(spark)  # registers all gbx_bng_*, gbx_quadbin_*, gbx_custom_* SQL functions
+```
 
-<CodeFromTest
-  code={gridxScalaCode}
-  language="scala"
-  source="docs/tests/scala/packages/GridxPackageExamples.scala"
-  testFile="docs/tests/scala/packages/GridxExamplesDocTest.scala"
-  functionName="GRIDX_SCALA_USAGE"
-  outputConstant="GRIDX_SCALA_USAGE_output"
-/>
+</TabItem>
+<TabItem value="heavyweight" label="Heavyweight">
 
-### SQL
+```python
+# BNG
+from databricks.labs.gbx.gridx.bng import functions as bx
+bx.register(spark)
 
-<CodeFromTest
-  code={packagesExamples}
-  language="sql"
-  source="docs/tests/python/packages/examples.py"
-  testFile="docs/tests/python/packages/test_examples.py"
-  functionName="SQL_GRIDX_BNG_USAGE"
-  outputConstant="SQL_GRIDX_BNG_USAGE_output"
-/>
+# Quadbin
+from databricks.labs.gbx.gridx.quadbin import functions as qx
+qx.register(spark)
 
-:::note SQL function prefixes
-In SQL, GridX functions are prefixed with **`gbx_`** (e.g. `gbx_bng_aswkb`, `gbx_quadbin_pointascell`). For SQL, Python, and Scala usage patterns, see [Language Bindings](./language-bindings).
-:::
+# Custom grid
+from databricks.labs.gbx.gridx.custom import functions as cx
+cx.register(spark)
+```
 
-## Common setup
+</TabItem>
+</Tabs>
 
-Run this once before the examples below. It registers GridX (BNG) so you can use `bng_*` in Python and `gbx_bng_*` in SQL.
+The examples on this page read from **ten canonical DataFrames**, one per fixture group. Each is available as a temp view for SQL examples. Point the placeholders at your own data to reproduce the examples:
 
-<CodeFromTest code={gridxFunctionsExamples} functionName="gridx_setup_example" language="python" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="gridx_setup_example_output" />
+| View / DataFrame | Schema | Backed by | Backs |
+|---|---|---|---|
+| `bng_cells` | `cellid STRING` | Inline literal `'TQ3080'` (1km cell, central London, EPSG:27700) | BNG scalar ops: `bng_aswkb`, `bng_aswkt`, `bng_cellarea`, `bng_centroid`, `bng_kring`, `bng_kloop` |
+| `bng_cell_pairs` | `cellid1 STRING`, `cellid2 STRING` | Inline literals `'TQ3080'`, `'TQ3081'` (adjacent cells, distance = 1) | `bng_distance`, `bng_euclideandistance` |
+| `bng_points` | `easting INT`, `northing INT`, `geom STRING` | Easting 530000, northing 180000, WKT point (EPSG:27700) | `bng_pointascell`, `bng_eastnorthasbng` |
+| `bng_polygons` | `geom STRING` | 3km × 3km BNG polygon in **EPSG:27700** (London area) | `bng_geomkring`, `bng_geomkloop`, `bng_polyfill`, `bng_tessellate`, and the 5 `*explode` generators |
+| `bng_chips` | `chip STRUCT<cellid STRING, core BOOLEAN, chip BINARY>` | 9 tessellation chips from the BNG polygon at resolution 3 | `bng_cellintersection`, `bng_cellunion`, `bng_cellintersection_agg`, `bng_cellunion_agg` |
+| `quadbin_cells` | `cell LONG` | Inline literal `5233961839712272383` (San Francisco, zoom 10) | `quadbin_aswkb`, `quadbin_centroid`, `quadbin_resolution`, `quadbin_kring`, `quadbin_cellunion` |
+| `quadbin_cell_pairs` | `cell1 LONG`, `cell2 LONG` | Two cells at `(0.0, 0.0, z10)` and `(0.0, 0.1, z10)` — distance = 1 | `quadbin_distance` |
+| `quadbin_polygons` | `geom STRING` | WGS84 polygon `(-1,-1) → (1,1)` | `quadbin_polyfill`, `quadbin_tessellate` |
+| `quadbin_kring_cells` | `cell LONG` | 9 cells from `kring(SF-z10, k=1)` | `quadbin_cellunion_agg` |
+| `custom_grids` | `grid STRUCT`, `cell LONG`, `point STRING` | BNG-like custom grid; cell at `POINT(530000 180000)`, resolution 5 | All 7 `custom_*` functions |
+
+All ten views are built from inline literals in the doc-test fixture helpers (no external files or `/Volumes` dependency, so the examples run anywhere).
 
 :::tip Map any GridX cell set with `plot_static`
 [`vizx.plot_static`](./vizx-vector#static-maps) renders a column of cell ids straight from a Spark DataFrame as a **static, GitHub-renderable map over a basemap** — and it's the one helper that covers **every** GridX grid: pass `grid_system="quadbin"`, `"bng"`, or `"custom"` (as well as `"h3"`). Each grid's native CRS is handled for you (e.g. BNG's EPSG:27700 is reprojected for the basemap), and `"custom"` takes the same grid spec via `grid_conf=`. It's the quickest way to eyeball the cells the functions below produce. See [`plot_static`](./vizx-vector#static-maps) for the full parameter list.
 :::
+
+---
+
+## Examples — Conventions {#conventions}
+
+### How to read the four tabs
+
+Every function on this page shows **one example**, expressed identically across four tabs:
+
+| Tab | Tier | Badge |
+|---|---|---|
+| **SQL** | Both (default) | — |
+| **Python (light)** | `pygx` lightweight tier | — |
+| **Python (heavy)** | heavyweight tier | Blue |
+| **Scala** | heavyweight tier | Blue |
+
+All four tabs operate on the **same input fixture** with the **same arguments**. Where a genuine tier difference exists — a diverging output schema or a behavior available only in one tier — the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
+
+In each Python example, `df = spark.table("<view>")` or an equivalent inline `spark.sql(...)` call loads the canonical fixture. Each SQL example reads `FROM <view>` or uses an inline literal — no separate `CREATE TEMP VIEW` step is shown.
+
+### Output representation
+
+The output cells in every function table follow a uniform convention so readers can compare tabs at a glance.
+
+**Cell-id strings** — BNG cell-ids (e.g. `'TQ3080'`) and quadbin cells (e.g. `5233961839712272383`) are shown in full when short.
+
+**Binary geometry ([E]WKB)** — geometry returned as `BINARY` is elided with one token and a format annotation. Use `(WKB binary)` when no SRID is embedded; `(EWKB binary)` when an SRID is embedded (quadbin functions embed SRID 4326):
+
+```
+... (WKB binary)
+... (EWKB binary)
+```
+
+**WKT strings** — short WKT strings are shown in full; longer strings are truncated with a type annotation:
+
+```
+POLYGON ((530000 180000, ...))
+POLYGON (... (WKT)
+```
+
+**Cell-id arrays** — arrays of cell-ids show the first few entries followed by `...` when the array is long:
+
+```
+['TQ2979', 'TQ2980', 'TQ2981', ..., 'TQ3181']   (9 cells)
+```
+
+**Doubles / numeric scalars** — shown as the real value (e.g. `1.0` for `bng_cellarea`).
+
+**Cell width** — output cells are capped at approximately 60 characters. A longer value is truncated with `...` and annotated with its type.
+
+**Identical-across-tier values** — when all four tabs produce the same result (e.g. `'TQ3080'` from `bng_pointascell`), each tab shows that value identically with the same annotation. Genuine tier differences are called out in a labeled `:::note`.
+
+### BNG domain rules
+
+The following rules apply to **all BNG functions** (`gbx_bng_*`):
+
+- **Coordinate system** — BNG geometry inputs (points and polygons) must be in **EPSG:27700** eastings/northings. WGS84 lon/lat coordinates (e.g. `POINT(-0.1278 51.5074)`) yield **empty arrays or null results** — this is the most common source of confusion.
+- **Resolution** — accepts **integer indices ±1..±6** (1 = 100km, 2 = 10km, 3 = 1km, 4 = 100m, 5 = 10m, 6 = 1m; negative values are quadrants) **or** string keys from the resolution map (e.g. `'1km'`, `'100m'`, `'10m'`). **Never** pass metres-as-integer (e.g. `1000`) — that interpretation is not supported by `BNG.getResolution` and raises an error.
+- **`bng_cellarea` returns square kilometres** — not square metres. A 1km cell returns `1.0`.
+- **Cell-id format** — standard BNG grid references (e.g. `'TQ3080'`). At resolution 3 (1km), the format is two letters + four digits; the resolution level is encoded in the string length.
+
+### BNG `*explode` generators — SQL LATERAL only
+
+The five BNG explode generators (`bng_kringexplode`, `bng_kloopexplode`, `bng_geomkringexplode`, `bng_geomkloopexplode`, `bng_tessellateexplode`) are Python UDTFs in the lightweight tier — they have **no Python DataFrame Column form**. Calling them as Column expressions raises `NotImplementedError`. Use SQL `LATERAL` for both tiers:
+
+```sql
+SELECT t.*
+FROM (SELECT 'TQ3080' AS cellid, 1 AS k) src,
+LATERAL gbx_bng_kringexplode(src.cellid, src.k) t
+```
+
+The Python (light) tab for these functions shows the same `spark.sql("... LATERAL ...")` invocation.
 
 ---
 
@@ -124,9 +203,14 @@ Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon
 **Returns:**
 - `BIGINT` quadbin cell ID
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_pointascell_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="quadbin_pointascell_sql_example_output" />
+<FunctionExamples
+  name="quadbin_pointascell"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -145,9 +229,14 @@ Powered by the **quadbin** package + **shapely**. Cell boundary polygon as EWKB 
 **Returns:**
 - Binary EWKB polygon (SRID-tagged 4326)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_aswkb_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" />
+<FunctionExamples
+  name="quadbin_aswkb"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -166,9 +255,14 @@ Powered by the **quadbin** package + **shapely**. Cell centroid (bbox-corner mea
 **Returns:**
 - Binary EWKB point (SRID-tagged 4326)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_centroid_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" />
+<FunctionExamples
+  name="quadbin_centroid"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -187,9 +281,14 @@ Powered by the **quadbin** package (numpy-vectorized). Extracts the zoom level f
 **Returns:**
 - `INT` zoom level (0..26)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_resolution_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" />
+<FunctionExamples
+  name="quadbin_resolution"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -208,9 +307,14 @@ Powered by the **quadbin** package + **shapely**. Enumerates the cells covering 
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs covering the bbox
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_polyfill_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="quadbin_polyfill_sql_example_output" />
+<FunctionExamples
+  name="quadbin_polyfill"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -229,9 +333,14 @@ Powered by the **quadbin** package. All cells within Chebyshev distance `k` (inc
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs (length `(2k+1)^2`)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_kring_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="quadbin_kring_sql_example_output" />
+<FunctionExamples
+  name="quadbin_kring"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -250,9 +359,14 @@ Powered by the **quadbin** package + **shapely**. Bbox polyfill then per-cell in
 **Returns:**
 - `ARRAY<STRUCT<cell: BIGINT, geom: BINARY>>`
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_tessellate_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" />
+<FunctionExamples
+  name="quadbin_tessellate"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -271,9 +385,14 @@ Powered by **shapely** (`union_all` of the cell polygons). Dissolves an `ARRAY<L
 **Returns:**
 - Binary EWKB multipolygon (SRID-tagged 4326)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_cellunion_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" />
+<FunctionExamples
+  name="quadbin_cellunion"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -292,9 +411,14 @@ Powered by **shapely**. Grouped aggregate — `groupBy(...).agg(gx.quadbin_cellu
 **Returns:**
 - `BINARY` EWKB multipolygon (SRID-tagged 4326) representing the dissolved coverage
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_cellunion_agg_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="quadbin_cellunion_agg_sql_example_output" />
+<FunctionExamples
+  name="quadbin_cellunion_agg"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -313,9 +437,14 @@ Powered by the **quadbin** package. Chebyshev distance on tile coordinates; mirr
 **Returns:**
 - `INT` cell-step distance
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="quadbin_distance_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" />
+<FunctionExamples
+  name="quadbin_distance"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -383,9 +512,14 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
 **Returns:**
 - Binary WKB geometry representation
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_aswkb_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_aswkb_sql_example_output" />
+<FunctionExamples
+  name="bng_aswkb"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -407,9 +541,14 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
 **Returns:**
 - String WKT geometry representation
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_aswkt_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_aswkt_sql_example_output" />
+<FunctionExamples
+  name="bng_aswkt"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -435,9 +574,14 @@ Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **s
 **Returns:**
 - Double representing the cell area in square kilometres
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_cellarea_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_cellarea_sql_example_output" />
+<FunctionExamples
+  name="bng_cellarea"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -459,9 +603,14 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center PO
 **Returns:**
 - Point geometry at cell center
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_centroid_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_centroid_sql_example_output" />
+<FunctionExamples
+  name="bng_centroid"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -469,24 +618,29 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center PO
 
 <Tier both/>
 
-Calculate distance between two BNG cells.
+Return the grid-step distance between two BNG cells.
 
 :::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** — grid-step distance between two cells, exact-parity with the heavyweight tier.
+Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count between two cells, exact-parity with the heavyweight tier.  Returns **LONG** (grid steps, not metres).
 :::
 
-**Signature:** `bng_distance(cell1: Column, cell2: Column): Column`
+**Signature:** `bng_distance(cellid1: Column, cellid2: Column): Column`
 
 **Parameters:**
-- `cell1` - First BNG cell reference
-- `cell2` - Second BNG cell reference
+- `cellid1` - First BNG cell reference (STRING)
+- `cellid2` - Second BNG cell reference (STRING)
 
 **Returns:**
-- Double representing distance in meters
+- LONG — Chebyshev grid-step distance.  Adjacent cells (sharing an edge or corner) return 1; the cell itself returns 0.
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_distance_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_distance_example_output" />
+<FunctionExamples
+  name="bng_distance"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -494,53 +648,67 @@ Powered by the **pure-Python port of `BNG.scala`** — grid-step distance betwee
 
 <Tier both/>
 
-Calculate Euclidean distance between two BNG cells.
+Return the Chebyshev grid-unit distance between two BNG cells.
 
 :::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** — straight-line distance between two cell centroids, exact-parity with the heavyweight tier.
+Powered by the **pure-Python port of `BNG.scala`** — Chebyshev distance in grid units, exact-parity with the heavyweight tier.  Returns **LONG** (grid units, not metres).
 :::
 
-**Signature:** `bng_euclideandistance(cell1: Column, cell2: Column): Column`
+**Signature:** `bng_euclideandistance(cellid1: Column, cellid2: Column): Column`
 
 **Parameters:**
-- `cell1` - First BNG cell reference
-- `cell2` - Second BNG cell reference
+- `cellid1` - First BNG cell reference (STRING)
+- `cellid2` - Second BNG cell reference (STRING)
 
 **Returns:**
-- Double representing Euclidean distance in meters
+- LONG — Chebyshev distance in grid units.  Adjacent cells return 1; diagonal cells also return 1.
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_euclideandistance_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_euclideandistance_example_output" />
+<FunctionExamples
+  name="bng_euclideandistance"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
 ## Cell Operations
 
-Operations combining multiple cells.
+Operations combining multiple BNG chip structs.
+
+:::warning Chip-struct inputs required
+`bng_cellintersection` and `bng_cellunion` take **`STRUCT<cellid STRING, core BOOLEAN, chip BINARY>`** chip inputs — the same struct produced by `bng_tessellate` / `bng_tessellateexplode`.  Passing plain `STRING` cell IDs throws `ClassCastException`.  Use `bng_tessellate(geom, resolution)` to produce chip inputs.
+:::
 
 ### bng_cellintersection
 
 <Tier both/>
 
-Get the intersection of two BNG cells.
+Intersect two BNG chip structs and return the dissolved intersection chip.
 
 :::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Intersects two cell chips, returning the dissolved chip.
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the heavyweight tier (AGREE).
 :::
 
-**Signature:** `bng_cellintersection(cell1: Column, cell2: Column): Column`
+**Signature:** `bng_cellintersection(chip1: Column, chip2: Column): Column`
 
 **Parameters:**
-- `cell1` - First BNG cell reference
-- `cell2` - Second BNG cell reference
+- `chip1` - First chip struct (`STRUCT<cellid STRING, core BOOLEAN, chip BINARY>`)
+- `chip2` - Second chip struct (same schema)
 
 **Returns:**
-- BNG cell ID representing the intersection
+- `STRUCT<cellid STRING, core BOOLEAN, chip BINARY>` — dissolved intersection chip.  A fully interior chip (core=true) intersected with itself returns `{cellid, true, null}`.
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_cellintersection_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_cellintersection_example_output" />
+<FunctionExamples
+  name="bng_cellintersection"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -548,24 +716,29 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Intersects two
 
 <Tier both/>
 
-Get the union of two BNG cells.
+Union two BNG chip structs and return the dissolved union chip.
 
 :::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Unions two cell chips, returning the dissolved chip.
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the heavyweight tier (AGREE).
 :::
 
-**Signature:** `bng_cellunion(cell1: Column, cell2: Column): Column`
+**Signature:** `bng_cellunion(chip1: Column, chip2: Column): Column`
 
 **Parameters:**
-- `cell1` - First BNG cell reference
-- `cell2` - Second BNG cell reference
+- `chip1` - First chip struct (`STRUCT<cellid STRING, core BOOLEAN, chip BINARY>`)
+- `chip2` - Second chip struct (same schema)
 
 **Returns:**
-- BNG cell ID representing the union
+- `STRUCT<cellid STRING, core BOOLEAN, chip BINARY>` — dissolved union chip.  A fully interior chip (core=true) unioned with itself returns `{cellid, true, null}`.
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_cellunion_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_cellunion_example_output" />
+<FunctionExamples
+  name="bng_cellunion"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -593,9 +766,14 @@ Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). E
 **Returns:**
 - String BNG cell reference
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_eastnorthasbng_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_eastnorthasbng_sql_example_output" />
+<FunctionExamples
+  name="bng_eastnorthasbng"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -612,21 +790,20 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. The point coor
 **Signature:** `bng_pointascell(point: Column, resolution: Column): Column`
 
 **Parameters:**
-- `point` - Point geometry as **WKT** (string) or **WKB** (binary). For example, WKT: `'POINT(-0.1278 51.5074)'`. Do not use `st_point()` or other DBR native geometry functions—they return a type GeoBrix does not accept.
+- `point` - Point geometry as **WKT** (string) or **WKB** (binary). Must be in **EPSG:27700** eastings/northings (e.g. `'POINT(530000 180000)'` for London). Do not use `st_point()` or other DBR native geometry functions — they return a type GeoBrix does not accept.
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
 
 **Returns:**
 - String BNG cell reference
 
-**Python (point as WKT column):**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_pointascell_python_api_example" language="python" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" />
-
-**Scala:** Pass a WKT or WKB column and BNG resolution (e.g. `bx.bng_pointascell(lit("POINT(530000 180000)"), lit("1km"))` for BNG coords, or `lit(3)` for 1 km index). Do not use `st_point()`.
-
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_pointascell_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_pointascell_sql_example_output" />
+<FunctionExamples
+  name="bng_pointascell"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -653,9 +830,14 @@ Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distan
 **Returns:**
 - Array of BNG cell references in the k-ring
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_kring_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_kring_sql_example_output" />
+<FunctionExamples
+  name="bng_kring"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -678,9 +860,14 @@ Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring di
 **Returns:**
 - Array of BNG cell references at exactly distance k
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_kloop_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_kloop_example_output" />
+<FunctionExamples
+  name="bng_kloop"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -704,9 +891,14 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the 
 **Returns:**
 - Array of BNG cell references
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkring_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkring_example_output" />
+<FunctionExamples
+  name="bng_geomkring"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -730,9 +922,14 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the 
 **Returns:**
 - Array of BNG cell references at exactly distance k
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkloop_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkloop_example_output" />
+<FunctionExamples
+  name="bng_geomkloop"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -759,9 +956,14 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the
 **Returns:**
 - Array of BNG cell IDs covering the geometry
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_polyfill_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_polyfill_sql_example_output" />
+<FunctionExamples
+  name="bng_polyfill"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -784,9 +986,14 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus 
 **Returns:**
 - Array of structs containing cell ID and geometry
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_tessellate_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_tessellate_example_output" />
+<FunctionExamples
+  name="bng_tessellate"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -825,9 +1032,14 @@ GROUP BY group_key
 **Returns:**
 - BNG cell ID representing common intersection
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_cellintersection_agg_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_cellintersection_agg_sql_example_output" />
+<FunctionExamples
+  name="bng_cellintersection_agg"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -862,9 +1074,14 @@ GROUP BY group_key
 **Returns:**
 - BNG cell ID representing bounding union
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="bng_cellunion_agg_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="bng_cellunion_agg_sql_example_output" />
+<FunctionExamples
+  name="bng_cellunion_agg"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -891,9 +1108,12 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 **Returns:**
 - Exploded rows, one per cell in k-ring
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_kringexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_kringexplode_example_output" />
+<FunctionExamples
+  name="bng_kringexplode"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -916,9 +1136,12 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 **Returns:**
 - Exploded rows, one per cell in k-loop
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_kloopexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_kloopexplode_example_output" />
+<FunctionExamples
+  name="bng_kloopexplode"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -942,9 +1165,12 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 **Returns:**
 - Exploded rows, one per cell
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkringexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkringexplode_example_output" />
+<FunctionExamples
+  name="bng_geomkringexplode"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -968,9 +1194,12 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 **Returns:**
 - Exploded rows, one per cell at distance k
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_geomkloopexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_geomkloopexplode_example_output" />
+<FunctionExamples
+  name="bng_geomkloopexplode"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -993,9 +1222,12 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 **Returns:**
 - Exploded rows with cell ID and geometry for each cell
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsExamples} functionName="bng_tessellateexplode_example" language="sql" source="docs/tests/python/api/gridx_functions.py" testFile="docs/tests/python/api/test_gridx_functions.py" outputConstant="bng_tessellateexplode_example_output" />
+<FunctionExamples
+  name="bng_tessellateexplode"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -1053,9 +1285,14 @@ Define a user-specified regular grid from an origin, extent, cell size, split fa
 **Returns:**
 - `STRUCT<bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, srid>` — a grid descriptor struct passed to all other `gbx_custom_*` functions.
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="custom_grid_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="custom_grid_sql_example_output" />
+<FunctionExamples
+  name="custom_grid"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -1075,9 +1312,14 @@ Index a point geometry into a custom grid cell ID at the specified resolution le
 **Returns:**
 - `BIGINT` cell ID encoding the grid position at the given resolution
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="custom_pointascell_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="custom_pointascell_sql_example_output" />
+<FunctionExamples
+  name="custom_pointascell"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -1094,11 +1336,16 @@ Return the WKB footprint polygon of a custom grid cell.
 - `grid` — custom grid descriptor returned by `gbx_custom_grid`
 
 **Returns:**
-- `BINARY` WKB polygon representing the cell boundary
+- `BINARY` WKB polygon representing the cell boundary (geometry `... (WKB binary)`)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="custom_cellaswkb_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="custom_cellaswkb_sql_example_output" />
+<FunctionExamples
+  name="custom_cellaswkb"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -1117,9 +1364,14 @@ Return the WKT footprint polygon of a custom grid cell.
 **Returns:**
 - `STRING` WKT polygon representing the cell boundary
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="custom_cellaswkt_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="custom_cellaswkt_sql_example_output" />
+<FunctionExamples
+  name="custom_cellaswkt"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -1136,11 +1388,16 @@ Return the centroid of a custom grid cell as a WKB point.
 - `grid` — custom grid descriptor returned by `gbx_custom_grid`
 
 **Returns:**
-- `BINARY` WKB point at the cell center (in the grid's CRS)
+- `BINARY` WKB point at the cell center (geometry `... (WKB binary)`)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="custom_centroid_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="custom_centroid_sql_example_output" />
+<FunctionExamples
+  name="custom_centroid"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -1160,9 +1417,14 @@ Fill a geometry with all custom grid cell IDs at the specified resolution.
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs whose footprints intersect the geometry
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="custom_polyfill_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="custom_polyfill_sql_example_output" />
+<FunctionExamples
+  name="custom_polyfill"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -1182,9 +1444,14 @@ Return all custom grid cells within `k` steps of a center cell (filled neighborh
 **Returns:**
 - `ARRAY<BIGINT>` of cell IDs within distance `k` (up to `(2k+1)^2` cells)
 
-**SQL:**
-
-<CodeFromTest code={gridxFunctionsSqlExamples} functionName="custom_kring_sql_example" language="sql" source="docs/tests/python/api/gridx_functions_sql.py" testFile="docs/tests/python/api/test_gridx_functions_sql.py" outputConstant="custom_kring_sql_example_output" />
+<FunctionExamples
+  name="custom_kring"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 

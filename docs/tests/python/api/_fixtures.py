@@ -768,6 +768,360 @@ def create_setup_views_vectorx_heavy(spark):
         builder(spark).createOrReplaceTempView(view)
 
 
+# ---------------------------------------------------------------------------
+# GridX fixture constants (inline literals — no /Volumes dependency)
+# ---------------------------------------------------------------------------
+
+# BNG canonical fixtures (EPSG:27700 — British National Grid eastings/northings)
+# Central London area: easting 530000 N, northing 180000 E
+_BNG_CELL_ID = "TQ3080"  # 1km cell containing (530000, 180000)
+_BNG_CELL_ID_2 = "TQ3081"  # adjacent cell (for distance functions)
+_BNG_POINT_WKT = "POINT(530000 180000)"  # central London, EPSG:27700
+_BNG_EASTING = 530000
+_BNG_NORTHING = 180000
+# 3km × 3km polygon covering TQ29/TQ30/TQ31 at res=3 (1km cells)
+# gbx_bng_polyfill → 9 cells; gbx_bng_tessellate → 9 chips
+_BNG_POLYGON_WKT = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
+_BNG_RESOLUTION = 3  # integer index for 1km cells
+
+# Quadbin canonical fixtures (EPSG:4326, WGS84 lon/lat)
+# gbx_quadbin_pointascell(-122.4194, 37.7749, 10) = 5233961839712272383 (SF at z10)
+_QUADBIN_CELL_SF_Z10: int = 5233961839712272383
+# gbx_quadbin_pointascell(0.0, 0.0, 8) = 5227553336189779967 (origin at z8)
+_QUADBIN_CELL_ORIGIN_Z8: int = 5227553336189779967
+# Small WGS84 polygon near origin — gbx_quadbin_polyfill/tessellate at z=5 → 4 cells
+_QUADBIN_POLYGON_WKT = "POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))"
+
+# Custom grid: BNG-like custom grid (EPSG:27700), 1km root cells, 2 splits/level
+# gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)
+# Cell at POINT(530000 180000) at res=5 = 360287970373976640
+_CUSTOM_CELL_ID: int = 360287970373976640
+
+
+# ---------------------------------------------------------------------------
+# GridX BNG fixture builders
+# ---------------------------------------------------------------------------
+
+
+def bng_cells_df(spark):
+    """Single-row DataFrame with one BNG cell-id.
+
+    Column: ``cellid STRING`` = ``'TQ3080'`` (1km cell, central London, EPSG:27700).
+
+    Backs: ``bng_aswkb``, ``bng_aswkt``, ``bng_cellarea``, ``bng_centroid``,
+    ``bng_kring``, ``bng_kloop``.
+    """
+    return spark.sql(f"SELECT '{_BNG_CELL_ID}' AS cellid")
+
+
+def bng_cells_df_heavy(spark):
+    """Heavy-tier equivalent of ``bng_cells_df``. Data is tier-agnostic."""
+    return bng_cells_df(spark)
+
+
+def bng_cell_pairs_df(spark):
+    """Single-row DataFrame with two adjacent BNG cell-ids.
+
+    Columns: ``cellid1 STRING`` = ``'TQ3080'``, ``cellid2 STRING`` = ``'TQ3081'``.
+    Distance between the two cells = 1 grid step.
+
+    Backs: ``bng_distance``, ``bng_euclideandistance``.
+    """
+    return spark.sql(
+        f"SELECT '{_BNG_CELL_ID}' AS cellid1, '{_BNG_CELL_ID_2}' AS cellid2"
+    )
+
+
+def bng_cell_pairs_df_heavy(spark):
+    """Heavy-tier equivalent of ``bng_cell_pairs_df``. Data is tier-agnostic."""
+    return bng_cell_pairs_df(spark)
+
+
+def bng_coordinates_df(spark):
+    """Single-row DataFrame with BNG easting/northing and a WKT point.
+
+    Columns: ``easting INT`` = 530000, ``northing INT`` = 180000,
+    ``geom STRING`` = ``'POINT(530000 180000)'`` (EPSG:27700).
+
+    Backs: ``bng_pointascell``, ``bng_eastnorthasbng``.
+    """
+    return spark.sql(
+        f"SELECT {_BNG_EASTING} AS easting, {_BNG_NORTHING} AS northing,"
+        f" '{_BNG_POINT_WKT}' AS geom"
+    )
+
+
+def bng_coordinates_df_heavy(spark):
+    """Heavy-tier equivalent of ``bng_coordinates_df``. Data is tier-agnostic."""
+    return bng_coordinates_df(spark)
+
+
+def bng_polygons_df(spark):
+    """Single-row DataFrame with a BNG polygon geometry string.
+
+    Column: ``geom STRING`` — 3km × 3km polygon in EPSG:27700 (London area).
+    ``gbx_bng_polyfill(geom, 3)`` → 9 cells; ``gbx_bng_tessellate(geom, 3)`` → 9 chips.
+
+    **IMPORTANT**: this polygon is in **EPSG:27700 eastings/northings**, NOT WGS84
+    lon/lat. WGS84 coordinates (e.g. lon=-0.1, lat=51.5) yield empty arrays for
+    all BNG geometry-accepting functions.
+
+    Backs: ``bng_geomkring``, ``bng_geomkloop``, ``bng_polyfill``,
+    ``bng_tessellate``, and the 5 ``*explode`` generators.
+    """
+    return spark.sql(f"SELECT '{_BNG_POLYGON_WKT}' AS geom")
+
+
+def bng_polygons_df_heavy(spark):
+    """Heavy-tier equivalent of ``bng_polygons_df``. Data is tier-agnostic."""
+    return bng_polygons_df(spark)
+
+
+def bng_chips_df(spark):
+    """9-row DataFrame of BNG chip structs from tessellating the canonical polygon.
+
+    Column: ``chip STRUCT<cellid STRING, core BOOLEAN, chip BINARY>``.
+    Each row is one chip from ``gbx_bng_tessellate(BNG_POLYGON, 3)`` — 9 chips
+    covering the 3km × 3km London-area polygon at 1km resolution.  The center
+    cell ``TQ3080`` is a ``core=True`` chip (fully interior); the 8 border cells
+    carry a non-null WKB clipped geometry in the ``chip`` field.
+
+    Registers pygx first (pygx Column wrappers resolve to SQL functions, so
+    registration is required before use as Column expressions).
+
+    Backs: ``bng_cellintersection``, ``bng_cellunion``,
+    ``bng_cellintersection_agg``, ``bng_cellunion_agg``.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    gx.register(spark)
+    geom_df = spark.sql(f"SELECT '{_BNG_POLYGON_WKT}' AS geom")
+    return geom_df.select(
+        f.explode(gx.bng_tessellate(f.col("geom"), f.lit(_BNG_RESOLUTION))).alias(
+            "chip"
+        )
+    )
+
+
+def bng_chips_df_heavy(spark):
+    """Heavy-tier BNG chip DataFrame.
+
+    Both tiers produce the same STRUCT<cellid, core, chip> schema for
+    ``bng_tessellate`` (AGREE), so this delegates to ``bng_chips_df``.
+    """
+    return bng_chips_df(spark)
+
+
+# ---------------------------------------------------------------------------
+# GridX Quadbin fixture builders
+# ---------------------------------------------------------------------------
+
+
+def quadbin_cells_df(spark):
+    """Single-row DataFrame with one quadbin cell (LONG).
+
+    Column: ``cell LONG`` = ``5233961839712272383``
+    (San Francisco, zoom 10; ``gbx_quadbin_pointascell(-122.4194, 37.7749, 10)``).
+
+    Backs: ``quadbin_aswkb``, ``quadbin_centroid``, ``quadbin_resolution``,
+    ``quadbin_kring``, ``quadbin_cellunion``.
+    """
+    return spark.sql(f"SELECT {_QUADBIN_CELL_SF_Z10}L AS cell")
+
+
+def quadbin_cells_df_heavy(spark):
+    """Heavy-tier equivalent of ``quadbin_cells_df``. Data is tier-agnostic."""
+    return quadbin_cells_df(spark)
+
+
+def quadbin_cell_pairs_df(spark):
+    """Single-row DataFrame with two quadbin cells at distance = 1.
+
+    Columns: ``cell1 LONG``, ``cell2 LONG``.
+    ``cell1`` = ``gbx_quadbin_pointascell(0.0, 0.0, 10)``
+    ``cell2`` = ``gbx_quadbin_pointascell(0.0, 0.1, 10)`` — adjacent, distance 1.
+
+    Registers pygx first (pygx Column wrappers resolve to SQL functions).
+
+    Backs: ``quadbin_distance``.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    gx.register(spark)
+    base = spark.sql("SELECT 1 AS dummy")
+    return base.select(
+        gx.quadbin_pointascell(f.lit(0.0), f.lit(0.0), f.lit(10)).alias("cell1"),
+        gx.quadbin_pointascell(f.lit(0.0), f.lit(0.1), f.lit(10)).alias("cell2"),
+    )
+
+
+def quadbin_cell_pairs_df_heavy(spark):
+    """Heavy-tier equivalent of ``quadbin_cell_pairs_df``. Data is tier-agnostic."""
+    return quadbin_cell_pairs_df(spark)
+
+
+def quadbin_polygons_df(spark):
+    """Single-row DataFrame with a WGS84 polygon geometry string.
+
+    Column: ``geom STRING`` — WGS84 polygon ``POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))``.
+    ``gbx_quadbin_polyfill(geom, 5)`` → 4 cells.
+
+    Backs: ``quadbin_polyfill``, ``quadbin_tessellate``.
+    """
+    return spark.sql(f"SELECT '{_QUADBIN_POLYGON_WKT}' AS geom")
+
+
+def quadbin_polygons_df_heavy(spark):
+    """Heavy-tier equivalent of ``quadbin_polygons_df``. Data is tier-agnostic."""
+    return quadbin_polygons_df(spark)
+
+
+def quadbin_kring_cells_df(spark):
+    """9-row DataFrame of quadbin cells from kring(SF-z10, k=1).
+
+    Column: ``cell LONG`` — 9 cells in the k=1 ring around the SF z10 cell
+    (including the center), suitable for ``quadbin_cellunion_agg``.
+
+    Registers pygx first (pygx Column wrappers resolve to SQL functions).
+
+    Backs: ``quadbin_cellunion_agg``.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    gx.register(spark)
+    cell_df = spark.sql(f"SELECT {_QUADBIN_CELL_SF_Z10}L AS cell")
+    return cell_df.select(
+        f.explode(gx.quadbin_kring(f.col("cell"), f.lit(1))).alias("cell")
+    )
+
+
+def quadbin_kring_cells_df_heavy(spark):
+    """Heavy-tier equivalent of ``quadbin_kring_cells_df``. Data is tier-agnostic."""
+    return quadbin_kring_cells_df(spark)
+
+
+# ---------------------------------------------------------------------------
+# GridX custom-grid fixture builders
+# ---------------------------------------------------------------------------
+
+
+def custom_grid_df(spark):
+    """Single-row DataFrame with a custom grid spec, a cell ID, and a point.
+
+    Columns:
+    - ``grid STRUCT<...>`` — BNG-like custom grid (EPSG:27700, 1km root cells,
+      2 splits/level, 5 resolution levels)
+    - ``cell LONG`` = ``360287970373976640`` (cell at POINT(530000 180000) at res=5)
+    - ``point STRING`` = ``'POINT(530000 180000)'``
+
+    Grid params: ``gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)``
+
+    Registers pygx first (pygx Column wrappers resolve to SQL functions).
+
+    Backs: all 7 ``custom_*`` functions.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    gx.register(spark)
+    base_df = spark.sql("SELECT 1 AS dummy")
+    grid_df = base_df.select(
+        gx.custom_grid(
+            f.lit(0),
+            f.lit(1000000),
+            f.lit(0),
+            f.lit(1000000),
+            f.lit(2),
+            f.lit(1000),
+            f.lit(1000),
+            f.lit(27700),
+        ).alias("grid")
+    )
+    return grid_df.select(
+        f.col("grid"),
+        gx.custom_pointascell(f.lit(_BNG_POINT_WKT), f.col("grid"), f.lit(5)).alias(
+            "cell"
+        ),
+        f.lit(_BNG_POINT_WKT).alias("point"),
+    )
+
+
+def custom_grid_df_heavy(spark):
+    """Heavy-tier equivalent of ``custom_grid_df``. Data is tier-agnostic."""
+    return custom_grid_df(spark)
+
+
+# ---------------------------------------------------------------------------
+# GridX Setup views
+# Maps view name -> builder function. Ten views covering all three GridX systems.
+#
+# View assignments:
+#   bng_cells          — single BNG cell-id; scalar accessor + kring/kloop
+#   bng_cell_pairs     — two adjacent cell-ids; distance functions
+#   bng_points         — easting/northing/point; pointascell + eastnorthasbng
+#   bng_polygons       — BNG polygon; polyfill/tessellate/geomkring/kloop/explode
+#   bng_chips          — chip structs from tessellation; intersection/union/agg
+#   quadbin_cells      — single quadbin cell; scalar + kring
+#   quadbin_cell_pairs — two quadbin cells; distance
+#   quadbin_polygons   — WGS84 polygon; polyfill/tessellate
+#   quadbin_kring_cells — kring cells (9 rows); cellunion_agg
+#   custom_grids       — grid struct + cell + point; all custom_* functions
+# ---------------------------------------------------------------------------
+
+_SETUP_VIEWS_GRIDX_LIGHT = {
+    "bng_cells": bng_cells_df,
+    "bng_cell_pairs": bng_cell_pairs_df,
+    "bng_points": bng_coordinates_df,
+    "bng_polygons": bng_polygons_df,
+    "bng_chips": bng_chips_df,
+    "quadbin_cells": quadbin_cells_df,
+    "quadbin_cell_pairs": quadbin_cell_pairs_df,
+    "quadbin_polygons": quadbin_polygons_df,
+    "quadbin_kring_cells": quadbin_kring_cells_df,
+    "custom_grids": custom_grid_df,
+}
+
+_SETUP_VIEWS_GRIDX_HEAVY = {
+    "bng_cells": bng_cells_df_heavy,
+    "bng_cell_pairs": bng_cell_pairs_df_heavy,
+    "bng_points": bng_coordinates_df_heavy,
+    "bng_polygons": bng_polygons_df_heavy,
+    "bng_chips": bng_chips_df_heavy,
+    "quadbin_cells": quadbin_cells_df_heavy,
+    "quadbin_cell_pairs": quadbin_cell_pairs_df_heavy,
+    "quadbin_polygons": quadbin_polygons_df_heavy,
+    "quadbin_kring_cells": quadbin_kring_cells_df_heavy,
+    "custom_grids": custom_grid_df_heavy,
+}
+
+
+def create_setup_views_gridx_light(spark):
+    """Create the ten light-tier GridX Setup views. Idempotent (createOrReplace).
+
+    Views: ``bng_cells``, ``bng_cell_pairs``, ``bng_points``, ``bng_polygons``,
+    ``bng_chips``, ``quadbin_cells``, ``quadbin_cell_pairs``, ``quadbin_polygons``,
+    ``quadbin_kring_cells``, ``custom_grids``.
+
+    Register pygx *before* calling this so SQL examples can use ``gbx_bng_*``,
+    ``gbx_quadbin_*``, and ``gbx_custom_*``.
+    """
+    for view, builder in _SETUP_VIEWS_GRIDX_LIGHT.items():
+        builder(spark).createOrReplaceTempView(view)
+
+
+def create_setup_views_gridx_heavy(spark):
+    """Create the ten heavy-tier GridX Setup views. Idempotent.
+
+    Views: same names as light; heavy-tier builders used where they differ.
+    Register gridx.bng / gridx.quadbin / gridx.custom *before* calling this.
+    """
+    for view, builder in _SETUP_VIEWS_GRIDX_HEAVY.items():
+        builder(spark).createOrReplaceTempView(view)
+
+
 if __name__ == "__main__":
     out = make_multiband_fixture()
     print(f"Written: {out}")

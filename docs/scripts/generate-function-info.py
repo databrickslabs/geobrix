@@ -397,6 +397,13 @@ _TIER_SCANS = [
         "python-heavy",
     ),
     (
+        # GridX heavy examples live in gridx_functions.py (T2-T7 add
+        # *_python_heavy_example functions here for BNG/quadbin/custom).
+        "tests/python/api/gridx_functions.py",
+        "def {base}_python_heavy_example",
+        "python-heavy",
+    ),
+    (
         "tests/scala/api/ScalaApiExamples.scala",
         "val {base}_scala_example",
         "scala",

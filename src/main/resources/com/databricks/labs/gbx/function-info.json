@@ -142,7 +142,7 @@
       ]
     },
     "gbx_rst_bng_tessellate": {
-      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'covering') t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_bng_tessellate(tile, '1km', 'covering') FROM rasters;",
       "usage_args": "tile, resolution, [mode]",
       "bindings": [
         "sql",
@@ -510,7 +510,7 @@
       ]
     },
     "gbx_rst_h3_tessellate": {
-      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_h3_tessellate(tile, 7, 'covering') FROM rasters;",
       "usage_args": "tile, resolution, [mode]",
       "bindings": [
         "sql",
@@ -850,7 +850,7 @@
       ]
     },
     "gbx_rst_quadbin_tessellate": {
-      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'covering') t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_tessellate(tile, 12, 'covering') FROM rasters;",
       "usage_args": "tile, resolution, [mode]",
       "bindings": [
         "sql",
@@ -1305,211 +1305,291 @@
       "examples": "Examples:\n      > SELECT gbx_bng_aswkb('TQ3080') as wkb_geom;",
       "usage_args": "cellid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_aswkt": {
       "examples": "Examples:\n      > SELECT gbx_bng_aswkt('TQ3080') as wkt_geom;",
       "usage_args": "cellid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_cellarea": {
-      "examples": "Examples:\n      > SELECT 'TQ3080' as cell, gbx_bng_cellarea('TQ3080') as area_km2 FROM locations;",
+      "examples": "Examples:\n      > SELECT gbx_bng_cellarea('TQ3080') AS area_km2;",
       "usage_args": "cellid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_cellintersection": {
-      "examples": "Examples:\n      > SELECT group_id, gbx_bng_cellintersection_agg(cell_id) as common_cell FROM observations GROUP BY group_id;",
+      "examples": "Examples:\n      > SELECT gbx_bng_cellintersection(chip, chip) AS intersection_chip FROM ( SELECT explode( gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) ) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "left_chip, right_chip",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_cellintersection_agg": {
-      "examples": "Examples:\n      > SELECT group_id, gbx_bng_cellintersection_agg(cell_id) as common_cell FROM observations GROUP BY group_id;",
+      "examples": "Examples:\n      > SELECT t.chip.cellid, gbx_bng_cellintersection_agg(t.chip) AS common_chip FROM ( SELECT explode(gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 )) AS chip ) t WHERE t.chip.cellid = 'TQ3080' GROUP BY t.chip.cellid;",
       "usage_args": "input_chip",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_cellunion": {
-      "examples": "Examples:\n      > SELECT region, gbx_bng_cellunion_agg(cell_id) as bounding_cell FROM observations GROUP BY region;",
+      "examples": "Examples:\n      > SELECT gbx_bng_cellunion(chip, chip) AS union_chip FROM ( SELECT explode( gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) ) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "left_chip, right_chip",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_cellunion_agg": {
-      "examples": "Examples:\n      > SELECT region, gbx_bng_cellunion_agg(cell_id) as bounding_cell FROM observations GROUP BY region;",
+      "examples": "Examples:\n      > SELECT t.chip.cellid, gbx_bng_cellunion_agg(t.chip) AS union_chip FROM ( SELECT explode(gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 )) AS chip ) t WHERE t.chip.cellid = 'TQ3080' GROUP BY t.chip.cellid;",
       "usage_args": "input_chip",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_centroid": {
       "examples": "Examples:\n      > SELECT gbx_bng_centroid('TQ3080') as centroid;",
       "usage_args": "cellid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_distance": {
-      "examples": "Examples:\n      > SELECT gbx_bng_distance('TQ3080', 'TQ3081') as distance_m;",
+      "examples": "Examples:\n      > SELECT gbx_bng_distance('TQ3080', 'TQ3081') AS dist_steps;",
       "usage_args": "cellid1, cellid2",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_eastnorthasbng": {
       "examples": "Examples:\n      > SELECT gbx_bng_eastnorthasbng(530000, 180000, '1km') as bng_cell;",
       "usage_args": "easting, northing, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_euclideandistance": {
-      "examples": "Examples:\n      > SELECT gbx_bng_euclideandistance('TQ3080', 'TQ3081') as euclidean_distance_m;",
+      "examples": "Examples:\n      > SELECT gbx_bng_euclideandistance('TQ3080', 'TQ3081') AS euclidean_dist;",
       "usage_args": "cellid1, cellid2",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_geomkloop": {
-      "examples": "Examples:\n      > SELECT gbx_bng_geomkloop( st_geomfromtext('POLYGON((-0.1 51.5, -0.1 51.6, 0.0 51.6, 0.0 51.5, -0.1 51.5))'), 3, 1 ) as kloop_cells;",
+      "examples": "Examples:\n      > SELECT gbx_bng_geomkloop( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3, 1 ) AS kloop;",
       "usage_args": "geom, resolution, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_geomkloopexplode": {
-      "examples": "Examples:\n      > SELECT gbx_bng_geomkloopexplode( st_geomfromtext('POINT(-0.1278 51.5074)'), 3, 1 ) as cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_geomkloopexplode(src.geom, 3, 1) t;",
       "usage_args": "geom, resolution, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light"
       ]
     },
     "gbx_bng_geomkring": {
-      "examples": "Examples:\n      > SELECT gbx_bng_geomkring( st_geomfromtext('POLYGON((-0.1 51.5, -0.1 51.6, 0.0 51.6, 0.0 51.5, -0.1 51.5))'), 3, 1 ) as kring_cells;",
+      "examples": "Examples:\n      > SELECT gbx_bng_geomkring( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3, 1 ) AS kring;",
       "usage_args": "geom, resolution, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_geomkringexplode": {
-      "examples": "Examples:\n      > SELECT gbx_bng_geomkringexplode( st_geomfromtext('POINT(-0.1278 51.5074)'), 3, 1 ) as cell;",
+      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_geomkringexplode(src.geom, 3, 1) t;",
       "usage_args": "geom, resolution, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light"
       ]
     },
     "gbx_bng_kloop": {
-      "examples": "Examples:\n      > SELECT cell_id, gbx_bng_kloop(cell_id, 2) as kloop_cells FROM locations;",
+      "examples": "Examples:\n      > SELECT gbx_bng_kloop('TQ3080', 1) AS kloop;",
       "usage_args": "cellid, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_kloopexplode": {
-      "examples": "Examples:\n      > SELECT center_cell, gbx_bng_kloopexplode(center_cell, 2) as ring_cell FROM (SELECT 'TQ3080' as center_cell);",
+      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'TQ3080' AS cellid) src, LATERAL gbx_bng_kloopexplode(src.cellid, 1) t;",
       "usage_args": "cellid, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light"
       ]
     },
     "gbx_bng_kring": {
-      "examples": "Examples:\n      > SELECT cell_id, gbx_bng_kring(cell_id, 2) as nearby_cells FROM locations;",
+      "examples": "Examples:\n      > SELECT gbx_bng_kring('TQ3080', 1) AS kring;",
       "usage_args": "cellid, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_kringexplode": {
-      "examples": "Examples:\n      > SELECT center_cell, gbx_bng_kringexplode(center_cell, 2) as nearby_cell FROM (SELECT 'TQ3080' as center_cell);",
+      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'TQ3080' AS cellid) src, LATERAL gbx_bng_kringexplode(src.cellid, 1) t;",
       "usage_args": "cellid, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light"
       ]
     },
     "gbx_bng_pointascell": {
-      "examples": "Examples:\n      > SELECT gbx_bng_pointascell('POINT(530000 180000)', '1km') as london_cell;",
+      "examples": "Examples:\n      > SELECT gbx_bng_pointascell('POINT(530000 180000)', '1km') AS bng_cell;",
       "usage_args": "geom, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_polyfill": {
-      "examples": "Examples:\n      > SELECT region_name, gbx_bng_polyfill(boundary, 3) as cells FROM regions;",
+      "examples": "Examples:\n      > SELECT gbx_bng_polyfill( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) AS cells;",
       "usage_args": "geom, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_bng_tessellate( st_geomfromtext('POLYGON((-0.1 51.5, -0.1 51.6, 0.0 51.6, 0.0 51.5, -0.1 51.5))'), 3 ) as tessellation;",
+      "examples": "Examples:\n      > SELECT gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) AS chips;",
       "usage_args": "geom, resolution, [keep_core_geom]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_bng_tessellateexplode": {
-      "examples": "Examples:\n      > SELECT gbx_bng_tessellateexplode( st_geomfromtext('POLYGON((-0.1 51.5, -0.1 51.6, 0.0 51.6, 0.0 51.5, -0.1 51.5))'), 3 ) as cell_info;",
+      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_tessellateexplode(src.geom, 3) t;",
       "usage_args": "geom, resolution, keep_core_geom",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light"
       ]
     },
     "_package_gridx_custom": "--- gridx_custom ---",
     "gbx_custom_cellaswkb": {
-      "examples": "Examples:\n      > SELECT gbx_custom_cellaswkb(cell, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS geom FROM cells;",
+      "examples": "Examples:\n      > SELECT gbx_custom_cellaswkb(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS geom;",
       "usage_args": "cell, grid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_custom_cellaswkt": {
-      "examples": "Examples:\n      > SELECT gbx_custom_cellaswkt(cell, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS wkt FROM cells;",
+      "examples": "Examples:\n      > SELECT gbx_custom_cellaswkt(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS wkt;",
       "usage_args": "cell, grid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_custom_centroid": {
-      "examples": "Examples:\n      > SELECT gbx_custom_centroid(cell, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS centroid FROM cells;",
+      "examples": "Examples:\n      > SELECT gbx_custom_centroid(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)) AS centroid;",
       "usage_args": "cell, grid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_custom_grid": {
       "examples": "Examples:\n      > SELECT gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid;",
       "usage_args": "bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, srid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_custom_kring": {
-      "examples": "Examples:\n      > SELECT gbx_custom_kring(cell, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 1) AS ring FROM cells;",
+      "examples": "Examples:\n      > SELECT gbx_custom_kring(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 1) AS ring;",
       "usage_args": "cell, grid, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_custom_pointascell": {
-      "examples": "Examples:\n      > SELECT gbx_custom_pointascell(geom, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 5) AS cell FROM points;",
+      "examples": "Examples:\n      > SELECT gbx_custom_pointascell('POINT(530000 180000)', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 5) AS cell;",
       "usage_args": "point, grid, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_custom_polyfill": {
-      "examples": "Examples:\n      > SELECT region_id, gbx_custom_polyfill(geom, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 5) AS cells FROM regions;",
+      "examples": "Examples:\n      > SELECT gbx_custom_polyfill('POLYGON((529000 179000,529000 182000,532000 182000,532000 179000,529000 179000))', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 1) AS cells;",
       "usage_args": "geom, grid, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "_package_vectorx": "--- vectorx ---",
@@ -1611,73 +1691,103 @@
     },
     "_package_other": "--- other ---",
     "gbx_quadbin_aswkb": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_aswkb(gbx_quadbin_pointascell(0.0, 0.0, 8)) as wkb;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_aswkb(gbx_quadbin_pointascell(-122.4194, 37.7749, 10)) AS wkb;",
       "usage_args": "cell",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_cellunion": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_cellunion( gbx_quadbin_kring(gbx_quadbin_pointascell(0.0, 0.0, 8), 1) ) as union_geom;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_cellunion( gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) ) AS union_geom;",
       "usage_args": "cells",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_cellunion_agg": {
-      "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellunion_agg(cell) AS coverage FROM grid_cells GROUP BY region;",
+      "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellunion_agg(cell) AS coverage FROM ( SELECT 'R1' AS region, explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1)) AS cell ) t GROUP BY region;",
       "usage_args": "cellid",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_centroid": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_centroid(gbx_quadbin_pointascell(0.0, 0.0, 8)) as centroid;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_centroid(gbx_quadbin_pointascell(-122.4194, 37.7749, 10)) AS centroid;",
       "usage_args": "cell",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_distance": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_distance( gbx_quadbin_pointascell(0.0, 0.0, 10), gbx_quadbin_pointascell(0.0001, 0.0, 10) ) as d;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_distance( gbx_quadbin_pointascell(0.0, 0.0, 10), gbx_quadbin_pointascell(0.0, 0.1, 10) ) AS d;",
       "usage_args": "cellid1, cellid2",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_kring": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_kring(gbx_quadbin_pointascell(0.0, 0.0, 10), 1) as ring;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) AS kring;",
       "usage_args": "cell, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_pointascell": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_pointascell(-122.4194, 37.7749, 10) as sf_cell;",
       "usage_args": "longitude, latitude, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_polyfill": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_polyfill( st_geomfromtext('POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))'), 5 ) as cells;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_polyfill('POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))', 5) AS cells;",
       "usage_args": "geom, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_resolution": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_resolution(gbx_quadbin_pointascell(0.0, 0.0, 12)) as z;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_resolution(gbx_quadbin_pointascell(-122.4194, 37.7749, 10)) AS z;",
       "usage_args": "cell",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     },
     "gbx_quadbin_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_tessellate( st_geomfromtext('POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))'), 5 ) as chips;",
+      "examples": "Examples:\n      > SELECT gbx_quadbin_tessellate('POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))', 5) AS chips;",
       "usage_args": "geom, resolution",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ]
     }
   }

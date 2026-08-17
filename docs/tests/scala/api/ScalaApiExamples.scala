@@ -3106,4 +3106,838 @@ result.getAs[Array[Byte]]("wkb")
 +--------+
 ... (WKB binary)""".trim
 
+  // =========================================================================
+  // GridX per-function examples — T2: BNG codec + accessors
+  // bng_aswkb, bng_aswkt, bng_cellarea, bng_centroid,
+  // bng_eastnorthasbng, bng_pointascell
+  //
+  // Fixture views: bng_cells (cellid STRING = 'TQ3080'),
+  //                bng_points (easting INT, northing INT, geom STRING)
+  // All four tabs share ONE example per function (AGREE — no tier divergence).
+  // =========================================================================
+
+  val bng_aswkb_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cells view (cellid = 'TQ3080', 1km cell, central London)
+val df = spark.table("bng_cells")
+val result = df.select(bx.bng_aswkb(col("cellid")).alias("wkb"))
+result.show()
+""".trim
+
+  val bng_aswkb_scala_example_output: String =
+    """
++--------+
+|wkb     |
++--------+
+|[binary]|
++--------+
+... (WKB binary)""".trim
+
+  val bng_aswkt_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cells view (cellid = 'TQ3080')
+val df = spark.table("bng_cells")
+val result = df.select(bx.bng_aswkt(col("cellid")).alias("wkt"))
+result.show(truncate = false)
+""".trim
+
+  val bng_aswkt_scala_example_output: String =
+    """
++----------------------------------------------------------+
+|wkt                                                       |
++----------------------------------------------------------+
+|POLYGON ((531000 180000, 531000 181000, 530000 181000, ...|
++----------------------------------------------------------+
+POLYGON ((531000 180000, 531000 181000, 530000 181000, 530000 180000, 531000 180000))""".trim
+
+  val bng_cellarea_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cells view (cellid = 'TQ3080', a 1km cell → area = 1.0 sq km)
+val df = spark.table("bng_cells")
+val result = df.select(bx.bng_cellarea(col("cellid")).alias("area_km2"))
+result.show()
+""".trim
+
+  val bng_cellarea_scala_example_output: String =
+    """
++---------+
+|area_km2 |
++---------+
+|1.0      |
++---------+""".trim
+
+  val bng_centroid_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cells view (cellid = 'TQ3080')
+// Returns a WKB POINT at the cell centre (530500, 180500) in EPSG:27700
+val df = spark.table("bng_cells")
+val result = df.select(bx.bng_centroid(col("cellid")).alias("centroid"))
+result.show()
+""".trim
+
+  val bng_centroid_scala_example_output: String =
+    """
++-----------+
+|centroid   |
++-----------+
+|[binary]   |
++-----------+
+... (WKB binary — POINT(530500 180500) in EPSG:27700)""".trim
+
+  val bng_eastnorthasbng_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_points view (easting=530000, northing=180000, EPSG:27700)
+val df = spark.table("bng_points")
+val result = df.select(
+  bx.bng_eastnorthasbng(col("easting"), col("northing"), lit("1km")).alias("bng_cell")
+)
+result.show()
+""".trim
+
+  val bng_eastnorthasbng_scala_example_output: String =
+    """
++--------+
+|bng_cell|
++--------+
+|TQ3080  |
++--------+""".trim
+
+  val bng_pointascell_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_points view (geom = 'POINT(530000 180000)' in EPSG:27700)
+val df = spark.table("bng_points")
+val result = df.select(
+  bx.bng_pointascell(col("geom"), lit("1km")).alias("bng_cell")
+)
+result.show()
+""".trim
+
+  val bng_pointascell_scala_example_output: String =
+    """
++--------+
+|bng_cell|
++--------+
+|TQ3080  |
++--------+""".trim
+
+  // =========================================================================
+  // GridX per-function examples — T3: BNG distance + chip ops
+  // bng_distance, bng_euclideandistance, bng_cellintersection, bng_cellunion
+  //
+  // Fixture views: bng_cell_pairs (cellid1='TQ3080', cellid2='TQ3081'),
+  //                bng_chips (9 chip structs from tessellation at res=3)
+  // All four tabs share ONE example per function (AGREE — no tier divergence).
+  // =========================================================================
+
+  val bng_distance_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cell_pairs view (cellid1='TQ3080', cellid2='TQ3081', adjacent 1km cells)
+// Returns LONG (grid steps, not metres): adjacent cells → dist_steps = 1
+val df = spark.table("bng_cell_pairs")
+val result = df.select(bx.bng_distance(col("cellid1"), col("cellid2")).alias("dist_steps"))
+result.show()
+""".trim
+
+  val bng_distance_scala_example_output: String =
+    """
++----------+
+|dist_steps|
++----------+
+|1         |
++----------+""".trim
+
+  val bng_euclideandistance_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cell_pairs view (cellid1='TQ3080', cellid2='TQ3081')
+// Returns LONG (Chebyshev grid units): adjacent cells → euclidean_dist = 1
+val df = spark.table("bng_cell_pairs")
+val result = df.select(
+  bx.bng_euclideandistance(col("cellid1"), col("cellid2")).alias("euclidean_dist")
+)
+result.show()
+""".trim
+
+  val bng_euclideandistance_scala_example_output: String =
+    """
++--------------+
+|euclidean_dist|
++--------------+
+|1             |
++--------------+""".trim
+
+  val bng_cellintersection_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_chips view (9 chip structs from tessellating the BNG polygon at res=3)
+// Filters for the core chip (TQ3080, core=true, chip=null) and intersects it with itself.
+// Chip inputs must come from bng_tessellate — plain String cell IDs throw ClassCastException.
+val df = spark.table("bng_chips").filter(col("chip.cellid") === "TQ3080")
+val result = df.select(
+  bx.bng_cellintersection(col("chip"), col("chip")).alias("intersection_chip")
+)
+result.show()
+""".trim
+
+  val bng_cellintersection_scala_example_output: String =
+    """
++--------------------+
+|intersection_chip   |
++--------------------+
+|{TQ3080, true, null}|
++--------------------+""".trim
+
+  val bng_cellunion_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_chips view (9 chip structs from tessellating the BNG polygon at res=3)
+// Filters for the core chip (TQ3080, core=true, chip=null) and unions it with itself.
+// Chip inputs must come from bng_tessellate — plain String cell IDs throw ClassCastException.
+val df = spark.table("bng_chips").filter(col("chip.cellid") === "TQ3080")
+val result = df.select(
+  bx.bng_cellunion(col("chip"), col("chip")).alias("union_chip")
+)
+result.show()
+""".trim
+
+  val bng_cellunion_scala_example_output: String =
+    """
++--------------------+
+|union_chip          |
++--------------------+
+|{TQ3080, true, null}|
++--------------------+""".trim
+
+  // =========================================================================
+  // GridX per-function examples — T4: BNG neighbourhood/fill
+  // bng_kring, bng_kloop, bng_geomkring, bng_geomkloop, bng_polyfill,
+  // bng_tessellate
+  //
+  // Fixture views: bng_cells (cellid STRING = 'TQ3080'),
+  //                bng_polygons (geom STRING — 3km × 3km BNG polygon, EPSG:27700)
+  // All four tabs share ONE example per function (AGREE — no tier divergence).
+  // Geometry inputs MUST be EPSG:27700; WGS84 coords yield empty arrays.
+  // =========================================================================
+
+  val bng_kring_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cells view (cellid = 'TQ3080', 1km cell, central London)
+// Returns ARRAY<STRING> — center plus 8 surrounding cells at k=1 → 9 cells
+val df = spark.table("bng_cells")
+val result = df.select(bx.bng_kring(col("cellid"), lit(1)).alias("kring"))
+result.show(truncate = false)
+""".trim
+
+  val bng_kring_scala_example_output: String =
+    """
++-----------------------------+
+|kring                        |
++-----------------------------+
+|[TQ2979, TQ2980, TQ2981, ...]|
++-----------------------------+
+... (9 cells: center TQ3080 plus 8 surrounding cells at k=1)""".trim
+
+  val bng_kloop_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_cells view (cellid = 'TQ3080', 1km cell, central London)
+// Returns ARRAY<STRING> — the 8 surrounding cells at k=1 (center excluded)
+val df = spark.table("bng_cells")
+val result = df.select(bx.bng_kloop(col("cellid"), lit(1)).alias("kloop"))
+result.show(truncate = false)
+""".trim
+
+  val bng_kloop_scala_example_output: String =
+    """
++-----------------------------+
+|kloop                        |
++-----------------------------+
+|[TQ2979, TQ2980, TQ2981, ...]|
++-----------------------------+
+... (8 cells: hollow ring at k=1, center TQ3080 excluded)""".trim
+
+  val bng_geomkring_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_polygons view (3km × 3km BNG polygon in EPSG:27700)
+// EPSG:27700 coordinates required — WGS84 yields empty arrays
+// res=3 polyfill → 9 cells; k=1 expansion → 25 cells total
+val df = spark.table("bng_polygons")
+val result = df.select(bx.bng_geomkring(col("geom"), lit(3), lit(1)).alias("kring"))
+result.show(truncate = false)
+""".trim
+
+  val bng_geomkring_scala_example_output: String =
+    """
++-----------------------------+
+|kring                        |
++-----------------------------+
+|[TQ2878, TQ2879, TQ2880, ...]|
++-----------------------------+
+... (25 cells: polyfill of BNG polygon expanded by k=1 ring)""".trim
+
+  val bng_geomkloop_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_polygons view (3km × 3km BNG polygon in EPSG:27700)
+// EPSG:27700 coordinates required — WGS84 yields empty arrays
+// res=3 polyfill → 9 cells; k=1 outer ring → 16 cells (hollow shell)
+val df = spark.table("bng_polygons")
+val result = df.select(bx.bng_geomkloop(col("geom"), lit(3), lit(1)).alias("kloop"))
+result.show(truncate = false)
+""".trim
+
+  val bng_geomkloop_scala_example_output: String =
+    """
++-----------------------------+
+|kloop                        |
++-----------------------------+
+|[TQ2878, TQ2879, TQ2880, ...]|
++-----------------------------+
+... (16 cells: outer ring at k=1 around the BNG polygon polyfill)""".trim
+
+  val bng_polyfill_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_polygons view (3km × 3km BNG polygon in EPSG:27700)
+// EPSG:27700 coordinates required — WGS84 yields empty arrays
+// res=3 (1km cells): 9 cells cover the 3km × 3km polygon
+val df = spark.table("bng_polygons")
+val result = df.select(bx.bng_polyfill(col("geom"), lit(3)).alias("cells"))
+result.show(truncate = false)
+""".trim
+
+  val bng_polyfill_scala_example_output: String =
+    """
++-----------------------------+
+|cells                        |
++-----------------------------+
+|[TQ2979, TQ2980, TQ2981, ...]|
++-----------------------------+
+... (9 cells covering the 3km × 3km BNG polygon at 1km resolution)""".trim
+
+  val bng_tessellate_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_polygons view (3km × 3km BNG polygon in EPSG:27700)
+// EPSG:27700 coordinates required — WGS84 yields empty arrays
+// res=3 (1km): 9 chips; TQ3080 is core (core=true, chip=null); borders carry WKB clip
+val df = spark.table("bng_polygons")
+val result = df.select(bx.bng_tessellate(col("geom"), lit(3)).alias("chips"))
+result.show(truncate = false)
+""".trim
+
+  val bng_tessellate_scala_example_output: String =
+    """
++--------------------------------------------+
+|chips                                       |
++--------------------------------------------+
+|[{TQ2979, false, [binary]}, {TQ3080, true,..|
++--------------------------------------------+
+... (9 chips; TQ3080 is core (core=true, chip=null); border cells carry WKB clip geometry)""".trim
+
+  // =========================================================================
+  // GridX per-function examples — T5: BNG aggregators
+  // bng_cellintersection_agg, bng_cellunion_agg
+  //
+  // Fixture view: bng_chips (9 chip structs from tessellation at res=3)
+  // DIVERGE: heavy returns STRUCT<cellid, core, chip>; light returns BINARY.
+  // The 5 BNG *explode UDTFs have no Column form on any tier — Scala tab
+  // is legitimately absent for those; only the 2 aggregators have Scala vals.
+  // =========================================================================
+
+  val bng_cellintersection_agg_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_chips view (9 chip structs from tessellating the BNG polygon at res=3)
+// Groups by chip.cellid and intersects chips within each group.
+// Each group holds exactly one chip — the aggregate returns that chip unchanged.
+// Heavy tier returns STRUCT<cellid, core, chip>; light returns BINARY.
+val df = spark.table("bng_chips").select(
+  col("chip"),
+  col("chip.cellid").alias("cellid")
+)
+val result = df.groupBy("cellid")
+  .agg(bx.bng_cellintersection_agg(col("chip")).alias("common_chip"))
+  .filter(col("cellid") === "TQ3080")
+result.show(truncate = false)
+""".trim
+
+  val bng_cellintersection_agg_scala_example_output: String =
+    """
++------+--------------------+
+|cellid|common_chip         |
++------+--------------------+
+|TQ3080|{TQ3080, true, null}|
++------+--------------------+
+... (STRUCT — TQ3080 core chip: cellid=TQ3080, core=true, chip=null)""".trim
+
+  val bng_cellunion_agg_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Reads the bng_chips view (9 chip structs from tessellating the BNG polygon at res=3)
+// Groups by chip.cellid and dissolves chips within each group.
+// Each group holds exactly one chip — the aggregate returns that chip unchanged.
+// Heavy tier returns STRUCT<cellid, core, chip>; light returns BINARY.
+val df = spark.table("bng_chips").select(
+  col("chip"),
+  col("chip.cellid").alias("cellid")
+)
+val result = df.groupBy("cellid")
+  .agg(bx.bng_cellunion_agg(col("chip")).alias("union_chip"))
+  .filter(col("cellid") === "TQ3080")
+result.show(truncate = false)
+""".trim
+
+  val bng_cellunion_agg_scala_example_output: String =
+    """
++------+--------------------+
+|cellid|union_chip          |
++------+--------------------+
+|TQ3080|{TQ3080, true, null}|
++------+--------------------+
+... (STRUCT — TQ3080 core chip: cellid=TQ3080, core=true, chip=null)""".trim
+
+  // =========================================================================
+  // GridX per-function examples — T6a: Quadbin codec + scalar
+  // quadbin_pointascell, quadbin_aswkb, quadbin_centroid,
+  // quadbin_resolution, quadbin_distance
+  //
+  // Fixture views: quadbin_cells (cell LONG = 5233961839712272383, SF at z10),
+  //                quadbin_cell_pairs (cell1/cell2 LONG, z10, distance=1)
+  // quadbin_pointascell uses an inline one-row DataFrame (no coord-fixture view).
+  // All four tabs share ONE example per function (AGREE — no tier divergence).
+  // =========================================================================
+
+  val quadbin_pointascell_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// San Francisco at zoom 10 (WGS84 lon/lat input; quadbin resolution 0..26)
+val df = spark.sql("SELECT -122.4194 AS lon, 37.7749 AS lat, 10 AS zoom")
+val result = df.select(
+  qx.quadbin_pointascell(col("lon"), col("lat"), col("zoom")).alias("sf_cell")
+)
+result.show()
+""".trim
+
+  val quadbin_pointascell_scala_example_output: String =
+    """
++-------------------+
+|sf_cell            |
++-------------------+
+|5233961839712272383|
++-------------------+""".trim
+
+  val quadbin_aswkb_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_cells view (cell = 5233961839712272383, SF at z10)
+// Returns the four-corner boundary polygon as EWKB (SRID 4326)
+val df = spark.table("quadbin_cells")
+val result = df.select(qx.quadbin_aswkb(col("cell")).alias("wkb"))
+result.show()
+""".trim
+
+  val quadbin_aswkb_scala_example_output: String =
+    """
++--------+
+|wkb     |
++--------+
+|[binary]|
++--------+
+... (EWKB binary — quadbin cell footprint polygon, SRID 4326)""".trim
+
+  val quadbin_centroid_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_cells view (cell = 5233961839712272383, SF at z10)
+// Returns the bbox-corner mean as EWKB POINT (SRID 4326)
+val df = spark.table("quadbin_cells")
+val result = df.select(qx.quadbin_centroid(col("cell")).alias("centroid"))
+result.show()
+""".trim
+
+  val quadbin_centroid_scala_example_output: String =
+    """
++-----------+
+|centroid   |
++-----------+
+|[binary]   |
++-----------+
+... (EWKB binary — POINT at SF z10 cell centroid, SRID 4326)""".trim
+
+  val quadbin_resolution_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_cells view (cell = 5233961839712272383, SF at z10)
+// Extracts the zoom level → returns INT 10
+val df = spark.table("quadbin_cells")
+val result = df.select(qx.quadbin_resolution(col("cell")).alias("z"))
+result.show()
+""".trim
+
+  val quadbin_resolution_scala_example_output: String =
+    """
++--+
+|z |
++--+
+|10|
++--+""".trim
+
+  val quadbin_distance_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_cell_pairs view (cell1 and cell2 at zoom 10, distance=1)
+val df = spark.table("quadbin_cell_pairs")
+val result = df.select(
+  qx.quadbin_distance(col("cell1"), col("cell2")).alias("d")
+)
+result.show()
+""".trim
+
+  val quadbin_distance_scala_example_output: String =
+    """
++--+
+|d |
++--+
+|1 |
++--+""".trim
+
+  // =========================================================================
+  // GridX per-function examples — T6b: Quadbin neighbourhood/union/agg
+  // quadbin_kring, quadbin_polyfill, quadbin_tessellate,
+  // quadbin_cellunion, quadbin_cellunion_agg
+  //
+  // Fixture views: quadbin_cells (SF z10), quadbin_polygons (WGS84 near origin),
+  //                quadbin_kring_cells (9-row kring of SF z10)
+  // All four tabs share ONE example per function (AGREE — no tier divergence).
+  // quadbin_cellunion_agg returns BINARY in both tiers — no struct divergence.
+  // =========================================================================
+
+  val quadbin_kring_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_cells view (cell = 5233961839712272383, SF at zoom 10)
+// Returns ARRAY<BIGINT> — center plus 8 surrounding cells at k=1 → 9 cells
+val df = spark.table("quadbin_cells")
+val result = df.select(qx.quadbin_kring(col("cell"), lit(1)).alias("kring"))
+result.show(truncate = false)
+""".trim
+
+  val quadbin_kring_scala_example_output: String =
+    """
++-------------------------------------+
+|kring                                |
++-------------------------------------+
+|[5233961839712272383, ..., (9 cells)]|
++-------------------------------------+
+... (9 cells: SF z10 center plus 8 surrounding cells at k=1)""".trim
+
+  val quadbin_polyfill_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_polygons view (WGS84 polygon near origin, z=5 → 4 cells)
+val df = spark.table("quadbin_polygons")
+val result = df.select(qx.quadbin_polyfill(col("geom"), lit(5)).alias("cells"))
+result.show(truncate = false)
+""".trim
+
+  val quadbin_polyfill_scala_example_output: String =
+    """
++--------------------------+
+|cells                     |
++--------------------------+
+|[5211790668774506495, ...]|
++--------------------------+
+... (4 cells covering the WGS84 polygon at zoom 5)""".trim
+
+  val quadbin_tessellate_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_polygons view (WGS84 polygon near origin, z=5 → 4 chips)
+// Each chip: STRUCT<cell BIGINT, geom BINARY> (EWKB, SRID 4326)
+val df = spark.table("quadbin_polygons")
+val result = df.select(qx.quadbin_tessellate(col("geom"), lit(5)).alias("chips"))
+result.show(truncate = false)
+""".trim
+
+  val quadbin_tessellate_scala_example_output: String =
+    """
++----------------------------------------------+
+|chips                                         |
++----------------------------------------------+
+|[{5211790668774506495, [binary]}, {5212..., ..|
++----------------------------------------------+
+... (4 chips: each quadbin cell paired with its clipped geometry WKB (SRID 4326))""".trim
+
+  val quadbin_cellunion_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_cells view (cell = 5233961839712272383, SF at z10)
+// Dissolves the k=1 kring (9 cells) into one EWKB MultiPolygon (SRID 4326)
+val df = spark.table("quadbin_cells")
+val result = df.select(
+  qx.quadbin_cellunion(
+    qx.quadbin_kring(col("cell"), lit(1))
+  ).alias("union_geom")
+)
+result.show()
+""".trim
+
+  val quadbin_cellunion_scala_example_output: String =
+    """
++-----------+
+|union_geom |
++-----------+
+|[binary]   |
++-----------+
+... (EWKB binary — MultiPolygon dissolving the SF z10 kring, SRID 4326)""".trim
+
+  val quadbin_cellunion_agg_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_kring_cells view (9 cells from kring of SF z10, k=1)
+// Groups all cells under 'R1' and dissolves them into one EWKB MultiPolygon.
+// Returns BINARY (SRID 4326) — both tiers agree (no struct divergence).
+val df = spark.table("quadbin_kring_cells").withColumn("region", lit("R1"))
+val result = df.groupBy("region")
+  .agg(qx.quadbin_cellunion_agg(col("cell")).alias("coverage"))
+result.show(truncate = false)
+""".trim
+
+  val quadbin_cellunion_agg_scala_example_output: String =
+    """
++------+--------+
+|region|coverage|
++------+--------+
+|R1    |[binary]|
++------+--------+
+... (BINARY EWKB — dissolved coverage of all 9 kring cells around SF z10, SRID 4326)""".trim
+
+  // =========================================================================
+  // GridX per-function examples — T7: Custom grid — all 7 functions
+  // custom_grid, custom_pointascell, custom_cellaswkb, custom_cellaswkt,
+  // custom_centroid, custom_polyfill, custom_kring
+  //
+  // Fixture views: custom_grids (grid STRUCT + cell=360287970373976640 + point='POINT(530000 180000)')
+  // custom_grid uses an inline one-row DataFrame; all others read custom_grids.
+  // All four tabs share ONE example per function (AGREE — no tier divergence).
+  // Cell IDs are BIGINT; geometry outputs are plain WKB with no SRID.
+  // =========================================================================
+
+  val custom_grid_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Define a BNG-like custom grid: EPSG:27700, 1km root cells, 2 splits/level
+val df = spark.sql("SELECT 1 AS dummy")
+val result = df.select(
+  cx.custom_grid(
+    lit(0), lit(1000000), lit(0), lit(1000000),
+    lit(2), lit(1000), lit(1000), lit(27700)
+  ).alias("grid")
+)
+result.show(truncate = false)
+""".trim
+
+  val custom_grid_scala_example_output: String =
+    """
++----------------------------------------------+
+|grid                                          |
++----------------------------------------------+
+|{0, 1000000, 0, 1000000, 2, 1000, 1000, 27700}|
++----------------------------------------------+""".trim
+
+  val custom_pointascell_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view (point = 'POINT(530000 180000)', grid struct, EPSG:27700)
+// Resolution 5 maps the easting/northing to cell 360287970373976640
+val df = spark.table("custom_grids")
+val result = df.select(
+  cx.custom_pointascell(col("point"), col("grid"), lit(5)).alias("cell")
+)
+result.show()
+""".trim
+
+  val custom_pointascell_scala_example_output: String =
+    """
++--------------------+
+|cell                |
++--------------------+
+|360287970373976640  |
++--------------------+""".trim
+
+  val custom_cellaswkb_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view (cell = 360287970373976640 at res=5, grid struct)
+// Returns the 31.25m x 31.25m cell footprint polygon as plain WKB (no SRID)
+val df = spark.table("custom_grids")
+val result = df.select(cx.custom_cellaswkb(col("cell"), col("grid")).alias("geom"))
+result.show()
+""".trim
+
+  val custom_cellaswkb_scala_example_output: String =
+    """
++--------+
+|geom    |
++--------+
+|[binary]|
++--------+
+... (WKB binary — 31.25m × 31.25m custom grid cell footprint polygon)""".trim
+
+  val custom_cellaswkt_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view (cell = 360287970373976640 at res=5, grid struct)
+// Returns the cell boundary as a WKT POLYGON in EPSG:27700 coordinates
+val df = spark.table("custom_grids")
+val result = df.select(cx.custom_cellaswkt(col("cell"), col("grid")).alias("wkt"))
+result.show(truncate = false)
+""".trim
+
+  val custom_cellaswkt_scala_example_output: String =
+    """
++----------------------------------------------------------------------------------------------------+
+|wkt                                                                                                 |
++----------------------------------------------------------------------------------------------------+
+|POLYGON ((530031.25 180000, 530031.25 180031.25, 530000 180031.25, 530000 180000, 530031.25 180000))|
++----------------------------------------------------------------------------------------------------+""".trim
+
+  val custom_centroid_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view (cell = 360287970373976640 at res=5, grid struct)
+// Returns the center of the 31.25m x 31.25m cell as plain WKB (no SRID)
+val df = spark.table("custom_grids")
+val result = df.select(cx.custom_centroid(col("cell"), col("grid")).alias("centroid"))
+result.show()
+""".trim
+
+  val custom_centroid_scala_example_output: String =
+    """
++-----------+
+|centroid   |
++-----------+
+|[binary]   |
++-----------+
+... (WKB binary — POINT at the center of the 31.25m × 31.25m custom grid cell)""".trim
+
+  val custom_polyfill_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view for the grid struct.
+// Fills the 3km x 3km BNG polygon with 500m cells at resolution 1 (36 cells).
+val poly = "POLYGON((529000 179000,529000 182000,532000 182000,532000 179000,529000 179000))"
+val df = spark.table("custom_grids")
+val result = df.select(cx.custom_polyfill(lit(poly), col("grid"), lit(1)).alias("cells"))
+result.show(truncate = false)
+""".trim
+
+  val custom_polyfill_scala_example_output: String =
+    """
++---------------------------------------------+
+|cells                                        |
++---------------------------------------------+
+|[72057594038644994, ..., (36 cells at res=1)]|
++---------------------------------------------+
+... (36 BIGINT cell IDs — 500m cells covering the 3km × 3km BNG polygon at resolution 1)""".trim
+
+  val custom_kring_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view (cell = 360287970373976640 at res=5, grid struct)
+// k=1 returns 9 cells: center plus 8 surrounding cells (3x3 neighbourhood)
+val df = spark.table("custom_grids")
+val result = df.select(cx.custom_kring(col("cell"), col("grid"), lit(1)).alias("ring"))
+result.show(truncate = false)
+""".trim
+
+  val custom_kring_scala_example_output: String =
+    """
++-------------------------------------------+
+|ring                                       |
++-------------------------------------------+
+|[360287970373976640, ..., (9 cells at k=1)]|
++-------------------------------------------+
+... (9 BIGINT cell IDs — the 3×3 neighbourhood including center cell at resolution 5)""".trim
+
 }

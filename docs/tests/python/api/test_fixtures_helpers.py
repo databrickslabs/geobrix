@@ -274,3 +274,229 @@ def test_create_setup_views_vectorx_light(spark):
     for view in ("tin_survey", "mvt_features", "vector_geoms", "legacy_geoms"):
         df = spark.table(view)
         assert df.count() >= 1, f"VectorX light view '{view}' is empty after setup"
+
+
+# ---------------------------------------------------------------------------
+# GridX fixture tests — BNG, Quadbin, Custom
+# ---------------------------------------------------------------------------
+
+
+def test_bng_cells_df_non_degenerate(spark):
+    """bng_cells_df() returns 1 row with a valid BNG cell-id string."""
+    from api._fixtures import bng_cells_df, _BNG_CELL_ID
+
+    rows = bng_cells_df(spark).collect()
+    assert len(rows) == 1, "bng_cells_df should return exactly 1 row"
+    cellid = rows[0]["cellid"]
+    assert cellid is not None, "cellid is None"
+    assert isinstance(cellid, str), f"cellid should be string, got {type(cellid)}"
+    assert cellid == _BNG_CELL_ID, f"Expected '{_BNG_CELL_ID}', got '{cellid}'"
+
+
+def test_bng_cell_pairs_df_non_degenerate(spark):
+    """bng_cell_pairs_df() returns 1 row with two distinct adjacent BNG cell-ids."""
+    from api._fixtures import bng_cell_pairs_df, _BNG_CELL_ID, _BNG_CELL_ID_2
+
+    rows = bng_cell_pairs_df(spark).collect()
+    assert len(rows) == 1, "bng_cell_pairs_df should return exactly 1 row"
+    assert rows[0]["cellid1"] == _BNG_CELL_ID, f"cellid1 mismatch"
+    assert rows[0]["cellid2"] == _BNG_CELL_ID_2, f"cellid2 mismatch"
+    assert rows[0]["cellid1"] != rows[0]["cellid2"], "cellid1 and cellid2 should differ"
+
+
+def test_bng_coordinates_df_non_degenerate(spark):
+    """bng_coordinates_df() returns 1 row with BNG easting, northing, and WKT point."""
+    from api._fixtures import bng_coordinates_df, _BNG_EASTING, _BNG_NORTHING, _BNG_POINT_WKT
+
+    rows = bng_coordinates_df(spark).collect()
+    assert len(rows) == 1, "bng_coordinates_df should return exactly 1 row"
+    assert rows[0]["easting"] == _BNG_EASTING, "easting mismatch"
+    assert rows[0]["northing"] == _BNG_NORTHING, "northing mismatch"
+    geom = rows[0]["geom"]
+    assert geom is not None, "geom is None"
+    assert "POINT" in geom.upper(), f"Expected POINT geometry, got: {geom}"
+    assert "530000" in geom and "180000" in geom, (
+        f"Expected BNG coords (530000, 180000) in point, got: {geom}"
+    )
+
+
+def test_bng_polygons_df_non_degenerate(spark):
+    """bng_polygons_df() returns 1 row with a valid BNG polygon in EPSG:27700."""
+    from api._fixtures import bng_polygons_df, _BNG_POLYGON_WKT
+
+    rows = bng_polygons_df(spark).collect()
+    assert len(rows) == 1, "bng_polygons_df should return exactly 1 row"
+    geom = rows[0]["geom"]
+    assert geom is not None, "geom is None"
+    assert "POLYGON" in geom.upper(), f"Expected POLYGON geometry, got: {geom}"
+    # Confirm BNG coords (eastings > 100000, NOT lon/lat near 0)
+    assert "529000" in geom, (
+        f"Expected BNG easting 529000 in polygon (got WGS84?): {geom}"
+    )
+
+
+def test_bng_chips_df_non_degenerate(spark):
+    """bng_chips_df() returns 9 chip structs with valid cellid/core/chip fields.
+
+    The 3km × 3km BNG polygon at resolution 3 (1km cells) produces exactly
+    9 chips. The center cell TQ3080 must be core=True (fully interior).
+    """
+    from api._fixtures import bng_chips_df
+
+    rows = bng_chips_df(spark).collect()
+    assert len(rows) == 9, (
+        f"bng_chips_df should return 9 chips (3×3 at res=3), got {len(rows)}.\n"
+        "Ensure BNG polygon is in EPSG:27700 (eastings/northings), not WGS84."
+    )
+    for i, row in enumerate(rows):
+        chip = row["chip"]
+        assert chip is not None, f"chip[{i}] struct is None"
+        assert chip["cellid"] is not None, f"chip[{i}].cellid is None"
+        assert isinstance(chip["cellid"], str), f"chip[{i}].cellid should be string"
+        assert len(chip["cellid"]) >= 4, (
+            f"chip[{i}].cellid looks too short: '{chip['cellid']}'"
+        )
+        assert chip["core"] is not None, f"chip[{i}].core is None"
+        assert isinstance(chip["core"], bool), f"chip[{i}].core should be bool"
+
+    # TQ3080 is the core cell (fully inside the polygon) — assert it directly
+    cell_ids = {row["chip"]["cellid"] for row in rows}
+    assert "TQ3080" in cell_ids, (
+        f"Expected TQ3080 among chip cell-ids, got: {sorted(cell_ids)}"
+    )
+    tq3080_rows = [row for row in rows if row["chip"]["cellid"] == "TQ3080"]
+    assert len(tq3080_rows) == 1, f"Expected exactly 1 TQ3080 chip, got {len(tq3080_rows)}"
+    assert tq3080_rows[0]["chip"]["core"] is True, (
+        "TQ3080 should be a core chip (fully interior to the polygon, core=True)"
+    )
+
+
+def test_bng_chips_df_chip_struct_valid(spark):
+    """bng_chips_df() chip structs have the correct STRUCT<cellid, core, chip> schema."""
+    from api._fixtures import bng_chips_df
+
+    df = bng_chips_df(spark)
+    schema_str = str(df.schema)
+    # Check field names present in the chip STRUCT
+    assert "cellid" in schema_str, f"'cellid' not found in chip schema: {schema_str}"
+    assert "core" in schema_str, f"'core' not found in chip schema: {schema_str}"
+    assert "chip" in schema_str, f"'chip' not found in chip schema: {schema_str}"
+
+
+def test_quadbin_cells_df_non_degenerate(spark):
+    """quadbin_cells_df() returns 1 row with a valid quadbin cell LONG."""
+    from api._fixtures import quadbin_cells_df, _QUADBIN_CELL_SF_Z10
+
+    rows = quadbin_cells_df(spark).collect()
+    assert len(rows) == 1, "quadbin_cells_df should return exactly 1 row"
+    cell = rows[0]["cell"]
+    assert cell is not None, "cell is None"
+    assert isinstance(cell, int), f"cell should be int (LONG), got {type(cell)}"
+    assert cell == _QUADBIN_CELL_SF_Z10, (
+        f"Expected SF z10 cell {_QUADBIN_CELL_SF_Z10}, got {cell}"
+    )
+
+
+def test_quadbin_cell_pairs_df_non_degenerate(spark):
+    """quadbin_cell_pairs_df() returns 1 row with two distinct quadbin cells."""
+    from api._fixtures import quadbin_cell_pairs_df
+
+    rows = quadbin_cell_pairs_df(spark).collect()
+    assert len(rows) == 1, "quadbin_cell_pairs_df should return exactly 1 row"
+    cell1 = rows[0]["cell1"]
+    cell2 = rows[0]["cell2"]
+    assert cell1 is not None, "cell1 is None"
+    assert cell2 is not None, "cell2 is None"
+    assert isinstance(cell1, int), f"cell1 should be int (LONG), got {type(cell1)}"
+    assert isinstance(cell2, int), f"cell2 should be int (LONG), got {type(cell2)}"
+    assert cell1 != cell2, "cell1 and cell2 should be different cells"
+    # Both cells should look like valid quadbin IDs (positive large longs)
+    assert cell1 > 0, f"cell1 should be positive, got {cell1}"
+    assert cell2 > 0, f"cell2 should be positive, got {cell2}"
+
+
+def test_quadbin_polygons_df_non_degenerate(spark):
+    """quadbin_polygons_df() returns 1 row with a WGS84 polygon string."""
+    from api._fixtures import quadbin_polygons_df
+
+    rows = quadbin_polygons_df(spark).collect()
+    assert len(rows) == 1, "quadbin_polygons_df should return exactly 1 row"
+    geom = rows[0]["geom"]
+    assert geom is not None, "geom is None"
+    assert "POLYGON" in geom.upper(), f"Expected POLYGON, got: {geom}"
+    # WGS84 coords are small (±180 lon, ±90 lat)
+    assert "-1" in geom and "1" in geom, (
+        f"Expected WGS84 coords (near origin) in polygon, got: {geom}"
+    )
+
+
+def test_quadbin_kring_cells_df_non_degenerate(spark):
+    """quadbin_kring_cells_df() returns 9 cells (k=1 ring including center)."""
+    from api._fixtures import quadbin_kring_cells_df
+
+    rows = quadbin_kring_cells_df(spark).collect()
+    assert len(rows) == 9, (
+        f"quadbin kring k=1 should return 9 cells (3×3 ring), got {len(rows)}"
+    )
+    cells = [row["cell"] for row in rows]
+    assert all(c is not None for c in cells), "Some cells are None"
+    assert all(isinstance(c, int) for c in cells), "All cells should be LONG"
+    assert len(set(cells)) == 9, f"Expected 9 distinct cells, got {len(set(cells))}"
+
+
+def test_custom_grid_df_non_degenerate(spark):
+    """custom_grid_df() returns 1 row with grid STRUCT, cell LONG, and point STRING."""
+    from api._fixtures import custom_grid_df, _CUSTOM_CELL_ID, _BNG_POINT_WKT
+
+    rows = custom_grid_df(spark).collect()
+    assert len(rows) == 1, "custom_grid_df should return exactly 1 row"
+
+    grid = rows[0]["grid"]
+    cell = rows[0]["cell"]
+    point = rows[0]["point"]
+
+    assert grid is not None, "grid struct is None"
+    assert cell is not None, "cell is None"
+    assert point is not None, "point is None"
+
+    assert isinstance(cell, int), f"cell should be int (LONG), got {type(cell)}"
+    assert cell == _CUSTOM_CELL_ID, (
+        f"Expected custom cell {_CUSTOM_CELL_ID}, got {cell}"
+    )
+    assert "POINT" in point.upper(), f"Expected POINT in point string, got: {point}"
+    assert "530000" in point, f"Expected BNG easting 530000 in point: {point}"
+
+
+def test_custom_grid_df_struct_fields(spark):
+    """custom_grid_df() grid struct has the expected fields for a custom grid spec."""
+    from api._fixtures import custom_grid_df
+
+    df = custom_grid_df(spark)
+    schema_str = str(df.schema)
+    # Custom grid struct should contain these field names
+    for field in ("bound_x_min", "bound_x_max", "cell_splits", "root_cell_size_x", "srid"):
+        assert field in schema_str, (
+            f"Expected field '{field}' in custom grid schema, got: {schema_str}"
+        )
+
+
+def test_create_setup_views_gridx_light(spark):
+    """create_setup_views_gridx_light() creates all ten GridX temp views."""
+    from api._fixtures import create_setup_views_gridx_light
+
+    create_setup_views_gridx_light(spark)
+    expected_views = (
+        "bng_cells",
+        "bng_cell_pairs",
+        "bng_points",
+        "bng_polygons",
+        "bng_chips",
+        "quadbin_cells",
+        "quadbin_cell_pairs",
+        "quadbin_polygons",
+        "quadbin_kring_cells",
+        "custom_grids",
+    )
+    for view in expected_views:
+        df = spark.table(view)
+        assert df.count() >= 1, f"GridX light view '{view}' is empty after setup"

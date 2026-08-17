@@ -996,39 +996,65 @@ def london_rasters(spark):
 
 
 def test_rst_quadbin_tessellate_sql_example(spark, london_rasters, london_rasters_view):
-    """quadbin tessellate generator emits one raster tile chip per overlapping cell."""
+    """quadbin tessellate is tier-divergent: heavy generator-in-SELECT + light LATERAL.
+
+    The heavy CollectionGenerator does NOT resolve via the modern
+    ``FROM v, LATERAL gbx_fn(...) t`` table-function syntax (that form is the
+    lightweight pyrx-UDTF surface, exercised under pyrx in
+    test_rasterx_transforms_python_light.py). The heavy tier invokes the
+    generator directly in ``SELECT``. The example therefore carries BOTH forms
+    (heavy first); here we validate the shape of both and execute the heavy one.
+    """
     sql = rasterx_functions_sql.rst_quadbin_tessellate_sql_example()
     assert "gbx_rst_quadbin_tessellate" in sql
-    # Modern LATERAL table-function form (heavy CollectionGenerator accepts it, like
-    # gbx_rst_maketiles). Execute the first (covering-mode) documented statement
-    # against the London raster view.
     assert (
         "LATERAL VIEW" not in sql
-    ), "tessellate example should use modern LATERAL ... t"
-    stmt = rasterx_functions_sql._sql_variant(sql, lateral=True).replace(
-        "FROM rasters", "FROM london_rasters"
-    )
+    ), "tessellate example should use modern LATERAL ... t, not LATERAL VIEW"
+    heavy = rasterx_functions_sql._sql_variant(sql, lateral=False)
+    light = rasterx_functions_sql._sql_variant(sql, lateral=True)
+    assert (
+        "LATERAL" not in heavy.upper()
+    ), "heavy tessellate form must be generator-in-SELECT, not LATERAL"
+    assert "LATERAL" in light.upper(), "light tessellate form must use LATERAL"
+    assert sql.index("gbx_rst_quadbin_tessellate(tile") < sql.index(
+        "LATERAL"
+    ), "heavy scalar form must come before the light LATERAL form"
+    # Execute the HEAVY (generator-in-SELECT) form against the heavy tier.
+    stmt = heavy.replace("FROM rasters", "FROM london_rasters")
     result = spark.sql(stmt).collect()
-    assert len(result) > 0, "quadbin tessellate produced no tile rows"
-    assert result[0]["raster"] is not None
+    assert len(result) > 0, "quadbin tessellate (heavy) produced no rows"
     assert hasattr(rasterx_functions_sql, "rst_quadbin_tessellate_sql_example_output")
 
 
 def test_rst_bng_tessellate_sql_example(spark, london_rasters, london_rasters_view):
-    """bng tessellate generator emits one raster tile chip per overlapping BNG cell."""
+    """bng tessellate is tier-divergent: heavy generator-in-SELECT + light LATERAL.
+
+    BNG warps the raster to EPSG:27700, then the heavy generator explodes to one
+    row per overlapping 1km cell when invoked directly in ``SELECT``. The modern
+    ``FROM v, LATERAL gbx_fn(...) t`` table-function form is the lightweight
+    pyrx-UDTF surface (exercised under pyrx in
+    test_rasterx_transforms_python_light.py), not the heavy tier. The example
+    carries BOTH forms (heavy first); here we validate both shapes and execute
+    the heavy one.
+    """
     sql = rasterx_functions_sql.rst_bng_tessellate_sql_example()
     assert "gbx_rst_bng_tessellate" in sql
-    # Modern LATERAL table-function form; BNG warps the raster to EPSG:27700 then
-    # yields one row per overlapping 1km cell. Execute the first documented statement.
     assert (
         "LATERAL VIEW" not in sql
-    ), "tessellate example should use modern LATERAL ... t"
-    stmt = rasterx_functions_sql._sql_variant(sql, lateral=True).replace(
-        "FROM rasters", "FROM london_rasters"
-    )
+    ), "tessellate example should use modern LATERAL ... t, not LATERAL VIEW"
+    heavy = rasterx_functions_sql._sql_variant(sql, lateral=False)
+    light = rasterx_functions_sql._sql_variant(sql, lateral=True)
+    assert (
+        "LATERAL" not in heavy.upper()
+    ), "heavy tessellate form must be generator-in-SELECT, not LATERAL"
+    assert "LATERAL" in light.upper(), "light tessellate form must use LATERAL"
+    assert sql.index("gbx_rst_bng_tessellate(tile") < sql.index(
+        "LATERAL"
+    ), "heavy scalar form must come before the light LATERAL form"
+    # Execute the HEAVY (generator-in-SELECT) form against the heavy tier.
+    stmt = heavy.replace("FROM rasters", "FROM london_rasters")
     result = spark.sql(stmt).collect()
-    assert len(result) > 0, "bng tessellate produced no tile rows"
-    assert result[0]["raster"] is not None
+    assert len(result) > 0, "bng tessellate (heavy) produced no rows"
     assert hasattr(rasterx_functions_sql, "rst_bng_tessellate_sql_example_output")
 
 

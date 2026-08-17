@@ -1250,20 +1250,13 @@ rst_updatetype_sql_example_output = """
 def rst_h3_tessellate_sql_example():
     """Tessellate raster to H3 grid (covering or centroid mode)"""
     return """
--- covering mode (default): every overlapping H3 cell, clipped to its hexagon
-SELECT t.*
-FROM rasters,
-LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;
+-- Heavyweight: the generator in SELECT explodes to one row per overlapping H3
+-- cell, clipped to its hexagon (covering mode, default; pass 'centroid' as the
+-- 3rd arg for pixel-centroid single-assignment).
+SELECT gbx_rst_h3_tessellate(tile, 7, 'covering') FROM rasters;
 
--- centroid mode: pixel-centroid single-assignment partition (no double-count)
-SELECT t.*
-FROM rasters,
-LATERAL gbx_rst_h3_tessellate(tile, 7, 'centroid') t;
-
--- backward-compatible two-argument form (covering)
-SELECT t.*
-FROM rasters,
-LATERAL gbx_rst_h3_tessellate(tile, 7) t;
+-- Lightweight (pyrx): registered as a streaming table function — call with LATERAL.
+SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 7, 'covering') t;
 """
 
 
@@ -1278,17 +1271,14 @@ rst_h3_tessellate_sql_example_output = """
 def rst_quadbin_tessellate_sql_example():
     """Tessellate a raster into CARTO quadbin v0 cells (covering or centroid mode)"""
     return """
--- covering mode (default): every quadbin cell whose tile overlaps the raster
--- bbox, each chip clipped to its cell. Zoom 12 for a city-scale raster. The
--- generator yields one `tile` chip per overlapping cell.
+-- Heavyweight: the generator in SELECT explodes to one row per overlapping
+-- quadbin cell, each chip clipped to its cell (covering mode, default; pass
+-- 'centroid' as the 3rd arg for pixel-centroid single-assignment). Zoom 12 for
+-- a city-scale raster.
+SELECT gbx_rst_quadbin_tessellate(tile, 12, 'covering') FROM rasters;
+
+-- Lightweight (pyrx): registered as a streaming table function — call with LATERAL.
 SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'covering') t;
-
--- centroid mode: single-assign each valid pixel to the cell holding its
--- centroid (chips partition the pixels, no double-count).
-SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12, 'centroid') t;
-
--- backward-compatible two-argument form (covering)
-SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 12) t;
 """
 
 
@@ -1305,16 +1295,14 @@ rst_quadbin_tessellate_sql_example_output = """
 def rst_bng_tessellate_sql_example():
     """Tessellate a raster into British National Grid cells (covering or centroid mode)"""
     return """
--- covering mode (default): every BNG grid square whose cell overlaps the raster
--- bbox. '1km' (== integer resolution 3); a raster in any CRS is warped to
--- EPSG:27700 first. The generator yields one `tile` chip per overlapping cell.
+-- Heavyweight: the generator in SELECT explodes to one row per overlapping BNG
+-- cell (covering mode, default; pass 'centroid' as the 3rd arg for
+-- pixel-centroid single-assignment). '1km' == integer resolution 3; a raster in
+-- any CRS is warped to EPSG:27700 first.
+SELECT gbx_rst_bng_tessellate(tile, '1km', 'covering') FROM rasters;
+
+-- Lightweight (pyrx): registered as a streaming table function — call with LATERAL.
 SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'covering') t;
-
--- centroid mode: single-assign each valid pixel to the cell holding its centroid.
-SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km', 'centroid') t;
-
--- backward-compatible two-argument form (covering)
-SELECT t.* FROM rasters, LATERAL gbx_rst_bng_tessellate(tile, '1km') t;
 """
 
 

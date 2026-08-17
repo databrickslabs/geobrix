@@ -5232,8 +5232,16 @@ def rst_memsize(tile: ColLike) -> Column:
 
 
 def rst_memsize_grouped(df, *, tile_col: str = "tile", out_col: str = "memsize"):
-    """Partition-scoped rst_memsize: amortizes source opens across a partition's
-    tiles via the grouped executor. Equivalent result to per-row rst_memsize."""
+    """Partition-scoped rst_memsize for virtual/FILE tiles: amortizes source opens
+    across a partition via the grouped executor.
+
+    Returns the same value as per-row ``rst_memsize`` for **virtual** tiles (the
+    decoded-window footprint = ``count * width * height * itemsize``).  This is
+    the intended input: path-backed tiles where the open cost dominates.
+
+    Note — for already-materialized tiles per-row ``rst_memsize`` returns the
+    serialized buffer length instead; the grouped form (which decodes via rasterio)
+    is **not** equivalent for that case and is not intended for it."""
     import numpy as np
     from pyspark.sql.types import LongType, StructField
 

@@ -1,17 +1,22 @@
 """Tests for rst_memsize_grouped — partition-scoped memsize via grouped executor.
 
-Verifies that rst_memsize_grouped(df) matches per-row rst_memsize for the same
-tiles, and that the computed value equals count * width * height * itemsize.
+Key proof: for virtual (path-backed) tiles, rst_memsize_grouped equals per-row
+rst_memsize AND equals count*width*height*itemsize.  Materialized-tile tests
+document the intentional divergence (grouped=decoded footprint, per-row=serialized
+buffer length) — that case is not the intended input.
 """
 
+import tempfile
+
 import numpy as np
+from pyspark.sql import functions as F
 from pyspark.sql.types import StructField as SF
 from pyspark.sql.types import StructType
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
-from databricks.labs.gbx.pyrx.functions import rst_memsize_grouped
+from databricks.labs.gbx.pyrx.functions import rst_memsize, rst_memsize_grouped
 
 
 def _make_bytes(width=8, height=8, count=1, epsg=4326):
@@ -33,6 +38,46 @@ def _make_bytes(width=8, height=8, count=1, epsg=4326):
             for b in range(1, count + 1):
                 ds.write(data + (b - 1) * 100, b)
         return mf.read()
+
+
+def test_grouped_equals_per_row_for_virtual_tiles(spark):
+    """PROOF: grouped == per_row == formula for virtual (path-backed) tiles.
+
+    Both rst_memsize and rst_memsize_grouped return count*width*height*itemsize
+    for a virtual tile.  This is the core equivalence the grouped executor must
+    satisfy — the case where amortized opens matter.
+    """
+    W, H, COUNT = 8, 8, 1
+    b = _make_bytes(width=W, height=H, count=COUNT, epsg=4326)
+    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as f:
+        f.write(b)
+        tif_path = f.name
+
+    rows = [
+        (
+            VirtualTile(
+                cellid=i,
+                path=tif_path,
+                raster=None,
+                window=(0, 0, W, H),
+            ).to_row(),
+        )
+        for i in range(4)
+    ]
+    df = spark.createDataFrame(rows, StructType([SF("tile", V2_TILE_SCHEMA)]))
+
+    per_row = {
+        r["cellid"]: r["ms"]
+        for r in df.select(
+            df.tile.cellid.alias("cellid"),
+            rst_memsize(F.col("tile")).alias("ms"),
+        ).collect()
+    }
+    grouped = {
+        r["tile"]["cellid"]: r["memsize"] for r in rst_memsize_grouped(df).collect()
+    }
+    assert grouped == per_row, f"grouped {grouped} != per_row {per_row}"
+    assert set(grouped.values()) == {W * H * COUNT * 4}
 
 
 def test_grouped_memsize_formula(spark):

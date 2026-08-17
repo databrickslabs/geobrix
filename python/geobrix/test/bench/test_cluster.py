@@ -104,7 +104,7 @@ def test_build_bench_notebook_cells():
     nb = cl.build_bench_notebook(cfg)
     src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
     assert (
-        'geobrix[light-dbr19] @ file:///Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl'
+        "geobrix[light-dbr19] @ file:///Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl"
         in src
     )
     assert "HeavyBenchMain" in src and "_jvm" in src

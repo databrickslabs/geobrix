@@ -992,7 +992,9 @@ def rst_merge(
 
     tc = _col(tiles)
     if file_supported():
-        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        file_refs_col = f.transform(
+            tc, lambda t: f.call_function("try_to_file", t["path"])
+        )
         return _uf_merge(tc, file_refs_col)
     return _merge_udf(tc)
 
@@ -1160,7 +1162,9 @@ def rst_combineavg(
 
     tc = _col(tiles)
     if file_supported():
-        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        file_refs_col = f.transform(
+            tc, lambda t: f.call_function("try_to_file", t["path"])
+        )
         return _uf_combineavg(tc, file_refs_col)
     return _combineavg_udf(tc)
 
@@ -1329,7 +1333,9 @@ def rst_frombands(
 
     tc = _col(bands)
     if file_supported():
-        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        file_refs_col = f.transform(
+            tc, lambda t: f.call_function("try_to_file", t["path"])
+        )
         return _uf_frombands(tc, file_refs_col)
     return _frombands_udf(tc)
 
@@ -1673,7 +1679,9 @@ def rst_resample_to_size(
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     tc = _col(tile)
-    return _uf_resample_to_size(tc, file_ref_arg(tc), _col(width_px), _col(height_px), alg)
+    return _uf_resample_to_size(
+        tc, file_ref_arg(tc), _col(width_px), _col(height_px), alg
+    )
 
 
 def rst_resample_to_res(
@@ -1928,7 +1936,9 @@ def rst_clip(
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     tc = _col(tile)
-    return _uf_clip(tc, file_ref_arg(tc), _col(geom), _col(cutline_all_touched), crs_col)
+    return _uf_clip(
+        tc, file_ref_arg(tc), _col(geom), _col(cutline_all_touched), crs_col
+    )
 
 
 def rst_updatetype(
@@ -3228,8 +3238,11 @@ def _uf_mapalgebra(tiles, file_refs, expression):
     while len(frefs) < len(tiles):
         frefs.append(None)
 
-    elems = [(t, fref) for t, fref in zip(tiles, frefs)
-             if t is not None and not _tile_is_empty(t)]
+    elems = [
+        (t, fref)
+        for t, fref in zip(tiles, frefs)
+        if t is not None and not _tile_is_empty(t)
+    ]
     if not elems:
         return None
 
@@ -3248,7 +3261,9 @@ def _uf_mapalgebra(tiles, file_refs, expression):
     new_bytes = mapalgebra_core.mapalgebra(rasters, str(expression))
     if new_bytes is None:
         return None
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(first_tile) if first_tile else 0)
+    return _serde.build_tile(
+        new_bytes, "GTiff", _tile_cellid(first_tile) if first_tile else 0
+    )
 
 
 def rst_mapalgebra(
@@ -3298,7 +3313,9 @@ def rst_mapalgebra(
 
     tc = _col(tiles)
     if file_supported():
-        file_refs_col = f.transform(tc, lambda t: f.call_function("try_to_file", t["path"]))
+        file_refs_col = f.transform(
+            tc, lambda t: f.call_function("try_to_file", t["path"])
+        )
         return _uf_mapalgebra(tc, file_refs_col, expr_col)
     return _mapalgebra_udf(tc, expr_col)
 
@@ -6824,7 +6841,9 @@ def rst_combineavg_agg(tile: ColLike) -> Column:
 
     tc = _col(tile)
     if file_supported():
-        return _as_tile_cellid_envelope_udf(_combineavg_agg_file_udf(tc, file_ref_arg(tc)))
+        return _as_tile_cellid_envelope_udf(
+            _combineavg_agg_file_udf(tc, file_ref_arg(tc))
+        )
     return _as_tile_cellid_envelope_udf(_combineavg_agg_udf(tc))
 
 

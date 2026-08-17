@@ -25,7 +25,6 @@ from databricks.labs.gbx.bench import runner as rn
 from databricks.labs.gbx.bench import spec as s
 from databricks.labs.gbx.bench import synth as _synth
 
-
 # ---------------------------------------------------------------------------
 # Shared corpus fixture
 # ---------------------------------------------------------------------------
@@ -35,19 +34,22 @@ from databricks.labs.gbx.bench import synth as _synth
 def small_corpus(tmp_path_factory):
     """32px 2-band float32 EPSG:4326 corpus — fast, repr of real corpora."""
     out = tmp_path_factory.mktemp("corpus")
-    return dg.generate_corpus(
-        out_dir=out,
-        seed=42,
-        tile_px=[32],
-        bands=[2],
-        dtypes=["float32"],
-        srids=[4326],
-        nodata_fracs=[0.0],
-        row_rows=4,
-        row_tile_px=32,
-        row_bands=2,
-        row_dtype="float32",
-    ), out
+    return (
+        dg.generate_corpus(
+            out_dir=out,
+            seed=42,
+            tile_px=[32],
+            bands=[2],
+            dtypes=["float32"],
+            srids=[4326],
+            nodata_fracs=[0.0],
+            row_rows=4,
+            row_tile_px=32,
+            row_bands=2,
+            row_dtype="float32",
+        ),
+        out,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +166,10 @@ def test_all_six_array_agg_ops_succeed_spark_path(small_corpus, spark):
         fp_rows = [r for r in rows if r.fn == fn and r.rows == 2]
         assert fp_rows, f"{fn}: no rows at N=2"
         fp = fp_rows[0].output_fingerprint
-        assert fp, f"{fn}: no consistency fingerprint at N=2 (expected raster fingerprint)"
+        assert (
+            fp
+        ), f"{fn}: no consistency fingerprint at N=2 (expected raster fingerprint)"
         parsed = json.loads(fp)
-        assert parsed["kind"] == "raster", (
-            f"{fn}: unexpected fingerprint kind: {parsed.get('kind')}"
-        )
+        assert (
+            parsed["kind"] == "raster"
+        ), f"{fn}: unexpected fingerprint kind: {parsed.get('kind')}"

@@ -862,7 +862,9 @@ def test_non_streaming_fallback_writes_and_roundtrips(spark, tmp_path):
         rows,
         schema="name string, pop int, geom_0 binary, "
         "geom_0_srid string, geom_0_srid_prop string",
-    ).repartition(3, F.col("geom_0"))  # 3 fragments
+    ).repartition(
+        3, F.col("geom_0")
+    )  # 3 fragments
 
     # Write using non-streaming driver
     df.write.format("vector_gbx").mode("overwrite").option(
@@ -891,7 +893,9 @@ def test_non_streaming_fallback_roundtrip_output_equivalence(spark, tmp_path):
         rows,
         schema="name string, pop int, geom_0 binary, "
         "geom_0_srid string, geom_0_srid_prop string",
-    ).repartition(4, F.col("geom_0"))  # 4 partitions
+    ).repartition(
+        4, F.col("geom_0")
+    )  # 4 partitions
 
     df.write.format("vector_gbx").mode("overwrite").option(
         "driverName", "FlatGeobuf"
@@ -905,7 +909,9 @@ def test_non_streaming_fallback_roundtrip_output_equivalence(spark, tmp_path):
     got_pops = {r["pop"] for r in back.collect()}
     assert got_pops == set(range(20))
     gcol = [f.name for f in back.schema.fields if f.name.endswith("_srid")][0][:-5]
-    geom_types = {_from_wkb(bytes(r[gcol])).geom_type for r in back.select(gcol).collect()}
+    geom_types = {
+        _from_wkb(bytes(r[gcol])).geom_type for r in back.select(gcol).collect()
+    }
     assert geom_types == {"Point"}
 
 
@@ -928,12 +934,20 @@ def test_write_local_streams_generator_without_materializing(tmp_path, monkeypat
     w.path = str(tmp_path / "streamed.geojson")
 
     schema = pa.schema(
-        [("geom_0", pa.binary()), ("geom_0_srid", pa.string()), ("geom_0_srid_proj", pa.string())]
+        [
+            ("geom_0", pa.binary()),
+            ("geom_0_srid", pa.string()),
+            ("geom_0_srid_proj", pa.string()),
+        ]
     )
 
     def _tbl(i):
         return pa.table(
-            {"geom_0": [to_wkb(Point(float(i), float(i)))], "geom_0_srid": ["4326"], "geom_0_srid_proj": [""]},
+            {
+                "geom_0": [to_wkb(Point(float(i), float(i)))],
+                "geom_0_srid": ["4326"],
+                "geom_0_srid_proj": [""],
+            },
             schema=schema,
         )
 

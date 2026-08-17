@@ -29,13 +29,16 @@ def _write_sample(path, width=4, height=3, epsg=4326):
 # _resolved_budget
 # ---------------------------------------------------------------------------
 
+
 def test_resolved_budget_size_mib_wins():
     from databricks.labs.gbx.ds.raster import _resolved_budget
+
     assert _resolved_budget(size_mib=2, strategy="none") == 2 * 1024 * 1024
 
 
 def test_resolved_budget_strategy_used_when_no_size_mib():
     from databricks.labs.gbx.ds.raster import _resolved_budget
+
     # strategy="none" → decoded_budget_bytes returns 0 (no split)
     result = _resolved_budget(size_mib=-1, strategy="none")
     assert result == 0
@@ -44,6 +47,7 @@ def test_resolved_budget_strategy_used_when_no_size_mib():
 # ---------------------------------------------------------------------------
 # _read_manifest_rows (JSON path only — Parquet needs Spark; tested in Task 4)
 # ---------------------------------------------------------------------------
+
 
 def test_read_manifest_rows_json(tmp_path):
     from databricks.labs.gbx.ds.raster import _read_manifest_rows
@@ -65,6 +69,7 @@ def test_read_manifest_rows_json(tmp_path):
 
 def test_read_manifest_rows_json_not_found():
     from databricks.labs.gbx.ds.raster import _read_manifest_rows
+
     with pytest.raises(FileNotFoundError):
         _read_manifest_rows("/nonexistent/manifest.json")
 
@@ -73,7 +78,10 @@ def test_read_manifest_rows_json_not_found():
 # _partitions_from_tile_rows
 # ---------------------------------------------------------------------------
 
-def test_partitions_from_tile_rows_window_and_dims_no_rasterio_open(tmp_path, monkeypatch):
+
+def test_partitions_from_tile_rows_window_and_dims_no_rasterio_open(
+    tmp_path, monkeypatch
+):
     """Row with path + window + dims → _TilePartition built without rasterio.open."""
     _write_sample(tmp_path / "a.tif", width=4, height=3)
     _write_sample(tmp_path / "b.tif", width=8, height=6)
@@ -84,13 +92,24 @@ def test_partitions_from_tile_rows_window_and_dims_no_rasterio_open(tmp_path, mo
     def _mock_open(p, *a, **kw):
         open_calls.append(p)
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
 
     rows = [
-        {"path": str(tmp_path / "a.tif"), "window": [0, 0, 4, 3], "width": 4, "height": 3},
-        {"path": str(tmp_path / "b.tif"), "window": [0, 0, 8, 6], "width": 8, "height": 6},
+        {
+            "path": str(tmp_path / "a.tif"),
+            "window": [0, 0, 4, 3],
+            "width": 4,
+            "height": 3,
+        },
+        {
+            "path": str(tmp_path / "b.tif"),
+            "window": [0, 0, 8, 6],
+            "width": 8,
+            "height": 6,
+        },
     ]
     parts = _partitions_from_tile_rows(
         rows,
@@ -103,7 +122,9 @@ def test_partitions_from_tile_rows_window_and_dims_no_rasterio_open(tmp_path, mo
         overlap_percent=0,
     )
 
-    assert len(open_calls) == 0, f"rasterio.open called {len(open_calls)} time(s) during planning"
+    assert (
+        len(open_calls) == 0
+    ), f"rasterio.open called {len(open_calls)} time(s) during planning"
     assert len(parts) == 2
     assert parts[0].file_path == str(tmp_path / "a.tif")
     assert parts[0].window == (0, 0, 4, 3)
@@ -122,6 +143,7 @@ def test_partitions_from_tile_rows_window_only_no_rasterio_open(tmp_path, monkey
     def _mock_open(p, *a, **kw):
         open_calls.append(p)
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
@@ -158,6 +180,7 @@ def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, monkeypatch)
     def _mock_open(p, *a, **kw):
         open_calls.append(str(p))
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
@@ -175,9 +198,9 @@ def test_partitions_from_tile_rows_path_only_opens_header(tmp_path, monkeypatch)
     )
 
     # Header was opened for the listed file only (materialized path)
-    assert any(str(tmp_path / "a.tif") in c for c in open_calls), (
-        f"Expected rasterio.open for a.tif; calls={open_calls}"
-    )
+    assert any(
+        str(tmp_path / "a.tif") in c for c in open_calls
+    ), f"Expected rasterio.open for a.tif; calls={open_calls}"
     assert len(parts) >= 1
 
 
@@ -192,6 +215,7 @@ def test_partitions_from_tile_rows_unlisted_file_never_opened(tmp_path, monkeypa
     def _mock_open(p, *a, **kw):
         open_calls.append(str(p))
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
@@ -209,14 +233,13 @@ def test_partitions_from_tile_rows_unlisted_file_never_opened(tmp_path, monkeypa
     )
 
     for c in open_calls:
-        assert "not_in_manifest" not in c, (
-            f"Unlisted file was opened: {c}"
-        )
+        assert "not_in_manifest" not in c, f"Unlisted file was opened: {c}"
 
 
 # ---------------------------------------------------------------------------
 # Integration tests — full partitions() routing via RasterGbxReader
 # ---------------------------------------------------------------------------
+
 
 def test_partitions_manifest_json_end_to_end(tmp_path, monkeypatch):
     """RasterGbxReader with manifest= option → correct partitions, 0 rasterio.open."""
@@ -237,18 +260,23 @@ def test_partitions_manifest_json_end_to_end(tmp_path, monkeypatch):
     def _mock_open(p, *a, **kw):
         open_calls.append(str(p))
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
-    reader = RasterGbxReader({
-        "path": str(tmp_path),
-        "manifest": manifest_file,
-        "virtualTiles": "true",
-    })
+    reader = RasterGbxReader(
+        {
+            "path": str(tmp_path),
+            "manifest": manifest_file,
+            "virtualTiles": "true",
+        }
+    )
     parts = reader.partitions()
 
-    assert len(open_calls) == 0, f"Expected 0 rasterio.open during partitions(); got {open_calls}"
+    assert (
+        len(open_calls) == 0
+    ), f"Expected 0 rasterio.open during partitions(); got {open_calls}"
     assert len(parts) == 2
     assert parts[0].file_path == str(tmp_path / "r0.tif")
     assert parts[0].window == (0, 0, 4, 3)
@@ -261,11 +289,13 @@ def test_partitions_manifest_mutual_exclusion_error():
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
     with pytest.raises(ValueError, match="mutually exclusive"):
-        RasterGbxReader({
-            "path": "/tmp/x",
-            "manifest": "/tmp/m.json",
-            "tilesTable": "catalog.schema.tiles",
-        })
+        RasterGbxReader(
+            {
+                "path": "/tmp/x",
+                "manifest": "/tmp/m.json",
+                "tilesTable": "catalog.schema.tiles",
+            }
+        )
 
 
 def test_partitions_tiles_table_flat_columns(tmp_path, spark):
@@ -280,13 +310,15 @@ def test_partitions_tiles_table_flat_columns(tmp_path, spark):
 
     from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
-    schema = StructType([
-        StructField("path", StringType(), False),
-        StructField("col_off", IntegerType(), True),
-        StructField("row_off", IntegerType(), True),
-        StructField("width", IntegerType(), True),
-        StructField("height", IntegerType(), True),
-    ])
+    schema = StructType(
+        [
+            StructField("path", StringType(), False),
+            StructField("col_off", IntegerType(), True),
+            StructField("row_off", IntegerType(), True),
+            StructField("width", IntegerType(), True),
+            StructField("height", IntegerType(), True),
+        ]
+    )
     tile_data = [(str(tmp_path / "raster.tif"), 0, 0, 4, 3)]
     spark.createDataFrame(tile_data, schema=schema).createOrReplaceTempView(
         "_test_tile_rows_flat_gbx"
@@ -294,11 +326,13 @@ def test_partitions_tiles_table_flat_columns(tmp_path, spark):
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
-    reader = RasterGbxReader({
-        "path": str(tmp_path),
-        "tilesTable": "_test_tile_rows_flat_gbx",
-        "virtualTiles": "true",
-    })
+    reader = RasterGbxReader(
+        {
+            "path": str(tmp_path),
+            "tilesTable": "_test_tile_rows_flat_gbx",
+            "virtualTiles": "true",
+        }
+    )
     parts = reader.partitions()
 
     assert len(parts) == 1
@@ -314,13 +348,15 @@ def test_partitions_tiles_table_end_to_end(tmp_path, spark):
 
     from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
-    schema = StructType([
-        StructField("path", StringType(), False),
-        StructField("col_off", IntegerType(), True),
-        StructField("row_off", IntegerType(), True),
-        StructField("width", IntegerType(), True),
-        StructField("height", IntegerType(), True),
-    ])
+    schema = StructType(
+        [
+            StructField("path", StringType(), False),
+            StructField("col_off", IntegerType(), True),
+            StructField("row_off", IntegerType(), True),
+            StructField("width", IntegerType(), True),
+            StructField("height", IntegerType(), True),
+        ]
+    )
     tile_data = [(str(tmp_path / "raster.tif"), 0, 0, 4, 3)]
     spark.createDataFrame(tile_data, schema=schema).createOrReplaceTempView(
         "_test_tile_rows_gbx"
@@ -328,11 +364,13 @@ def test_partitions_tiles_table_end_to_end(tmp_path, spark):
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
-    reader = RasterGbxReader({
-        "path": str(tmp_path),
-        "tilesTable": "_test_tile_rows_gbx",
-        "virtualTiles": "true",
-    })
+    reader = RasterGbxReader(
+        {
+            "path": str(tmp_path),
+            "tilesTable": "_test_tile_rows_gbx",
+            "virtualTiles": "true",
+        }
+    )
     parts = reader.partitions()
 
     assert len(parts) == 1

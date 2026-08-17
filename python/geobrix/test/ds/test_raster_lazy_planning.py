@@ -25,6 +25,7 @@ def _write_sample(path, width=4, height=3, epsg=4326):
 # _plan_partitions_for_file: virtual passthrough case should NOT open header
 # ---------------------------------------------------------------------------
 
+
 def test_plan_partitions_virtual_passthrough_no_rasterio_open(tmp_path, monkeypatch):
     """virtualTiles=True, no split, no AOI → rasterio.open NOT called at plan time."""
     _write_sample(tmp_path / "raster.tif", width=4, height=3)
@@ -35,6 +36,7 @@ def test_plan_partitions_virtual_passthrough_no_rasterio_open(tmp_path, monkeypa
     def _mock_open(p, *a, **kw):
         open_calls.append(str(p))
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import _plan_partitions_for_file
@@ -45,9 +47,9 @@ def test_plan_partitions_virtual_passthrough_no_rasterio_open(tmp_path, monkeypa
         emit_virtual=True,
     )
 
-    assert len(open_calls) == 0, (
-        f"rasterio.open called {len(open_calls)} time(s) during planning: {open_calls}"
-    )
+    assert (
+        len(open_calls) == 0
+    ), f"rasterio.open called {len(open_calls)} time(s) during planning: {open_calls}"
     assert len(parts) == 1
     assert parts[0].window is None  # lazy: filled in by read()
     assert parts[0].emit_virtual is True
@@ -65,6 +67,7 @@ def test_plan_partitions_virtual_three_files_zero_opens(tmp_path, monkeypatch):
     def _mock_open(p, *a, **kw):
         open_calls.append(str(p))
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
@@ -72,9 +75,9 @@ def test_plan_partitions_virtual_three_files_zero_opens(tmp_path, monkeypatch):
     reader = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "true"})
     parts = reader.partitions()
 
-    assert len(open_calls) == 0, (
-        f"Expected 0 rasterio.open during partitions(); got {len(open_calls)}: {open_calls}"
-    )
+    assert (
+        len(open_calls) == 0
+    ), f"Expected 0 rasterio.open during partitions(); got {len(open_calls)}: {open_calls}"
     assert len(parts) == 3
     for p in parts:
         assert p.window is None
@@ -84,6 +87,7 @@ def test_plan_partitions_virtual_three_files_zero_opens(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 # tileSize case must STILL read header at plan (correctness regression guard)
 # ---------------------------------------------------------------------------
+
 
 def test_plan_partitions_tilesize_still_reads_header_at_plan(tmp_path, monkeypatch):
     """tileSize requires dims at plan time → rasterio.open IS called."""
@@ -95,15 +99,18 @@ def test_plan_partitions_tilesize_still_reads_header_at_plan(tmp_path, monkeypat
     def _mock_open(p, *a, **kw):
         open_calls.append(str(p))
         return real_open(p, *a, **kw)
+
     monkeypatch.setattr(rasterio, "open", _mock_open)
 
     from databricks.labs.gbx.ds.raster import RasterGbxReader
 
-    reader = RasterGbxReader({
-        "path": str(tmp_path),
-        "virtualTiles": "true",
-        "tileSize": "4",
-    })
+    reader = RasterGbxReader(
+        {
+            "path": str(tmp_path),
+            "virtualTiles": "true",
+            "tileSize": "4",
+        }
+    )
     parts = reader.partitions()
 
     # Header opened for grid-window planning
@@ -117,6 +124,7 @@ def test_plan_partitions_tilesize_still_reads_header_at_plan(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 # End-to-end: read() fills the lazy window; emitted tile has correct dims
 # ---------------------------------------------------------------------------
+
 
 def test_read_fills_lazy_window_via_spark(tmp_path, spark):
     """Virtual passthrough read via Spark → tile.window matches actual raster dims."""

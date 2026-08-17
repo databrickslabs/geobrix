@@ -234,7 +234,9 @@ def _write_row_tile(args: tuple) -> "m.TileEntry":
     b = make_tile_bytes(row_tile_px, row_bands, row_dtype, srid, 0.0, tile_seed)
     rel = f"rows/r{j}.tif"
     (Path(out_dir) / rel).write_bytes(b)
-    return m.TileEntry(rel, base_cellid + j, srid, row_dtype, row_bands, row_tile_px, 0.0)
+    return m.TileEntry(
+        rel, base_cellid + j, srid, row_dtype, row_bands, row_tile_px, 0.0
+    )
 
 
 def generate_corpus(
@@ -298,8 +300,16 @@ def generate_corpus(
     if jobs is None:
         jobs = _default_jobs()
     write_args = [
-        (j, out_dir, row_tile_px, row_bands, row_dtype,
-         srids[j % len(srids)], seed + 100000 + j, len(size_sweep))
+        (
+            j,
+            out_dir,
+            row_tile_px,
+            row_bands,
+            row_dtype,
+            srids[j % len(srids)],
+            seed + 100000 + j,
+            len(size_sweep),
+        )
         for j in range(row_rows)
     ]
     if jobs == 1 or row_rows <= 1:
@@ -442,7 +452,7 @@ def generate_cog_multiwindow_corpus(
     manifest_rows = []
 
     for i in range(cog_count):
-        cog_seed = int(rng.integers(0, 2 ** 31))
+        cog_seed = int(rng.integers(0, 2**31))
         tile_bytes = make_tile_bytes(
             tile_px=cog_px,
             bands=bands,
@@ -512,7 +522,10 @@ def generate_cog_multiwindow_corpus(
                     break
                 actual_w = min(win_w, cog_px - off_x)
                 manifest_rows.append(
-                    {"path": str(dest.resolve()), "window": [off_x, 0, actual_w, cog_px]}
+                    {
+                        "path": str(dest.resolve()),
+                        "window": [off_x, 0, actual_w, cog_px],
+                    }
                 )
 
     manifest_path = out_dir / "cog_multiwindow_manifest.json"
@@ -793,13 +806,15 @@ def main(argv=None):
             width = a.large_raster_width
             height = a.large_raster_height or width
         elif a.large_raster_size_gb is not None:
-            size_bytes = int(a.large_raster_size_gb * 1024 ** 3)
+            size_bytes = int(a.large_raster_size_gb * 1024**3)
             bpp = bands_val * np.dtype(dtype_val).itemsize
             side = int(math.isqrt(size_bytes // bpp))
             width = height = side
         else:
-            ap.error("--large-raster / --striped requires --large-raster-size-gb or "
-                     "--large-raster-width")
+            ap.error(
+                "--large-raster / --striped requires --large-raster-size-gb or "
+                "--large-raster-width"
+            )
 
         if a.large_raster_out:
             out_path = Path(a.large_raster_out)
@@ -850,10 +865,12 @@ def main(argv=None):
             compress=a.cog_compress,
         )
         actual_rows = len(json.loads(manifest_path.read_text()))
-        print(json.dumps(
-            {"manifest": str(manifest_path), "rows": actual_rows},
-            indent=2,
-        ))
+        print(
+            json.dumps(
+                {"manifest": str(manifest_path), "rows": actual_rows},
+                indent=2,
+            )
+        )
         return
 
     corpus = generate_corpus(

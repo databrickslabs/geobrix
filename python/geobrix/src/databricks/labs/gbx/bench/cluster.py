@@ -2955,7 +2955,11 @@ def build_bench_notebook(cfg: dict) -> dict:
         # dbutils.library.restartPython() is omitted here because %pip install already
         # restarts the Python environment; a second restart after it is redundant and
         # causes kernel crash on DBR 19.x. `markdown` powers the displayHTML summaries.
-        _cell('%pip install --quiet "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(wheel=cfg['wheel'])),
+        _cell(
+            '%pip install --quiet "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
+                wheel=cfg["wheel"]
+            )
+        ),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),

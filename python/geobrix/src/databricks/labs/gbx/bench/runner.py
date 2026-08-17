@@ -522,7 +522,6 @@ def _tile_aggregate_df(spark, root, corpus, fs):
     read the bytes from the synth file paths at runtime.
     """
     import rasterio as _rasterio
-
     from pyspark.sql import functions as F
     from pyspark.sql.types import (
         IntegerType,
@@ -575,9 +574,12 @@ def _tile_aggregate_df(spark, root, corpus, fs):
             F.lit(None).cast(StringType()).alias("clip_crs"),
             F.lit(None).cast(StringType()).alias("crs"),
             F.create_map(
-                F.lit("driver"), F.lit("GTiff"),
-                F.lit("width"), F.col("tile_width").cast(StringType()),
-                F.lit("height"), F.col("tile_height").cast(StringType()),
+                F.lit("driver"),
+                F.lit("GTiff"),
+                F.lit("width"),
+                F.col("tile_width").cast(StringType()),
+                F.lit("height"),
+                F.col("tile_height").cast(StringType()),
             ).alias("metadata"),
         ).alias("tile"),
         F.col("band_index"),
@@ -1671,10 +1673,14 @@ def run_spark_path(  # noqa: C901
                     F.lit(None).cast("string").alias("clip_crs"),
                     F.lit(None).cast("string").alias("crs"),
                     F.create_map(
-                        F.lit("driver"), F.lit("GTiff"),
-                        F.lit("width"), F.lit(str(w)),
-                        F.lit("height"), F.lit(str(h)),
-                        F.lit("count"), F.lit(str(cnt)),
+                        F.lit("driver"),
+                        F.lit("GTiff"),
+                        F.lit("width"),
+                        F.lit(str(w)),
+                        F.lit("height"),
+                        F.lit(str(h)),
+                        F.lit("count"),
+                        F.lit(str(cnt)),
                     ).alias("metadata"),
                 )
             )

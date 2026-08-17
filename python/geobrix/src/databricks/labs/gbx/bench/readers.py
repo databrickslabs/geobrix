@@ -155,6 +155,7 @@ def run_spark_path_reader(
     _plan_s = 0.0
     if split_plan_read:
         import time as _time
+
         from databricks.labs.gbx.ds.raster import RasterGbxReader
 
         _plan_start = _time.monotonic()
@@ -300,6 +301,7 @@ def run_virtual_tile_pixel_read(
     env = capture_env(where)
 
     import pyspark.sql.functions as _F
+
     from databricks.labs.gbx.pyrx import functions as _pyrx
 
     def _job():
@@ -343,10 +345,14 @@ def run_virtual_tile_pixel_read(
                 iter_p90_s=stats["iter_p90_ms"] / 1000.0,
                 iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
                 avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
-                per_tile_avg_s=(ms / actual_rows / 1000.0) if (ms and actual_rows) else 0.0,
+                per_tile_avg_s=(
+                    (ms / actual_rows / 1000.0) if (ms and actual_rows) else 0.0
+                ),
                 per_tile_avg_ms=(ms / actual_rows) if (ms and actual_rows) else 0.0,
                 throughput_mpix_s=0.0,
-                throughput_rows_s=(actual_rows / (ms / 1000.0)) if (ms and actual_rows) else 0.0,
+                throughput_rows_s=(
+                    (actual_rows / (ms / 1000.0)) if (ms and actual_rows) else 0.0
+                ),
                 peak_rss_mb=peak_rss_mb(),
                 status="ok",
                 note=f"virtual-tile pixel read ({mode_label})",

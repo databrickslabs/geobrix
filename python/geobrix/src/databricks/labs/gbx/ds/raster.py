@@ -689,6 +689,7 @@ def _as_window_list(val) -> list:
 # Budget resolution helper (shared by partitions() and _partitions_from_tile_rows)
 # ---------------------------------------------------------------------------
 
+
 def _resolved_budget(size_mib: int, strategy) -> int:
     """Return the decoded-memory budget in bytes.
 
@@ -704,6 +705,7 @@ def _resolved_budget(size_mib: int, strategy) -> int:
 # Manifest / tile-table helpers (Approach 1 — pre-computed tile input)
 # ---------------------------------------------------------------------------
 
+
 def _read_manifest_rows(manifest_path: str) -> list:
     """Read tile rows from a JSON or Parquet manifest file.
 
@@ -718,9 +720,7 @@ def _read_manifest_rows(manifest_path: str) -> list:
 
     local = _listing.to_local_path(manifest_path)
     if not _os.path.exists(local):
-        raise FileNotFoundError(
-            f"raster_gbx: manifest not found: {manifest_path!r}"
-        )
+        raise FileNotFoundError(f"raster_gbx: manifest not found: {manifest_path!r}")
     if local.endswith(".parquet"):
         from pyspark.sql import SparkSession
 
@@ -788,8 +788,15 @@ def _partitions_from_tile_rows(
 
         # Also handle flat column layout: col_off/row_off/width/height at top level
         # (common for tilesTable results that store window fields as separate columns).
-        if win is None and all(k in r for k in ("col_off", "row_off", "width", "height")):
-            win = (int(r["col_off"]), int(r["row_off"]), int(r["width"]), int(r["height"]))
+        if win is None and all(
+            k in r for k in ("col_off", "row_off", "width", "height")
+        ):
+            win = (
+                int(r["col_off"]),
+                int(r["row_off"]),
+                int(r["width"]),
+                int(r["height"]),
+            )
 
         if win is None:
             # Try whole-file dims as fallback

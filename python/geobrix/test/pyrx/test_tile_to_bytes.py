@@ -67,8 +67,14 @@ def test_materialized_returns_same_bytes():
     data = np.arange(4 * 3, dtype="float32").reshape(3, 4)
     transform = from_origin(10.0, 50.0, 0.5, 0.5)
     profile = dict(
-        driver="GTiff", width=4, height=3, count=1, dtype="float32",
-        crs="EPSG:4326", transform=transform, nodata=-9999.0,
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+        nodata=-9999.0,
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -136,7 +142,7 @@ def test_virtual_clip_pixels_identical(tmp_path):
     minx = win_ulx
     maxy = win_uly
     midx = win_ulx + (w // 2) * abs(transform.a)
-    miny = win_uly + h * transform.e   # transform.e is negative
+    miny = win_uly + h * transform.e  # transform.e is negative
 
     poly = box(minx, miny, midx, maxy)
     clip_wkb = shapely.wkb.dumps(poly)
@@ -156,9 +162,9 @@ def test_virtual_clip_pixels_identical(tmp_path):
     ref_pix = _pixels(ref)
     opt_pix = _pixels(opt)
     # Shape and pixel values must match.
-    assert ref_pix.shape == opt_pix.shape, (
-        f"clip shape mismatch: ref={ref_pix.shape} opt={opt_pix.shape}"
-    )
+    assert (
+        ref_pix.shape == opt_pix.shape
+    ), f"clip shape mismatch: ref={ref_pix.shape} opt={opt_pix.shape}"
     assert np.array_equal(ref_pix, opt_pix)
 
 
@@ -186,16 +192,12 @@ def test_mapalgebra_bytes_virtual_matches_materialized(tmp_path):
     mat_ta = VirtualTile(cellid=0, raster=mat_a)
     mat_tb = VirtualTile(cellid=0, raster=mat_b)
 
-    out_virtual = _mapalgebra_bytes(
-        [vt_a.to_row(), vt_b.to_row()], "A + B"
-    )
-    out_mat = _mapalgebra_bytes(
-        [mat_ta.to_row(), mat_tb.to_row()], "A + B"
-    )
+    out_virtual = _mapalgebra_bytes([vt_a.to_row(), vt_b.to_row()], "A + B")
+    out_mat = _mapalgebra_bytes([mat_ta.to_row(), mat_tb.to_row()], "A + B")
 
     assert out_virtual is not None
     assert out_mat is not None
     with _serde.open_tile(out_virtual) as ov, _serde.open_tile(out_mat) as om:
-        assert np.allclose(ov.read(1), om.read(1), atol=1e-5), (
-            "mapalgebra_bytes virtual != materialized"
-        )
+        assert np.allclose(
+            ov.read(1), om.read(1), atol=1e-5
+        ), "mapalgebra_bytes virtual != materialized"

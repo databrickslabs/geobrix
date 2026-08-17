@@ -66,7 +66,9 @@ def test_file_supported_memoization(spark):
         result2 = file_supported()
         assert result1 is False
         assert result2 is False
-        assert call_count[0] == 1, f"Expected spark.sql called once, got {call_count[0]}"
+        assert (
+            call_count[0] == 1
+        ), f"Expected spark.sql called once, got {call_count[0]}"
     finally:
         spark.sql = original_sql
 
@@ -179,7 +181,10 @@ def test_open_windowed_via_fileref_reads_correct_pixels(gtiff_bytes):
 
 def test_open_windowed_via_fileref_raises_on_non_seekable(gtiff_bytes):
     """Non-seekable FileRef stream → FileRefReadError is raised."""
-    from databricks.labs.gbx.pyrx._file_ref import FileRefReadError, open_windowed_via_fileref
+    from databricks.labs.gbx.pyrx._file_ref import (
+        FileRefReadError,
+        open_windowed_via_fileref,
+    )
 
     stub_fref = _StubFileRefNonSeekable(gtiff_bytes)
     window = (0, 0, 2, 2)
@@ -356,9 +361,8 @@ def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
         "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
     ):
         # Build a materialized tile from the gtiff_bytes fixture (4×3).
-        df = (
-            spark.createDataFrame([(gtiff_bytes,)], ["raster"])
-            .select(prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
+        df = spark.createDataFrame([(gtiff_bytes,)], ["raster"]).select(
+            prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile")
         )
         result = df.select(prx.rst_height("tile")).collect()[0][0]
     assert result == 3, f"Expected height=3, got {result}"
@@ -428,9 +432,9 @@ def test_open_tile_file_ref_clip_falls_through_to_clipped_result(gtiff_bytes):
             err_msg="FILE path returned different pixels than fallback for clipped tile",
         )
         # And the result must be clipped (narrower than the full window width=4).
-        assert width_with_ref < 4, (
-            f"FILE path returned full-width={width_with_ref}; expected clip to reduce width"
-        )
+        assert (
+            width_with_ref < 4
+        ), f"FILE path returned full-width={width_with_ref}; expected clip to reduce width"
     finally:
         os.remove(tmp_path)
 
@@ -473,9 +477,9 @@ def test_open_tile_file_ref_warp_falls_through_to_warped_result(gtiff_bytes):
             crs_no_ref = ds_no_ref.crs
 
         # Both must produce EPSG:3857 output.
-        assert crs_with_ref.to_epsg() == 3857, (
-            f"FILE path CRS={crs_with_ref}; expected EPSG:3857"
-        )
+        assert (
+            crs_with_ref.to_epsg() == 3857
+        ), f"FILE path CRS={crs_with_ref}; expected EPSG:3857"
         assert crs_no_ref.to_epsg() == 3857
 
         # Pixel arrays must be identical.
@@ -535,22 +539,26 @@ def test_sql_registry_still_maps_to_single_arg_udfs():
         _u_width,
     )
 
-    assert SQL_REGISTRY["gbx_rst_height"] is _u_height, "gbx_rst_height must map to _u_height"
-    assert SQL_REGISTRY["gbx_rst_numbands"] is _u_numbands, (
-        "gbx_rst_numbands must map to _u_numbands"
-    )
+    assert (
+        SQL_REGISTRY["gbx_rst_height"] is _u_height
+    ), "gbx_rst_height must map to _u_height"
+    assert (
+        SQL_REGISTRY["gbx_rst_numbands"] is _u_numbands
+    ), "gbx_rst_numbands must map to _u_numbands"
     assert SQL_REGISTRY["gbx_rst_srid"] is _u_srid, "gbx_rst_srid must map to _u_srid"
-    assert SQL_REGISTRY["gbx_rst_width"] is _u_width, "gbx_rst_width must map to _u_width"
-    assert SQL_REGISTRY["gbx_rst_metadata"] is _metadata_udf, (
-        "gbx_rst_metadata must map to _metadata_udf (single-arg)"
-    )
-    assert SQL_REGISTRY["gbx_rst_boundingbox"] is _u_boundingbox, (
-        "gbx_rst_boundingbox must map to _u_boundingbox"
-    )
-    assert SQL_REGISTRY["gbx_rst_summary"] is _summary_udf, (
-        "gbx_rst_summary must map to _summary_udf (single-arg)"
-    )
+    assert (
+        SQL_REGISTRY["gbx_rst_width"] is _u_width
+    ), "gbx_rst_width must map to _u_width"
+    assert (
+        SQL_REGISTRY["gbx_rst_metadata"] is _metadata_udf
+    ), "gbx_rst_metadata must map to _metadata_udf (single-arg)"
+    assert (
+        SQL_REGISTRY["gbx_rst_boundingbox"] is _u_boundingbox
+    ), "gbx_rst_boundingbox must map to _u_boundingbox"
+    assert (
+        SQL_REGISTRY["gbx_rst_summary"] is _summary_udf
+    ), "gbx_rst_summary must map to _summary_udf (single-arg)"
     assert SQL_REGISTRY["gbx_rst_crs"] is _u_crs, "gbx_rst_crs must map to _u_crs"
-    assert SQL_REGISTRY["gbx_rst_isempty"] is _u_isempty, (
-        "gbx_rst_isempty must map to _u_isempty"
-    )
+    assert (
+        SQL_REGISTRY["gbx_rst_isempty"] is _u_isempty
+    ), "gbx_rst_isempty must map to _u_isempty"

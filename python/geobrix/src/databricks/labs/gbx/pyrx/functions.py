@@ -5231,6 +5231,26 @@ def rst_memsize(tile: ColLike) -> Column:
     return _memsize_struct_udf(_col(tile))
 
 
+def rst_memsize_grouped(df, *, tile_col: str = "tile", out_col: str = "memsize"):
+    """Partition-scoped rst_memsize: amortizes source opens across a partition's
+    tiles via the grouped executor. Equivalent result to per-row rst_memsize."""
+    import numpy as np
+    from pyspark.sql.types import LongType, StructField
+
+    from .grouped_exec import grouped_tile_map
+
+    def _core(ds):
+        itemsize = np.dtype(ds.dtypes[0]).itemsize
+        return int(ds.count * ds.width * ds.height * itemsize)
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, LongType()),
+        tile_col=tile_col,
+    )
+
+
 def rst_rotation(tile: ColLike) -> Column:
     """Rotation angle = atan(skewY / scaleX) in radians; DOUBLE."""
     return _u_rotation(_col(tile))

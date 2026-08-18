@@ -13,7 +13,15 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import BinaryType, LongType, StringType
 
-from . import file_props
+from . import _file_ref, file_props
+
+
+def _strip_dbfs_scheme(uri):
+    """Return a FUSE-openable /Volumes path from a FileRef .uri (dbfs:/Volumes/...)."""
+    if uri is None:
+        return None
+    return uri[len("dbfs:") :] if uri.startswith("dbfs:") else uri
+
 
 # plain (non-FILE) columns the reader is willing to project into a tile
 _TILE_PLAIN_COLS = (
@@ -59,6 +67,28 @@ def _table_props(spark: SparkSession, table: str) -> dict:
     return {r["key"]: r["value"] for r in rows}
 
 
+def _describe_cols(spark: SparkSession, table: str):
+    """Return ``(plain_col_names, file_col_name_or_None)`` for a table.
+
+    FILE-typed columns are excluded from the plain set and reported separately.
+    Partition/metadata header rows (``col_name`` is ``None`` or starts with ``#``)
+    are ignored.
+    """
+    desc = spark.sql(f"DESCRIBE TABLE {table}").collect()
+    plain = set()
+    file_col = None
+    for r in desc:
+        col_name = r["col_name"]
+        data_type = (r["data_type"] or "").lower()
+        if not col_name or col_name.startswith("#"):
+            continue
+        if data_type == "file":
+            file_col = col_name
+        else:
+            plain.add(col_name)
+    return plain, file_col
+
+
 def _project_sql(table: str, present: list) -> str:
     if not present:
         raise ValueError(f"no plain columns to project from {table!r}")
@@ -72,39 +102,73 @@ def read_file_table(
 ) -> DataFrame:
     """Read a GeoBrix FILE-column table, returning a DataFrame with a ``tile`` column.
 
-    The ``tile`` column is ``V2_TILE_SCHEMA``-shaped, built only from plain columns
-    (path/window/crs/...).  The FILE column is never selected (Serverless-GC-safe).
-    ``path_mode`` on each tile is taken from the table's ``file_mode`` property, or
-    ``"external"`` when the table is not GeoBrix-stamped.  Non-tile columns pass through.
+    The ``tile`` column is ``V2_TILE_SCHEMA``-shaped.
+
+    **Managed + FILE-capable runtime**: ``tile.path`` is set to the FILE column's
+    ``.uri`` subfield with the ``dbfs:`` scheme stripped to a FUSE-openable
+    ``/Volumes/...`` path; ``path_mode`` is ``"managed"``.  The FILE column is
+    projected at the SQL level so the strip stays distributable (no ``.collect()``).
+
+    **All other cases** (external table, or ``file_supported`` returns False):
+    only plain columns are projected; the FILE column is never referenced
+    (Serverless-GC-safe).  ``path_mode`` is taken from the table's ``file_mode``
+    property, or ``"external"`` when the table is not GeoBrix-stamped.
+
+    Non-tile columns pass through unchanged.
     """
     parsed = file_props.parse_props(_table_props(spark, table))
-    path_mode = parsed["file_mode"] or "external"
+    file_mode = parsed["file_mode"] or "external"
 
     # Enumerate columns via DESCRIBE TABLE — NOT spark.table(...).schema, which is
     # unsafe on Serverless GC when a FILE column is present.
-    desc = spark.sql(f"DESCRIBE TABLE {table}").collect()
-    plain = {
-        r["col_name"]
-        for r in desc
-        if r["col_name"]
-        and not r["col_name"].startswith("#")
-        and (r["data_type"] or "").lower() != "file"
-    }
+    plain, file_col_name = _describe_cols(spark, table)
     present = [c for c in _TILE_PLAIN_COLS if c in plain]
     passthrough = [c for c in plain if c not in _TILE_PLAIN_COLS]
 
-    base = spark.sql(_project_sql(table, present + passthrough))
+    # Determine whether to resolve path via the FILE column's .uri subfield.
+    # FILE column is ONLY referenced when file_supported(spark) is True — on
+    # Serverless-GC today (FILE absent) we fall through to the plain-column branch.
+    use_managed_uri = (
+        file_mode == "managed"
+        and file_col_name is not None
+        and _file_ref.file_supported(spark)
+    )
+
+    if use_managed_uri:
+        # Managed + FILE-capable: project the FILE column to resolve .uri, but
+        # exclude any plain `path` column from the SELECT (the uri IS the path now).
+        present_for_select = [c for c in present if c != "path"]
+        base = spark.sql(
+            _project_sql(table, present_for_select + passthrough + [file_col_name])
+        )
+        path_col = F.expr(f"regexp_replace({file_col_name}.uri, '^dbfs:', '')")
+        path_mode_col = F.lit("managed")
+    else:
+        # Plain branch: today's behavior — FILE column never referenced.
+        base = spark.sql(_project_sql(table, present + passthrough))
+        path_col = None  # use F.col("path") via `present` membership below
+        path_mode_col = F.lit(file_mode)
 
     # Build typed null expressions lazily (requires active SparkContext).
-    absent = (
-        _absent_fields()
-    )  # every struct field has an explicit V2_TILE_SCHEMA-typed entry
+    absent = _absent_fields()
 
     # field order/types match V2_TILE_SCHEMA
     # (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode)
+    # For `path`: managed+capable branch uses the uri-derived expression; otherwise
+    # falls through to the standard present/absent logic.
+    present_for_struct = (
+        [c for c in present if c != "path"] if use_managed_uri else present
+    )
+
     tile_struct = F.struct(
         *[
-            F.col(c).alias(c) if c in present else absent[c].alias(c)
+            (
+                path_col.alias("path")
+                if c == "path" and use_managed_uri
+                else (
+                    F.col(c).alias(c) if c in present_for_struct else absent[c].alias(c)
+                )
+            )
             for c in (
                 "cellid",
                 "raster",
@@ -116,7 +180,7 @@ def read_file_table(
                 "metadata",
             )
         ],
-        F.lit(path_mode).alias("path_mode"),
+        path_mode_col.alias("path_mode"),
     )
     # "raster" is intentionally absent from a FILE table (null BINARY).
     out = base.withColumn("tile", tile_struct)

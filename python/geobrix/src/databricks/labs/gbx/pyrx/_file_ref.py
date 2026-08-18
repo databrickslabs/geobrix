@@ -12,6 +12,11 @@ open_windowed_via_fileref(file_ref, window, pending)
     on any failure so callers can degrade to a local-file fallback.
 
 Serverless-safe: no .rdd / _jvm / _jsc / sparkContext / conf.set.
+
+Shared FILE-capability surface: ``file_supported`` and ``file_ref_arg`` have no
+raster-specific coupling — they operate on a generic path string / Column and are
+the canonical entry points for any GeoBrix light-tier package (pyrx, pyvx, pygx)
+that needs to detect or inject FILE references.
 """
 
 import os

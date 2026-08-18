@@ -6,8 +6,6 @@ document the intentional divergence (grouped=decoded footprint, per-row=serializ
 buffer length) — that case is not the intended input.
 """
 
-import tempfile
-
 import numpy as np
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructField as SF
@@ -40,7 +38,7 @@ def _make_bytes(width=8, height=8, count=1, epsg=4326):
         return mf.read()
 
 
-def test_grouped_equals_per_row_for_virtual_tiles(spark):
+def test_grouped_equals_per_row_for_virtual_tiles(spark, tmp_path):
     """PROOF: grouped == per_row == formula for virtual (path-backed) tiles.
 
     Both rst_memsize and rst_memsize_grouped return count*width*height*itemsize
@@ -49,20 +47,58 @@ def test_grouped_equals_per_row_for_virtual_tiles(spark):
     """
     W, H, COUNT = 8, 8, 1
     b = _make_bytes(width=W, height=H, count=COUNT, epsg=4326)
-    with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as f:
-        f.write(b)
-        tif_path = f.name
+    tif_path = tmp_path / "virtual.tif"
+    tif_path.write_bytes(b)
 
     rows = [
         (
             VirtualTile(
                 cellid=i,
-                path=tif_path,
+                path=str(tif_path),
                 raster=None,
                 window=(0, 0, W, H),
             ).to_row(),
         )
         for i in range(4)
+    ]
+    df = spark.createDataFrame(rows, StructType([SF("tile", V2_TILE_SCHEMA)]))
+
+    per_row = {
+        r["cellid"]: r["ms"]
+        for r in df.select(
+            df.tile.cellid.alias("cellid"),
+            rst_memsize(F.col("tile")).alias("ms"),
+        ).collect()
+    }
+    grouped = {
+        r["tile"]["cellid"]: r["memsize"] for r in rst_memsize_grouped(df).collect()
+    }
+    assert grouped == per_row, f"grouped {grouped} != per_row {per_row}"
+    assert set(grouped.values()) == {W * H * COUNT * 4}
+
+
+def test_grouped_equals_per_row_for_windowless_virtual_tiles(spark, tmp_path):
+    """PROOF: grouped == per_row == full-source footprint for windowless virtual tiles.
+
+    Task 1 relaxed the 'virtual tile requires a window' invariant; window=None
+    means the full source.  The fallback must use open_header (not _open, which
+    raises ValueError for windowless tiles) so grouped matches per-row rst_memsize.
+    """
+    W, H, COUNT = 8, 8, 1
+    b = _make_bytes(width=W, height=H, count=COUNT, epsg=4326)
+    tif_path = tmp_path / "windowless.tif"
+    tif_path.write_bytes(b)
+
+    rows = [
+        (
+            VirtualTile(
+                cellid=i,
+                path=str(tif_path),
+                raster=None,
+                window=None,
+            ).to_row(),
+        )
+        for i in range(2)
     ]
     df = spark.createDataFrame(rows, StructType([SF("tile", V2_TILE_SCHEMA)]))
 

@@ -11,6 +11,8 @@ from pyspark.sql.types import LongType, StructField, StructType
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
+_FLOAT32_ITEMSIZE = 4  # bytes per sample in the test GeoTIFFs (float32)
+
 
 def _tile_df(spark, tile_bytes):
     """Create a 3-row DataFrame with materialized tiles (raster inline, path None)."""
@@ -77,3 +79,73 @@ def test_grouped_map_custom_tile_col(spark, gtiff_bytes):
     )
     nbs = [r["nb"] for r in out.collect()]
     assert all(nb == 1 for nb in nbs)
+
+
+# ---------------------------------------------------------------------------
+# I2: grouped executor robustness
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_map_windowless_virtual_tile(spark, gtiff_bytes, tmp_path):
+    """A windowless virtual tile (window=None) returns the full-source footprint.
+
+    file_supported()=False locally so tiles take the fallback path.  The fallback
+    must route windowless virtual tiles through open_header (not _open, which
+    raises ValueError for window=None).  This matches per-row rst_memsize behavior.
+    gtiff_bytes is 4x3 float32 count=1 → 4*3*1*4=48 bytes footprint.
+    """
+    tif = tmp_path / "whole.tif"
+    tif.write_bytes(gtiff_bytes)
+
+    vt = VirtualTile(cellid=7, path=str(tif), raster=None, window=None)
+    df = spark.createDataFrame(
+        [(vt.to_row(),)],
+        StructType([StructField("tile", V2_TILE_SCHEMA)]),
+    )
+
+    def core_fn(ds):
+        return int(ds.count * ds.width * ds.height * np.dtype(ds.dtypes[0]).itemsize)
+
+    out = grouped_tile_map(df, core_fn, return_field=StructField("sz", LongType()))
+    vals = [r["sz"] for r in out.collect()]
+    assert vals == [
+        4 * 3 * 1 * _FLOAT32_ITEMSIZE
+    ], f"unexpected result for windowless virtual tile: {vals}"
+
+
+def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp_path):
+    """An unreadable tile (bogus path) degrades to None; partition does NOT crash.
+
+    The good tile in the same partition still computes its result correctly.
+    gtiff_bytes is 4x3 float32 count=1 → 48 bytes footprint.
+    """
+    good = tmp_path / "good.tif"
+    good.write_bytes(gtiff_bytes)
+
+    rows = [
+        (
+            VirtualTile(
+                cellid=0,
+                path="/nonexistent/bogus.tif",
+                raster=None,
+                window=(0, 0, 4, 3),
+            ).to_row(),
+        ),
+        (
+            VirtualTile(
+                cellid=1, path=str(good), raster=None, window=(0, 0, 4, 3)
+            ).to_row(),
+        ),
+    ]
+    df = spark.createDataFrame(rows, StructType([StructField("tile", V2_TILE_SCHEMA)]))
+
+    def core_fn(ds):
+        return int(ds.count * ds.width * ds.height * np.dtype(ds.dtypes[0]).itemsize)
+
+    out = grouped_tile_map(df, core_fn, return_field=StructField("sz", LongType()))
+    result = {r["tile"]["cellid"]: r["sz"] for r in out.collect()}
+
+    assert result[0] is None, f"expected None for unreadable tile, got {result[0]}"
+    assert (
+        result[1] == 4 * 3 * 1 * _FLOAT32_ITEMSIZE
+    ), f"readable tile wrong: {result[1]}"

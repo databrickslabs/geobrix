@@ -16,6 +16,28 @@ from pyspark.sql.types import StructField, StructType
 GBX_LRU_MAX_BYTES = int(os.environ.get("GBX_LRU_MAX_BYTES", 4 * 1024**3))  # 4 GiB
 STREAM_NOMINAL_BYTES = 16 * 1024**2  # resident estimate for an open stream/dataset
 
+# Sentinel for "core_fn has not been called yet for this tile".
+# Distinct from None so a core_fn that legitimately returns None
+# is not re-routed through the fallback (M1 fix).
+_MISS = object()
+
+
+def _tile_is_windowless_virtual(tile) -> bool:
+    """True if *tile* is a virtual tile (path set, raster None) with no window.
+
+    Used in the fallback path to route windowless virtual tiles to ``open_header``
+    (which returns the full-source footprint) instead of ``_open`` (which raises
+    ``ValueError`` for windowless virtual tiles).
+    """
+    try:
+        return (
+            tile["raster"] is None
+            and tile["path"] is not None
+            and tile["window"] is None
+        )
+    except (KeyError, TypeError):
+        return False
+
 
 def align_partitions(
     df: DataFrame, *, n: int, path_col: str = "tile.path"
@@ -250,7 +272,7 @@ def grouped_tile_map(
                     except (KeyError, TypeError):
                         uri = None
 
-                    result = None
+                    result = _MISS
                     if uri and file_ok and has_fr_col:
                         fr = row["_file_ref"]
                         if fr is not None:
@@ -298,18 +320,29 @@ def grouped_tile_map(
                                     result = core_fn(src)
                             except Exception:
                                 # Any open/stream/view-construction failure →
-                                # degrade gracefully to the per-row fallback.
-                                result = None
+                                # degrade gracefully to the per-tile fallback below.
+                                result = _MISS
 
-                    if result is None:
+                    if result is _MISS:
                         # Fallback path: covers
                         #   (a) materialized tiles (raster inline, path None)
                         #   (b) virtual tiles when FILE is not supported
                         #   (c) FILE open/stream/view failure (graceful degrade)
-                        from .core.open_tile import _open
+                        # For windowless virtual tiles, _open raises ValueError;
+                        # open_header returns the full-source footprint (consistent
+                        # with per-row rst_memsize).  Per-tile errors degrade to
+                        # None rather than crashing the whole partition.
+                        from .core.open_tile import _open, open_header
 
-                        with _open(tile) as ds:
-                            result = core_fn(ds)
+                        try:
+                            if _tile_is_windowless_virtual(tile):
+                                with open_header(tile) as ds:
+                                    result = core_fn(ds)
+                            else:
+                                with _open(tile) as ds:
+                                    result = core_fn(ds)
+                        except Exception:
+                            result = None
 
                     results.append(result)
 

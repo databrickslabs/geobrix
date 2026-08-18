@@ -26,7 +26,7 @@ def test_create_sql_external_no_partition_no_zorder():
         file_col="tile_file",
         file_mode="external",
         filespace=None,
-        cluster=True,
+        layout="cluster",
     )
     assert "tile_file FILE EXTERNAL" in sql
     assert "USING DELTA" in sql
@@ -44,7 +44,7 @@ def test_create_sql_managed_requires_filespace():
             file_col="f",
             file_mode="managed",
             filespace=None,
-            cluster=False,
+            layout="order",
         )
     sql = ft.build_create_sql(
         "t",
@@ -52,7 +52,7 @@ def test_create_sql_managed_requires_filespace():
         file_col="f",
         file_mode="managed",
         filespace="/Volumes/c/s/v",
-        cluster=False,
+        layout="order",
     )
     assert "f FILE MANAGED" in sql
     assert "databricks.filespace-preview" in sql
@@ -85,7 +85,7 @@ def test_create_sql_invalid_file_mode():
             file_col="f",
             file_mode="bogus",
             filespace=None,
-            cluster=False,
+            layout="order",
         )
 
 
@@ -107,7 +107,7 @@ def test_create_sql_no_cluster():
         file_col="tile_file",
         file_mode="external",
         filespace=None,
-        cluster=False,
+        layout="order",
     )
     assert "CLUSTER BY" not in sql
     assert "tile_file FILE EXTERNAL" in sql
@@ -213,3 +213,91 @@ def test_write_file_table_managed_uses_qualified_raster():
     assert "create_file(content => raster)" not in insert.replace(
         "create_file(content => tile.raster)", ""
     ), "bare create_file(content => raster) found — still using unqualified reference"
+
+
+# ---------------------------------------------------------------------------
+# I1: validate before DROP
+# ---------------------------------------------------------------------------
+
+
+def test_write_file_table_validates_before_drop():
+    """write_file_table raises ValueError BEFORE issuing any DROP when args are invalid.
+
+    Previously build_create_sql (which validates) ran AFTER DROP TABLE, so an
+    invalid file_mode with overwrite=True would destroy the existing table, then
+    raise.  The fix hoists the same checks to the top of write_file_table.
+    """
+    dropped = []
+    spark = MagicMock()
+
+    def capture_sql(sql):
+        if "DROP" in sql.upper():
+            dropped.append(sql)
+
+    spark.sql.side_effect = capture_sql
+
+    with pytest.raises(ValueError, match="managed file_mode requires a filespace"):
+        ft.write_file_table(
+            spark,
+            _make_mock_df(),
+            "cat.sch.t",
+            file_mode="managed",
+            filespace=None,
+            overwrite=True,
+        )
+    assert not dropped, f"DROP was issued before validation: {dropped}"
+
+
+def test_write_file_table_invalid_mode_raises_before_drop():
+    """Bogus file_mode also raises before any DROP."""
+    dropped = []
+    spark = MagicMock()
+
+    def capture_sql(sql):
+        if "DROP" in sql.upper():
+            dropped.append(sql)
+
+    spark.sql.side_effect = capture_sql
+
+    with pytest.raises(ValueError, match="file_mode must be"):
+        ft.write_file_table(
+            spark,
+            _make_mock_df(),
+            "cat.sch.t",
+            file_mode="bogus",
+            overwrite=True,
+        )
+    assert not dropped, f"DROP was issued before validation: {dropped}"
+
+
+# ---------------------------------------------------------------------------
+# M3: plain layout → honest write_strategy, no ORDER BY
+# ---------------------------------------------------------------------------
+
+
+def test_write_file_table_plain_layout_no_order_by():
+    """layout='plain' → write_strategy is external:plain and INSERT has no ORDER BY."""
+    captured = []
+    spark = MagicMock()
+    spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    ft.write_file_table(
+        spark,
+        _make_mock_df(),
+        "cat.sch.t",
+        file_mode="external",
+        layout="plain",
+    )
+
+    insert_sqls = [s for s in captured if s.startswith("INSERT")]
+    assert insert_sqls, "no INSERT captured"
+    assert (
+        "ORDER BY" not in insert_sqls[0]
+    ), f"unexpected ORDER BY in plain layout INSERT:\n{insert_sqls[0]}"
+
+    create_sqls = [s for s in captured if s.startswith("CREATE")]
+    assert create_sqls, "no CREATE captured"
+    assert (
+        "external:plain" in create_sqls[0]
+    ), f"write_strategy should be external:plain; got:\n{create_sqls[0]}"
+    assert "CLUSTER BY" not in create_sqls[0], "unexpected CLUSTER BY in plain layout"

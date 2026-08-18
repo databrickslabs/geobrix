@@ -6,6 +6,7 @@ cannot fetch a FILE-containing schema or collect a FILE value. The FILE ref is
 reconstructed lazily at compute time via file_ref_arg(tile["path"]).
 """
 
+import uuid
 from typing import Optional
 
 from pyspark.sql import DataFrame, SparkSession
@@ -68,8 +69,6 @@ def _project_sql(table: str, present: list) -> str:
 def read_file_table(
     spark: SparkSession,
     table: str,
-    *,
-    tile_cols: Optional[dict] = None,
 ) -> DataFrame:
     """Read a GeoBrix FILE-column table, returning a DataFrame with a ``tile`` column.
 
@@ -145,9 +144,14 @@ def build_create_sql(
     file_col: str,
     file_mode: str,
     filespace: Optional[str],
-    cluster: bool,
+    layout: str,
 ) -> str:
     """Return a CREATE TABLE … USING DELTA DDL with a typed FILE column.
+
+    ``layout`` must be ``"plain"``, ``"order"``, or ``"cluster"``.
+    ``"cluster"`` adds ``CLUSTER BY (path)``; the others do not.
+    The value is stamped verbatim in ``write_strategy`` so the reader
+    knows exactly how the table was written.
 
     Raises ValueError for an invalid ``file_mode`` or a managed table without
     a ``filespace``.  Never emits PARTITIONED BY or ZORDER.
@@ -159,7 +163,7 @@ def build_create_sql(
 
     col_defs = ", ".join(f"{name} {dtype}" for name, dtype in plain_cols)
     file_kw = "MANAGED" if file_mode == "managed" else "EXTERNAL"
-    layout = "cluster" if cluster else "order"
+    cluster = layout == "cluster"
 
     props = file_props.build_props(
         file_mode=file_mode,
@@ -220,85 +224,101 @@ def write_file_table(
     in the INSERT statement so Databricks can stamp the correct FILE metadata.
 
     ``file_mode`` defaults to ``"external"`` (portable, no filespace needed).
-    ``layout`` controls clustering: ``"cluster"`` → CLUSTER BY (path);
-    ``"order"`` or ``"plain"`` → no clustering (write still honours ORDER BY path).
+    ``layout`` controls write strategy: ``"cluster"`` → CLUSTER BY (path) with
+    ORDER BY path; ``"order"`` → ORDER BY path, no clustering; ``"plain"`` → no
+    clustering, no ORDER BY.  The value is stamped verbatim in ``write_strategy``
+    so the reader knows exactly how the table was written.
     """
-    view = "_gbx_file_src"
+    # I1: validate before any side effect (DROP, view creation).
+    # build_create_sql validates too, but that runs AFTER the DROP — validating
+    # here prevents data loss when overwrite=True and the arguments are invalid.
+    if file_mode not in ("external", "managed"):
+        raise ValueError(f"file_mode must be external|managed, got {file_mode!r}")
+    if file_mode == "managed" and not filespace:
+        raise ValueError("managed file_mode requires a filespace (/Volumes/...)")
+
+    # M4: unique view name to avoid cross-request clobber.
+    view = f"_gbx_file_src_{uuid.uuid4().hex}"
     df.createOrReplaceTempView(view)
+    try:
+        if overwrite:
+            spark.sql(f"DROP TABLE IF EXISTS {table}")
 
-    if overwrite:
-        spark.sql(f"DROP TABLE IF EXISTS {table}")
-
-    # Plain columns: all top-level df fields except the tile struct itself.
-    # Callers typically have a flat df (tile fields already at top level) but
-    # we handle the struct-wrapper case too: project tile.* fields except raster.
-    tile_fields = (
-        {f.name for f in df.schema["tile"].dataType.fields}
-        if "tile" in [f.name for f in df.schema.fields]
-        else set()
-    )
-
-    if tile_fields:
-        # df has a `tile` struct — flatten to top-level for the table schema
-        plain_cols = [
-            (fname, df.schema["tile"].dataType[fname].dataType.simpleString())
-            for fname in tile_fields
-            if fname not in ("raster", "path_mode")
-        ]
-        # also include any non-tile top-level columns
-        plain_cols += [
-            (f.name, f.dataType.simpleString())
-            for f in df.schema.fields
-            if f.name != "tile"
-        ]
-    else:
-        # df is already flat
-        plain_cols = [(f.name, f.dataType.simpleString()) for f in df.schema.fields]
-
-    spark.sql(
-        build_create_sql(
-            table,
-            plain_cols=plain_cols,
-            file_col=file_col,
-            file_mode=file_mode,
-            filespace=filespace,
-            cluster=(layout == "cluster"),
-        )
-    )
-
-    # Use qualified struct references so the INSERT SELECT is unambiguous regardless
-    # of whether the view has bare top-level columns.  SELECT-level aliases (like the
-    # `tile.path AS path` in flat_exprs) are NOT visible to sibling expressions in the
-    # same SELECT list — only ORDER BY/HAVING/outer queries see them.
-    if tile_fields:
-        file_expr = (
-            f"create_file(content => tile.raster) AS {file_col}"
-            if file_mode == "managed"
-            else f"try_to_file(tile.path) AS {file_col}"
-        )
-    else:
-        file_expr = (
-            f"create_file(content => raster) AS {file_col}"
-            if file_mode == "managed"
-            else f"try_to_file(path) AS {file_col}"
+        # Plain columns: all top-level df fields except the tile struct itself.
+        # Callers typically have a flat df (tile fields already at top level) but
+        # we handle the struct-wrapper case too: project tile.* fields except raster.
+        tile_fields = (
+            {f.name for f in df.schema["tile"].dataType.fields}
+            if "tile" in [f.name for f in df.schema.fields]
+            else set()
         )
 
-    if tile_fields:
-        flat_exprs = [
-            f"tile.{fname} AS {fname}"
-            for fname in tile_fields
-            if fname not in ("raster", "path_mode")
-        ]
-        passthrough_exprs = [f.name for f in df.schema.fields if f.name != "tile"]
-        select_exprs = flat_exprs + passthrough_exprs + [file_expr]
-    else:
-        select_exprs = [f.name for f in df.schema.fields] + [file_expr]
+        if tile_fields:
+            # df has a `tile` struct — flatten to top-level for the table schema
+            plain_cols = [
+                (fname, df.schema["tile"].dataType[fname].dataType.simpleString())
+                for fname in tile_fields
+                if fname not in ("raster", "path_mode")
+            ]
+            # also include any non-tile top-level columns
+            plain_cols += [
+                (f.name, f.dataType.simpleString())
+                for f in df.schema.fields
+                if f.name != "tile"
+            ]
+        else:
+            # df is already flat
+            plain_cols = [(f.name, f.dataType.simpleString()) for f in df.schema.fields]
 
-    spark.sql(
-        build_insert_sql(
-            table,
-            view,
-            select_exprs=select_exprs,
-            order_by_path=(layout in ("order", "cluster")),
+        spark.sql(
+            build_create_sql(
+                table,
+                plain_cols=plain_cols,
+                file_col=file_col,
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+            )
         )
-    )
+
+        # Use qualified struct references so the INSERT SELECT is unambiguous regardless
+        # of whether the view has bare top-level columns.  SELECT-level aliases (like the
+        # `tile.path AS path` in flat_exprs) are NOT visible to sibling expressions in the
+        # same SELECT list — only ORDER BY/HAVING/outer queries see them.
+        if tile_fields:
+            file_expr = (
+                f"create_file(content => tile.raster) AS {file_col}"
+                if file_mode == "managed"
+                else f"try_to_file(tile.path) AS {file_col}"
+            )
+        else:
+            file_expr = (
+                f"create_file(content => raster) AS {file_col}"
+                if file_mode == "managed"
+                else f"try_to_file(path) AS {file_col}"
+            )
+
+        if tile_fields:
+            flat_exprs = [
+                f"tile.{fname} AS {fname}"
+                for fname in tile_fields
+                if fname not in ("raster", "path_mode")
+            ]
+            passthrough_exprs = [f.name for f in df.schema.fields if f.name != "tile"]
+            select_exprs = flat_exprs + passthrough_exprs + [file_expr]
+        else:
+            select_exprs = [f.name for f in df.schema.fields] + [file_expr]
+
+        spark.sql(
+            build_insert_sql(
+                table,
+                view,
+                select_exprs=select_exprs,
+                order_by_path=(layout in ("order", "cluster")),
+            )
+        )
+    finally:
+        try:
+            spark.sql(f"DROP VIEW IF EXISTS {view}")
+        except Exception:
+            pass

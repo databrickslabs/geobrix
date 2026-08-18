@@ -150,6 +150,44 @@ def test_grouped_map_windowless_virtual_tile(spark, gtiff_bytes, tmp_path):
     ], f"unexpected result for windowless virtual tile: {vals}"
 
 
+# ---------------------------------------------------------------------------
+# T9c: out_schema collision — return_field.name matches an input column
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_map_out_col_collision_replaces_not_appends(spark, gtiff_bytes):
+    """When return_field.name collides with an input column, out_schema REPLACES it.
+
+    T9c root cause: rst_clip_grouped uses out_col='tile' by default, which
+    collides with the input 'tile' column.  The pre-fix code did:
+        out_schema = StructType(original_fields + [return_field])
+    producing TWO 'tile' fields.  The _map function's .assign(**{out_name: ...})
+    overwrites the pandas column (ONE 'tile' in the output pandas df), so Arrow
+    sees one column against a schema declaring two — raising
+    "not all nodes, buffers and variadicBufferCounts were consumed" on-cluster.
+
+    Fix: filter out any field whose name matches return_field.name before appending.
+    """
+    df = _tile_df(spark, gtiff_bytes)  # schema has exactly one field: "tile"
+
+    # Return a LongType column also named "tile" — the collision case.
+    out = grouped_tile_map(
+        df,
+        lambda ds, cellid: ds.count,  # returns an int, typed as LongType
+        return_field=StructField("tile", LongType()),
+    )
+    field_names = out.schema.fieldNames()
+    assert field_names.count("tile") == 1, (
+        f"Expected exactly one 'tile' field in output schema, got {field_names}. "
+        f"T9c regression: duplicate field causes Arrow schema mismatch on-cluster."
+    )
+    # collect() must not raise (Arrow schema matches pandas output)
+    rows = out.collect()
+    assert len(rows) == 3
+    # core_fn returns ds.count (1 band) cast to LongType
+    assert all(r["tile"] == 1 for r in rows)
+
+
 def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp_path):
     """An unreadable tile (bogus path) degrades to None; partition does NOT crash.
 

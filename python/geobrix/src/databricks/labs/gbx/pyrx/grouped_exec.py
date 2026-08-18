@@ -279,14 +279,23 @@ def grouped_tile_map(
     ``core_fn(ds_or_view, cellid)`` must not hold a reference to its first arg
     after returning.
 
-    Output schema is ``df.schema + [return_field]``; ``_file_ref`` never leaks.
+    Output schema is ``df.schema`` with ``return_field`` appended (or replacing
+    an existing field of the same name); ``_file_ref`` never leaks.
     """
     from . import _file_ref as _fr_mod
 
     # Capture original fields BEFORE adding _file_ref so the output schema
     # matches the caller's expectation exactly.
     original_fields = list(df.schema.fields)
-    out_schema = StructType(original_fields + [return_field])
+    # Replace a colliding field rather than appending a duplicate.  When
+    # out_col equals an existing input column name (e.g. out_col="tile" —
+    # the default for rst_clip_grouped and the 11 pixel-op _grouped variants),
+    # the pandas _map yields a df with ONE column of that name (via .assign
+    # overwrite), so out_schema must also have ONE field.  Appending a
+    # duplicate causes Arrow schema mismatch on real clusters.
+    out_schema = StructType(
+        [f for f in original_fields if f.name != return_field.name] + [return_field]
+    )
     out_name = return_field.name
 
     # Add the FileRef column on the driver before mapInPandas.  Each row

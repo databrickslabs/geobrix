@@ -112,9 +112,7 @@ def _check_file_support(spark: SparkSession) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def file_ref_arg(
-    tile_col: Column, spark: "Optional[SparkSession]" = None
-) -> Column:
+def file_ref_arg(tile_col: Column, spark: "Optional[SparkSession]" = None) -> Column:
     """Return a Column expression for the file_ref argument to tile-reading UDFs.
 
     If file_supported() is True, returns a plan-level FILE mint expression

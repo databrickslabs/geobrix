@@ -266,9 +266,9 @@ def grouped_tile_map(
                                 from rasterio.windows import Window
 
                                 from .core.open_tile import (
-                                    _WindowHeaderView,
                                     _parse_pending,
                                     _to_virtual_tile,
+                                    _WindowHeaderView,
                                 )
 
                                 vt = _to_virtual_tile(tile)

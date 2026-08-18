@@ -455,15 +455,23 @@ Virtual tiles are read on demand. Reading cost is dominated by **opening** the s
 
 GeoBrix's virtual tile reader supports two access modes:
 
-| Mode | Per-open cost | Per-window cost (amortized) | Best for |
-|---|---|---|---|
-| **Byte-range stream** (`.open()`) | Scales with file size and layout | ~2 ms (COG) | Grouped reads: one source, many windows |
-| **FUSE** (`.as_local_file()`) | Flat ~7 ms at any size | ~124 ms (cold random window) | Per-tile-open when amortization is not possible |
+| Mode | Per-open cost | Typical per-window cost | Memory per open source | Best for |
+|---|---|---|---|---|
+| **Byte-range stream** (`.open()`) | Scales with file size and layout | ~2 ms (COG, with amortization) | **RAM ≈ source file size** | Grouped reads on small-to-moderate files |
+| **FUSE** (`.as_local_file()`) | Flat ~7 ms at any size | ~124 ms (cold read baseline) | Low — reads only requested bytes lazily | Large files, per-tile-open, RAM-constrained workers |
 
 When the open cost is amortized across multiple windows from the same source, byte-range stream reads are **10–290× faster** than FUSE for windowed COG reads. Without amortization (one open per tile), FUSE's flat open cost wins: stream's per-open header parse grows with file size and becomes prohibitive at scale.
 
-:::warning Large source rasters
-The cost to *open* a large file via byte-range scales with its size and internal layout. For a Cloud-Optimized GeoTIFF it grows from milliseconds (small) to seconds (multi-GB). For a **large striped GeoTIFF**, parsing the strip-offset table over byte-range can reach **47–54 seconds per open** at 10 GB. Never open a large striped source once per tile via byte-range — either amortize (open once, read all windows) or use FUSE for per-tile access. **Prefer COGs** for windowed access at scale: COG open costs are far lower and windowed reads avoid unnecessary byte fetching.
+**Choosing stream vs FUSE — size-adaptive guidance:**
+
+The right choice depends on source file size and available executor RAM:
+
+- **Use stream** for small-to-moderate sources where executor RAM can hold the file. Opening a source via byte-range (`fref.open()` → `rasterio.open(stream)`) buffers the **entire source into executor RAM** — fast windowed reads, but **RAM ≈ source file size per concurrently open source**. A partition that holds 4 open handles to 500 MB COGs consumes ~2 GB of executor RAM.
+- **Use FUSE** for large source files or when executor RAM is constrained. FUSE reads only the bytes each window needs — low RAM and lazy — but cold random-window access costs ~124 ms per window.
+- **Never stream large striped GeoTIFFs.** Their strip-offset tables are parsed over byte-range at open time — tens of seconds AND full-file RAM per open. Use FUSE (or, better, COG) for any access pattern involving large striped files.
+
+:::warning Large source rasters: time AND memory
+The cost to *open* a large file via byte-range scales with its size and internal layout — and the file is **buffered into executor RAM**. For a Cloud-Optimized GeoTIFF: open cost grows from milliseconds (small) to seconds (multi-GB), and RAM ≈ file size. For a **large striped GeoTIFF**, parsing the strip-offset table over byte-range can reach **47–54 seconds per open at 10 GB, with 10 GB of executor RAM consumed**. Never open a large striped source via byte-range. Either amortize on a COG (open once, read all windows) or use FUSE for per-tile access. **Prefer COGs** for windowed access at scale.
 :::
 
 ### Per-partition open-amortization (the grouped executor)

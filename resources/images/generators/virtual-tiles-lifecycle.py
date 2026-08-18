@@ -51,6 +51,10 @@ ACCENT_WRITE  = "#7A5AA6"; TINT_WRITE  = "#ECE5F5"   # violet
 C_VIRTUAL     = "#0F8E8B"; TINT_VIRTUAL = "#E4F3F2"  # teal, hollow/dashed
 C_MATERIAL    = "#E04E2A"; TINT_MATERIAL = "#FCE9E2" # orange, filled
 
+# FILE / governed-storage accent — used only for MANAGED FILE callouts (Box 1 + Box 4).
+# Indigo-slate: distinct from Source blue, Write violet, teal, and orange.
+C_FILE_MANAGED = "#5060A8"
+
 # --- Canvas -------------------------------------------------------------------
 
 PAD       = 40
@@ -397,6 +401,11 @@ def render():
             parts.append(gfn(gx, cy, ACCENT_SOURCE, TINT_SOURCE, s=34))
         parts.append(text(gx + 34, cy - 3, name, size=12, weight=700, fill=C_INK))
         parts.append(text(gx + 34, cy + 13, sub, size=9.5, weight=500, fill=C_MUTED_2))
+        if i == len(left_fmts) - 1:
+            # "tables / DataFrames" row only: note the MANAGED FILE read option
+            _fc, _ = chip(gx + 34, cy + 26, "MANAGED FILE",
+                          fg="#FFFFFF", bg=C_FILE_MANAGED, h=18, size=9.5, pad_x=8)
+            parts.append(_fc)
     # COG offset to the right = the (optional) optimization target; dotted
     # convergence arrows from each FILE format show "prepare any file -> COG".
     # The "..." (other formats) and tables/DataFrames do NOT arrow to COG;
@@ -565,9 +574,9 @@ def render():
                       anchor="middle"))
     parts.append(text(gx2, lbl_y, "+ others", size=10, weight=700, fill=C_MUTED,
                       anchor="middle"))
-    # sink 2: databricks sql -> table
+    # sink 2: databricks sql -> table (height extended by 30px to accommodate MANAGED FILE chip)
     wy2 = wy + 152
-    parts.append(f'<rect x="{x_write + 22}" y="{wy2}" width="{col_w - 44}" height="128" rx="12" '
+    parts.append(f'<rect x="{x_write + 22}" y="{wy2}" width="{col_w - 44}" height="158" rx="12" '
                  f'fill="#FFFFFF" stroke="{ACCENT_WRITE}" stroke-width="1.5" filter="url(#card-shadow)"/>')
     parts.append(top_stripe(x_write + 22, wy2, col_w - 44, ACCENT_WRITE, r=12))
     parts.append(text(x_write + 38, wy2 + 30, "Databricks SQL → table", size=14.5,
@@ -575,6 +584,11 @@ def render():
     parts.append(glyph_table(x_write + col_w/2, wy2 + 80, ACCENT_WRITE, TINT_WRITE, s=48))
     parts.append(mono(x_write + col_w/2, wy2 + 116, "CREATE TABLE … AS SELECT", size=10.5,
                       weight=600, fill=C_MUTED, anchor="middle"))
+    # MANAGED FILE write option — symmetric to Box 1 callout; centered under the mono line
+    _mfw = int(len("MANAGED FILE") * 0.56 * 9.5) + 8 * 2
+    _fc2, _ = chip(x_write + col_w / 2 - _mfw / 2, wy2 + 130, "MANAGED FILE",
+                   fg="#FFFFFF", bg=C_FILE_MANAGED, h=18, size=9.5, pad_x=8)
+    parts.append(_fc2)
 
     # ---- Footer ----
     parts.append(text(PAD, canvas_h - 12,

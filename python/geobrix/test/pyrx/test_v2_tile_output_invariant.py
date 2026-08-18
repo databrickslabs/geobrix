@@ -57,7 +57,7 @@ def _tile_returning_registered_udfs():
     ids=[n for n, _ in _tile_returning_registered_udfs()],
 )
 def test_registered_tile_op_emits_v2_schema(name, udf):
-    """Each registered tile-returning UDF declares the 8-field v2 return type."""
+    """Each registered tile-returning UDF declares the 9-field v2 return type."""
     rt = getattr(udf, "returnType", None)
     assert rt is not None, f"{name}: UDF has no returnType (not an @f.udf?)"
     assert rt == V2_TILE_SCHEMA, (
@@ -77,6 +77,7 @@ def test_v2_schema_field_contract():
         "clip_crs",
         "crs",
         "metadata",
+        "path_mode",
     ]
 
 

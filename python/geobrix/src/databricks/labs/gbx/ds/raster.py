@@ -215,6 +215,7 @@ def _v2_tile_row(
         clip_crs,
         crs,
         metadata,
+        None,  # path_mode: materialized/unknown; effective_path_mode() infers downstream
     )
 
 

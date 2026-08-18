@@ -4085,7 +4085,7 @@ def rst_polygonize(
 class _RstSeparateBandsUDTF:
     """Streaming UDTF: yield one single-band tile struct per band."""
 
-    def eval(self, tile):
+    def eval(self, tile, file_ref=None):
         if _tile_is_empty(tile):
             yield _serde.build_error_tile("RST_SeparateBands: empty or unreadable tile")
             return
@@ -4095,7 +4095,7 @@ class _RstSeparateBandsUDTF:
         # NOTE: a mid-iteration failure yields already-emitted good rows + one error row
         # (not exactly 1); accepted because fully-corrupt open-failure is the primary case.
         try:
-            with ot._open(tile) as ds:
+            with ot._open(tile, file_ref=file_ref) as ds:
                 for i, b in enumerate(tiling.iter_separate_bands(ds)):
                     yield _serde.build_tile(b, "GTiff", i)
         except Exception as e:  # noqa: BLE001
@@ -4107,7 +4107,7 @@ class _RstSeparateBandsUDTF:
 class _RstRetileUDTF:
     """Streaming UDTF: yield one sub-tile struct per non-overlapping window."""
 
-    def eval(self, tile, tile_width, tile_height):
+    def eval(self, tile, tile_width, tile_height, file_ref=None):
         if _tile_is_empty(tile):
             yield _serde.build_error_tile("RST_ReTile: empty or unreadable tile")
             return
@@ -4116,7 +4116,7 @@ class _RstRetileUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            with ot._open(tile) as ds:
+            with ot._open(tile, file_ref=file_ref) as ds:
                 for i, b in enumerate(
                     tiling.iter_retile(ds, int(tile_width), int(tile_height))
                 ):
@@ -4130,7 +4130,7 @@ class _RstRetileUDTF:
 class _RstToOverlappingTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per overlapping window."""
 
-    def eval(self, tile, tile_width, tile_height, overlap):
+    def eval(self, tile, tile_width, tile_height, overlap, file_ref=None):
         if _tile_is_empty(tile):
             yield _serde.build_error_tile(
                 "RST_ToOverlappingTiles: empty or unreadable tile"
@@ -4141,7 +4141,7 @@ class _RstToOverlappingTilesUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            with ot._open(tile) as ds:
+            with ot._open(tile, file_ref=file_ref) as ds:
                 for i, b in enumerate(
                     tiling.iter_to_overlapping_tiles(
                         ds, int(tile_width), int(tile_height), int(overlap)
@@ -4157,7 +4157,7 @@ class _RstToOverlappingTilesUDTF:
 class _RstMakeTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per power-of-4 split tile."""
 
-    def eval(self, tile, size_in_mb):
+    def eval(self, tile, size_in_mb, file_ref=None):
         if _tile_is_empty(tile):
             yield _serde.build_error_tile("RST_MakeTiles: empty or unreadable tile")
             return
@@ -4166,23 +4166,12 @@ class _RstMakeTilesUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            # iter_make_tiles keys the power-of-4 split count on the encoded byte
-            # length, so obtain the materialized bytes (verbatim for a materialized
-            # tile; front-door materialize for a virtual tile) and open those.
-            vt = ot._to_virtual_tile(tile)
-            raster = (
-                ot.materialize_to_bytes(vt).raster
-                if vt.is_virtual()
-                else bytes(vt.raster)
-            )
-            with _serde.open_tile(raster) as ds:
-                # Pass the encoded byte length so the power-of-4 split count matches
-                # heavy BalancedSubdivision (which keys on GDAL's in-memory file size).
-                for i, b in enumerate(
-                    tiling.iter_make_tiles(
-                        ds, float(size_in_mb), size_bytes=len(raster)
-                    )
-                ):
+            # Open via FILE stream (file_ref) when available; fall back to FUSE/bytes
+            # when file_ref is None.  iter_make_tiles keys the power-of-4 split count
+            # on the encoded byte length; _encoded_size_bytes re-encodes for sizing,
+            # matching heavy BalancedSubdivision (which keys on GDAL's in-memory size).
+            with ot._open(tile, file_ref=file_ref) as ds:
+                for i, b in enumerate(tiling.iter_make_tiles(ds, float(size_in_mb))):
                     yield _serde.build_tile(b, "GTiff", i)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_MakeTiles: {e}")
@@ -4193,7 +4182,7 @@ class _RstMakeTilesUDTF:
 class _RstH3TessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping H3 cell."""
 
-    def eval(self, tile, resolution, mode=None):
+    def eval(self, tile, resolution, mode=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
             yield _serde.build_error_tile("RST_H3_Tessellate: empty or unreadable tile")
             return
@@ -4208,7 +4197,7 @@ class _RstH3TessellateUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            with ot._open(tile) as ds:
+            with ot._open(tile, file_ref=file_ref) as ds:
                 for cellid, raster in tessellate_core.iter_tessellate_h3(
                     ds, int(resolution), mode=effective_mode
                 ):
@@ -4220,7 +4209,7 @@ class _RstH3TessellateUDTF:
             return
 
 
-def rst_separatebands(tile: ColLike) -> None:
+def rst_separatebands(tile: ColLike):
     """Split a multi-band tile into single-band tiles (one row per band).
 
     Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
@@ -4230,13 +4219,13 @@ def rst_separatebands(tile: ColLike) -> None:
     Each output row is a tile struct carrying the same georeferencing and CRS
     as the input; one row per band.
     """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_separatebands(tile) t"
-    )
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _RstSeparateBandsUDTF(tc, file_ref_arg(tc))
 
 
-def rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike) -> None:
+def rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike):
     """Partition a tile into non-overlapping sub-tiles of the given pixel size.
 
     Edge tiles are narrower/shorter when the raster dimensions are not exact
@@ -4249,10 +4238,10 @@ def rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike) -> None
 
     Each output row is a tile struct; one row per sub-tile.
     """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_retile(tile, tile_width, tile_height) t"
-    )
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _RstRetileUDTF(tc, _col(tile_width), _col(tile_height), file_ref_arg(tc))
 
 
 def rst_tooverlappingtiles(
@@ -4260,7 +4249,7 @@ def rst_tooverlappingtiles(
     tile_width: ColLike,
     tile_height: ColLike,
     overlap: ColLike,
-) -> None:
+):
     """Partition a tile into overlapping sub-tiles.
 
     Each tile is tile_width x tile_height pixels. *overlap* is a **percentage**
@@ -4275,16 +4264,15 @@ def rst_tooverlappingtiles(
 
     Each output row is a tile struct; one row per sub-tile.
     """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, "
-        "LATERAL gbx_rst_tooverlappingtiles(tile, tile_width, tile_height, overlap) t"
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _RstToOverlappingTilesUDTF(
+        tc, _col(tile_width), _col(tile_height), _col(overlap), file_ref_arg(tc)
     )
 
 
-def rst_h3_tessellate(
-    tile: ColLike, resolution: ColLike, mode: ColLike = "covering"
-) -> None:
+def rst_h3_tessellate(tile: ColLike, resolution: ColLike, mode: ColLike = "covering"):
     """Tessellate a raster into H3 cells (mirrors ``gbx_rst_h3_tessellate``).
 
     For every H3 cell overlapping the raster's extent at *resolution*, the
@@ -4310,17 +4298,17 @@ def rst_h3_tessellate(
                     exactly one cell by its centroid (strict partition, no
                     overlap).
     """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_h3_tessellate(tile, resolution) t"
-    )
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _RstH3TessellateUDTF(tc, _col(resolution), _col(mode), file_ref_arg(tc))
 
 
 @udtf(returnType=V2_TILE_SCHEMA)
 class _RstQuadbinTessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping quadbin cell."""
 
-    def eval(self, tile, resolution, mode=None):
+    def eval(self, tile, resolution, mode=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
             yield _serde.build_error_tile(
                 "RST_Quadbin_Tessellate: empty or unreadable tile"
@@ -4337,7 +4325,7 @@ class _RstQuadbinTessellateUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            with ot._open(tile) as ds:
+            with ot._open(tile, file_ref=file_ref) as ds:
                 for cellid, raster in tessellate_core.iter_tessellate_quadbin(
                     ds, int(resolution), mode=effective_mode
                 ):
@@ -4361,7 +4349,7 @@ class _RstBngTessellateUDTF:
     NOT the metadata map.
     """
 
-    def eval(self, tile, resolution, mode=None):
+    def eval(self, tile, resolution, mode=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
             yield _serde.build_error_tile(
                 "RST_BNG_Tessellate: empty or unreadable tile"
@@ -4379,7 +4367,7 @@ class _RstBngTessellateUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            with ot._open(tile) as ds:
+            with ot._open(tile, file_ref=file_ref) as ds:
                 for cellid_str, raster in tessellate_core.iter_tessellate_bng(
                     ds, resolution, mode=effective_mode
                 ):
@@ -4392,9 +4380,7 @@ class _RstBngTessellateUDTF:
             return
 
 
-def rst_bng_tessellate(
-    tile: ColLike, resolution: ColLike, mode: ColLike = "covering"
-) -> None:
+def rst_bng_tessellate(tile: ColLike, resolution: ColLike, mode: ColLike = "covering"):
     """Tessellate a raster into BNG cells (mirrors ``gbx_rst_bng_tessellate``).
 
     The raster is reprojected to EPSG:27700 (British National Grid) first
@@ -4424,15 +4410,15 @@ def rst_bng_tessellate(
                     ``"centroid"`` — each valid pixel is assigned to exactly one
                     cell by its centroid (strict partition, no overlap).
     """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_bng_tessellate(tile, resolution) t"
-    )
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _RstBngTessellateUDTF(tc, _col(resolution), _col(mode), file_ref_arg(tc))
 
 
 def rst_quadbin_tessellate(
     tile: ColLike, resolution: ColLike, mode: ColLike = "covering"
-) -> None:
+):
     """Tessellate a raster into quadbin cells (mirrors ``gbx_rst_quadbin_tessellate``).
 
     For every quadbin cell overlapping the raster's extent at *resolution*, the
@@ -4457,13 +4443,13 @@ def rst_quadbin_tessellate(
                     ``"centroid"`` — each valid pixel is assigned to exactly one
                     cell by its centroid (strict partition, no overlap).
     """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_tessellate(tile, resolution) t"
-    )
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _RstQuadbinTessellateUDTF(tc, _col(resolution), _col(mode), file_ref_arg(tc))
 
 
-def rst_maketiles(tile: ColLike, size_in_mb: ColLike) -> None:
+def rst_maketiles(tile: ColLike, size_in_mb: ColLike):
     """Split a raster into tiles of approximately size_in_mb each (one row per tile).
 
     Quad-splits the raster into a power-of-4 grid (1, 4, 16, ... tiles) until
@@ -4477,10 +4463,10 @@ def rst_maketiles(tile: ColLike, size_in_mb: ColLike) -> None:
 
     Each output row is a tile struct; one row per sub-tile.
     """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_maketiles(tile, size_in_mb) t"
-    )
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    tc = _col(tile)
+    return _RstMakeTilesUDTF(tc, _col(size_in_mb), file_ref_arg(tc))
 
 
 # --- Tier 1f: terrain UDFs (slope, aspect, hillshade) ----------------------

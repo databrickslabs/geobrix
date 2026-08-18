@@ -91,3 +91,114 @@ def test_lru_weighs_by_real_size():
     lru.get("a")
     lru.get("b")  # 120 > 100 → oldest ("a") evicted
     assert closed == [{"k": "a"}]
+
+
+# ---------------------------------------------------------------------------
+# Task 4: staged-temp cleanup on eviction (temp-leak fix)
+# ---------------------------------------------------------------------------
+
+
+def _make_tiny_gtiff_bytes():
+    """Return bytes of a minimal valid GeoTIFF (4×3 float32, no Spark needed)."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.5, 0.5),
+        nodata=-9999.0,
+    )
+    data = np.arange(12, dtype="float32").reshape(3, 4)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(data, 1)
+        return mf.read()
+
+
+def test_make_opener_closer_deletes_staged_temp(tmp_path, monkeypatch):
+    """Closer removes the staged temp file on eviction (temp-leak fix).
+
+    Uses the real _make_opener closer+opener seam:
+    - monkeypatch _stage_local_if_needed to return a known temp with is_temp=True
+    - call opener() so it registers the temp in staged_temps (the private dict)
+    - call closer() on the returned dataset
+    - assert the temp file no longer exists
+    """
+    from databricks.labs.gbx.pyrx.core import preparer
+    from databricks.labs.gbx.pyrx.grouped_exec import _make_opener
+
+    tif_bytes = _make_tiny_gtiff_bytes()
+
+    # Create the "staged copy" that _stage_local_if_needed would produce.
+    staged = tmp_path / "staged_copy.tif"
+    staged.write_bytes(tif_bytes)
+
+    # Patch staging to return our known temp with is_temp=True.
+    monkeypatch.setattr(
+        preparer, "_stage_local_if_needed", lambda p: (str(staged), True)
+    )
+
+    fr_holder, opener, closer, weigher = _make_opener()
+    # fr_holder[0] = None → opener uses the staging fallback path.
+
+    ds = opener("any_uri")
+    assert staged.exists(), "staged temp should exist before closer is called"
+
+    closer(ds)
+    assert not staged.exists(), (
+        "closer must delete the staged temp file; "
+        "temp-leak fix regression: os.remove not called in closer"
+    )
+
+
+def test_make_opener_lru_eviction_deletes_staged_temp(tmp_path, monkeypatch):
+    """LRU eviction (max_count=1) triggers closer which deletes the staged temp.
+
+    Opens two entries sequentially; the first is evicted when the second is added.
+    Both entries use staged temps; after eviction the first temp must be gone,
+    the second must still exist (it is the current/live entry).
+    """
+    from databricks.labs.gbx.pyrx.core import preparer
+    from databricks.labs.gbx.pyrx.grouped_exec import OpenResourceLRU, _make_opener
+
+    tif_bytes = _make_tiny_gtiff_bytes()
+
+    # Two separate staged copies — one per source uri.
+    staged_a = tmp_path / "staged_a.tif"
+    staged_b = tmp_path / "staged_b.tif"
+    staged_a.write_bytes(tif_bytes)
+    staged_b.write_bytes(tif_bytes)
+
+    staged_map = {"uri_a": str(staged_a), "uri_b": str(staged_b)}
+
+    def fake_stage(p):
+        return staged_map[p], True
+
+    monkeypatch.setattr(preparer, "_stage_local_if_needed", fake_stage)
+
+    fr_holder, opener, closer, weigher = _make_opener()
+    lru = OpenResourceLRU(
+        max_bytes=10**12,
+        max_count=1,
+        opener=opener,
+        closer=closer,
+        weigher=weigher,
+    )
+
+    lru.get("uri_a")  # opens staged_a; no eviction yet (only 1 entry)
+    lru.get(
+        "uri_b"
+    )  # opens staged_b; evicts uri_a (max_count=1), closer deletes staged_a
+
+    assert (
+        not staged_a.exists()
+    ), "evicted entry's staged temp must be deleted by the closer"
+    assert (
+        staged_b.exists()
+    ), "current (non-evicted) entry's staged temp must still exist"

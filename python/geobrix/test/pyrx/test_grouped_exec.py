@@ -3,6 +3,10 @@
 Local Spark (local[2]) always returns file_supported()=False, so all tests
 exercise the fallback opener path over materialized tiles.  The FILE-stream
 fast path is validated on-cluster in Task 9.
+
+T9b fix: the worker no longer calls file_supported() to decide the FILE path;
+it keys off _file_ref column presence (has_fr_col) instead, avoiding the
+getActiveSession()==None pitfall on Spark-Connect worker threads.
 """
 
 import numpy as np
@@ -79,6 +83,39 @@ def test_grouped_map_custom_tile_col(spark, gtiff_bytes):
     )
     nbs = [r["nb"] for r in out.collect()]
     assert all(nb == 1 for nb in nbs)
+
+
+# ---------------------------------------------------------------------------
+# T9b: _make_opener no longer calls worker-side file_supported()
+# ---------------------------------------------------------------------------
+
+
+def test_make_opener_returns_four_items_not_five():
+    """_make_opener must return (fr_holder, opener, closer, weigher) — 4 items.
+
+    Under the OLD implementation _make_opener called file_supported() on the
+    worker and returned a 5-tuple (file_ok, fr_holder, opener, closer, weigher).
+    The T9b fix removes the worker-side file_supported() call and drops file_ok
+    from the return: the FILE capability signal is now the _file_ref column's
+    presence (has_fr_col), which the driver set via an explicit df.sparkSession.
+
+    This structural assertion FAILS under the old 5-tuple contract and PASSES
+    under the new 4-tuple contract, confirming the getActiveSession() dependency
+    has been removed from the worker path.
+    """
+    from databricks.labs.gbx.pyrx.grouped_exec import _make_opener
+
+    result = _make_opener()
+    assert len(result) == 4, (
+        f"_make_opener must return 4 items (fr_holder, opener, closer, weigher); "
+        f"got {len(result)} — worker-side file_supported() may still be present "
+        f"(T9b regression)"
+    )
+    fr_holder, opener, closer, weigher = result
+    assert isinstance(fr_holder, list) and len(fr_holder) == 1
+    assert callable(opener)
+    assert callable(closer)
+    assert callable(weigher)
 
 
 # ---------------------------------------------------------------------------

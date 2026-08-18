@@ -118,10 +118,19 @@ class OpenResourceLRU:
 def _make_opener():
     """Capability-adaptive opener factory.
 
-    Returns ``(file_ok, fr_holder, opener, closer, weigher)``.
+    Returns ``(fr_holder, opener, closer, weigher)``.
 
     Runs on the worker; all imports are worker-local (GDAL env configured
     before this is called).
+
+    FILE capability is signaled by the presence of the ``_file_ref`` column
+    (``has_fr_col`` in the caller), NOT by a worker-side ``file_supported()``
+    call.  The driver gated column addition on ``file_ok_driver`` using an
+    explicit ``df.sparkSession``; a worker-side ``file_supported()`` would
+    rely on ``getActiveSession()``, which returns ``None`` on Spark-Connect
+    worker threads (e.g. Serverless on DBR 19.5), silently disabling the FILE
+    fast path even when the driver correctly determined FILE is supported.
+    The ``_file_ref`` column's presence IS the worker capability signal.
 
     The LRU is keyed by ``uri`` (the source-path string) — hashable, and the
     identity that amortises opens.
@@ -132,50 +141,29 @@ def _make_opener():
     ``fr.open()`` (a seekable stream — the FILE fast path).  On a cache hit the
     opener is never called and ``fr_holder[0]`` is irrelevant.
 
-    FILE-capable: opener calls ``fr.open()`` → ``rasterio.open(stream)``; on any
-    stream-open failure degrades to local staging so the LRU still gets an entry.
-
-    Fallback (non-FILE / local Spark): stages the source file locally and returns
-    a plain ``rasterio.open`` dataset.  Used only when the caller actually invokes
-    ``lru.get(uri)`` for a path-keyed virtual tile; the materialized-tile branch
-    bypasses the LRU entirely and never calls this.
+    opener calls ``fr.open()`` → ``rasterio.open(stream)``; on any stream-open
+    failure degrades to local staging so the LRU still gets an entry.
     """
-    from . import _file_ref as _fr_mod
-
-    file_ok = _fr_mod.file_supported()
-
     # fr_holder: mutable slot so the partition loop can inject the current row's
     # FileRef before lru.get(uri).  A list is used because closures can't rebind
     # a bare name in the outer scope.
     fr_holder = [None]
 
-    if file_ok:
+    def opener(uri: str):
+        import rasterio
 
-        def opener(uri: str):
-            import rasterio
+        fr = fr_holder[0]
+        if fr is not None:
+            try:
+                stream = fr.open()
+                return rasterio.open(stream)
+            except Exception:
+                pass  # fall through to staging fallback
+        # Staging fallback: fr unavailable or stream-open failed.
+        from .core.preparer import _stage_local_if_needed
 
-            fr = fr_holder[0]
-            if fr is not None:
-                try:
-                    stream = fr.open()
-                    return rasterio.open(stream)
-                except Exception:
-                    pass  # fall through to staging fallback
-            # Staging fallback: fr unavailable or stream-open failed.
-            from .core.preparer import _stage_local_if_needed
-
-            local_path, _ = _stage_local_if_needed(uri)
-            return rasterio.open(local_path)
-
-    else:
-
-        def opener(uri: str):
-            import rasterio
-
-            from .core.preparer import _stage_local_if_needed
-
-            local_path, _ = _stage_local_if_needed(uri)
-            return rasterio.open(local_path)
+        local_path, _ = _stage_local_if_needed(uri)
+        return rasterio.open(local_path)
 
     def closer(src) -> None:
         try:
@@ -188,7 +176,7 @@ def _make_opener():
         # the count guard (max_count=64) governs the LRU eviction policy.
         return STREAM_NOMINAL_BYTES
 
-    return file_ok, fr_holder, opener, closer, weigher
+    return fr_holder, opener, closer, weigher
 
 
 def grouped_tile_map(
@@ -258,11 +246,17 @@ def grouped_tile_map(
         from . import _env
 
         _env.configure_gdal_env()
-        file_ok, fr_holder, opener, closer, weigher = _make_opener()
+        fr_holder, opener, closer, weigher = _make_opener()
         lru = OpenResourceLRU(opener=opener, closer=closer, weigher=weigher)
         try:
             for pdf in pdf_iter:
                 results = []
+                # has_fr_col is the worker-side FILE capability signal: the driver
+                # added _file_ref only when file_ok_driver was True (checked via an
+                # explicit df.sparkSession).  We key off column presence rather than
+                # a worker-side file_supported() call because getActiveSession()
+                # returns None on Spark-Connect worker threads (e.g. Serverless
+                # DBR 19.5), which would silently defeat the FILE fast path.
                 has_fr_col = "_file_ref" in pdf.columns
                 for _, row in pdf.iterrows():
                     tile = row[tile_col]
@@ -273,7 +267,7 @@ def grouped_tile_map(
                         uri = None
 
                     result = _MISS
-                    if uri and file_ok and has_fr_col:
+                    if uri and has_fr_col:
                         fr = row["_file_ref"]
                         if fr is not None:
                             # FILE fast path: inject FileRef so the LRU opener can
@@ -326,7 +320,8 @@ def grouped_tile_map(
                     if result is _MISS:
                         # Fallback path: covers
                         #   (a) materialized tiles (raster inline, path None)
-                        #   (b) virtual tiles when FILE is not supported
+                        #   (b) virtual tiles when driver did not add _file_ref
+                        #       (FILE not supported on this cluster)
                         #   (c) FILE open/stream/view failure (graceful degrade)
                         # For windowless virtual tiles, _open raises ValueError;
                         # open_header returns the full-source footprint (consistent

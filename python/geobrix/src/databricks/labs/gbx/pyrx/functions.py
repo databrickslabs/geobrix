@@ -5259,6 +5259,53 @@ def rst_memsize_grouped(df, *, tile_col: str = "tile", out_col: str = "memsize")
     )
 
 
+def rst_clip_grouped(
+    df,
+    geom_wkb,
+    all_touched: bool = False,
+    clip_crs=None,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_clip via the grouped executor (FILE pixel fast path).
+
+    Clips every tile in *df* to *geom_wkb* (WKB, EWKB, WKT, or EWKT) by routing
+    pixel reads through ``grouped_tile_map`` with ``view="pixels"``.  Source opens
+    are amortized per partition: each unique FILE source is opened once and reused
+    for all windows that share it, making this the preferred form for virtual/FILE
+    tiles where the open cost dominates.
+
+    *geom_wkb* is a driver-side constant (one geometry for all tiles in the group),
+    not a per-row column.  Per-row geometry is handled by the scalar ``rst_clip``.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct); null when the clip geometry does not overlap the tile.
+    """
+    from .grouped_exec import grouped_tile_map
+
+    # Capture raw bytes in closure; parse inside _core so shapely objects are
+    # never pickled across the Spark worker boundary.
+    def _core(ds, cellid):
+        from databricks.labs.gbx._geom import parse_geom
+
+        geom = parse_geom(geom_wkb)
+        if geom is None:
+            return None
+        new_bytes = edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
 def rst_rotation(tile: ColLike) -> Column:
     """Rotation angle = atan(skewY / scaleX) in radians; DOUBLE."""
     return _u_rotation(_col(tile))

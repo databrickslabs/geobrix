@@ -444,3 +444,79 @@ The quadbin functions are **sub-millisecond cell math**, so the lightweight spar
 The lightweight BNG tier is a **pure-Python codec port of `BNG.scala`** plus shapely for geometry. It carries **exact cell-set parity** with the heavyweight tier — the cross-tier parity suite asserts identical cell IDs for `eastnorthasbng`/`pointascell`/`kring`/`polyfill`/`tessellate` and identical chip geometry for the aggregates. The performance shape mirrors quadbin: STRING cell-id math is sub-millisecond, so the spark-path timing is dominated by the per-row JVM↔Python boundary rather than the work; the numpy-vectorized scalar `pandas_udf`s amortize the Arrow transfer, while the WKB-geometry ops (`aswkb`, `tessellate`, the chip aggregates) additionally carry the geometry-bytes serialization cost across that boundary. The lightweight tier's decisive advantage is again **Serverless/ARM reach and no-JVM/JAR install**. **All 23 `gbx_bng_*` functions were benchmarked on a cluster** (spark-path, 1,000 tiles/iteration, both tiers) with **exact cell-set / decoded-geometry parity across all 23**: the lightweight tier runs within **~±20% of heavy (0.82×–1.18×)**, all sub-millisecond per tile — effectively at parity, within the run-to-run noise band at this scale. See [Benchmarking — Grid](./benchmarking) for the full per-function table.
 
 For output consistency: the two tiers agree within tolerance on the large majority of functions. The known divergences (`rst_convolve`, `rst_resample`, `rst_derivedband`, `rst_contour`) are at NoData/edge boundaries; interior pixel values agree. See [Benchmarking — Results](./benchmarking#results) for the per-function consistency labels.
+
+---
+
+## Virtual tile read performance {#virtual-tile-read-performance}
+
+Virtual tiles are read on demand. Reading cost is dominated by **opening** the source raster, not by the pixel read itself. A pipeline that reads many tiles from the same source raster should open that source once and amortize the cost across all its windows — not open it once per tile.
+
+### Two access modes: stream and FUSE
+
+GeoBrix's virtual tile reader supports two access modes:
+
+| Mode | Per-open cost | Per-window cost (amortized) | Best for |
+|---|---|---|---|
+| **Byte-range stream** (`.open()`) | Scales with file size and layout | ~2 ms (COG) | Grouped reads: one source, many windows |
+| **FUSE** (`.as_local_file()`) | Flat ~7 ms at any size | ~124 ms (cold random window) | Per-tile-open when amortization is not possible |
+
+When the open cost is amortized across multiple windows from the same source, byte-range stream reads are **10–290× faster** than FUSE for windowed COG reads. Without amortization (one open per tile), FUSE's flat open cost wins: stream's per-open header parse grows with file size and becomes prohibitive at scale.
+
+:::warning Large source rasters
+The cost to *open* a large file via byte-range scales with its size and internal layout. For a Cloud-Optimized GeoTIFF it grows from milliseconds (small) to seconds (multi-GB). For a **large striped GeoTIFF**, parsing the strip-offset table over byte-range can reach **47–54 seconds per open** at 10 GB. Never open a large striped source once per tile via byte-range — either amortize (open once, read all windows) or use FUSE for per-tile access. **Prefer COGs** for windowed access at scale: COG open costs are far lower and windowed reads avoid unnecessary byte fetching.
+:::
+
+### Per-partition open-amortization (the grouped executor)
+
+GeoBrix's grouped executor holds a small per-partition LRU cache of open stream handles, keyed by source path. The first access for a source in a partition opens it (cache miss); all subsequent windows from that source in the same partition are cache hits (~2 ms each). When tiles are sorted by source path within each partition, even a partition holding several sources fully amortizes at LRU size ~2.
+
+Measured on a 647 MB COG corpus (15 sources × 12 windows = 180 tiles):
+
+| Write layout | Read approach | Opens | Total time |
+|---|---|---|---|
+| Scattered (no alignment) | Dumb (as-written) | 135 | 173 s |
+| `ORDER BY path` | Dumb (as-written) | **15** | 37 s |
+| `ORDER BY path` | Smart (re-partition) | **15** | **11 s** |
+
+To enable amortization after a join or reshape that has scattered tiles across partitions, re-align before processing:
+
+```python
+df = df.repartition(n, "tile.path").sortWithinPartitions("tile.path")
+```
+
+Size `n` for parallelism, not for file count:
+- **Classic clusters (fixed workers):** `n ≈ 3–5× total worker cores` — e.g. 20 workers × 4 cores → `n ≈ 100`
+- **Serverless (elastic workers):** `n` is the parallelism signal; smaller values pull in fewer workers, larger pull in more
+
+Do not set `n = number_of_files` for large corpora — over-partitioning produces tiny tasks and scheduling overhead.
+
+### MANAGED vs EXTERNAL: identical read performance
+
+A tile column declared `FILE MANAGED` and one declared `FILE EXTERNAL` perform identically for reads. Both resolve to the same underlying paths; the open-cost and windowed-read cost are indistinguishable. The choice between MANAGED and EXTERNAL is about **governance and lifecycle**, not read speed. MANAGED tiles carry governed lifecycle (tied to the table) and `content_type` detection; EXTERNAL tiles reference files managed independently in a Volume. Choose based on governance requirements, not on any expected read-latency difference.
+
+### Write-side layout for efficient reads
+
+The GeoBrix writer optionally lays tiles out source-aligned at write time, so the reader can amortize for free on the first read — no re-partition step required after a normal read-write round trip.
+
+| Write strategy | Effect on reads |
+|---|---|
+| `INSERT … ORDER BY tile.path` | Immediate physical grouping — dumb reads amortize without any re-partition |
+| `CLUSTER BY (tile.path)` on the table + periodic `OPTIMIZE` | Durable layout after Delta applies liquid clustering |
+| `CLUSTER BY (tile.path)` on the initial insert only (no `OPTIMIZE`) | May not be grouped yet — combine with `ORDER BY` in the `INSERT` for insert-time grouping |
+| No alignment | Scattered — requires explicit `repartition + sortWithinPartitions` on every read |
+
+:::caution Avoid `partitionBy("tile.path")`
+`tile.path` is high-cardinality — one value per source file. Using it as a Delta partition column creates thousands of partition directories, causing metadata explosion and slow query planning. Use `ORDER BY` and `CLUSTER BY` instead.
+:::
+
+### FILE type and `path_mode`
+
+When FILE is available (Databricks Runtime 19 dedicated clusters; coming soon to Serverless), the tile struct's [`path_mode` field](./tile-structure) records how the virtual tile was stored:
+
+| `path_mode` | Meaning |
+|---|---|
+| `null` | Materialized tile (raster bytes present), or a plain FUSE-path virtual tile |
+| `"external"` | FILE EXTERNAL virtual tile — opened via byte-range stream |
+| `"managed"` | FILE MANAGED virtual tile — opened via byte-range stream; lifecycle governed by the table |
+
+On runtimes without FILE support (Serverless today, DBR 17/18), `path_mode` is always `null` and virtual tiles use the FUSE path — correct and unchanged.

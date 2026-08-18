@@ -29,7 +29,8 @@ struct<
   clip_polygon: binary,                          -- Optional clip geometry (WKB)
   clip_crs: string,                              -- CRS for clip_polygon
   crs: string,                                   -- Working/target CRS
-  metadata: map<string,string>                   -- Driver, extension, size, etc.
+  metadata: map<string,string>,                  -- Driver, extension, size, etc.
+  path_mode: string                              -- Storage mode: null, 'external', or 'managed'
 >
 ```
 
@@ -47,6 +48,7 @@ A tile is **materialized** when `raster` carries the encoded bytes (the common c
 | `clip_crs` | `string` | Yes | CRS for `clip_polygon` (e.g. `"EPSG:4326"`). |
 | `crs` | `string` | Yes | Working/target CRS. |
 | `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. |
+| `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
 
 :::note Reference vs. instruction
 On a **materialized** tile, `window` / `clip_polygon` / `clip_crs` / `crs` are **provenance** — a record of what was already applied to produce the bytes. On a **virtual** tile they are **instructions** — pending operations applied when the tile is read. See [Virtual Tiles](./virtual-tiles#reference-vs-instruction).

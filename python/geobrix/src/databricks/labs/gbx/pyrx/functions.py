@@ -5306,6 +5306,446 @@ def rst_clip_grouped(
     )
 
 
+def rst_transform_grouped(
+    df,
+    target_srid,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_transform via the grouped executor (FILE pixel fast path).
+
+    Reprojects every tile in *df* to *target_srid* (int EPSG code) by routing
+    pixel reads through ``grouped_tile_map`` with ``view="pixels"``.  Source opens
+    are amortized per partition, making this the preferred form for virtual/FILE
+    tiles where the open cost dominates.
+
+    *target_srid* is a driver-side constant (one EPSG code for all tiles).
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    def _core(ds, cellid):
+        new_bytes = warp.reproject_to_srid(ds, int(target_srid))
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_to_webmercator_grouped(
+    df,
+    resampling: str = "bilinear",
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_to_webmercator via the grouped executor (FILE pixel fast path).
+
+    Reprojects every tile in *df* to EPSG:3857 (web mercator) with the given
+    *resampling* algorithm by routing pixel reads through ``grouped_tile_map``
+    with ``view="pixels"``.  Source opens are amortized per partition.
+
+    *resampling* is a driver-side constant (default ``"bilinear"``).
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _resampling = str(resampling)
+
+    def _core(ds, cellid):
+        new_bytes = warp.reproject_to_srid(ds, 3857, resampling=_resampling)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_transformcrs_grouped(
+    df,
+    crs_value,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_transformcrs via the grouped executor (FILE pixel fast path).
+
+    Reprojects every tile in *df* to *crs_value* (CRS string such as ``"EPSG:3857"``
+    or a WKT string) by routing pixel reads through ``grouped_tile_map`` with
+    ``view="pixels"``.  Source opens are amortized per partition.
+
+    *crs_value* is a driver-side constant (one CRS for all tiles).
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _crs = str(crs_value)
+
+    def _core(ds, cellid):
+        new_bytes = warp.reproject_to_crs(ds, _crs)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_resample_grouped(
+    df,
+    factor,
+    algorithm: str = "bilinear",
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_resample via the grouped executor (FILE pixel fast path).
+
+    Resamples every tile in *df* by a multiplicative *factor* (>1 upsamples,
+    0<factor<1 downsamples) using the given *algorithm*.  Pixel reads are routed
+    through ``grouped_tile_map`` with ``view="pixels"``; source opens are amortized
+    per partition.
+
+    *factor* and *algorithm* are driver-side constants.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _alg = str(algorithm)
+
+    def _core(ds, cellid):
+        new_bytes = resample.resample_by_factor(ds, float(factor), _alg)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_resample_to_size_grouped(
+    df,
+    width_px,
+    height_px,
+    algorithm: str = "bilinear",
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_resample_to_size via the grouped executor (FILE pixel fast path).
+
+    Resamples every tile in *df* to exactly *width_px* × *height_px* pixels using
+    *algorithm*.  Pixel reads are routed through ``grouped_tile_map`` with
+    ``view="pixels"``; source opens are amortized per partition.
+
+    *width_px*, *height_px*, and *algorithm* are driver-side constants.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _alg = str(algorithm)
+
+    def _core(ds, cellid):
+        new_bytes = resample.resample_to_size(ds, int(width_px), int(height_px), _alg)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_resample_to_res_grouped(
+    df,
+    x_res,
+    y_res,
+    algorithm: str = "bilinear",
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_resample_to_res via the grouped executor (FILE pixel fast path).
+
+    Resamples every tile in *df* to the target pixel resolution (*x_res*, *y_res*)
+    using *algorithm*.  Pixel reads are routed through ``grouped_tile_map`` with
+    ``view="pixels"``; source opens are amortized per partition.
+
+    *x_res*, *y_res*, and *algorithm* are driver-side constants.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _alg = str(algorithm)
+
+    def _core(ds, cellid):
+        new_bytes = resample.resample_to_res(ds, float(x_res), float(y_res), _alg)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_threshold_grouped(
+    df,
+    op: str = ">",
+    value: float = 0.0,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_threshold via the grouped executor (FILE pixel fast path).
+
+    Applies a pixel threshold to every tile in *df*, setting pixels that do not
+    satisfy ``pixel <op> value`` to NoData.  Pixel reads are routed through
+    ``grouped_tile_map`` with ``view="pixels"``; source opens are amortized per
+    partition.
+
+    *op* (one of ``">"``, ``"<"``, ``">="`` ``"<="`` ``"=="`` ``"!="``) and
+    *value* are driver-side constants.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _op = str(op)
+    _val = float(value)
+
+    def _core(ds, cellid):
+        new_bytes = edit.threshold(ds, _op, _val)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_updatetype_grouped(
+    df,
+    new_type,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_updatetype via the grouped executor (FILE pixel fast path).
+
+    Casts all raster bands in every tile to *new_type* (GDAL data type string such
+    as ``"Float64"`` or ``"Int16"``).  Pixel reads are routed through
+    ``grouped_tile_map`` with ``view="pixels"``; source opens are amortized per
+    partition.
+
+    *new_type* is a driver-side constant.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _new_type = str(new_type)
+
+    def _core(ds, cellid):
+        new_bytes = edit.update_type(ds, _new_type)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_slope_grouped(
+    df,
+    unit: str = "degrees",
+    xscale=None,
+    yscale=None,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_slope via the grouped executor (FILE pixel fast path).
+
+    Computes terrain slope (Horn's 3x3 method) for every tile in *df*.  Pixel
+    reads are routed through ``grouped_tile_map`` with ``view="pixels"``; source
+    opens are amortized per partition.
+
+    *unit* (``"degrees"`` or ``"percent"``), *xscale*, and *yscale* are
+    driver-side constants.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _unit = str(unit)
+    _xs = None if xscale is None else float(xscale)
+    _ys = None if yscale is None else float(yscale)
+
+    def _core(ds, cellid):
+        new_bytes = terrain.slope(ds, unit=_unit, xscale=_xs, yscale=_ys)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_aspect_grouped(
+    df,
+    trigonometric=False,
+    zero_for_flat=False,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_aspect via the grouped executor (FILE pixel fast path).
+
+    Computes terrain aspect (Horn's 3x3 method) for every tile in *df*.  Pixel
+    reads are routed through ``grouped_tile_map`` with ``view="pixels"``; source
+    opens are amortized per partition.
+
+    *trigonometric* and *zero_for_flat* are driver-side constants.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _trig = bool(trigonometric)
+    _zff = bool(zero_for_flat)
+
+    def _core(ds, cellid):
+        new_bytes = terrain.aspect(ds, trigonometric=_trig, zero_for_flat=_zff)
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
+def rst_hillshade_grouped(
+    df,
+    azimuth: float = 315.0,
+    altitude: float = 45.0,
+    z_factor: float = 1.0,
+    xscale=None,
+    yscale=None,
+    *,
+    tile_col: str = "tile",
+    out_col: str = "tile",
+):
+    """Partition-scoped rst_hillshade via the grouped executor (FILE pixel fast path).
+
+    Computes hillshade (Horn's 3x3 method) for every tile in *df*.  Pixel reads
+    are routed through ``grouped_tile_map`` with ``view="pixels"``; source opens
+    are amortized per partition.
+
+    *azimuth*, *altitude*, *z_factor*, *xscale*, and *yscale* are driver-side
+    constants.
+
+    Returns a new DataFrame with the same columns as *df* plus *out_col* (a
+    V2_TILE_SCHEMA struct).
+    """
+    from .grouped_exec import grouped_tile_map
+
+    _az = float(azimuth)
+    _alt = float(altitude)
+    _zf = float(z_factor)
+    _xs = None if xscale is None else float(xscale)
+    _ys = None if yscale is None else float(yscale)
+
+    def _core(ds, cellid):
+        new_bytes = terrain.hillshade(
+            ds,
+            azimuth=_az,
+            altitude=_alt,
+            z_factor=_zf,
+            xscale=_xs,
+            yscale=_ys,
+        )
+        return (
+            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
+        )
+
+    return grouped_tile_map(
+        df,
+        _core,
+        return_field=StructField(out_col, V2_TILE_SCHEMA),
+        tile_col=tile_col,
+        view="pixels",
+    )
+
+
 def rst_rotation(tile: ColLike) -> Column:
     """Rotation angle = atan(skewY / scaleX) in radians; DOUBLE."""
     return _u_rotation(_col(tile))

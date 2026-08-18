@@ -71,3 +71,23 @@ def test_close_all_closes_remaining():
     lru.get("y")
     lru.close_all()
     assert sorted(closed) == ["x", "y"] and lru.bytes == 0
+
+
+# ---------------------------------------------------------------------------
+# Task 4: real-size weigher (not STREAM_NOMINAL_BYTES)
+# ---------------------------------------------------------------------------
+
+
+def test_lru_weighs_by_real_size():
+    """LRU uses the weigher's return value (60 bytes each); oldest evicted when over budget."""
+    closed = []
+    lru = OpenResourceLRU(
+        max_bytes=100,
+        max_count=8,
+        opener=lambda k: {"k": k},
+        closer=lambda s: closed.append(s),
+        weigher=lambda s, k: 60,  # 60 bytes each
+    )
+    lru.get("a")
+    lru.get("b")  # 120 > 100 → oldest ("a") evicted
+    assert closed == [{"k": "a"}]

@@ -14,7 +14,10 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import StructField, StructType
 
 GBX_LRU_MAX_BYTES = int(os.environ.get("GBX_LRU_MAX_BYTES", 4 * 1024**3))  # 4 GiB
-STREAM_NOMINAL_BYTES = 16 * 1024**2  # resident estimate for an open stream/dataset
+GBX_STREAM_MAX_BYTES = int(
+    os.environ.get("GBX_STREAM_MAX_BYTES", 256 * 1024**2)
+)  # 256 MiB
+STREAM_NOMINAL_BYTES = 16 * 1024**2  # fallback nominal when size is unknown
 
 # Sentinel for "core_fn has not been called yet for this tile".
 # Distinct from None so a core_fn that legitimately returns None
@@ -68,7 +71,7 @@ class OpenResourceLRU:
         self,
         *,
         max_bytes: int = GBX_LRU_MAX_BYTES,
-        max_count: int = 64,
+        max_count: int = 4,
         opener: Callable[[str], Any],
         closer: Callable[[Any], None],
         weigher: Callable[[Any, str], int],
@@ -115,6 +118,26 @@ class OpenResourceLRU:
             self._closer(res)
 
 
+def _open_via_file_ref(fr, rasterio):
+    """Open a rasterio DatasetReader from *fr* using the size-adaptive strategy.
+
+    - Small file (≤ GBX_STREAM_MAX_BYTES) AND tiled layout: stream into /vsimem via
+      ``fr.open()`` — efficient for tiled/COG sources that support random window reads.
+    - Large file OR striped layout: lazy FUSE open via ``fr.as_local_file()`` — blocks
+      are fetched on demand without loading the whole file into RAM.
+
+    Raises on any failure; caller must handle and fall back to staging.
+    """
+    if fr.size <= GBX_STREAM_MAX_BYTES:
+        stream = fr.open()
+        ds = rasterio.open(stream)
+        if ds.profile.get("tiled", False):
+            return ds  # tiled/COG: seekable stream is efficient
+        ds.close()  # striped: fall through to FUSE
+    local_path = fr.as_local_file()
+    return rasterio.open(local_path)
+
+
 def _make_opener():
     """Capability-adaptive opener factory.
 
@@ -137,17 +160,25 @@ def _make_opener():
 
     ``fr_holder`` is a one-element list ``[None]``.  Before each ``lru.get(uri)``
     call the partition loop sets ``fr_holder[0] = <current FileRef>``.  On an LRU
-    cache miss the opener reads ``fr_holder[0]`` to stream-open the source via
-    ``fr.open()`` (a seekable stream — the FILE fast path).  On a cache hit the
-    opener is never called and ``fr_holder[0]`` is irrelevant.
+    cache miss the opener reads ``fr_holder[0]`` to decide how to open the source:
 
-    opener calls ``fr.open()`` → ``rasterio.open(stream)``; on any stream-open
-    failure degrades to local staging so the LRU still gets an entry.
+    - ``fr.size <= GBX_STREAM_MAX_BYTES`` AND tiled (not striped): ``fr.open()``
+      stream → ``rasterio.open(stream)``.  Tiled sources support efficient random
+      window reads via the seekable stream; loading into /vsimem is bounded by the
+      size cap.
+    - Large file (``fr.size > GBX_STREAM_MAX_BYTES``) OR striped layout: use
+      ``fr.as_local_file()`` (lazy FUSE path) so rasterio fetches blocks on demand
+      without loading the entire file into RAM.
+
+    Staged temps (fallback when FileRef is unavailable) are tracked and deleted
+    by the closer on eviction, preventing temp-file leaks.
     """
     # fr_holder: mutable slot so the partition loop can inject the current row's
     # FileRef before lru.get(uri).  A list is used because closures can't rebind
     # a bare name in the outer scope.
     fr_holder = [None]
+    # Tracks staged temp paths: id(src) -> temp_path.  Used by closer to clean up.
+    staged_temps: "dict[int, str]" = {}
 
     def opener(uri: str):
         import rasterio
@@ -155,25 +186,47 @@ def _make_opener():
         fr = fr_holder[0]
         if fr is not None:
             try:
-                stream = fr.open()
-                return rasterio.open(stream)
+                return _open_via_file_ref(fr, rasterio)
             except Exception:
-                pass  # fall through to staging fallback
-        # Staging fallback: fr unavailable or stream-open failed.
+                pass  # all FILE paths failed → staging fallback
+        # Staging fallback: fr unavailable or all FILE paths raised.
         from .core.preparer import _stage_local_if_needed
 
-        local_path, _ = _stage_local_if_needed(uri)
-        return rasterio.open(local_path)
+        local_path, is_temp = _stage_local_if_needed(uri)
+        ds = rasterio.open(local_path)
+        if is_temp:
+            staged_temps[id(ds)] = local_path
+        return ds
 
     def closer(src) -> None:
+        tmp = staged_temps.pop(id(src), None)
         try:
             src.close()
         except Exception:
             pass
+        if tmp:
+            try:
+                os.remove(tmp)
+            except Exception:
+                pass
 
     def weigher(src, key: str) -> int:
-        # Nominal weight: an open stream/dataset holds minimal resident RAM;
-        # the count guard (max_count=64) governs the LRU eviction policy.
+        # Prefer the current FileRef's declared byte size.  At the time the LRU
+        # calls weigher, fr_holder[0] is still set to the FileRef for this uri
+        # (set by the partition loop before lru.get(uri)).
+        fr = fr_holder[0]
+        if fr is not None:
+            try:
+                return int(fr.size)
+            except Exception:
+                pass
+        # Staged fallback: use the on-disk size of the temp copy.
+        tmp = staged_temps.get(id(src))
+        if tmp:
+            try:
+                return os.path.getsize(tmp)
+            except Exception:
+                pass
         return STREAM_NOMINAL_BYTES
 
     return fr_holder, opener, closer, weigher
@@ -325,8 +378,9 @@ def grouped_tile_map(
                                         # Materialise the window into GTiff bytes,
                                         # open as a real DatasetReader inside an
                                         # ExitStack, and pass to core_fn.
-                                        import rasterio
                                         from contextlib import ExitStack
+
+                                        import rasterio
 
                                         from .core.open_tile import (
                                             _window_dataset_bytes,
@@ -336,9 +390,7 @@ def grouped_tile_map(
                                         b = _window_dataset_bytes(src, win, pending)
                                         with ExitStack() as _stk:
                                             ds = _stk.enter_context(
-                                                rasterio.open(
-                                                    rasterio.io.MemoryFile(b)
-                                                )
+                                                rasterio.open(rasterio.io.MemoryFile(b))
                                             )
                                             result = core_fn(ds, cellid)
                                     else:
@@ -387,7 +439,9 @@ def grouped_tile_map(
                                 with open_header(tile) as ds:
                                     if _view_mode == "header":
                                         from rasterio.windows import Window as _Win
+
                                         from .core.open_tile import _WindowHeaderView
+
                                         _hv = _WindowHeaderView(
                                             ds,
                                             _Win(0, 0, ds.width, ds.height),
@@ -399,7 +453,9 @@ def grouped_tile_map(
                                 with _open(tile) as ds:
                                     if _view_mode == "header":
                                         from rasterio.windows import Window as _Win
+
                                         from .core.open_tile import _WindowHeaderView
+
                                         _hv = _WindowHeaderView(
                                             ds,
                                             _Win(0, 0, ds.width, ds.height),

@@ -418,3 +418,25 @@ def test_stage_local_force_stage_env_always_copies(tmp_path, monkeypatch):
     assert path != str(f)
     assert os.path.exists(path)
     os.remove(path)
+
+
+# ---------------------------------------------------------------------------
+# Task 4: GBX_STAGE_MAX_BYTES guard
+# ---------------------------------------------------------------------------
+
+
+def test_stage_local_respects_max_bytes(monkeypatch, tmp_path):
+    """Files over GBX_STAGE_MAX_BYTES raise StageTooLargeError instead of copying."""
+    from databricks.labs.gbx.pyrx.core import preparer as m
+
+    big = tmp_path / "big.tif"
+    big.write_bytes(b"x" * 1024)  # 1024-byte file
+
+    monkeypatch.setenv("GBX_STAGE_MAX_BYTES", "512")  # cap below 1024 bytes
+    monkeypatch.setenv("GBX_FORCE_STAGE", "1")  # skip probe, go straight to copy branch
+    monkeypatch.setattr(m, "_is_fuse_path", lambda p: True)  # force FUSE path
+
+    import pytest
+
+    with pytest.raises(m.StageTooLargeError):
+        m._stage_local_if_needed(str(big))

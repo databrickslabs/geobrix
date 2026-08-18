@@ -18,6 +18,15 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 
+class StageTooLargeError(Exception):
+    """Raised when a source file exceeds ``GBX_STAGE_MAX_BYTES`` and cannot be staged.
+
+    Callers (grouped-exec, scalar UDF paths) catch ``Exception`` and degrade
+    gracefully (return None / fall back to header), so this is intentionally a
+    plain ``Exception`` subclass.
+    """
+
+
 def cog_output_name(source_basename: str) -> str:
     """Full source basename + ``.cog`` (extension preserved): x.tiff -> x.tiff.cog."""
     return f"{source_basename}.cog"
@@ -309,6 +318,20 @@ def _stage_local_if_needed(path: str) -> Tuple[str, bool]:
             return path, False
         except Exception:
             pass  # probe failed — fall through to copy
+
+    # Size guard: refuse to stage files that exceed the configured cap.
+    # This prevents silent OOM from staging a multi-GiB file to local disk.
+    # Does NOT apply to the direct-FUSE-access success path above.
+    stage_max = int(os.environ.get("GBX_STAGE_MAX_BYTES", 4 * 1024**3))
+    try:
+        file_size = os.path.getsize(path)
+    except OSError:
+        file_size = 0  # size unknown; proceed and let the copy fail naturally
+    if file_size > stage_max:
+        raise StageTooLargeError(
+            f"File {path!r} is {file_size:,} bytes, exceeds "
+            f"GBX_STAGE_MAX_BYTES={stage_max:,}; use FUSE (as_local_file) instead"
+        )
 
     # Copy fallback: stage to a local temp (original behavior).
     fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".tif")

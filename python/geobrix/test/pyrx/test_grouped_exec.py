@@ -253,3 +253,29 @@ def test_grouped_tile_map_cellid_passed_to_core(spark, gtiff_bytes):
             f"cellid mismatch: tile cellid={expected_cellid}, "
             f"core_fn got {result[expected_cellid]}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Task 4: _make_opener weigher uses real FileRef.size (not STREAM_NOMINAL_BYTES)
+# ---------------------------------------------------------------------------
+
+
+def test_make_opener_weigher_uses_fileref_size():
+    """_make_opener weigher returns fr_holder[0].size (real bytes), not the 16 MiB nominal.
+
+    The old weigher always returned STREAM_NOMINAL_BYTES (16 MiB), so the LRU byte
+    budget never fired for large files.  The fix: the weigher reads fr_holder[0].size
+    so large-file entries carry their real cost.
+    """
+    from databricks.labs.gbx.pyrx.grouped_exec import _make_opener
+
+    fr_holder, opener, closer, weigher = _make_opener()
+
+    class FakeSrc:
+        pass
+
+    src = FakeSrc()
+    fr_holder[0] = type("FR", (), {"size": 500_000_000})()  # 500 MB FileRef
+    assert (
+        weigher(src, "uri") == 500_000_000
+    ), "weigher must return fr_holder[0].size, not STREAM_NOMINAL_BYTES"

@@ -238,7 +238,7 @@ def test_get_tile_size_positive_mb_still_splits():
 
 # ---------------------------------------------------------------------------
 # FILE-aware UDTF tests: file_ref=NULL (FILE unavailable) → FUSE fallback.
-# These guard that adding file_ref as the 2nd eval parameter does not alter
+# These guard that adding file_ref as a trailing eval parameter does not alter
 # behavior when FILE is not available (file_supported=False on local[2]).
 # The FILE stream fast path is validated on-cluster in Task 9.
 # ---------------------------------------------------------------------------

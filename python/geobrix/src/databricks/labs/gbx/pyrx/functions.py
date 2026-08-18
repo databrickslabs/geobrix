@@ -4166,12 +4166,17 @@ class _RstMakeTilesUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            # Open via FILE stream (file_ref) when available; fall back to FUSE/bytes
-            # when file_ref is None.  iter_make_tiles keys the power-of-4 split count
-            # on the encoded byte length; _encoded_size_bytes re-encodes for sizing,
-            # matching heavy BalancedSubdivision (which keys on GDAL's in-memory size).
+            # Key size_bytes on the materialized raster bytes when present (byte-identical
+            # to pre-change behavior for materialized tiles; preserves the encoded byte
+            # length the old path used via len(raster)). For virtual tiles (tile.raster
+            # is None, whether opened via FILE stream or FUSE path), fall back to
+            # _encoded_size_bytes (dataset re-encode), matching heavy BalancedSubdivision.
+            raster_bytes = tile.raster
+            size_bytes = len(raster_bytes) if raster_bytes is not None else None
             with ot._open(tile, file_ref=file_ref) as ds:
-                for i, b in enumerate(tiling.iter_make_tiles(ds, float(size_in_mb))):
+                for i, b in enumerate(
+                    tiling.iter_make_tiles(ds, float(size_in_mb), size_bytes=size_bytes)
+                ):
                     yield _serde.build_tile(b, "GTiff", i)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_MakeTiles: {e}")

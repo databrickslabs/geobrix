@@ -94,7 +94,9 @@ class OpenResourceLRU:
 
 
 def _make_opener():
-    """Capability-adaptive opener factory.  Returns ``(file_ok, opener, closer, weigher)``.
+    """Capability-adaptive opener factory.
+
+    Returns ``(file_ok, fr_holder, opener, closer, weigher)``.
 
     Runs on the worker; all imports are worker-local (GDAL env configured
     before this is called).
@@ -102,26 +104,56 @@ def _make_opener():
     The LRU is keyed by ``uri`` (the source-path string) — hashable, and the
     identity that amortises opens.
 
-    FILE-capable (Task 9): will cache an open seekable FILE stream per uri
-    via ``open_windowed_via_fileref``; the per-tile window read happens inside
-    the caller after getting the stream from the LRU.
+    ``fr_holder`` is a one-element list ``[None]``.  Before each ``lru.get(uri)``
+    call the partition loop sets ``fr_holder[0] = <current FileRef>``.  On an LRU
+    cache miss the opener reads ``fr_holder[0]`` to stream-open the source via
+    ``fr.open()`` (a seekable stream — the FILE fast path).  On a cache hit the
+    opener is never called and ``fr_holder[0]`` is irrelevant.
 
-    Fallback (non-FILE / local Spark): stages the source file locally and
-    returns a plain ``rasterio.open`` dataset.  Used only when the caller
-    actually invokes ``lru.get(uri)`` for a path-keyed virtual tile; the
-    materialized-tile branch bypasses the LRU entirely and never calls this.
+    FILE-capable: opener calls ``fr.open()`` → ``rasterio.open(stream)``; on any
+    stream-open failure degrades to local staging so the LRU still gets an entry.
+
+    Fallback (non-FILE / local Spark): stages the source file locally and returns
+    a plain ``rasterio.open`` dataset.  Used only when the caller actually invokes
+    ``lru.get(uri)`` for a path-keyed virtual tile; the materialized-tile branch
+    bypasses the LRU entirely and never calls this.
     """
-    from . import _file_ref
+    from . import _file_ref as _fr_mod
 
-    file_ok = _file_ref.file_supported()
+    file_ok = _fr_mod.file_supported()
 
-    def opener(uri: str):
-        import rasterio
+    # fr_holder: mutable slot so the partition loop can inject the current row's
+    # FileRef before lru.get(uri).  A list is used because closures can't rebind
+    # a bare name in the outer scope.
+    fr_holder = [None]
 
-        from .core.preparer import _stage_local_if_needed
+    if file_ok:
 
-        local_path, _ = _stage_local_if_needed(uri)
-        return rasterio.open(local_path)
+        def opener(uri: str):
+            import rasterio
+
+            fr = fr_holder[0]
+            if fr is not None:
+                try:
+                    stream = fr.open()
+                    return rasterio.open(stream)
+                except Exception:
+                    pass  # fall through to staging fallback
+            # Staging fallback: fr unavailable or stream-open failed.
+            from .core.preparer import _stage_local_if_needed
+
+            local_path, _ = _stage_local_if_needed(uri)
+            return rasterio.open(local_path)
+
+    else:
+
+        def opener(uri: str):
+            import rasterio
+
+            from .core.preparer import _stage_local_if_needed
+
+            local_path, _ = _stage_local_if_needed(uri)
+            return rasterio.open(local_path)
 
     def closer(src) -> None:
         try:
@@ -130,11 +162,11 @@ def _make_opener():
             pass
 
     def weigher(src, key: str) -> int:
-        # Nominal weight for an open dataset; count guard governs.
-        # Local-stage branch (Task 9 fast-follow) will weigh the staged file size.
+        # Nominal weight: an open stream/dataset holds minimal resident RAM;
+        # the count guard (max_count=64) governs the LRU eviction policy.
         return STREAM_NOMINAL_BYTES
 
-    return file_ok, opener, closer, weigher
+    return file_ok, fr_holder, opener, closer, weigher
 
 
 def grouped_tile_map(
@@ -147,38 +179,69 @@ def grouped_tile_map(
     """Partition-scoped ``mapInPandas`` executor for light-tier tiles.
 
     For each tile in the partition, opens the raster source, applies
-    ``core_fn(ds) -> value`` on the open ``DatasetReader``, and stores the
-    result in a new column ``return_field.name``.
+    ``core_fn(ds) -> value`` on the open ``DatasetReader`` (or a read-free
+    ``_WindowHeaderView`` on the FILE fast path), and stores the result in a
+    new column ``return_field.name``.
 
     Tile dispatch:
 
     - **Materialized tiles** (``raster`` set, ``path`` None): opened per-row via
       ``_open``; the LRU is not consulted — bytes are already inline, nothing
       to amortise.  This is the path exercised by the local unit test.
-    - **Virtual tiles** (``path`` set) + FILE-capable (Task 9): LRU caches an
-      open seekable stream keyed by ``uri``; ``open_windowed_via_fileref``
-      slots in to read each tile window from the cached stream.
-    - **Virtual tiles** + fallback (non-FILE): opened per-row via ``_open``;
-      no amortisation — each tile's window is unique.
+    - **Virtual tiles** (``path`` set) + FILE-capable: before ``mapInPandas`` a
+      ``_file_ref`` column is added holding a ``try_to_file(path)`` FileRef for
+      each row.  Inside the partition the LRU caches the open rasterio dataset
+      (opened from the FileRef's seekable stream) keyed by ``uri``; a per-tile
+      ``_WindowHeaderView`` wraps the cached dataset to expose the correct
+      window-scoped dims to ``core_fn`` without reading pixels.  ``_file_ref``
+      is stripped from the output so the output schema is unchanged.
+      On any FileRef open or view-construction failure, degrades per-tile to
+      the fallback path below.
+    - **Virtual tiles** + fallback (non-FILE / open failure): opened per-row via
+      ``_open``; no amortisation — each tile's window is unique.
 
-    ``core_fn`` receives an open ``DatasetReader`` and must not hold a
-    reference to it after returning.
+    ``core_fn`` receives an open ``DatasetReader`` (or a ``_WindowHeaderView``
+    duck-typed for header attributes) and must not hold a reference after
+    returning.
 
-    Output schema is ``df.schema + [return_field]``.  No cast to
-    ``V2_TILE_SCHEMA``.
+    Output schema is ``df.schema + [return_field]``; ``_file_ref`` never leaks.
     """
-    out_schema = StructType(list(df.schema.fields) + [return_field])
+    from . import _file_ref as _fr_mod
+
+    # Capture original fields BEFORE adding _file_ref so the output schema
+    # matches the caller's expectation exactly.
+    original_fields = list(df.schema.fields)
+    out_schema = StructType(original_fields + [return_field])
     out_name = return_field.name
+
+    # Add the FileRef column on the driver before mapInPandas.  Each row
+    # gets try_to_file(tile.path); materialized tiles (path=null) get NULL.
+    # Pass df.sparkSession explicitly so file_supported() doesn't need to
+    # resolve the session via getActiveSession() (which can return None on
+    # Spark Connect / DBR 14+ in some threading contexts).
+    # file_supported() is memoized per SparkSession and is cheap after the
+    # first call.
+    try:
+        _driver_spark = df.sparkSession
+    except Exception:
+        _driver_spark = None
+    file_ok_driver = _fr_mod.file_supported(_driver_spark)
+    if file_ok_driver:
+        # file_ref_arg expects the TILE column and extracts ["path"] internally.
+        df = df.withColumn(
+            "_file_ref", _fr_mod.file_ref_arg(F.col(tile_col), spark=_driver_spark)
+        )
 
     def _map(pdf_iter):
         from . import _env
 
         _env.configure_gdal_env()
-        file_ok, opener, closer, weigher = _make_opener()
+        file_ok, fr_holder, opener, closer, weigher = _make_opener()
         lru = OpenResourceLRU(opener=opener, closer=closer, weigher=weigher)
         try:
             for pdf in pdf_iter:
                 results = []
+                has_fr_col = "_file_ref" in pdf.columns
                 for _, row in pdf.iterrows():
                     tile = row[tile_col]
                     # Resolve uri: None for materialized tiles, path string for virtual.
@@ -187,22 +250,73 @@ def grouped_tile_map(
                     except (KeyError, TypeError):
                         uri = None
 
-                    if uri and file_ok:
-                        # FILE fast path (Task 9): get the cached open source from
-                        # the LRU, then read the tile's window from it.
-                        # Currently returns the full-source dataset; Task 9 will
-                        # replace with a windowed read via open_windowed_via_fileref.
-                        src = lru.get(uri)
-                        results.append(core_fn(src))
-                    else:
-                        # Fallback: open per-row.  Covers:
+                    result = None
+                    if uri and file_ok and has_fr_col:
+                        fr = row["_file_ref"]
+                        if fr is not None:
+                            # FILE fast path: inject FileRef so the LRU opener can
+                            # stream-open the source on a cache miss, then build a
+                            # read-free per-tile window view from the cached dataset.
+                            try:
+                                fr_holder[0] = fr
+                                src = lru.get(uri)
+                                # Build a _WindowHeaderView so core_fn sees the
+                                # tile's window dims (count/width/height/dtypes),
+                                # not the full-source dims.  No pixel I/O.
+                                from rasterio.windows import Window
+
+                                from .core.open_tile import (
+                                    _WindowHeaderView,
+                                    _parse_pending,
+                                    _to_virtual_tile,
+                                )
+
+                                vt = _to_virtual_tile(tile)
+                                bands, raw_nodata, srid, crs_str = _parse_pending(
+                                    vt.metadata
+                                )
+                                pending_count = len(bands) if bands else None
+                                pending_crs = None
+                                if crs_str is not None or srid is not None:
+                                    from .core.crs import resolve_crs
+
+                                    pending_crs = resolve_crs(
+                                        crs_str if crs_str is not None else srid
+                                    )
+                                if vt.window is not None:
+                                    c, r_off, w, h = vt.window
+                                    view = _WindowHeaderView(
+                                        src,
+                                        Window(c, r_off, w, h),
+                                        pending_count=pending_count,
+                                        pending_crs=pending_crs,
+                                        pending_nodata=raw_nodata,
+                                    )
+                                    result = core_fn(view)
+                                else:
+                                    # No sub-window: full source; src is correct.
+                                    result = core_fn(src)
+                            except Exception:
+                                # Any open/stream/view-construction failure →
+                                # degrade gracefully to the per-row fallback.
+                                result = None
+
+                    if result is None:
+                        # Fallback path: covers
                         #   (a) materialized tiles (raster inline, path None)
                         #   (b) virtual tiles when FILE is not supported
+                        #   (c) FILE open/stream/view failure (graceful degrade)
                         from .core.open_tile import _open
 
                         with _open(tile) as ds:
-                            results.append(core_fn(ds))
-                yield pdf.assign(**{out_name: results})
+                            result = core_fn(ds)
+
+                    results.append(result)
+
+                # Strip _file_ref from the output so the schema matches
+                # original_fields + [return_field] exactly.
+                out_pdf = pdf.drop(columns=["_file_ref"], errors="ignore")
+                yield out_pdf.assign(**{out_name: results})
         finally:
             lru.close_all()
 

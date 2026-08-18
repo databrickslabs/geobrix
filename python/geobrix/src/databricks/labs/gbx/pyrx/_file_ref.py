@@ -16,6 +16,7 @@ Serverless-safe: no .rdd / _jvm / _jsc / sparkContext / conf.set.
 
 import os
 from contextlib import contextmanager
+from typing import Optional
 
 import rasterio
 from pyspark.sql import Column, SparkSession
@@ -37,26 +38,41 @@ def _epsg_of_str(crs_str: str):
         return None
 
 
-def file_supported() -> bool:
+def file_supported(spark: "Optional[SparkSession]" = None) -> bool:
     """Memoized per-SparkSession capability check for FILE support.
 
-    Obtains the active SparkSession internally via SparkSession.getActiveSession()
-    (Serverless-safe, no .rdd / _jvm / conf.set). Returns True if:
+    An explicit ``spark`` session may be passed by callers that already have the
+    session object (e.g. ``grouped_tile_map`` passes ``df.sparkSession``); this
+    avoids the ``getActiveSession()``/``getOrCreate()`` resolution entirely and is
+    the preferred path on Spark Connect (DBR 14+) where thread-local state can
+    make ``getActiveSession()`` return None outside the main notebook thread.
+    When ``spark`` is not passed, resolution order is:
+      1. ``SparkSession.getActiveSession()``
+      2. ``SparkSession.builder.getOrCreate()``
+    Both fallbacks are Serverless-safe (no .rdd / _jvm / conf.set).
+
+    Returns True if:
     - GBX_DISABLE_FILE env var is not set to "1", AND
     - FILE type is recognized and usable (end-to-end roundtrip succeeds).
 
     Returns False if:
     - GBX_DISABLE_FILE="1" (no spark touched), OR
-    - No active SparkSession, OR
+    - No SparkSession obtainable, OR
     - Any exception during the roundtrip (UNSUPPORTED_DATATYPE, sentinel
       unreadable, consume failure, etc.).
 
-    Result is cached per SparkSession; the probe runs at most once per session.
+    Result is cached per SparkSession object; the probe runs at most once.
     """
     if os.environ.get("GBX_DISABLE_FILE") == "1":
         return False
 
-    spark = SparkSession.getActiveSession()
+    if spark is None:
+        spark = SparkSession.getActiveSession()
+    if spark is None:
+        try:
+            spark = SparkSession.builder.getOrCreate()
+        except Exception:
+            return False
     if spark is None:
         return False
 
@@ -96,7 +112,9 @@ def _check_file_support(spark: SparkSession) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def file_ref_arg(tile_col: Column) -> Column:
+def file_ref_arg(
+    tile_col: Column, spark: "Optional[SparkSession]" = None
+) -> Column:
     """Return a Column expression for the file_ref argument to tile-reading UDFs.
 
     If file_supported() is True, returns a plan-level FILE mint expression
@@ -104,13 +122,16 @@ def file_ref_arg(tile_col: Column) -> Column:
     as a real FileRef value.  Otherwise returns F.lit(None) so the UDF falls
     back to the plain-path read.
 
-    Uses SparkSession.getActiveSession() internally (Serverless-safe: no
-    .rdd / _jvm / _jsc / sparkContext / conf.set).  Takes no spark param.
+    ``spark``: optional explicit session (preferred on Spark Connect / DBR 14+
+    where ``getActiveSession()`` can return None in some threading contexts).
+    When omitted, ``file_supported()`` resolves the session internally.
+
+    Serverless-safe: no .rdd / _jvm / _jsc / sparkContext / conf.set.
     """
     # NOTE: on a FILE-enabled session the first call to file_supported() triggers
     # a synchronous feature-detect query (memoized once per session) — so building
     # the Column has a one-time side effect.
-    if file_supported():
+    if file_supported(spark):
         # F.call_function calls a named Spark SQL function as a plan expression.
         # try_to_file is a Spark SQL built-in (not a PySpark function) that mints
         # a FILE reference from a Volume path string.

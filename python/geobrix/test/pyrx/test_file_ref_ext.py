@@ -652,47 +652,10 @@ def test_rst_mapalgebra_file_ref_equals_fallback(gtiff_bytes):
         os.remove(tmp)
 
 
-# Task 12 — grouped aggregators
-
-
-def test_rst_merge_agg_binding_has_file_variant():
-    import databricks.labs.gbx.pyrx.functions as prx
-
-    assert hasattr(prx, "_merge_agg_file_udf"), "_merge_agg_file_udf must exist"
-    assert hasattr(
-        prx, "_combineavg_agg_file_udf"
-    ), "_combineavg_agg_file_udf must exist"
-    assert hasattr(prx, "_frombands_agg_file_udf"), "_frombands_agg_file_udf must exist"
-
-
-def test_rst_merge_agg_file_ref_unit(gtiff_bytes):
-    """Unit test: _merge_agg_file_udf processes tiles correctly with stub FileRefs."""
-    import pandas as pd
-    from rasterio.io import MemoryFile
-
-    fd, tmp = tempfile.mkstemp(suffix=".tif")
-    os.close(fd)
-    with open(tmp, "wb") as fh:
-        fh.write(gtiff_bytes)
-    try:
-        vt_row = VirtualTile(cellid=7, path=tmp, window=(0, 0, 4, 3)).to_row()
-        fref_stub = _StubFileRef(gtiff_bytes)
-
-        from databricks.labs.gbx.pyrx.functions import _merge_agg_file_udf
-
-        tile_series = pd.Series([vt_row])
-        fref_series = pd.Series([fref_stub])
-
-        # Call the underlying function directly (pandas_udf wraps a plain fn).
-        raw_fn = _merge_agg_file_udf.func
-        result_bytes = raw_fn(tile_series, fref_series)
-
-        assert result_bytes is not None
-        with MemoryFile(bytes(result_bytes)) as mf, mf.open() as ds:
-            assert ds.count == 1
-            assert ds.read(1).shape == (3, 4)  # height=3, width=4
-    finally:
-        os.remove(tmp)
+# Task 12 — grouped aggregators (FILE-aware frombands)
+# _merge_agg_file_udf and _combineavg_agg_file_udf were removed in Task 8:
+# aggregators now always open tiles via FUSE (tile.path as EXTERNAL), avoiding
+# nondeterministic try_to_file in .agg() (Spark 4 restriction).
 
 
 def test_rst_frombands_agg_file_ref_unit(gtiff_bytes):

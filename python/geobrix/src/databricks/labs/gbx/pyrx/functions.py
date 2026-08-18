@@ -6692,40 +6692,6 @@ def _merge_agg_udf(tile: pd.Series) -> bytes:
 
 
 @pandas_udf(BinaryType())
-def _merge_agg_file_udf(tile: pd.Series, file_ref: pd.Series) -> bytes:
-    """FILE-aware merge aggregator: reads virtual tiles via per-row FileRef.
-
-    For each row: if file_ref is not None AND tile is virtual, read via
-    ot._open(tile_row, file_ref=fref); otherwise use verbatim bytes (fallback).
-    Materialized tiles use verbatim bytes (sort-key invariant preserved).
-    """
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    rasters = []
-    dropped = 0
-    for r, fref in zip(tile, file_ref):
-        if r is None:
-            continue
-        try:
-            vt = ot._to_virtual_tile(r)
-            if vt.is_virtual():
-                with ot._open(r, file_ref=fref) as ds:
-                    candidate = _dataset_to_gtiff_bytes(ds)
-            else:
-                candidate = bytes(vt.raster)
-            with _serde.open_tile(candidate):
-                pass
-            rasters.append(candidate)
-        except Exception:  # noqa: BLE001
-            dropped += 1
-            continue
-    if not rasters:
-        return None
-    return agg_core.merge_tiles(rasters)
-
-
-@pandas_udf(BinaryType())
 def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
@@ -6757,44 +6723,6 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     # Prepend an 8-byte big-endian cellid envelope (stripped by the scalar UDF).
-    return cellid.to_bytes(8, "big", signed=True) + bytes(out)
-
-
-@pandas_udf(BinaryType())
-def _combineavg_agg_file_udf(tile: pd.Series, file_ref: pd.Series) -> bytes:
-    """FILE-aware combineavg aggregator: reads virtual tiles via per-row FileRef."""
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    rasters = []
-    cellid = 0
-    first = True
-    dropped = 0
-    for r, fref in zip(tile, file_ref):
-        if r is None:
-            continue
-        try:
-            vt = ot._to_virtual_tile(r)
-            if vt.is_virtual():
-                with ot._open(r, file_ref=fref) as ds:
-                    candidate = _dataset_to_gtiff_bytes(ds)
-            else:
-                candidate = bytes(vt.raster)
-            with _serde.open_tile(candidate):
-                pass
-            if first:
-                cid = r["cellid"] if hasattr(r, "__getitem__") else 0
-                cellid = int(cid) if cid is not None else 0
-                first = False
-            rasters.append(candidate)
-        except Exception:  # noqa: BLE001
-            dropped += 1
-            continue
-    if not rasters:
-        return None
-    out = agg_core.combineavg_tiles(rasters)
-    if out is None:
-        return None
     return cellid.to_bytes(8, "big", signed=True) + bytes(out)
 
 

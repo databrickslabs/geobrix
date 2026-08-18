@@ -82,7 +82,15 @@ def _describe_cols(spark: SparkSession, table: str):
         data_type = (r["data_type"] or "").lower()
         if not col_name or col_name.startswith("#"):
             continue
-        if data_type == "file":
+        # Match bare "file" and qualifier variants emitted by some DBR versions:
+        # "file managed", "file external", "file (managed)", "managed file", etc.
+        # Startswith and endswith together cover both ordering conventions.
+        is_file_type = (
+            data_type == "file"
+            or data_type.startswith("file ")
+            or data_type.endswith(" file")
+        )
+        if is_file_type:
             file_col = col_name
         else:
             plain.add(col_name)

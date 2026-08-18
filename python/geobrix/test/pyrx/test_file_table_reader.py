@@ -1,6 +1,8 @@
 import shutil
 from pathlib import Path
 
+import pytest
+
 from databricks.labs.gbx.pyrx.file_table import read_file_table
 
 
@@ -210,3 +212,111 @@ def test_read_never_selects_star_or_file_column(spark, monkeypatch):
     _make_plain_table(spark, "file_tbl_r2")
     read_file_table(spark, "file_tbl_r2")
     assert "*" not in seen["sql"] and "SELECT" in seen["sql"].upper()
+
+
+# ---------------------------------------------------------------------------
+# T9c: V1 seam tests — file_supported session contract + _describe_cols
+# ---------------------------------------------------------------------------
+
+
+def test_read_file_table_passes_spark_to_file_supported(spark, monkeypatch):
+    """read_file_table must call file_supported WITH the spark session, not None.
+
+    V1 root-cause investigation: the leading hypothesis was that spark wasn't
+    passed, letting getActiveSession()=None on Spark Connect (DBR 14+) defeat
+    the FILE capability gate.  Confirmed: the existing code already passes
+    spark correctly.  This test locks in the contract as a regression guard.
+
+    We set up a managed table context (file_mode='managed', file_col present)
+    so the code reaches the file_supported gate rather than short-circuiting.
+    """
+    import databricks.labs.gbx.pyrx._file_ref as fr
+    import databricks.labs.gbx.pyrx.file_table as ft
+    from databricks.labs.gbx.pyrx import file_props
+
+    _make_managed_stub_table(spark, "file_tbl_session_spy")
+
+    received_sessions = []
+    real_file_supported = fr.file_supported
+
+    def spy_file_supported(sess=None):
+        received_sessions.append(sess)
+        return real_file_supported(sess)
+
+    monkeypatch.setattr(ft, "_table_props", lambda *a, **k: {
+        file_props.WRITE_STRATEGY_KEY: "managed:plain",
+        file_props.WRITER_VERSION_KEY: "1",
+    })
+    monkeypatch.setattr(ft, "_describe_cols", lambda s, t: ({"cellid", "path", "crs"}, "tile_file"))
+    monkeypatch.setattr(fr, "file_supported", spy_file_supported)
+
+    read_file_table(spark, "file_tbl_session_spy")
+
+    assert received_sessions, "file_supported was never called"
+    assert any(s is not None for s in received_sessions), (
+        "file_supported was called without a spark session — Spark-Connect "
+        "getActiveSession() pitfall; pass spark explicitly (T9c regression)"
+    )
+    # At least one call must have received the exact session we passed in.
+    assert any(s is spark for s in received_sessions), (
+        f"file_supported was not called with the caller's spark session; "
+        f"got sessions: {[type(s).__name__ for s in received_sessions]}"
+    )
+
+
+@pytest.mark.parametrize(
+    "data_type,expected_is_file",
+    [
+        ("file", True),
+        ("FILE", True),  # case-insensitive
+        ("file managed", True),  # DBR-19 qualifier variant (V1 root cause)
+        ("file external", True),
+        ("file (managed)", True),
+        ("managed file", True),
+        ("external file", True),
+        ("string", False),
+        ("bigint", False),
+        ("binary", False),
+        ("struct<uri:string>", False),
+    ],
+)
+def test_describe_cols_file_type_detection(data_type, expected_is_file):
+    """_describe_cols must detect FILE columns even when DBR returns a qualified type.
+
+    V1 root cause: on DBR-19, DESCRIBE TABLE may return 'file managed' or
+    'managed file' rather than the bare 'file' token.  The original exact check
+    (data_type == 'file') would miss these, leaving file_col_name=None and
+    use_managed_uri=False even when file_supported(spark)=True.
+    """
+    import databricks.labs.gbx.pyrx.file_table as ft
+
+    # Simulate DESCRIBE TABLE rows: 'path' STRING and 'tile_file' <data_type>.
+    # _describe_cols uses r["col_name"] subscript access, so fake rows must
+    # support __getitem__.  Use a simple dict-backed class.
+    class _Row(dict):
+        pass
+
+    fake_rows = [
+        _Row(col_name="path", data_type="string"),
+        _Row(col_name="tile_file", data_type=data_type),
+    ]
+
+    class _FakeSpark:
+        def sql(self, _q):
+            class _FakeDF:
+                def collect(self_):
+                    return fake_rows
+            return _FakeDF()
+
+    plain, file_col = ft._describe_cols(_FakeSpark(), "dummy_table")
+    if expected_is_file:
+        assert file_col == "tile_file", (
+            f"data_type={data_type!r}: expected FILE detection, got file_col={file_col!r}. "
+            f"V1 root cause: _describe_cols must handle qualified FILE type tokens."
+        )
+        assert "tile_file" not in plain
+    else:
+        assert file_col is None, (
+            f"data_type={data_type!r}: falsely detected as FILE; file_col={file_col!r}"
+        )
+        assert "tile_file" in plain

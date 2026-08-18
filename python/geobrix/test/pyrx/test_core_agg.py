@@ -538,3 +538,85 @@ class TestGroupedAggUdfSkipsCorrupt:
 
         with _serde.open_tile(bytes(agg_b)):
             pass  # raises if bytes are not a valid raster
+
+
+# ---------------------------------------------------------------------------
+# Task 8 — aggregators never inject try_to_file (Spark 4 nondeterminism guard)
+# ---------------------------------------------------------------------------
+# try_to_file is nondeterministic; Spark 4 rejects nondeterministic expressions
+# as aggregate function arguments (AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION).
+# rst_merge_agg and rst_combineavg_agg must always use the FUSE-opening UDF path,
+# never file_ref_arg(). These tests document the invariant.
+# ---------------------------------------------------------------------------
+
+
+def test_merge_agg_no_try_to_file(spark):
+    """rst_merge_agg must not inject try_to_file into the column expression tree.
+
+    On a FILE-capable cluster, the pre-fix code conditionally injected
+    file_ref_arg (= try_to_file(tile.path)) which is nondeterministic and
+    causes Spark 4 to reject the .agg() call.  After the fix the expression
+    tree must be free of try_to_file regardless of cluster capability.
+
+    ``spark`` is required so the JVM is up (Column._jc.toString() needs the
+    JVM running).
+    """
+    from databricks.labs.gbx.pyrx.functions import rst_merge_agg
+
+    expr = rst_merge_agg("tile")._jc.toString()
+    assert "try_to_file" not in expr.lower()
+
+
+def test_combineavg_agg_no_try_to_file(spark):
+    """rst_combineavg_agg must not inject try_to_file (same rationale as merge)."""
+    from databricks.labs.gbx.pyrx.functions import rst_combineavg_agg
+
+    expr = rst_combineavg_agg("tile")._jc.toString()
+    assert "try_to_file" not in expr.lower()
+
+
+class TestAggPublicFunctionsParity:
+    """Public rst_merge_agg / rst_combineavg_agg produce correct output for materialized tiles.
+
+    Parity check: dropping the file-ref branch must not regress materialized-tile groups.
+    """
+
+    def test_rst_merge_agg_non_null_mosaic(self, spark):
+        """Two adjacent materialized tiles merge into a non-null union-extent mosaic."""
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        result = df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged"))
+        rows = result.collect()
+        assert rows, "no rows returned"
+        merged = rows[0]["merged"]
+        assert merged is not None, "merged tile must be non-null"
+        raster_bytes = merged["raster"]
+        assert raster_bytes is not None and len(raster_bytes) > 0
+        # Union extent: 4 pixels wide, left edge 0.0, right edge 4.0.
+        with _serde.open_tile(bytes(raster_bytes)) as ds:
+            assert ds.width == 4
+            b = ds.bounds
+            assert b.left == pytest.approx(0.0)
+            assert b.right == pytest.approx(4.0)
+
+    def test_rst_combineavg_agg_non_null_mean(self, spark):
+        """Two aligned materialized tiles produce a correct per-pixel mean."""
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        a = _ras(np.array([[2.0, 4.0], [6.0, 8.0]]))
+        b = _ras(np.array([[4.0, 8.0], [10.0, 12.0]]))
+        df = _spark_tile_df_raw(spark, [a, b])
+        result = df.groupBy("g").agg(prx.rst_combineavg_agg("tile").alias("avg"))
+        rows = result.collect()
+        assert rows, "no rows returned"
+        avg_tile = rows[0]["avg"]
+        assert avg_tile is not None, "avg tile must be non-null"
+        raster_bytes = avg_tile["raster"]
+        assert raster_bytes is not None and len(raster_bytes) > 0
+        with _serde.open_tile(bytes(raster_bytes)) as ds:
+            got = ds.read(1)
+        # pixel-wise mean: [[3, 6], [8, 10]]
+        assert np.allclose(got, [[3.0, 6.0], [8.0, 10.0]])

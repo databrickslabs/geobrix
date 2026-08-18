@@ -7323,12 +7323,13 @@ def rst_merge_agg(tile: ColLike) -> Column:
 
     Each tile carries its own georef/CRS, so the merge is spatial and the output
     spans the union extent. Returns a tile struct (cellid 0).
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg, file_supported
 
+    FILE tiles are opened via the FUSE path (``tile.path``) — the aggregator
+    treats every tile as EXTERNAL.  Using ``try_to_file`` here would inject a
+    nondeterministic expression into the aggregate, which Spark 4 rejects with
+    ``AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION``.
+    """
     tc = _col(tile)
-    if file_supported():
-        return _as_tile_udf(_merge_agg_file_udf(tc, file_ref_arg(tc)))
     return _as_tile_udf(_merge_agg_udf(tc))
 
 
@@ -7342,14 +7343,12 @@ def rst_combineavg_agg(tile: ColLike) -> Column:
     Assumes the group's tiles are aligned (same shape/extent/CRS); raises if
     shapes differ. The output cellid is the group's first tile cellid. Returns a
     tile struct.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg, file_supported
 
+    FILE tiles are opened via the FUSE path (``tile.path``) — the aggregator
+    treats every tile as EXTERNAL.  See ``rst_merge_agg`` for the Spark 4
+    nondeterminism rationale.
+    """
     tc = _col(tile)
-    if file_supported():
-        return _as_tile_cellid_envelope_udf(
-            _combineavg_agg_file_udf(tc, file_ref_arg(tc))
-        )
     return _as_tile_cellid_envelope_udf(_combineavg_agg_udf(tc))
 
 

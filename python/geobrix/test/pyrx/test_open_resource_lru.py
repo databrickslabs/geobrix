@@ -124,14 +124,14 @@ def _make_tiny_gtiff_bytes():
 def test_make_opener_closer_deletes_staged_temp(tmp_path, monkeypatch):
     """Closer removes the staged temp file on eviction (temp-leak fix).
 
-    Uses the real _make_opener closer+opener seam:
+    Uses the real _OpenerContext closer+opener seam:
     - monkeypatch _stage_local_if_needed to return a known temp with is_temp=True
-    - call opener() so it registers the temp in staged_temps (the private dict)
-    - call closer() on the returned dataset
+    - call ctx.open() so it registers the temp in _staged_temps
+    - call ctx.close() on the returned dataset
     - assert the temp file no longer exists
     """
     from databricks.labs.gbx.pyrx.core import preparer
-    from databricks.labs.gbx.pyrx.grouped_exec import _make_opener
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
 
     tif_bytes = _make_tiny_gtiff_bytes()
 
@@ -144,28 +144,28 @@ def test_make_opener_closer_deletes_staged_temp(tmp_path, monkeypatch):
         preparer, "_stage_local_if_needed", lambda p: (str(staged), True)
     )
 
-    fr_holder, opener, closer, weigher = _make_opener()
-    # fr_holder[0] = None → opener uses the staging fallback path.
+    ctx = _OpenerContext()
+    # ctx.fr_holder[0] = None → open() uses the staging fallback path.
 
-    ds = opener("any_uri")
-    assert staged.exists(), "staged temp should exist before closer is called"
+    ds = ctx.open("any_uri")
+    assert staged.exists(), "staged temp should exist before close is called"
 
-    closer(ds)
+    ctx.close(ds)
     assert not staged.exists(), (
-        "closer must delete the staged temp file; "
-        "temp-leak fix regression: os.remove not called in closer"
+        "close must delete the staged temp file; "
+        "temp-leak fix regression: os.remove not called in close"
     )
 
 
 def test_make_opener_lru_eviction_deletes_staged_temp(tmp_path, monkeypatch):
-    """LRU eviction (max_count=1) triggers closer which deletes the staged temp.
+    """LRU eviction (max_count=1) triggers close which deletes the staged temp.
 
     Opens two entries sequentially; the first is evicted when the second is added.
     Both entries use staged temps; after eviction the first temp must be gone,
     the second must still exist (it is the current/live entry).
     """
     from databricks.labs.gbx.pyrx.core import preparer
-    from databricks.labs.gbx.pyrx.grouped_exec import OpenResourceLRU, _make_opener
+    from databricks.labs.gbx.pyrx.grouped_exec import OpenResourceLRU, _OpenerContext
 
     tif_bytes = _make_tiny_gtiff_bytes()
 
@@ -182,23 +182,23 @@ def test_make_opener_lru_eviction_deletes_staged_temp(tmp_path, monkeypatch):
 
     monkeypatch.setattr(preparer, "_stage_local_if_needed", fake_stage)
 
-    fr_holder, opener, closer, weigher = _make_opener()
+    ctx = _OpenerContext()
     lru = OpenResourceLRU(
         max_bytes=10**12,
         max_count=1,
-        opener=opener,
-        closer=closer,
-        weigher=weigher,
+        opener=ctx.open,
+        closer=ctx.close,
+        weigher=ctx.weigh,
     )
 
     lru.get("uri_a")  # opens staged_a; no eviction yet (only 1 entry)
     lru.get(
         "uri_b"
-    )  # opens staged_b; evicts uri_a (max_count=1), closer deletes staged_a
+    )  # opens staged_b; evicts uri_a (max_count=1), close deletes staged_a
 
     assert (
         not staged_a.exists()
-    ), "evicted entry's staged temp must be deleted by the closer"
+    ), "evicted entry's staged temp must be deleted by close"
     assert (
         staged_b.exists()
     ), "current (non-evicted) entry's staged temp must still exist"

@@ -133,7 +133,12 @@ def file_ref_arg(tile_col: Column, spark: "Optional[SparkSession]" = None) -> Co
         # F.call_function calls a named Spark SQL function as a plan expression.
         # try_to_file is a Spark SQL built-in (not a PySpark function) that mints
         # a FILE reference from a Volume path string.
-        return F.call_function("try_to_file", tile_col["path"])
+        #
+        # Callers pass file_ref_arg(_col(tile)) where _col("tile") deliberately
+        # returns the bare str "tile" (so callers can use it as a column name).
+        # A bare str does not support ["path"] subscript — coerce to Column first.
+        _tc = F.col(tile_col) if isinstance(tile_col, str) else tile_col
+        return F.call_function("try_to_file", _tc["path"])
     # FILE not supported or no session — pass None (UDF uses fallback path).
     return F.lit(None)
 

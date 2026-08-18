@@ -518,6 +518,50 @@ def test_open_windowed_via_fileref_caller_exception_propagates(gtiff_bytes):
             raise ValueError("caller boom")
 
 
+def test_file_ref_arg_str_column_name_does_not_raise(spark):
+    """file_ref_arg("tile") must not raise TypeError on a FILE-capable cluster.
+
+    Callers in functions.py invoke file_ref_arg(_col(tile)) where _col("tile")
+    returns the bare string "tile" unchanged (intentional — used for column
+    naming).  When file_supported() is True, the old code did tile_col["path"]
+    on the bare str, raising TypeError: string indices must be integers.
+    After the fix a bare str is coerced to F.col(tile_col) before the ["path"]
+    access.
+
+    RED → GREEN lever: TypeError before the fix; Column after.
+    """
+    from unittest import mock
+
+    from pyspark.sql import Column
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
+
+    with mock.patch(
+        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=True
+    ):
+        # String column-name path — was TypeError: string indices must be integers.
+        result_str = file_ref_arg("tile")
+        assert isinstance(
+            result_str, Column
+        ), f"Expected Column, got {type(result_str)}"
+
+        # Column path — must still work (no regression).
+        result_col = file_ref_arg(F.col("tile"))
+        assert isinstance(
+            result_col, Column
+        ), f"Expected Column, got {type(result_col)}"
+
+    # False path: both forms must still return F.lit(None)-shaped Column (unchanged).
+    with mock.patch(
+        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
+    ):
+        result_false_str = file_ref_arg("tile")
+        assert isinstance(result_false_str, Column)
+        result_false_col = file_ref_arg(F.col("tile"))
+        assert isinstance(result_false_col, Column)
+
+
 def test_sql_registry_still_maps_to_single_arg_udfs():
     """SQL_REGISTRY entries for all rewired accessors point at single-arg ``_u_*`` UDFs.
 

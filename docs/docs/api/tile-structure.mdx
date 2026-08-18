@@ -56,74 +56,6 @@ On a **materialized** tile, `window` / `clip_polygon` / `clip_crs` / `crs` are *
 
 ---
 
-## Field Details
-
-### 1. cellid
-
-The `cellid` field identifies which grid cell a tile belongs to when using tessellation (e.g., `rst_h3_tessellate`).
-
-**Properties:**
-- **Type**: `bigint` (64-bit integer)
-- **Nullable**: Yes
-- **Purpose**: Enables spatial indexing and joining of tessellated rasters
-
-**Values:**
-- `null` - For non-tessellated rasters (e.g., from `rst_fromfile`)
-- `> 0` - For tessellated rasters (H3 cell ID)
-
-**Example:**
-
-<CodeFromTest code={tileStructureExamples} functionName="SQL_CELLID_NON_TESSELLATED" language="sql" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="SQL_CELLID_NON_TESSELLATED_output" />
-
-<CodeFromTest code={tileStructureExamples} functionName="SQL_CELLID_TESSELLATED" language="sql" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="SQL_CELLID_TESSELLATED_output" />
-
-### 2. raster
-
-The `raster` field contains the raster bytes — the full file content in memory —
-for a **materialized** tile. It is `null` for a **virtual** tile, where the pixels
-live at `path` and are read on demand.
-
-**Tile constructors and materializing readers produce binary content:**
-- `rst_fromfile(path, driver)` → reads the file at `path` into **binary** bytes (its `path` argument is a *source file* to read, not a tile reference)
-- `rst_fromcontent(content, driver)` → embeds the given **binary** bytes
-- GDAL reader → **binary** (raster bytes)
-- The lightweight `cog_gbx` reader can instead emit **virtual** tiles (`raster` null, `path` + `window` set) — see [Virtual Tiles](./virtual-tiles).
-
-**Properties:**
-- **Type**: `binary`
-- **Nullable**: Yes — `null` on a virtual tile; the bytes are present on a materialized tile.
-- **Purpose**: Self-contained raster payload carried through the plan. Heavyweight operators consume materialized bytes; lightweight operators accept either and materialize a virtual tile's window only when pixels are needed.
-
-**Binary Format:**
-- Complete raster file (e.g. GeoTIFF) in memory
-- Can be deserialized with GDAL/rasterio
-- Typically compressed (LZW, DEFLATE, etc.)
-
-**Example:**
-
-<CodeFromTest code={tileStructureExamples} functionName="access_path_and_binary" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_path_and_binary_output" />
-
-### 3. metadata
-
-The `metadata` field contains key-value pairs describing the raster format and properties.
-
-**Properties:**
-- **Type**: `map<string,string>`
-- **Nullable**: Yes
-- **Purpose**: Provides format information needed for GDAL operations
-
-**Common Keys:**
-- `driver` - GDAL driver name (e.g., "GTiff", "NetCDF", "HDF4")
-- `extension` - File extension (e.g., ".tif", ".nc")
-- `size` - Size in bytes (as string) matching the length of the raster payload
-- Other format-specific metadata
-
-**Example:**
-
-<CodeFromTest code={tileStructureExamples} functionName="access_metadata_fields" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_metadata_fields_output" />
-
----
-
 ## Working with Tiles
 
 ### Accessing Tile Fields
@@ -155,6 +87,10 @@ Filter tiles based on driver or other metadata:
 
 <CodeFromTest code={tileStructureExamples} functionName="filtering_by_metadata" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="filtering_by_metadata_output" />
 
+Access individual metadata keys from a tile:
+
+<CodeFromTest code={tileStructureExamples} functionName="access_metadata_fields" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_metadata_fields_output" />
+
 ### Using Tiles in Custom UDFs
 
 Access tile components for custom processing:
@@ -162,6 +98,10 @@ Access tile components for custom processing:
 <CodeFromTest code={tileStructureExamples} functionName="using_tiles_in_custom_udfs" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="using_tiles_in_custom_udfs_output" />
 
 ### Processing Binary Raster Data
+
+Access the `path` and `raster` fields to distinguish virtual from materialized tiles:
+
+<CodeFromTest code={tileStructureExamples} functionName="access_path_and_binary" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_path_and_binary_output" />
 
 When the `raster` field contains binary data, use it with rasterio or GDAL:
 

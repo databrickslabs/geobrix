@@ -40,7 +40,15 @@ Doing that forces four design questions this document answers:
 
 - A `.open()` stream opened via `rasterio.open(stream)` loads the **whole file into `/vsimem`
   memory** (~file-size RSS) — fast windows, but RAM ≈ file size. A 10 GB striped stream-open
-  crashes the worker. FUSE (`.as_local_file()`) is lazy + low-RAM but slower cold.
+  crashes the worker. FUSE (`.as_local_file()`) is lazy + low-RAM but slower cold. **Measured for
+  BOTH MANAGED and EXTERNAL FileRefs (2026-08-18) — the slurp/lazy split is governance-independent:**
+  it is a rasterio "read a file-object into a MemoryFile" behavior, not a FILE-mode property. On a
+  308 MB COG, `.open()` RSS jumped ~+310–324 MB **at open** (before any window) for both modes,
+  while `.as_local_file()` stayed +0 at open and grew only ~+30 MB across four windows for both;
+  disk delta ≈ 0 for the stream in both. (This reconciles an earlier disk-only observation that
+  called `.open()` "byte-range/no-copy" — true for disk, but the bytes land in RAM.) One mode
+  difference: MANAGED `.open()` **cold-open is much slower** — ~29 s vs ~3.6 s external for 308 MB
+  (single sample, ~8×) — which only reinforces FUSE for large MANAGED files.
 - A `FileRef`'s entire public surface is `{as_local_file, checksum, content_type, from_bytes,
   from_local_file, offset, open, size, uri}`. Its only URL-ish accessor, `.uri`, returns a
   **`dbfs:` scheme path** (`dbfs:/Volumes/…`) — **not** an HTTP URL. There is no signed/presigned
@@ -213,7 +221,9 @@ Increment 2 corrects it:
    - **large** → FUSE `.as_local_file()` (lazy, low-RAM, slower cold);
    - **never stream huge-striped** (a striped multi-GB stream-open crashes the worker).
    The cutover is a configurable byte threshold (`GBX_STREAM_MAX_BYTES`, default in the low-hundreds
-   of MB) plus a striped-layout guard; both are validated on-cluster during implementation.
+   of MB) plus a striped-layout guard; both are validated on-cluster during implementation. The
+   threshold may be **mode-aware** — lower for MANAGED, whose `.open()` cold-open measured ~8×
+   slower than EXTERNAL (29 s vs 3.6 s for 308 MB), so managed large files favor FUSE sooner.
 4. **`GBX_STAGE_MAX_BYTES` guard on `_stage_local_if_needed`** — today it has no size guard and will
    copy an arbitrarily large file to `/tmp`; add a cap (huge files never stage) **and fix the
    temp-file leak** (`is_temp` is discarded in `_make_opener`, so evicted temp copies are never

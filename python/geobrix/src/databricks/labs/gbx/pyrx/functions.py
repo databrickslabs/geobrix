@@ -5247,7 +5247,7 @@ def rst_memsize_grouped(df, *, tile_col: str = "tile", out_col: str = "memsize")
 
     from .grouped_exec import grouped_tile_map
 
-    def _core(ds):
+    def _core(ds, cellid):  # noqa: ARG001 — cellid passed by executor contract
         itemsize = np.dtype(ds.dtypes[0]).itemsize
         return int(ds.count * ds.width * ds.height * itemsize)
 

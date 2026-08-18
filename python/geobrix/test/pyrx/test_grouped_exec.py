@@ -36,7 +36,7 @@ def test_grouped_map_matches_per_row_memsize(spark, gtiff_bytes):
     tile per-row via _open and applies core_fn on the open DatasetReader.
     """
 
-    def core_fn(ds):
+    def core_fn(ds, cellid):
         itemsize = np.dtype(ds.dtypes[0]).itemsize
         return int(ds.count * ds.width * ds.height * itemsize)
 
@@ -54,7 +54,7 @@ def test_grouped_map_output_schema_extends_input(spark, gtiff_bytes):
     df = _tile_df(spark, gtiff_bytes)
     out = grouped_tile_map(
         df,
-        lambda ds: ds.count,
+        lambda ds, cellid: ds.count,
         return_field=StructField("band_count", LongType()),
     )
     assert out.schema.fieldNames() == ["tile", "band_count"]
@@ -77,7 +77,7 @@ def test_grouped_map_custom_tile_col(spark, gtiff_bytes):
     )
     out = grouped_tile_map(
         df,
-        lambda ds: ds.count,
+        lambda ds, cellid: ds.count,
         return_field=StructField("nb", LongType()),
         tile_col="raster_tile",
     )
@@ -140,7 +140,7 @@ def test_grouped_map_windowless_virtual_tile(spark, gtiff_bytes, tmp_path):
         StructType([StructField("tile", V2_TILE_SCHEMA)]),
     )
 
-    def core_fn(ds):
+    def core_fn(ds, cellid):
         return int(ds.count * ds.width * ds.height * np.dtype(ds.dtypes[0]).itemsize)
 
     out = grouped_tile_map(df, core_fn, return_field=StructField("sz", LongType()))
@@ -176,7 +176,7 @@ def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp
     ]
     df = spark.createDataFrame(rows, StructType([StructField("tile", V2_TILE_SCHEMA)]))
 
-    def core_fn(ds):
+    def core_fn(ds, cellid):
         return int(ds.count * ds.width * ds.height * np.dtype(ds.dtypes[0]).itemsize)
 
     out = grouped_tile_map(df, core_fn, return_field=StructField("sz", LongType()))
@@ -186,3 +186,70 @@ def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp
     assert (
         result[1] == 4 * 3 * 1 * _FLOAT32_ITEMSIZE
     ), f"readable tile wrong: {result[1]}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: header-vs-pixel view contract (M2)
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_tile_map_pixel_view_allows_read(spark, gtiff_bytes):
+    """view="pixels" hands core_fn a real DatasetReader whose .read(1) works.
+
+    Uses the fallback path (materialized tiles, file_supported()=False locally).
+    The fallback already yields a real DatasetReader, so view="pixels" passes it
+    straight through — this test validates the kwarg is accepted and the path works.
+    """
+
+    def core(ds, cellid):
+        return int(ds.read(1).sum())  # reads pixels
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        core,
+        return_field=StructField("s", LongType()),
+        view="pixels",
+    )
+    assert out.select("s").head()[0] is not None
+
+
+def test_grouped_tile_map_header_view_forbids_read(spark, gtiff_bytes):
+    """view="header" (default) hands core_fn a _WindowHeaderView whose .read() raises.
+
+    The view exposes header attrs (width, height, count, dtypes) but intentionally
+    blocks pixel I/O.
+    """
+
+    def core(view, cellid):
+        try:
+            view.read(1)
+            return -1  # should not reach here
+        except Exception:
+            return int(view.width)  # header attrs only
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        core,
+        return_field=StructField("w", LongType()),
+    )  # default view="header"
+    assert out.select("w").head()[0] > 0
+
+
+def test_grouped_tile_map_cellid_passed_to_core(spark, gtiff_bytes):
+    """core_fn receives the cellid matching the tile's cellid field."""
+
+    def core(ds, cellid):
+        return int(cellid)
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        core,
+        return_field=StructField("cid", LongType()),
+    )
+    result = {r["tile"]["cellid"]: r["cid"] for r in out.collect()}
+    # Each row should return its own cellid (0, 1, 2 as created by _tile_df).
+    for expected_cellid in [0, 1, 2]:
+        assert result[expected_cellid] == expected_cellid, (
+            f"cellid mismatch: tile cellid={expected_cellid}, "
+            f"core_fn got {result[expected_cellid]}"
+        )

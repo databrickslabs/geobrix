@@ -185,13 +185,27 @@ def grouped_tile_map(
     *,
     return_field: StructField,
     tile_col: str = "tile",
+    view: str = "header",
 ) -> DataFrame:
     """Partition-scoped ``mapInPandas`` executor for light-tier tiles.
 
     For each tile in the partition, opens the raster source, applies
-    ``core_fn(ds) -> value`` on the open ``DatasetReader`` (or a read-free
-    ``_WindowHeaderView`` on the FILE fast path), and stores the result in a
-    new column ``return_field.name``.
+    ``core_fn(ds_or_view, cellid) -> value`` on the open ``DatasetReader`` (or a
+    read-free ``_WindowHeaderView`` on the FILE fast path), and stores the result
+    in a new column ``return_field.name``.
+
+    ``cellid`` is the tile's ``cellid`` field, passed so tile-returning ops can
+    stamp the output tile with the input cell identity.
+
+    The ``view`` keyword controls what ``core_fn`` receives on the FILE fast path:
+
+    - ``view="header"`` (default): ``core_fn`` receives a ``_WindowHeaderView``
+      whose ``.read()`` raises — header attributes only, no pixel I/O.
+    - ``view="pixels"``: the window is materialised from the cached source via
+      ``_window_dataset_bytes``, opened as a real ``DatasetReader``, and passed
+      to ``core_fn``.  On the fallback path (materialized tiles / non-FILE /
+      open failure) ``core_fn`` always receives a real ``DatasetReader``
+      regardless of ``view``.
 
     Tile dispatch:
 
@@ -201,18 +215,16 @@ def grouped_tile_map(
     - **Virtual tiles** (``path`` set) + FILE-capable: before ``mapInPandas`` a
       ``_file_ref`` column is added holding a ``try_to_file(path)`` FileRef for
       each row.  Inside the partition the LRU caches the open rasterio dataset
-      (opened from the FileRef's seekable stream) keyed by ``uri``; a per-tile
-      ``_WindowHeaderView`` wraps the cached dataset to expose the correct
-      window-scoped dims to ``core_fn`` without reading pixels.  ``_file_ref``
-      is stripped from the output so the output schema is unchanged.
-      On any FileRef open or view-construction failure, degrades per-tile to
-      the fallback path below.
+      (opened from the FileRef's seekable stream) keyed by ``uri``; on the FILE
+      fast path the view contract (header/pixels) determines what is passed to
+      ``core_fn``.  ``_file_ref`` is stripped from the output so the output
+      schema is unchanged.  On any FileRef open or view-construction failure,
+      degrades per-tile to the fallback path below.
     - **Virtual tiles** + fallback (non-FILE / open failure): opened per-row via
       ``_open``; no amortisation — each tile's window is unique.
 
-    ``core_fn`` receives an open ``DatasetReader`` (or a ``_WindowHeaderView``
-    duck-typed for header attributes) and must not hold a reference after
-    returning.
+    ``core_fn(ds_or_view, cellid)`` must not hold a reference to its first arg
+    after returning.
 
     Output schema is ``df.schema + [return_field]``; ``_file_ref`` never leaks.
     """
@@ -248,6 +260,10 @@ def grouped_tile_map(
         _env.configure_gdal_env()
         fr_holder, opener, closer, weigher = _make_opener()
         lru = OpenResourceLRU(opener=opener, closer=closer, weigher=weigher)
+        # Capture the view kwarg in the closure so the inner loop can use it
+        # without shadowing the local variable 'view' with a _WindowHeaderView
+        # instance (the FILE fast-path loop used to do that).
+        _view_mode = view
         try:
             for pdf in pdf_iter:
                 results = []
@@ -260,6 +276,11 @@ def grouped_tile_map(
                 has_fr_col = "_file_ref" in pdf.columns
                 for _, row in pdf.iterrows():
                     tile = row[tile_col]
+                    # Extract cellid from the tile struct for passing to core_fn.
+                    try:
+                        cellid = tile["cellid"]
+                    except (KeyError, TypeError):
+                        cellid = None
                     # Resolve uri: None for materialized tiles, path string for virtual.
                     try:
                         uri = tile["path"] or None
@@ -271,14 +292,12 @@ def grouped_tile_map(
                         fr = row["_file_ref"]
                         if fr is not None:
                             # FILE fast path: inject FileRef so the LRU opener can
-                            # stream-open the source on a cache miss, then build a
-                            # read-free per-tile window view from the cached dataset.
+                            # stream-open the source on a cache miss, then hand
+                            # core_fn either a read-free header view or a real
+                            # windowed DatasetReader depending on _view_mode.
                             try:
                                 fr_holder[0] = fr
                                 src = lru.get(uri)
-                                # Build a _WindowHeaderView so core_fn sees the
-                                # tile's window dims (count/width/height/dtypes),
-                                # not the full-source dims.  No pixel I/O.
                                 from rasterio.windows import Window
 
                                 from .core.open_tile import (
@@ -301,17 +320,45 @@ def grouped_tile_map(
                                     )
                                 if vt.window is not None:
                                     c, r_off, w, h = vt.window
-                                    view = _WindowHeaderView(
-                                        src,
-                                        Window(c, r_off, w, h),
-                                        pending_count=pending_count,
-                                        pending_crs=pending_crs,
-                                        pending_nodata=raw_nodata,
-                                    )
-                                    result = core_fn(view)
+                                    win = Window(c, r_off, w, h)
+                                    if _view_mode == "pixels":
+                                        # Materialise the window into GTiff bytes,
+                                        # open as a real DatasetReader inside an
+                                        # ExitStack, and pass to core_fn.
+                                        import rasterio
+                                        from contextlib import ExitStack
+
+                                        from .core.open_tile import (
+                                            _window_dataset_bytes,
+                                        )
+
+                                        pending = (bands, raw_nodata, srid, crs_str)
+                                        b = _window_dataset_bytes(src, win, pending)
+                                        with ExitStack() as _stk:
+                                            ds = _stk.enter_context(
+                                                rasterio.open(
+                                                    rasterio.io.MemoryFile(b)
+                                                )
+                                            )
+                                            result = core_fn(ds, cellid)
+                                    else:
+                                        # view="header": read-free header view.
+                                        header_view = _WindowHeaderView(
+                                            src,
+                                            win,
+                                            pending_count=pending_count,
+                                            pending_crs=pending_crs,
+                                            pending_nodata=raw_nodata,
+                                        )
+                                        result = core_fn(header_view, cellid)
                                 else:
                                     # No sub-window: full source; src is correct.
-                                    result = core_fn(src)
+                                    # For view="pixels" src is already a full
+                                    # DatasetReader; for view="header" we pass it
+                                    # directly (no sub-window means full-source dims
+                                    # are correct — a WindowHeaderView would be a
+                                    # no-op wrapper here).
+                                    result = core_fn(src, cellid)
                             except Exception:
                                 # Any open/stream/view-construction failure →
                                 # degrade gracefully to the per-tile fallback below.
@@ -327,15 +374,39 @@ def grouped_tile_map(
                         # open_header returns the full-source footprint (consistent
                         # with per-row rst_memsize).  Per-tile errors degrade to
                         # None rather than crashing the whole partition.
+                        #
+                        # view contract on fallback path:
+                        #   view="header": wrap the open DatasetReader in a full-
+                        #     extent _WindowHeaderView so core_fn consistently gets
+                        #     a read-blocking view regardless of tile type.
+                        #   view="pixels": pass the real DatasetReader directly.
                         from .core.open_tile import _open, open_header
 
                         try:
                             if _tile_is_windowless_virtual(tile):
                                 with open_header(tile) as ds:
-                                    result = core_fn(ds)
+                                    if _view_mode == "header":
+                                        from rasterio.windows import Window as _Win
+                                        from .core.open_tile import _WindowHeaderView
+                                        _hv = _WindowHeaderView(
+                                            ds,
+                                            _Win(0, 0, ds.width, ds.height),
+                                        )
+                                        result = core_fn(_hv, cellid)
+                                    else:
+                                        result = core_fn(ds, cellid)
                             else:
                                 with _open(tile) as ds:
-                                    result = core_fn(ds)
+                                    if _view_mode == "header":
+                                        from rasterio.windows import Window as _Win
+                                        from .core.open_tile import _WindowHeaderView
+                                        _hv = _WindowHeaderView(
+                                            ds,
+                                            _Win(0, 0, ds.width, ds.height),
+                                        )
+                                        result = core_fn(_hv, cellid)
+                                    else:
+                                        result = core_fn(ds, cellid)
                         except Exception:
                             result = None
 

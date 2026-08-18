@@ -121,10 +121,16 @@ class OpenResourceLRU:
 def _open_via_file_ref(fr, rasterio):
     """Open a rasterio DatasetReader from *fr* using the size-adaptive strategy.
 
+    Returns ``(ds, stream)`` when opened via byte-range stream (tiled/COG path),
+    or ``(ds, None)`` when opened via FUSE (``as_local_file``).
+
     - Small file (≤ GBX_STREAM_MAX_BYTES) AND tiled layout: stream into /vsimem via
       ``fr.open()`` — efficient for tiled/COG sources that support random window reads.
     - Large file OR striped layout: lazy FUSE open via ``fr.as_local_file()`` — blocks
       are fetched on demand without loading the whole file into RAM.
+
+    On the striped fallthrough, both the interim DatasetReader and the stream are
+    closed before falling back to FUSE; the returned ``(ds, None)`` pair is FUSE-only.
 
     Raises on any failure; caller must handle and fall back to staging.
     """
@@ -132,61 +138,54 @@ def _open_via_file_ref(fr, rasterio):
         stream = fr.open()
         ds = rasterio.open(stream)
         if ds.profile.get("tiled", False):
-            return ds  # tiled/COG: seekable stream is efficient
-        ds.close()  # striped: fall through to FUSE
+            return ds, stream  # tiled/COG: seekable stream is efficient
+        ds.close()
+        stream.close()  # striped: release the stream before FUSE fallback
     local_path = fr.as_local_file()
-    return rasterio.open(local_path)
+    return rasterio.open(local_path), None  # FUSE path: no stream
 
 
-def _make_opener():
-    """Capability-adaptive opener factory.
+class _OpenerContext:
+    """Per-partition opener/closer/weigher state for the FILE-capable LRU.
 
-    Returns ``(fr_holder, opener, closer, weigher)``.
+    Runs on the worker; all imports inside methods are worker-local (GDAL env
+    configured before this is instantiated).
 
-    Runs on the worker; all imports are worker-local (GDAL env configured
-    before this is called).
+    ``fr_holder`` is a one-element list ``[None]``.  The partition loop sets
+    ``fr_holder[0] = <current FileRef>`` before each ``lru.get(uri)`` call so the
+    opener can stream-open the source on a cache miss.
 
-    FILE capability is signaled by the presence of the ``_file_ref`` column
-    (``has_fr_col`` in the caller), NOT by a worker-side ``file_supported()``
-    call.  The driver gated column addition on ``file_ok_driver`` using an
-    explicit ``df.sparkSession``; a worker-side ``file_supported()`` would
-    rely on ``getActiveSession()``, which returns ``None`` on Spark-Connect
-    worker threads (e.g. Serverless on DBR 19.5), silently disabling the FILE
-    fast path even when the driver correctly determined FILE is supported.
-    The ``_file_ref`` column's presence IS the worker capability signal.
+    FILE capability is signaled by the presence of the ``_file_ref`` column, NOT
+    by a worker-side ``file_supported()`` call (which uses ``getActiveSession()``
+    and returns ``None`` on Spark-Connect worker threads, e.g. Serverless DBR 19.5).
 
-    The LRU is keyed by ``uri`` (the source-path string) — hashable, and the
-    identity that amortises opens.
-
-    ``fr_holder`` is a one-element list ``[None]``.  Before each ``lru.get(uri)``
-    call the partition loop sets ``fr_holder[0] = <current FileRef>``.  On an LRU
-    cache miss the opener reads ``fr_holder[0]`` to decide how to open the source:
-
-    - ``fr.size <= GBX_STREAM_MAX_BYTES`` AND tiled (not striped): ``fr.open()``
-      stream → ``rasterio.open(stream)``.  Tiled sources support efficient random
-      window reads via the seekable stream; loading into /vsimem is bounded by the
-      size cap.
-    - Large file (``fr.size > GBX_STREAM_MAX_BYTES``) OR striped layout: use
-      ``fr.as_local_file()`` (lazy FUSE path) so rasterio fetches blocks on demand
-      without loading the entire file into RAM.
-
-    Staged temps (fallback when FileRef is unavailable) are tracked and deleted
-    by the closer on eviction, preventing temp-file leaks.
+    Tracking dicts:
+    - ``_staged_temps``: id(ds) → temp_path for staging-fallback cleanup.
+    - ``_streams``: id(ds) → stream for tiled/COG opens — closed by ``close`` to
+      prevent stream leaks alongside the DatasetReader.
+    - ``_fuse_sources``: set of id(ds) for FUSE-opened handles — FUSE handles don't
+      buffer into executor RAM, so ``weigh`` returns a small nominal for them.
     """
-    # fr_holder: mutable slot so the partition loop can inject the current row's
-    # FileRef before lru.get(uri).  A list is used because closures can't rebind
-    # a bare name in the outer scope.
-    fr_holder = [None]
-    # Tracks staged temp paths: id(src) -> temp_path.  Used by closer to clean up.
-    staged_temps: "dict[int, str]" = {}
 
-    def opener(uri: str):
+    def __init__(self):
+        # Mutable FileRef slot; a list so the partition loop can rebind it.
+        self.fr_holder: "list[Any]" = [None]
+        self._staged_temps: "dict[int, str]" = {}
+        self._streams: "dict[int, Any]" = {}
+        self._fuse_sources: "set[int]" = set()
+
+    def open(self, uri: str):
         import rasterio
 
-        fr = fr_holder[0]
+        fr = self.fr_holder[0]
         if fr is not None:
             try:
-                return _open_via_file_ref(fr, rasterio)
+                ds, stream = _open_via_file_ref(fr, rasterio)
+                if stream is not None:
+                    self._streams[id(ds)] = stream
+                else:
+                    self._fuse_sources.add(id(ds))
+                return ds
             except Exception:
                 pass  # all FILE paths failed → staging fallback
         # Staging fallback: fr unavailable or all FILE paths raised.
@@ -195,33 +194,42 @@ def _make_opener():
         local_path, is_temp = _stage_local_if_needed(uri)
         ds = rasterio.open(local_path)
         if is_temp:
-            staged_temps[id(ds)] = local_path
+            self._staged_temps[id(ds)] = local_path
         return ds
 
-    def closer(src) -> None:
-        tmp = staged_temps.pop(id(src), None)
+    def close(self, src) -> None:
+        tmp = self._staged_temps.pop(id(src), None)
+        stream = self._streams.pop(id(src), None)
+        self._fuse_sources.discard(id(src))
         try:
             src.close()
         except Exception:
             pass
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception:
+                pass
         if tmp:
             try:
                 os.remove(tmp)
             except Exception:
                 pass
 
-    def weigher(src, key: str) -> int:
-        # Prefer the current FileRef's declared byte size.  At the time the LRU
-        # calls weigher, fr_holder[0] is still set to the FileRef for this uri
-        # (set by the partition loop before lru.get(uri)).
-        fr = fr_holder[0]
+    def weigh(self, src, key: str) -> int:
+        # FUSE-opened handles don't buffer into executor RAM — use a small nominal
+        # so the LRU budget isn't inflated by large-file FUSE references.
+        if id(src) in self._fuse_sources:
+            return STREAM_NOMINAL_BYTES
+        # Stream/COG path: use the FileRef's declared byte size (actual RAM use).
+        fr = self.fr_holder[0]
         if fr is not None:
             try:
                 return int(fr.size)
             except Exception:
                 pass
         # Staged fallback: use the on-disk size of the temp copy.
-        tmp = staged_temps.get(id(src))
+        tmp = self._staged_temps.get(id(src))
         if tmp:
             try:
                 return os.path.getsize(tmp)
@@ -229,7 +237,112 @@ def _make_opener():
                 pass
         return STREAM_NOMINAL_BYTES
 
-    return fr_holder, opener, closer, weigher
+
+def _run_file_fast_path(fr_holder, lru, uri, fr, tile, cellid, view_mode, core_fn):
+    """Execute the FILE fast-path for one tile. Returns result; raises on failure.
+
+    Sets ``fr_holder[0] = fr`` before calling ``lru.get(uri)`` so the opener can
+    stream-open the source on a cache miss, then dispatches to ``core_fn`` via
+    either a read-free ``_WindowHeaderView`` (``view_mode="header"``) or a real
+    windowed ``DatasetReader`` materialised from the cached source
+    (``view_mode="pixels"``).
+
+    Caller wraps in ``try/except Exception`` and sets ``result = _MISS`` so the
+    fallback path can take over on any open / stream / view-construction failure.
+    """
+    fr_holder[0] = fr
+    src = lru.get(uri)
+    from rasterio.windows import Window
+
+    from .core.open_tile import _parse_pending, _to_virtual_tile, _WindowHeaderView
+
+    vt = _to_virtual_tile(tile)
+    bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
+    pending_count = len(bands) if bands else None
+    pending_crs = None
+    if crs_str is not None or srid is not None:
+        from .core.crs import resolve_crs
+
+        pending_crs = resolve_crs(crs_str if crs_str is not None else srid)
+    if vt.window is not None:
+        c, r_off, w, h = vt.window
+        win = Window(c, r_off, w, h)
+        if view_mode == "pixels":
+            # Materialise the window into GTiff bytes, open as a real
+            # DatasetReader inside an ExitStack, and pass to core_fn.
+            from contextlib import ExitStack
+
+            import rasterio
+
+            from .core.open_tile import _window_dataset_bytes
+
+            pending = (bands, raw_nodata, srid, crs_str)
+            b = _window_dataset_bytes(src, win, pending)
+            with ExitStack() as _stk:
+                ds = _stk.enter_context(rasterio.open(rasterio.io.MemoryFile(b)))
+                return core_fn(ds, cellid)
+        else:
+            # view="header": read-free header view.
+            header_view = _WindowHeaderView(
+                src,
+                win,
+                pending_count=pending_count,
+                pending_crs=pending_crs,
+                pending_nodata=raw_nodata,
+            )
+            return core_fn(header_view, cellid)
+    else:
+        # No sub-window: full source; src is a complete DatasetReader.
+        # For view="pixels" src is already a full DatasetReader; for
+        # view="header" we pass it directly (no sub-window means full-source
+        # dims are correct — a WindowHeaderView would be a no-op wrapper).
+        return core_fn(src, cellid)
+
+
+def _run_fallback_tile(tile, cellid, view_mode, core_fn):
+    """Execute the per-tile fallback for one tile. Returns result; raises on failure.
+
+    Covers:
+      (a) materialized tiles (raster inline, path None)
+      (b) virtual tiles when driver did not add _file_ref (FILE not supported)
+      (c) FILE open/stream/view failure (graceful degrade from fast path)
+
+    For windowless virtual tiles, ``_open`` raises ``ValueError``; ``open_header``
+    returns the full-source footprint (consistent with per-row ``rst_memsize``).
+
+    view contract:
+      ``view="header"``: wrap the open DatasetReader in a full-extent
+        ``_WindowHeaderView`` so ``core_fn`` consistently receives a read-blocking
+        view regardless of tile type.
+      ``view="pixels"``: pass the real DatasetReader directly.
+
+    Caller wraps in ``try/except Exception`` and sets ``result = None`` on failure
+    so per-tile errors degrade gracefully rather than crashing the whole partition.
+    """
+    from .core.open_tile import _open, open_header
+
+    if _tile_is_windowless_virtual(tile):
+        with open_header(tile) as ds:
+            if view_mode == "header":
+                from rasterio.windows import Window as _Win
+
+                from .core.open_tile import _WindowHeaderView
+
+                _hv = _WindowHeaderView(ds, _Win(0, 0, ds.width, ds.height))
+                return core_fn(_hv, cellid)
+            else:
+                return core_fn(ds, cellid)
+    else:
+        with _open(tile) as ds:
+            if view_mode == "header":
+                from rasterio.windows import Window as _Win
+
+                from .core.open_tile import _WindowHeaderView
+
+                _hv = _WindowHeaderView(ds, _Win(0, 0, ds.width, ds.height))
+                return core_fn(_hv, cellid)
+            else:
+                return core_fn(ds, cellid)
 
 
 def grouped_tile_map(
@@ -320,11 +433,11 @@ def grouped_tile_map(
         from . import _env
 
         _env.configure_gdal_env()
-        fr_holder, opener, closer, weigher = _make_opener()
-        lru = OpenResourceLRU(opener=opener, closer=closer, weigher=weigher)
+        _ctx = _OpenerContext()
+        lru = OpenResourceLRU(opener=_ctx.open, closer=_ctx.close, weigher=_ctx.weigh)
         # Capture the view kwarg in the closure so the inner loop can use it
         # without shadowing the local variable 'view' with a _WindowHeaderView
-        # instance (the FILE fast-path loop used to do that).
+        # instance.
         _view_mode = view
         try:
             for pdf in pdf_iter:
@@ -354,124 +467,28 @@ def grouped_tile_map(
                         fr = row["_file_ref"]
                         if fr is not None:
                             # FILE fast path: inject FileRef so the LRU opener can
-                            # stream-open the source on a cache miss, then hand
-                            # core_fn either a read-free header view or a real
-                            # windowed DatasetReader depending on _view_mode.
+                            # stream-open the source on a cache miss.
                             try:
-                                fr_holder[0] = fr
-                                src = lru.get(uri)
-                                from rasterio.windows import Window
-
-                                from .core.open_tile import (
-                                    _parse_pending,
-                                    _to_virtual_tile,
-                                    _WindowHeaderView,
+                                result = _run_file_fast_path(
+                                    _ctx.fr_holder,
+                                    lru,
+                                    uri,
+                                    fr,
+                                    tile,
+                                    cellid,
+                                    _view_mode,
+                                    core_fn,
                                 )
-
-                                vt = _to_virtual_tile(tile)
-                                bands, raw_nodata, srid, crs_str = _parse_pending(
-                                    vt.metadata
-                                )
-                                pending_count = len(bands) if bands else None
-                                pending_crs = None
-                                if crs_str is not None or srid is not None:
-                                    from .core.crs import resolve_crs
-
-                                    pending_crs = resolve_crs(
-                                        crs_str if crs_str is not None else srid
-                                    )
-                                if vt.window is not None:
-                                    c, r_off, w, h = vt.window
-                                    win = Window(c, r_off, w, h)
-                                    if _view_mode == "pixels":
-                                        # Materialise the window into GTiff bytes,
-                                        # open as a real DatasetReader inside an
-                                        # ExitStack, and pass to core_fn.
-                                        from contextlib import ExitStack
-
-                                        import rasterio
-
-                                        from .core.open_tile import (
-                                            _window_dataset_bytes,
-                                        )
-
-                                        pending = (bands, raw_nodata, srid, crs_str)
-                                        b = _window_dataset_bytes(src, win, pending)
-                                        with ExitStack() as _stk:
-                                            ds = _stk.enter_context(
-                                                rasterio.open(rasterio.io.MemoryFile(b))
-                                            )
-                                            result = core_fn(ds, cellid)
-                                    else:
-                                        # view="header": read-free header view.
-                                        header_view = _WindowHeaderView(
-                                            src,
-                                            win,
-                                            pending_count=pending_count,
-                                            pending_crs=pending_crs,
-                                            pending_nodata=raw_nodata,
-                                        )
-                                        result = core_fn(header_view, cellid)
-                                else:
-                                    # No sub-window: full source; src is correct.
-                                    # For view="pixels" src is already a full
-                                    # DatasetReader; for view="header" we pass it
-                                    # directly (no sub-window means full-source dims
-                                    # are correct — a WindowHeaderView would be a
-                                    # no-op wrapper here).
-                                    result = core_fn(src, cellid)
                             except Exception:
                                 # Any open/stream/view-construction failure →
-                                # degrade gracefully to the per-tile fallback below.
+                                # degrade gracefully to the per-tile fallback.
                                 result = _MISS
 
                     if result is _MISS:
-                        # Fallback path: covers
-                        #   (a) materialized tiles (raster inline, path None)
-                        #   (b) virtual tiles when driver did not add _file_ref
-                        #       (FILE not supported on this cluster)
-                        #   (c) FILE open/stream/view failure (graceful degrade)
-                        # For windowless virtual tiles, _open raises ValueError;
-                        # open_header returns the full-source footprint (consistent
-                        # with per-row rst_memsize).  Per-tile errors degrade to
-                        # None rather than crashing the whole partition.
-                        #
-                        # view contract on fallback path:
-                        #   view="header": wrap the open DatasetReader in a full-
-                        #     extent _WindowHeaderView so core_fn consistently gets
-                        #     a read-blocking view regardless of tile type.
-                        #   view="pixels": pass the real DatasetReader directly.
-                        from .core.open_tile import _open, open_header
-
                         try:
-                            if _tile_is_windowless_virtual(tile):
-                                with open_header(tile) as ds:
-                                    if _view_mode == "header":
-                                        from rasterio.windows import Window as _Win
-
-                                        from .core.open_tile import _WindowHeaderView
-
-                                        _hv = _WindowHeaderView(
-                                            ds,
-                                            _Win(0, 0, ds.width, ds.height),
-                                        )
-                                        result = core_fn(_hv, cellid)
-                                    else:
-                                        result = core_fn(ds, cellid)
-                            else:
-                                with _open(tile) as ds:
-                                    if _view_mode == "header":
-                                        from rasterio.windows import Window as _Win
-
-                                        from .core.open_tile import _WindowHeaderView
-
-                                        _hv = _WindowHeaderView(
-                                            ds,
-                                            _Win(0, 0, ds.width, ds.height),
-                                        )
-                                        result = core_fn(_hv, cellid)
-                                    else:
-                                        result = core_fn(ds, cellid)
+                            result = _run_fallback_tile(
+                                tile, cellid, _view_mode, core_fn
+                            )
                         except Exception:
                             result = None
 

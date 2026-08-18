@@ -849,12 +849,24 @@ The result splits cleanly along the `Disposition`:
 | Real COG — NAIP (DEFLATE, 512px blocks) | 324 MB, 1 000 × 256 px windows | 23.4 s | 16.2 s | **1.44×** |
 | Real COG — Sentinel-2 (DEFLATE, 1024px blocks) | 22 MB, 1 000 × 256 px windows | 19.4 s | 17.7 s | **0.91× (wash)** |
 
-**Conclusion:** FILE is not a throughput win for virtual-tile reads — it never wins, in any
-configuration tested. The bottleneck is per-tile HTTP stream setup and COG-header parsing
-over HTTP — each tile opens a new `FileRef` connection and re-parses the COG header before
-reading the window bytes. GDAL windowed reads over FUSE use block-level I/O against the OS
-page cache, which reuses each decompressed block across the windows that touch it — FUSE
-does **not** stage the whole file.
+:::note Per-tile-open (non-amortized) regime
+The table above measures the **non-amortized regime**: `warmup=0`, each tile opens a new
+`FileRef` connection and re-parses the COG header before reading its window. In this regime
+FUSE wins because the per-open HTTP cost is paid once per tile with no reuse.
+
+With **per-partition open-amortization** — where the source is opened once per partition
+and all windows from that source are read from the same cached dataset handle — the byte-range
+stream wins **10–290×** over FUSE for windowed COG reads. See
+[Virtual tile read performance](../api/performance#virtual-tile-read-performance) for the
+amortized numbers and guidance on enabling amortization via the grouped executor.
+:::
+
+**Conclusion (non-amortized, per-tile-open):** In the per-tile-open regime, FILE is not a
+throughput win — it never wins. The bottleneck is per-tile HTTP stream setup and COG-header
+parsing over HTTP — each tile opens a new `FileRef` connection and re-parses the COG header
+before reading the window bytes. GDAL windowed reads over FUSE use block-level I/O against
+the OS page cache, which reuses each decompressed block across the windows that touch it —
+FUSE does **not** stage the whole file.
 
 The **margin** depends on the COG's internal structure. FUSE wins by ~2× on 256px-tiled
 COGs (where a 256px window maps to exactly one block), but the advantage **shrinks toward a
@@ -863,8 +875,8 @@ wash on real production COGs**: when the internal block is larger than the read 
 whole block, so FILE's byte-range selectivity is neutralized and only the per-tile HTTP
 overhead separates them. The one regime where FILE loses badly (11×) is **low reuse** — many
 distinct files read once each — because the per-open HTTP cost dominates with no block reuse
-to amortize it. Net: **FILE is a governed file-access mechanism for clusters without a FUSE
-mount, not a raster read optimization.**
+to amortize it. Net: **in the non-amortized regime, FILE is a governed file-access mechanism
+for clusters without a FUSE mount, not a raster read optimization.**
 
 The standard bench corpus uses many small whole-file tiles. To reproduce these results,
 use the COG multi-window corpus: K large Cloud-Optimized GeoTIFFs, each referenced by M

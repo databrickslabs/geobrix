@@ -20,7 +20,7 @@ import java.nio.file.Files
   *
   * Covers:
   *  - v1 (3-field) binary tile: metadata read at position 2
-  *  - v2 (8-field) materialized tile: metadata read at position 7, not 2
+  *  - v2 (9-field) materialized tile: metadata read at position 7, not 2
   *  - v2 virtual tile (raster null, path set): guard throws with actionable message
   *  - unrecognized field count: clear error mentioning the count
   */
@@ -86,7 +86,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         RasterDriver.releaseDataset(ds)
     }
 
-    test("rowToTile reads a v2 (8-field) materialized tile; metadata at position 7") {
+    test("rowToTile reads a v2 (9-field) materialized tile; metadata at position 7") {
         val md = toMapData(Map("k" -> "v"))
         val (cell, ds, meta) = RasterSerializationUtil.rowToTile(
             v2MaterializedRow(9L, tinyGeotiff(), md), BinaryType)
@@ -160,13 +160,13 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
      *  (their eval() requires large geometry inputs and GDAL state not available here).
      */
     test("rasterize aggregator eval row numFields matches dataType field count") {
-        // --- Helper: assert dataType declares 9 fields ---
-        def assertDataType8(name: String, dt: org.apache.spark.sql.types.DataType): Unit = {
+        // --- Helper: assert dataType declares 9 fields (v2 9-field tile schema) ---
+        def assertDataType9(name: String, dt: org.apache.spark.sql.types.DataType): Unit = {
             val n = dt.asInstanceOf[StructType].size
             assert(n == 9, s"$name.dataType has $n fields, expected 9")
         }
 
-        assertDataType8("RST_RasterizeAgg",
+        assertDataType9("RST_RasterizeAgg",
             RST_RasterizeAgg(
                 geomExpr     = Literal.create(null, BinaryType),
                 valueExpr    = Literal(0.0),
@@ -181,7 +181,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
 
         // Grid aggregator signature: cellId, value, srid, pixelSize, xmin, ymin, xmax, ymax,
         //                              width, height, mode, kringPad  (12 positional args)
-        assertDataType8("RST_BNG_RasterizeAgg",
+        assertDataType9("RST_BNG_RasterizeAgg",
             RST_BNG_RasterizeAgg(
                 cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
@@ -197,7 +197,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
                 kringPadExpr  = Literal(0)
             ).dataType)
 
-        assertDataType8("RST_H3_RasterizeAgg",
+        assertDataType9("RST_H3_RasterizeAgg",
             RST_H3_RasterizeAgg(
                 cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
@@ -213,7 +213,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
                 kringPadExpr  = Literal(0)
             ).dataType)
 
-        assertDataType8("RST_Quadbin_RasterizeAgg",
+        assertDataType9("RST_Quadbin_RasterizeAgg",
             RST_Quadbin_RasterizeAgg(
                 cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),

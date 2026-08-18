@@ -18,7 +18,7 @@ In GeoBrix, a **tile** is not a simple binary column—it's a **structured type*
 
 A tile has the following structure:
 
-![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, nullable), path/window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string)](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
+![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, nullable), path/window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string), path_mode (string, storage mode: null / 'external' / 'managed')](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
 
 ```
 struct<

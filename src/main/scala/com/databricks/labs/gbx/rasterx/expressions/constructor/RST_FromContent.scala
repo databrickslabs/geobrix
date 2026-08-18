@@ -43,7 +43,7 @@ object RST_FromContent extends WithExpressionInfo {
                   "size" -> content.length.toString
                 )
                 val mapData = SerializationUtil.toMapData[String, String](mtd)
-                // v2 8-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata
+                // v2 9-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode
                 InternalRow.fromSeq(Seq(null, content, null, null, null, null, null, mapData, null))
             },
             null,

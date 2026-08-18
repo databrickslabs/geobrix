@@ -243,11 +243,17 @@ def test_read_file_table_passes_spark_to_file_supported(spark, monkeypatch):
         received_sessions.append(sess)
         return real_file_supported(sess)
 
-    monkeypatch.setattr(ft, "_table_props", lambda *a, **k: {
-        file_props.WRITE_STRATEGY_KEY: "managed:plain",
-        file_props.WRITER_VERSION_KEY: "1",
-    })
-    monkeypatch.setattr(ft, "_describe_cols", lambda s, t: ({"cellid", "path", "crs"}, "tile_file"))
+    monkeypatch.setattr(
+        ft,
+        "_table_props",
+        lambda *a, **k: {
+            file_props.WRITE_STRATEGY_KEY: "managed:plain",
+            file_props.WRITER_VERSION_KEY: "1",
+        },
+    )
+    monkeypatch.setattr(
+        ft, "_describe_cols", lambda s, t: ({"cellid", "path", "crs"}, "tile_file")
+    )
     monkeypatch.setattr(fr, "file_supported", spy_file_supported)
 
     read_file_table(spark, "file_tbl_session_spy")
@@ -306,6 +312,7 @@ def test_describe_cols_file_type_detection(data_type, expected_is_file):
             class _FakeDF:
                 def collect(self_):
                     return fake_rows
+
             return _FakeDF()
 
     plain, file_col = ft._describe_cols(_FakeSpark(), "dummy_table")
@@ -316,7 +323,7 @@ def test_describe_cols_file_type_detection(data_type, expected_is_file):
         )
         assert "tile_file" not in plain
     else:
-        assert file_col is None, (
-            f"data_type={data_type!r}: falsely detected as FILE; file_col={file_col!r}"
-        )
+        assert (
+            file_col is None
+        ), f"data_type={data_type!r}: falsely detected as FILE; file_col={file_col!r}"
         assert "tile_file" in plain

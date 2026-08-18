@@ -197,11 +197,17 @@ here; read them there.
 
 :::tip Virtual tiles + large COGs: byte-range reads
 When virtual tiles reference **windows** of a large Cloud-Optimized GeoTIFF,
-Databricks FILE can fetch only the bytes covering each window's COG tile blocks —
-rather than opening and seeking the full file. For large COGs (hundreds of MB),
-this is where the virtual-tile model pays off most: many narrow window references
-into one large COG are substantially cheaper with FILE than with the FUSE fallback.
-See [FILE-on vs FILE-off](../api/benchmarking#file-capability-cog-multiwindow) for measured results.
+Databricks FILE fetches only the bytes covering each window's COG tile blocks —
+rather than opening and seeking the full file. The read advantage is realized with
+**per-partition open-amortization**: opening the source once per partition and reading
+all its windows from the same cached dataset handle, rather than opening a new connection
+per tile. With amortization, byte-range stream reads are 10–290× faster than FUSE for
+windowed COG reads.
+
+See [Virtual tile read performance](../api/performance#virtual-tile-read-performance)
+for amortized numbers and guidance on the grouped executor. For per-tile-open (non-amortized)
+benchmarks, see [FILE vs FUSE: large-COG results](../api/benchmarking#file-capability-cog-multiwindow)
+— in that regime FUSE wins; the two pages cover different access patterns.
 :::
 
 ## See also

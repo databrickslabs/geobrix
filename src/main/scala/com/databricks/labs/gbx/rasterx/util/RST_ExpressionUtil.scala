@@ -82,7 +82,7 @@ object RST_ExpressionUtil {
 
     /**
       * Field count of the element StructType inside an ARRAY&lt;tile&gt; expression.
-      * Returns 3 for a v1 tile (3-field) or 8 for a v2 tile (8-field), derived from the
+      * Returns 3 for a v1 tile (3-field) or 9 for a v2 tile (9-field), derived from the
       * declared schema so it is automatically correct for whatever the input is.
       * Defaults to 3 (v1) if the expression type does not match ArrayType(StructType, _).
       */

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generate the RasterX tile-structure infographic SVG (v2 tile struct).
 
-Renders the 8-field v2 tile struct as a 4x2 card grid, plus a materialized-vs-
+Renders the 9-field v2 tile struct as a 3x3 card grid, plus a materialized-vs-
 virtual example-tile comparison. Used by docs/api/tile-structure.mdx and slides.
 
 Re-render after a change to the tile schema:
@@ -38,11 +38,13 @@ C_BORDER = "#E5E7EB"
 #   reference = indigo (path, window)  — set when virtual
 #   provenance= violet (clip_polygon, clip_crs, crs)
 #   meta      = blue   (metadata)
-A_IDENT  = "#0F8E8B"; T_IDENT  = "#D5ECEC"
-A_RASTER = "#E04E2A"; T_RASTER = "#FCE9E2"
-A_REF    = "#3B5BDB"; T_REF    = "#E5E9FB"
-A_PROV   = "#7A5AA6"; T_PROV   = "#ECE5F5"
-A_META   = "#1F6FB5"; T_META   = "#E3EEF8"
+#   storage   = green  (path_mode) — FILE storage mode indicator
+A_IDENT   = "#0F8E8B"; T_IDENT   = "#D5ECEC"
+A_RASTER  = "#E04E2A"; T_RASTER  = "#FCE9E2"
+A_REF     = "#3B5BDB"; T_REF     = "#E5E9FB"
+A_PROV    = "#7A5AA6"; T_PROV    = "#ECE5F5"
+A_META    = "#1F6FB5"; T_META    = "#E3EEF8"
+A_STORAGE = "#1E7D4B"; T_STORAGE = "#E0F2E9"
 
 # --- Schema -------------------------------------------------------------------
 
@@ -73,6 +75,8 @@ FIELDS = [
           "Working / target CRS", A_PROV, T_PROV),
     Field("metadata", "map<string,string>", True, "META",
           "driver, extension, size, format keys", A_META, T_META),
+    Field("path_mode", "string", True, "STORAGE",
+          "null / 'external' / 'managed' (FILE storage mode)", A_STORAGE, T_STORAGE),
 ]
 
 # Example tiles: materialized vs virtual
@@ -85,6 +89,7 @@ MATERIALIZED_EXAMPLE = [
     ("clip_crs", "null"),
     ("crs", "EPSG:32633"),
     ("metadata", '{driver→"GTiff", size→"188416"}'),
+    ("path_mode", "null"),
 ]
 VIRTUAL_EXAMPLE = [
     ("cellid", "null"),
@@ -95,6 +100,7 @@ VIRTUAL_EXAMPLE = [
     ("clip_crs", "EPSG:4326"),
     ("crs", "EPSG:32633"),
     ("metadata", '{driver→"GTiff"}'),
+    ("path_mode", '"external"'),
 ]
 
 # --- Layout -------------------------------------------------------------------
@@ -105,8 +111,8 @@ HEADER_H   = 100
 HERO_TOP_GAP = 16
 HERO_PAD   = 22
 HERO_TITLE_H = 52
-GRID_COLS  = 4
-GRID_ROWS  = 2
+GRID_COLS  = 3
+GRID_ROWS  = 3
 CARD_GAP   = 16
 CARD_H     = 118
 CMP_TOP_GAP = 20
@@ -247,10 +253,10 @@ def render():
     hero_y = PAD + HEADER_H + HERO_TOP_GAP
     parts.append(card(PAD, hero_y, inner_w, hero_h))
     parts.append(top_stripe(PAD, hero_y, inner_w, C_INK_2))
-    parts.append(text(PAD + HERO_PAD, hero_y + 30, "TILE SCHEMA — 8 FIELDS",
+    parts.append(text(PAD + HERO_PAD, hero_y + 30, "TILE SCHEMA — 9 FIELDS",
                       size=11, weight=700, fill=C_MUTED_3, letter_spacing="1.6"))
     parts.append(mono(CANVAS_W - PAD - HERO_PAD, hero_y + 30,
-                      "struct<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>",
+                      "struct<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode>",
                       size=12.5, weight=600, fill=C_MUTED, anchor="end"))
     # field grid
     field_w = (inner_w - 2 * HERO_PAD - (GRID_COLS - 1) * CARD_GAP) / GRID_COLS

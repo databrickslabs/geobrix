@@ -91,31 +91,23 @@ def test_grouped_map_custom_tile_col(spark, gtiff_bytes):
 
 
 def test_make_opener_returns_four_items_not_five():
-    """_make_opener must return (fr_holder, opener, closer, weigher) — 4 items.
+    """_OpenerContext must expose fr_holder, open, close, weigh — no worker-side file_supported().
 
     Under the OLD implementation _make_opener called file_supported() on the
     worker and returned a 5-tuple (file_ok, fr_holder, opener, closer, weigher).
-    The T9b fix removes the worker-side file_supported() call and drops file_ok
-    from the return: the FILE capability signal is now the _file_ref column's
-    presence (has_fr_col), which the driver set via an explicit df.sparkSession.
-
-    This structural assertion FAILS under the old 5-tuple contract and PASSES
-    under the new 4-tuple contract, confirming the getActiveSession() dependency
-    has been removed from the worker path.
+    The T9b fix removes the worker-side file_supported() call; the opener/closer/
+    weigher are now methods on _OpenerContext, and the FILE capability signal is
+    the _file_ref column's presence (has_fr_col) set by the driver.
     """
-    from databricks.labs.gbx.pyrx.grouped_exec import _make_opener
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
 
-    result = _make_opener()
-    assert len(result) == 4, (
-        f"_make_opener must return 4 items (fr_holder, opener, closer, weigher); "
-        f"got {len(result)} — worker-side file_supported() may still be present "
-        f"(T9b regression)"
+    ctx = _OpenerContext()
+    assert isinstance(ctx.fr_holder, list) and len(ctx.fr_holder) == 1, (
+        "fr_holder must be a one-element list (T9b contract)"
     )
-    fr_holder, opener, closer, weigher = result
-    assert isinstance(fr_holder, list) and len(fr_holder) == 1
-    assert callable(opener)
-    assert callable(closer)
-    assert callable(weigher)
+    assert callable(ctx.open), "_OpenerContext.open must be callable"
+    assert callable(ctx.close), "_OpenerContext.close must be callable"
+    assert callable(ctx.weigh), "_OpenerContext.weigh must be callable"
 
 
 # ---------------------------------------------------------------------------
@@ -299,21 +291,22 @@ def test_grouped_tile_map_cellid_passed_to_core(spark, gtiff_bytes):
 
 
 def test_make_opener_weigher_uses_fileref_size():
-    """_make_opener weigher returns fr_holder[0].size (real bytes), not the 16 MiB nominal.
+    """_OpenerContext.weigh returns fr_holder[0].size (real bytes) for stream-opened entries.
 
     The old weigher always returned STREAM_NOMINAL_BYTES (16 MiB), so the LRU byte
     budget never fired for large files.  The fix: the weigher reads fr_holder[0].size
-    so large-file entries carry their real cost.
+    for stream-opened entries (not in _fuse_sources) so large-file entries carry
+    their real cost.
     """
-    from databricks.labs.gbx.pyrx.grouped_exec import _make_opener
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
 
-    fr_holder, opener, closer, weigher = _make_opener()
+    ctx = _OpenerContext()
 
     class FakeSrc:
         pass
 
     src = FakeSrc()
-    fr_holder[0] = type("FR", (), {"size": 500_000_000})()  # 500 MB FileRef
+    ctx.fr_holder[0] = type("FR", (), {"size": 500_000_000})()  # 500 MB FileRef
     assert (
-        weigher(src, "uri") == 500_000_000
-    ), "weigher must return fr_holder[0].size, not STREAM_NOMINAL_BYTES"
+        ctx.weigh(src, "uri") == 500_000_000
+    ), "weigh must return fr_holder[0].size, not STREAM_NOMINAL_BYTES"

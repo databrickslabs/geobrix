@@ -1760,7 +1760,7 @@ def _clip_v2_udf(
     materialize,
 ):
     # Force-output variant (Python API only): same clip math, but the produced
-    # bytes are shaped via shape_output. Returns the 8-field v2 tile envelope.
+    # bytes are shaped via shape_output. Returns the 9-field v2 tile envelope.
     if _tile_is_empty(tile) or geom_wkb is None:
         return None
     new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
@@ -4078,7 +4078,7 @@ def rst_polygonize(
 # All four fan out to ARRAY<tile> in the heavyweight tier; the light tier
 # streams one tile struct per row via UDTFs (eval yields each tile dict
 # incrementally from the iter_* cores — never buffers the full list).
-# Each UDTF row IS the tile struct (V2_TILE_SCHEMA: 8-field v2 tile with cellid, raster, metadata, etc).
+# Each UDTF row IS the tile struct (V2_TILE_SCHEMA: 9-field v2 tile with cellid, raster, metadata, path_mode, etc).
 
 
 @udtf(returnType=V2_TILE_SCHEMA)
@@ -4173,6 +4173,11 @@ class _RstMakeTilesUDTF:
             # _encoded_size_bytes (dataset re-encode), matching heavy BalancedSubdivision.
             raster_bytes = tile.raster
             size_bytes = len(raster_bytes) if raster_bytes is not None else None
+            # NOTE: For virtual tiles (raster=None), size_bytes=None so iter_make_tiles
+            # uses the re-encoded dataset size rather than the original bytes length.
+            # With compressed virtual inputs the re-encoded size may differ slightly
+            # from a materialized tile of the same content, so split-count may vary
+            # slightly — this divergence is inherent to streaming and expected.
             with ot._open(tile, file_ref=file_ref) as ds:
                 for i, b in enumerate(
                     tiling.iter_make_tiles(ds, float(size_in_mb), size_bytes=size_bytes)

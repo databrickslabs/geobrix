@@ -182,7 +182,7 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
             "all_parents" -> "",
             "last_command" -> "gbx_rst_dtmfromgeoms"
         )
-        // v2 8-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata
+        // v2 9-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode
         InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, SerializationUtil.toMapData[String, String](mtd), null))
     }
 

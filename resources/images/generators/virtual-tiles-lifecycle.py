@@ -402,9 +402,9 @@ def render():
         parts.append(text(gx + 34, cy - 3, name, size=12, weight=700, fill=C_INK))
         parts.append(text(gx + 34, cy + 13, sub, size=9.5, weight=500, fill=C_MUTED_2))
         if i == len(left_fmts) - 1:
-            # "tables / DataFrames" row only: note the MANAGED FILE read option
-            _fc, _ = chip(gx + 34, cy + 26, "MANAGED FILE",
-                          fg="#FFFFFF", bg=C_FILE_MANAGED, h=18, size=9.5, pad_x=8)
+            # "tables / DataFrames" row only: note the MANAGED|EXTERNAL FILE read option
+            _fc, _ = chip(gx + 34, cy + 26, "MANAGED | EXTERNAL FILE",
+                          fg="#FFFFFF", bg=C_FILE_MANAGED, h=24, size=9.5, pad_x=13)
             parts.append(_fc)
     # COG offset to the right = the (optional) optimization target; dotted
     # convergence arrows from each FILE format show "prepare any file -> COG".
@@ -585,9 +585,9 @@ def render():
     parts.append(mono(x_write + col_w/2, wy2 + 116, "CREATE TABLE … AS SELECT", size=10.5,
                       weight=600, fill=C_MUTED, anchor="middle"))
     # MANAGED FILE write option — symmetric to Box 1 callout; centered under the mono line
-    _mfw = int(len("MANAGED FILE") * 0.56 * 9.5) + 8 * 2
-    _fc2, _ = chip(x_write + col_w / 2 - _mfw / 2, wy2 + 130, "MANAGED FILE",
-                   fg="#FFFFFF", bg=C_FILE_MANAGED, h=18, size=9.5, pad_x=8)
+    _mfw = int(len("MANAGED | EXTERNAL FILE") * 0.56 * 9.5) + 13 * 2
+    _fc2, _ = chip(x_write + col_w / 2 - _mfw / 2, wy2 + 130, "MANAGED | EXTERNAL FILE",
+                   fg="#FFFFFF", bg=C_FILE_MANAGED, h=24, size=9.5, pad_x=13)
     parts.append(_fc2)
 
     # ---- Footer ----

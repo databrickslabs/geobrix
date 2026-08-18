@@ -259,7 +259,7 @@ case class RST_H3_RasterizeAgg(
                 "all_parents" -> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData))
+            InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData, null))
         } finally {
             rasterDs.delete()
             srcSR.delete()

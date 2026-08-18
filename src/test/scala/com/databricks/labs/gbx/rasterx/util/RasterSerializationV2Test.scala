@@ -64,10 +64,10 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         new GenericInternalRow(Array[Any](cellid, bytes, emptyMap))
 
     private def v2MaterializedRow(cellid: Long, bytes: Array[Byte], md: MapData): InternalRow =
-        new GenericInternalRow(Array[Any](cellid, bytes, null, null, null, null, null, md))
+        new GenericInternalRow(Array[Any](cellid, bytes, null, null, null, null, null, md, null))
 
     private def v2VirtualRow(cellid: Long, path: String): InternalRow =
-        new GenericInternalRow(Array[Any](cellid, null, UTF8String.fromString(path), null, null, null, null, emptyMap))
+        new GenericInternalRow(Array[Any](cellid, null, UTF8String.fromString(path), null, null, null, null, emptyMap, null))
 
     /** Open a minimal in-memory GeoTIFF as a live Dataset (caller must releaseDataset). */
     private def openTinyGeotiff(): org.gdal.gdal.Dataset = {
@@ -114,22 +114,40 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
             s"Expected field count '2' in message: ${ex.getMessage}")
     }
 
+    test("v2TileType carries path_mode as the 9th field") {
+        val fields = RST_ExpressionUtil.v2TileType.fields
+        assert(fields.length == 9, s"expected 9 fields, got ${fields.length}")
+        assert(fields.last.name == "path_mode")
+        assert(fields.last.dataType == StringType)
+        assert(fields.last.nullable)
+    }
+
     test("v2TileType matches the light V2 schema exactly") {
         val t = RST_ExpressionUtil.v2TileType
-        assert(t.fieldNames.toSeq == Seq("cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata"))
+        assert(t.fieldNames.toSeq == Seq("cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata", "path_mode"))
         assert(t("cellid").dataType == LongType && !t("cellid").nullable)
         assert(t("raster").dataType == BinaryType && t("raster").nullable)
         val w = t("window").dataType.asInstanceOf[org.apache.spark.sql.types.StructType]
         assert(w.fieldNames.toSeq == Seq("col_off", "row_off", "width", "height"))
         assert(t("metadata").dataType == MapType(StringType, StringType))
+        assert(t("path_mode").dataType == StringType && t("path_mode").nullable)
     }
 
-    test("tileToRow emits an 8-field v2 materialized row with null pedigree") {
+    test("tileToRow emits a 9-field v2 materialized row with null pedigree and null path_mode") {
         val ds = openTinyGeotiff()
         val row = RasterSerializationUtil.tileToRow((5L, ds, Map("d" -> "GTiff")), BinaryType, hconf)
-        assert(row.numFields == 8 && row.getLong(0) == 5L && !row.isNullAt(1))
+        assert(row.numFields == 9 && row.getLong(0) == 5L && !row.isNullAt(1))
         assert(row.isNullAt(2) && row.isNullAt(3) && row.isNullAt(4) && row.isNullAt(5) && row.isNullAt(6))
         assert(!row.isNullAt(7))
+        assert(row.isNullAt(8), "path_mode at position 8 must be null for a materialized tile")
+        RasterDriver.releaseDataset(ds)
+    }
+
+    test("materialized v2 tile sets path_mode = null") {
+        val ds = openTinyGeotiff()
+        val row = RasterSerializationUtil.tileToRow((99L, ds, Map.empty), BinaryType, hconf)
+        assert(row.numFields == 9, s"expected 9 fields, got ${row.numFields}")
+        assert(row.isNullAt(8), "path_mode (position 8) should be null for a materialized tile")
         RasterDriver.releaseDataset(ds)
     }
 
@@ -142,10 +160,10 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
      *  (their eval() requires large geometry inputs and GDAL state not available here).
      */
     test("rasterize aggregator eval row numFields matches dataType field count") {
-        // --- Helper: assert dataType declares 8 fields ---
+        // --- Helper: assert dataType declares 9 fields ---
         def assertDataType8(name: String, dt: org.apache.spark.sql.types.DataType): Unit = {
             val n = dt.asInstanceOf[StructType].size
-            assert(n == 8, s"$name.dataType has $n fields, expected 8")
+            assert(n == 9, s"$name.dataType has $n fields, expected 9")
         }
 
         assertDataType8("RST_RasterizeAgg",
@@ -242,7 +260,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         val declaredSize = agg.dataType.asInstanceOf[StructType].size
         assert(emittedRow.numFields == declaredSize,
             s"RST_RasterizeAgg.eval row has ${emittedRow.numFields} fields but dataType declares $declaredSize")
-        assert(emittedRow.numFields == 8, s"Expected 8 fields, got ${emittedRow.numFields}")
+        assert(emittedRow.numFields == 9, s"Expected 9 fields, got ${emittedRow.numFields}")
     }
 
 }

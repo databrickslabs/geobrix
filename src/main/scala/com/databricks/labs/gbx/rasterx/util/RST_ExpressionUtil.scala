@@ -98,7 +98,7 @@ object RST_ExpressionUtil {
         StructField("width", IntegerType, nullable = false),
         StructField("height", IntegerType, nullable = false)))
 
-    /** Canonical v2 tile schema — 8 fields, matching the light-tier V2_TILE_SCHEMA byte-for-byte. */
+    /** Canonical v2 tile schema — 9 fields, matching the light-tier V2_TILE_SCHEMA byte-for-byte. */
     val v2TileType: StructType = StructType(Seq(
         StructField("cellid", LongType, nullable = false),
         StructField("raster", BinaryType, nullable = true),
@@ -107,12 +107,13 @@ object RST_ExpressionUtil {
         StructField("clip_polygon", BinaryType, nullable = true),
         StructField("clip_crs", StringType, nullable = true),
         StructField("crs", StringType, nullable = true),
-        StructField("metadata", MapType(StringType, StringType), nullable = true)))
+        StructField("metadata", MapType(StringType, StringType), nullable = true),
+        StructField("path_mode", StringType, nullable = true)))
 
-    /** StructType for a tile with the given tile expression's raster type (v2 8-field schema). */
+    /** StructType for a tile with the given tile expression's raster type (v2 9-field schema). */
     def tileDataType(tile: Expression): DataType = v2TileType
 
-    /** StructType for a tile with the given raster DataType (v2 8-field schema). */
+    /** StructType for a tile with the given raster DataType (v2 9-field schema). */
     def tileDataType(rdt: DataType): DataType = v2TileType
 
     /** Initialize NodeFileManager and GDAL for this process (e.g. on executor). */

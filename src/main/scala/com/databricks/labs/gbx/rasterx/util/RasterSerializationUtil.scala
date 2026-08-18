@@ -20,7 +20,7 @@ final class VirtualTileException(msg: String) extends IllegalArgumentException(m
   *
   * Supports two tile layouts:
   *  - v1 (3 fields): (cellid, raster, metadata)
-  *  - v2 (8 fields): (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata)
+  *  - v2 (9 fields): (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode)
   *
   * Raster is binary content (BinaryType only). A v2 tile with raster=null and path set is a
   * virtual tile; the heavy tier cannot process it — callers must materialize first.
@@ -32,10 +32,10 @@ object RasterSerializationUtil {
     private case class TileLayout(cellid: Int, raster: Int, metadata: Int, path: Option[Int], isV2: Boolean)
 
     private def tileLayout(row: InternalRow): TileLayout = row.numFields match {
-        case 3 => TileLayout(cellid = 0, raster = 1, metadata = 2, path = None, isV2 = false)
-        case 8 => TileLayout(cellid = 0, raster = 1, metadata = 7, path = Some(2), isV2 = true)
+        case 3    => TileLayout(cellid = 0, raster = 1, metadata = 2, path = None, isV2 = false)
+        case 8 | 9 => TileLayout(cellid = 0, raster = 1, metadata = 7, path = Some(2), isV2 = true)
         case n => throw new IllegalArgumentException(
-            s"Unrecognized raster tile struct: expected a v1 (3-field) or v2 (8-field) tile, got $n fields.")
+            s"Unrecognized raster tile struct: expected a v1 (3-field) or v2 (8- or 9-field) tile, got $n fields.")
     }
 
     private def guardMaterialized(row: InternalRow, lyt: TileLayout): Unit =
@@ -99,34 +99,46 @@ object RasterSerializationUtil {
             null,     // clip_polygon
             clipCrs.map(org.apache.spark.unsafe.types.UTF8String.fromString).orNull, // clip_crs
             null,     // crs
-            metadata  // metadata (position 7)
+            metadata, // metadata (position 7)
+            null      // path_mode (position 8, null for materialized tiles)
           )
         )
     }
 
-    /** Reshape a v1 (3-field) OR v2 (8-field) tile InternalRow to the canonical v2 8-field
-      * layout WITHOUT opening / re-encoding the raster. v2 rows pass through unchanged; v1
-      * rows are widened: (cellid, raster, metadata) → (cellid, raster, null×5, metadata).
+    /** Reshape a v1 (3-field) OR v2 (8- or 9-field) tile InternalRow to the canonical v2 9-field
+      * layout WITHOUT opening / re-encoding the raster. v2 rows are widened from 8 to 9 if
+      * needed; v1 rows are widened: (cellid, raster, metadata) → (cellid, raster, null×5, metadata, null).
       *
-      * Use this at aggregator update() time so every buffered row is 8-field, making the
+      * Use this at aggregator update() time so every buffered row is 9-field, making the
       * size==1 fast-path passthrough and the serialize UnsafeProjection (which is created
-      * over the 8-field dataType) both safe on v1 input.
+      * over the 9-field dataType) both safe on v1 or 8-field v2 input.
       */
     def normalizeToV2Row(row: InternalRow): InternalRow = {
         val lyt = tileLayout(row)
-        if (lyt.isV2) row
-        else {
-            // v1: cellid@0, raster@1, metadata@2 → v2: cellid@0, raster@1, [null×5], metadata@7
+        if (lyt.isV2 && row.numFields == 9) row
+        else if (lyt.isV2) {
+            // 8-field v2: widen by appending null path_mode at position 8
+            val cellid      = row.getLong(0)
+            val raster      = if (row.isNullAt(1)) null else row.getBinary(1)
+            val path        = if (row.isNullAt(2)) null else row.getUTF8String(2)
+            val window      = if (row.isNullAt(3)) null else row.getStruct(3, 4)
+            val clipPolygon = if (row.isNullAt(4)) null else row.getBinary(4)
+            val clipCrs     = if (row.isNullAt(5)) null else row.getUTF8String(5)
+            val crs         = if (row.isNullAt(6)) null else row.getUTF8String(6)
+            val metadata    = if (row.isNullAt(7)) null else row.getMap(7)
+            InternalRow.fromSeq(Seq(cellid, raster, path, window, clipPolygon, clipCrs, crs, metadata, null))
+        } else {
+            // v1: cellid@0, raster@1, metadata@2 → v2: cellid@0, raster@1, [null×5], metadata@7, null
             val cellid   = row.getLong(lyt.cellid)
             val raster   = if (row.isNullAt(lyt.raster))   null else row.getBinary(lyt.raster)
             val metadata = if (row.isNullAt(lyt.metadata)) null else row.getMap(lyt.metadata)
-            InternalRow.fromSeq(Seq(cellid, raster, null, null, null, null, null, metadata))
+            InternalRow.fromSeq(Seq(cellid, raster, null, null, null, null, null, metadata, null))
         }
     }
 
     /** Deserialize an array of tile structs to (cellId, Dataset, metadata); caller must release each Dataset.
       *
-      * @param elementFieldCount the declared field count of the element StructType (3 for v1, 8 for v2).
+      * @param elementFieldCount the declared field count of the element StructType (3 for v1, 9 for v2).
       *                          Must come from the expression's declared input schema — never hardcoded.
       */
     def arrayToTiles(array: ArrayData, dataType: DataType, elementFieldCount: Int = 3): Seq[(Long, Dataset, Map[String, String])] = {

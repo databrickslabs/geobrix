@@ -291,7 +291,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
         )
         val mapData = SerializationUtil.toMapData[String, String](mtd)
         // v2 8-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata
-        InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData))
+        InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData, null))
     }
 
     override def name: String = "gbx_rst_gridfrompoints"

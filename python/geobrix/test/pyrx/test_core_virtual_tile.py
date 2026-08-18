@@ -53,6 +53,21 @@ def test_row_roundtrip_materialized_null_window():
     assert vt.VirtualTile.from_row(row) == t
 
 
+def test_v2_schema_field_order_matches_heavy_contract():
+    names = [f.name for f in vt.V2_TILE_SCHEMA.fields]
+    assert names == [
+        "cellid",
+        "raster",
+        "path",
+        "window",
+        "clip_polygon",
+        "clip_crs",
+        "crs",
+        "metadata",
+        "path_mode",
+    ]
+
+
 def test_schema_has_v2_fields():
     names = set(V.name for V in vt.V2_TILE_SCHEMA.fields)
     assert names == {

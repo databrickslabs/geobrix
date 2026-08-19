@@ -54,10 +54,11 @@ test-logs/bench/
 *.override.yml
 .databricks/
 
-# Agent/session scratch + local tooling (never committed)
+# Agent/session scratch + local tooling (never committed). All internal planning
+# (specs, plans, prompts, input, SDD ledgers) is consolidated under /.superpowers/;
+# the public representation of decisions lives in docs/docs/. The legacy root
+# locations (/prompts/, /input/, /docs/superpowers/) stay ignored as guards.
 /.superpowers/
-# Internal planning docs (specs, plans, perf notes) — NOT public. The public
-# representation of decisions lives in docs/docs/. Kept locally, untracked.
 /docs/superpowers/
 /.isaac/
 /.tmp

@@ -245,7 +245,7 @@ resolving whether derived parameter names should be published while R1/N9 naming
 Historically each companion overrode these, but the convention was dropped along the
 way: for a long stretch only 8 of ~179 companions had them, so most functions printed
 `gbx_rst_foo() - ` — empty parens, no description. Treat blank metadata as a bug, not
-a default. See `prompts/refactoring/2026-08-06-describe-function-metadata-drift-inventory.md`.
+a default. See `.superpowers/prompts/refactoring/2026-08-06-describe-function-metadata-drift-inventory.md`.
 
 **A signature change must move every surface together.** Changing arity or a parameter's
 meaning touches up to seven places, and the ones that fail *silently* are the dangerous
@@ -288,7 +288,7 @@ Anything under `docs/docs/` is read by end users — release notes, package page
 | "the Wave 1 aggregator" | "the aggregator" or `gbx_st_asmvt` |
 | references to internal subagents or dispatch sequencing | reference behavior, not the process |
 
-**Wave numbers** are legitimate only in: `prompts/features/*.md` (internal plans), dispatch prompts (internal), git commit messages (internal), `input/` scoping drafts (gitignored).
+**Wave numbers** are legitimate only in: `.superpowers/prompts/features/*.md` (internal plans), dispatch prompts (internal), git commit messages (internal), `.superpowers/input/` scoping drafts (gitignored).
 
 Quick check before merging: `grep -rn -iE "wave [0-9]+|wave-[0-9]+" docs/docs/ 2>/dev/null` should print nothing. The QC judge enforces this automatically via the `internals-leak` check.
 
@@ -315,7 +315,7 @@ some agent. State the relevant ones up front so the agent doesn't burn a run on 
   named-argument support, so an extra wrapper argument is silently dropped rather than erroring.
 - **Doc tests only run in Docker** (they need the full env + sample data under `/Volumes`).
   Corpus tests skip unless the container was started with the sample-data mounts.
-- **`/prompts/` and `docs/superpowers/` are gitignored** scratch (internal planning; the public representation of decisions lives in `docs/docs/`).
+- **`.superpowers/` is gitignored** scratch — all internal planning (specs, plans, prompts, input, SDD ledgers); the public representation of decisions lives in `docs/docs/`.
 - Non-EPSG / authority-less CRS may render as different-but-equivalent strings across tiers.
   Parity means CRS-equivalence, not string equality.
 
@@ -402,10 +402,14 @@ For unattended/CI work, U2M is the wrong credential: use an OAuth **M2M service 
 
 ## Session artifacts
 
-Two locations, by artifact class:
+All internal planning artifacts live under the **gitignored `.superpowers/` tree** — consolidated here to keep the project root uncluttered and internal planning out of the public repo. The public representation of decisions is `docs/docs/` (release notes, package pages), not the planning tree. By class:
 
-- **Design specs and implementation plans** (the `superpowers` workflow outputs) live under `docs/superpowers/` — specs (brainstorming-skill output, the `*-design.md` files) under `docs/superpowers/specs/YYYY-MM-DD-<kebab-topic>-design.md`, and plans (writing-plans-skill output) under `docs/superpowers/plans/YYYY-MM-DD-<kebab-topic>.md`. This tree is **gitignored** — internal planning scratch kept locally across sessions, not committed. The public representation of decisions is `docs/docs/` (release notes, package pages), not the planning tree.
-- **Everything else** (session summaries, analyses, progress notes, scoping drafts) goes under `prompts/<category>/YYYY-MM-DD-<kebab-topic>.md`. Categories include `features/`, `documentation/`, `refactoring/`, `testing/`, `bugfixes/`. **`/prompts/` is gitignored** — local scratch, not committed.
+- **Design specs** (brainstorming-skill output, the `*-design.md` files) → `.superpowers/specs/YYYY-MM-DD-<kebab-topic>-design.md`.
+- **Implementation plans** (writing-plans-skill output) → `.superpowers/plans/YYYY-MM-DD-<kebab-topic>.md`.
+- **Everything else** (session summaries, analyses, progress notes) → `.superpowers/prompts/<category>/YYYY-MM-DD-<kebab-topic>.md`. Categories include `features/`, `documentation/`, `refactoring/`, `testing/`, `bugfixes/`.
+- **Scoping drafts / raw input** → `.superpowers/input/`. **SDD ledgers/workspaces** → `.superpowers/sdd/<plan-basename>/`.
+
+This **overrides the brainstorming/writing-plans skills' default `docs/superpowers/` location** — write specs/plans under `.superpowers/` instead. The whole tree is gitignored (kept locally across sessions, never committed).
 
 ## What used to live under `.cursor/`
 

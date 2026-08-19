@@ -45,7 +45,7 @@ show_banner "Versions audit"
 setup_log_file "$LOG_PATH"
 
 # Files where pinned versions live. Keep this list in sync with the SECURITY/CI
-# review notes in prompts/security/. New file? Add it here AND remove this line
+# review notes in .superpowers/prompts/security/. New file? Add it here AND remove this line
 # of staleness.
 FILES=(
     ".github/actions/scala_build/action.yml"

@@ -96,6 +96,7 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
         org.apache.spark.sql.types.StructField("cellid",       org.apache.spark.sql.types.LongType,   nullable = false),
         org.apache.spark.sql.types.StructField("raster",       BinaryType,                            nullable = true),
         org.apache.spark.sql.types.StructField("path",         org.apache.spark.sql.types.StringType, nullable = true),
+        org.apache.spark.sql.types.StructField("path_mode",    org.apache.spark.sql.types.StringType, nullable = true),
         org.apache.spark.sql.types.StructField("window",       org.apache.spark.sql.types.StringType, nullable = true),
         org.apache.spark.sql.types.StructField("clip_polygon", BinaryType,                            nullable = true),
         org.apache.spark.sql.types.StructField("clip_crs",     org.apache.spark.sql.types.StringType, nullable = true),
@@ -113,7 +114,7 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
             exprConfExpr  = Literal.create(encodedEmpty(), StringType)
         )
 
-    /** Create a v2 (8-field) tile row from raster bytes; fields 2-6 are null, metadata at position 7. */
+    /** Create a v2 (9-field) tile row from raster bytes; fields 2-7 are null, metadata at position 8. */
     private def makeSingleBandTileRowV2(tag: String, fillValue: Int): InternalRow = {
         val path = s"/vsimem/frombands_agg_v2_test_$tag.tif"
         val drv = gdal.GetDriverByName("GTiff")
@@ -131,16 +132,17 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
         gdal.Unlink(path)
 
         val emptyMeta = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
-        // v2 layout: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata
+        // v2 layout: cellid, raster, path, path_mode, window, clip_polygon, clip_crs, crs, metadata
         InternalRow.fromSeq(Seq(
             1L,        // cellid
             bytes,     // raster (BinaryType)  — position 1
             null,      // path
+            null,      // path_mode — position 3
             null,      // window
             null,      // clip_polygon
             null,      // clip_crs
             null,      // crs
-            emptyMeta  // metadata — position 7
+            emptyMeta  // metadata — position 8
         ))
     }
 
@@ -260,11 +262,11 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
         buf should have length 1
     }
 
-    // ---- v2 (8-field) tile tests -------------------------------------------
+    // ---- v2 (9-field) tile tests -------------------------------------------
 
-    test("v2 tiles: band-order correctness from 8-field input rows") {
-        // Regression: getStruct(1, 3) on an 8-field row truncates to 3 fields,
-        // causing rowToTile to misread the metadata position (field 2 instead of 7).
+    test("v2 tiles: band-order correctness from v2 input rows") {
+        // Regression: getStruct(1, 3) on an 8-field row truncated to 3 fields,
+        // causing rowToTile to misread the metadata position. Now uses 9-field rows.
         val tileA = makeSingleBandTileRowV2("v2A", 10)
         val tileB = makeSingleBandTileRowV2("v2B", 20)
         val tileC = makeSingleBandTileRowV2("v2C", 30)
@@ -289,7 +291,7 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
         readBandMean(result, 3) shouldBe 30.0 +- 0.5
     }
 
-    test("v2 tiles: merge then eval with 8-field inputs assembles correct band order") {
+    test("v2 tiles: merge then eval with v2 inputs assembles correct band order") {
         val tileA = makeSingleBandTileRowV2("v2mA", 10)
         val tileB = makeSingleBandTileRowV2("v2mB", 20)
         val tileC = makeSingleBandTileRowV2("v2mC", 30)

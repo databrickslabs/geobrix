@@ -19,15 +19,16 @@ def test_v2_row_materialized_shape_and_order():
         window=(1, 2, 300, 400),
         metadata={"driver": "GTiff"},
     )
-    # 8-tuple in V2_TILE_SCHEMA field order
+    # 9-tuple in V2_TILE_SCHEMA field order: cellid/raster/path/path_mode/window/clip_polygon/clip_crs/crs/metadata
     assert row[0] == -1  # cellid
     assert row[1] == b"abc"  # raster
     assert row[2] == "/v/x.tif"  # path
-    assert row[3] == {"col_off": 1, "row_off": 2, "width": 300, "height": 400}
+    assert row[3] is None  # path_mode (None for materialized)
+    assert row[4] == {"col_off": 1, "row_off": 2, "width": 300, "height": 400}  # window
     assert (
-        row[4] is None and row[5] is None and row[6] is None
+        row[5] is None and row[6] is None and row[7] is None
     )  # clip_polygon/clip_crs/crs
-    assert row[7] == {"driver": "GTiff"}  # metadata
+    assert row[8] == {"driver": "GTiff"}  # metadata
 
 
 def test_v2_row_virtual_null_raster_and_window_dict():
@@ -39,11 +40,11 @@ def test_v2_row_virtual_null_raster_and_window_dict():
         metadata={"format": "cog"},
     )
     assert row[1] is None  # raster null (virtual)
-    assert row[3] == {"col_off": 0, "row_off": 0, "width": 512, "height": 512}
+    assert row[4] == {"col_off": 0, "row_off": 0, "width": 512, "height": 512}  # window
 
 
 def test_v2_row_none_window_serializes_to_none():
     row = _v2_tile_row(
         cellid=-1, raster=b"abc", path="/v/x.tif", window=None, metadata={}
     )
-    assert row[3] is None
+    assert row[4] is None  # window at position 4

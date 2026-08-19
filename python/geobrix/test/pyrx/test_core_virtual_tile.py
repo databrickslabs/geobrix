@@ -59,12 +59,12 @@ def test_v2_schema_field_order_matches_heavy_contract():
         "cellid",
         "raster",
         "path",
+        "path_mode",
         "window",
         "clip_polygon",
         "clip_crs",
         "crs",
         "metadata",
-        "path_mode",
     ]
 
 

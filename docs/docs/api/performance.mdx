@@ -39,16 +39,20 @@ GeoBrix's virtual tile reader supports two access modes:
 
 When the open cost is amortized across multiple windows from the same source, byte-range stream reads are **10–290× faster** than FUSE for windowed COG reads. Without amortization (one open per tile), FUSE's flat open cost wins: stream's per-open header parse grows with file size and becomes prohibitive at scale.
 
-**Choosing stream vs FUSE — size-adaptive guidance:**
+**You don't choose stream vs FUSE — GeoBrix does, automatically, per source.** The reader inspects each source's size and layout and picks the access mode that's correct for it. This table is what GeoBrix does for you, not a decision you make:
 
-The right choice depends on source file size and available executor RAM:
+| Source (per file) | GeoBrix auto-selects | Why |
+|---|---|---|
+| Tiled / COG, ≤ 256 MiB | **byte-range stream** | random-window reads are efficient on a tiled layout; the source buffers into executor RAM |
+| Large (over 256 MiB) **or** striped | **FUSE (lazy)** | fetches only the bytes each window needs — no whole-file RAM, safe at any size |
+| stream **or** FUSE open fails | **staging fallback** (temp file) | correctness over speed |
 
-- **Use stream** for small-to-moderate sources where executor RAM can hold the file. Opening a source via byte-range (`fref.open()` → `rasterio.open(stream)`) buffers the **entire source into executor RAM** — fast windowed reads, but **RAM ≈ source file size per concurrently open source**. A partition that holds 4 open handles to 500 MB COGs consumes ~2 GB of executor RAM.
-- **Use FUSE** for large source files or when executor RAM is constrained. FUSE reads only the bytes each window needs — low RAM and lazy — but cold random-window access costs ~124 ms per window.
-- **Never stream large striped GeoTIFFs.** Their strip-offset tables are parsed over byte-range at open time — tens of seconds AND full-file RAM per open. Use FUSE (or, better, COG) for any access pattern involving large striped files.
+The 256 MiB stream cutoff (`GBX_STREAM_MAX_BYTES`) is an optional environment override — the default handles the common cases, so you normally set nothing.
 
-:::warning Large source rasters: time AND memory
-The cost to *open* a large file via byte-range scales with its size and internal layout — and the file is **buffered into executor RAM**. For a Cloud-Optimized GeoTIFF: open cost grows from milliseconds (small) to seconds (multi-GB), and RAM ≈ file size. For a **large striped GeoTIFF**, parsing the strip-offset table over byte-range can reach **47–54 seconds per open at 10 GB, with 10 GB of executor RAM consumed**. Never open a large striped source via byte-range. Either amortize on a COG (open once, read all windows) or use FUSE for per-tile access. **Prefer COGs** for windowed access at scale.
+**Executor RAM is auto-managed by a byte-budgeted LRU cache — you don't size or clear it.** Open sources are held in a per-partition LRU keyed by source path, capped at a byte budget (`GBX_LRU_MAX_BYTES`, default 4 GiB). Stream handles count their buffered size against the budget; FUSE handles count only a small nominal (they don't buffer the file). When the budget would be exceeded, the least-recently-used source is evicted and closed. So a partition **never blows executor RAM no matter how many sources it touches**, and repeated windows from an already-open source are ~2 ms cache hits (the amortization in the next section).
+
+:::note Why the auto-rules look the way they do — the striped-file trap GeoBrix sidesteps
+Opening a large source via byte-range buffers it into executor RAM, and for a **large striped GeoTIFF** parsing the strip-offset table over byte-range can reach **47–54 seconds per open at 10 GB, consuming 10 GB of executor RAM**. That is exactly why GeoBrix routes large or striped sources to FUSE (lazy, low-RAM) automatically rather than streaming them. For best windowed-read throughput, **prefer COGs** — a tiled COG under the threshold takes the fast stream path and amortizes across its windows.
 :::
 
 ### Per-partition open-amortization (the grouped executor)

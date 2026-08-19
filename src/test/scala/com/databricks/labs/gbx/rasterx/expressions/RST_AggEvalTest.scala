@@ -300,8 +300,8 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     //
     // Drives the aggregators directly (update / serialize / eval) with genuine
     // 3-field InternalRows. Before the normalizeToV2Row fix these paths threw
-    // ArrayIndexOutOfBoundsException because the 8-field UnsafeProjection
-    // tried to read fields 3..7 on a 3-element row.
+    // ArrayIndexOutOfBoundsException because the 9-field UnsafeProjection
+    // tried to read fields 3..8 on a 3-element row.
     // =========================================================================
 
     /** Produce a tiny in-memory GeoTIFF as bytes via /vsimem (no temp file).
@@ -348,7 +348,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     private def inputRow(tileRow: GenericInternalRow): GenericInternalRow =
         new GenericInternalRow(Array[Any](tileRow))
 
-    test("RST_MergeAgg: size==1 v1 input through update() returns 8-field row (no AIOOBE)") {
+    test("RST_MergeAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
         functions.register(spark)
         // BoundReference(0, v1TileType) binds child to field 0 of the input row,
         // so child.eval(inputRow(tileRow)) returns the v1 InternalRow directly.
@@ -357,13 +357,13 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val tile = v1Row(1L, tinyGTiffBytes(10))
         agg.update(buf, inputRow(tile))
 
-        // Buffered row must be 8-field after normalization in update()
-        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+        // Buffered row must be 9-field after normalization in update()
+        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
 
-        // eval size==1 returns buffer.head; must be 8-field — before fix was 3-field
+        // eval size==1 returns buffer.head; must be 9-field — before fix was 3-field
         val out = agg.eval(buf)
         assert(out != null)
-        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
     }
 
     test("RST_MergeAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
@@ -373,9 +373,9 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(10))))
         agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(20))))
         buf.size shouldBe 2
-        buf.foreach(_.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8)
+        buf.foreach(_.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9)
 
-        // serialize must NOT throw AIOOBE — before fix threw on 8-field UnsafeProjection
+        // serialize must NOT throw AIOOBE — before fix threw on 9-field UnsafeProjection
         // applied to 3-field rows
         noException should be thrownBy {
             val bytes = agg.serialize(buf)
@@ -384,17 +384,17 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         }
     }
 
-    test("RST_CombineAvgAgg: size==1 v1 input through update() returns 8-field row (no AIOOBE)") {
+    test("RST_CombineAvgAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
         functions.register(spark)
         val agg = RST_CombineAvgAgg(v1TileRef)
         val buf = agg.createAggregationBuffer()
         agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(50))))
 
-        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
 
         val out = agg.eval(buf)
         assert(out != null)
-        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 8
+        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
     }
 
     test("RST_CombineAvgAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
@@ -609,20 +609,22 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         errVal should include ("RST_FromBandsAgg")
     }
 
-    test("normalizeToV2Row: v1 3-field row becomes 8-field, v2 8-field row is unchanged") {
+    test("normalizeToV2Row: v1 3-field row becomes 9-field, v2 9-field row is unchanged") {
         val emptyMap = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
         val v1 = new GenericInternalRow(Array[Any](42L, Array[Byte](1, 2, 3), emptyMap))
         val n  = RasterSerializationUtil.normalizeToV2Row(v1)
-        n.numFields shouldBe 8
+        n.numFields shouldBe 9
         n.getLong(0) shouldBe 42L
         n.getBinary(1) shouldBe Array[Byte](1, 2, 3)
         // Fields 2..6 (pedigree) must be null
         (2 to 6).foreach(i => n.isNullAt(i) shouldBe true)
         // metadata still present at position 7
         n.isNullAt(7) shouldBe false
+        // path_mode at position 8 must be null
+        n.isNullAt(8) shouldBe true
 
         // v2 row passes through unchanged (same object reference)
-        val v2 = new GenericInternalRow(Array[Any](7L, Array[Byte](9), null, null, null, null, null, emptyMap))
+        val v2 = new GenericInternalRow(Array[Any](7L, Array[Byte](9), null, null, null, null, null, emptyMap, null))
         RasterSerializationUtil.normalizeToV2Row(v2) should be theSameInstanceAs v2
     }
 

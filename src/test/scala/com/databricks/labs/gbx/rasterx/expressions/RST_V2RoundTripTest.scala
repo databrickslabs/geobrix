@@ -17,7 +17,7 @@ import org.scalatest.matchers.should.Matchers._
   * End-to-end parity tests for the v2 tile layout (Task 9).
   *
   * Proves:
-  *  - heavy rst_* consumes a v1 binary tile (rst_fromcontent) and emits an 8-field v2 struct
+  *  - heavy rst_* consumes a v1 binary tile (rst_fromcontent) and emits a 9-field v2 struct
   *  - heavy rst_* consumes a v2 materialized tile end-to-end without ClassCastException
   *  - heavy rst_* raises the materialize-first guard through the Spark plan (SparkException wraps
   *    the IllegalArgumentException produced by RasterSerializationUtil.guardMaterialized)
@@ -59,10 +59,10 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             .withColumn("clipper", st_buffer(col("bbox"), lit(-520000.0)))
             .select(rst_clip(col("tile"), col("clipper"), lit(true)).as("t"))
 
-        // Output schema must be the v2 8-field struct.
+        // Output schema must be the v2 9-field struct.
         val tileType = out.schema("t").dataType.asInstanceOf[StructType]
         tileType.fieldNames.toSeq should equal(
-            Seq("cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata"))
+            Seq("cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata", "path_mode"))
 
         // The raster field must be non-null (materialized bytes, not a virtual tile).
         val row = out.head.getAs[Row]("t")
@@ -92,9 +92,9 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
 
         stage1.count() // materialise
 
-        // Confirm stage1 output is v2 (8 fields).
+        // Confirm stage1 output is v2 (9 fields).
         val stage1Type = stage1.schema("t").dataType.asInstanceOf[StructType]
-        stage1Type.fields.length should be(8)
+        stage1Type.fields.length should be(9)
 
         // Stage 2: feed the v2 tile into rst_boundingbox — proves layout-aware deserialise
         // handles v2 input through the full Spark execution path (not just the serde unit test).
@@ -116,7 +116,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         import com.databricks.labs.gbx.rasterx.functions._
         functions.register(spark)
 
-        // Build a v2 virtual tile DataFrame: raster=null, path set, 8-field schema.
+        // Build a v2 virtual tile DataFrame: raster=null, path set, 9-field schema.
         // window is a nested struct; pass null for it and the other pedigree fields.
         val tileSchema = StructType(Seq(
             StructField("tile", RST_ExpressionUtil.v2TileType, nullable = false)))
@@ -129,7 +129,8 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             null,                  // clip_polygon
             null,                  // clip_crs
             null,                  // crs
-            Map.empty[String, String] // metadata
+            Map.empty[String, String], // metadata
+            null                   // path_mode
         ))
 
         val dfVirtual = spark.createDataFrame(
@@ -161,7 +162,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         import com.databricks.labs.gbx.rasterx.functions._
         functions.register(spark)
 
-        // Build a v2 virtual tile DataFrame: raster=null, path set, 8-field schema.
+        // Build a v2 virtual tile DataFrame: raster=null, path set, 9-field schema.
         val tileSchema = StructType(Seq(
             StructField("tile", RST_ExpressionUtil.v2TileType, nullable = false)))
 
@@ -170,7 +171,8 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             null,                  // raster = null → virtual
             "/some/virtual.tif",   // path set
             null, null, null, null,
-            Map.empty[String, String]))
+            Map.empty[String, String],
+            null))                 // path_mode
 
         val dfVirtual = spark.createDataFrame(
             spark.sparkContext.parallelize(Seq(virtualRow)),

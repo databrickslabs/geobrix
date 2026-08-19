@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.grid.H3
 import com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometry
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -259,7 +259,7 @@ case class RST_H3_RasterizeAgg(
                 "all_parents" -> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData, null))
+            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
         } finally {
             rasterDs.delete()
             srcSR.delete()

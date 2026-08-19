@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.grid.BNG
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -266,7 +266,7 @@ case class RST_BNG_RasterizeAgg(
                 "all_parents" -> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData, null))
+            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
         } finally {
             rasterDs.delete()
         }

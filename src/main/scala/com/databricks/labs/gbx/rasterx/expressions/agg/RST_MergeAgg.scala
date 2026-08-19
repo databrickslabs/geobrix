@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.operations.MergeRasters
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil, V2Tile}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
@@ -139,7 +139,7 @@ object RST_MergeAgg extends WithExpressionInfo {
       * sorts on -- with no random per-open component.
       */
     private[agg] def contentKey(row: InternalRow): Array[Byte] =
-        row.getBinary(1)
+        V2Tile.getRaster(row)
 
     /** Unsigned lexicographic ordering of byte arrays (a stable total order on raw content). */
     private[agg] val unsignedBytesOrdering: Ordering[Array[Byte]] = new Ordering[Array[Byte]] {

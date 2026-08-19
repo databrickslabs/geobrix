@@ -44,11 +44,11 @@ GROUP BY z, x, y;
 
 
 st_asmvt_sql_example_output = """
-+---+---+---+---------+
-|  z|  x|  y|      mvt|
-+---+---+---+---------+
-|  0|  0|  0|[binary] |
-+---+---+---+---------+
++-+-+-+--------+
+|z|x|y|mvt     |
++-+-+-+--------+
+|0|0|0|[binary]|
++-+-+-+--------+
 ... (MVT binary)
 """
 
@@ -76,13 +76,13 @@ LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t AS til
 
 
 st_asmvt_pyramid_sql_example_output = """
-+---+---+---+-----------+
-|  z|  x|  y|  mvt_bytes|
-+---+---+---+-----------+
-|  0|  0|  0|  [binary] |
-|  1|  1|  1|  [binary] |
-|  2|  2|  2|  [binary] |
-+---+---+---+-----------+
++-+-+-+---------+
+|z|x|y|mvt_bytes|
++-+-+-+---------+
+|0|0|0|[binary] |
+|1|1|1|[binary] |
+|2|2|2|[binary] |
++-+-+-+---------+
 ... (MVT binary — one row per intersecting tile across zoom levels 0–2)
 """
 
@@ -215,11 +215,11 @@ SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS stamped FROM vector_geoms;
 
 
 st_setcrs_sql_example_output = """
-+---------+
-|stamped  |
-+---------+
-|[binary] |
-+---------+
++--------+
+|stamped |
++--------+
+|[binary]|
++--------+
 ... (EWKB binary — coordinates preserved, SRID=4326 embedded)
 """
 

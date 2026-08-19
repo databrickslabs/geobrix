@@ -360,19 +360,19 @@ POLYGON ((531000 180000, 531000 181000, 530000 181000, 530000 180000, 531000 180
 """
 
 bng_cellarea_sql_example_output = """
-+---------+
-|area_km2 |
-+---------+
-|1.0      |
-+---------+
++--------+
+|area_km2|
++--------+
+|1.0     |
++--------+
 """
 
 bng_centroid_sql_example_output = """
-+-----------+
-|centroid   |
-+-----------+
-|[binary]   |
-+-----------+
++--------+
+|centroid|
++--------+
+|[binary]|
++--------+
 ... (WKB binary — POINT(530500 180500) in EPSG:27700)
 """
 
@@ -481,37 +481,37 @@ bng_tessellate_sql_example_output = """
 
 bng_cellintersection_agg_sql_example_output = """
 # Heavyweight SQL (active tier = heavy/Scala) — STRUCT<cellid, core, chip>:
-+-------+--------------------+
-|cellid |common_chip         |
-+-------+--------------------+
-|TQ3080 |{TQ3080, true, null}|
-+-------+--------------------+
++------+--------------------+
+|cellid|common_chip         |
++------+--------------------+
+|TQ3080|{TQ3080, true, null}|
++------+--------------------+
 ... (core cell TQ3080: chip=null means the full cell polygon)
 
 # Lightweight SQL (active tier = pygx) — BINARY (dissolved chip WKB in EPSG:27700):
-+-------+------------+
-|cellid |common_chip |
-+-------+------------+
-|TQ3080 |[binary]    |
-+-------+------------+
++------+-----------+
+|cellid|common_chip|
++------+-----------+
+|TQ3080|[binary]   |
++------+-----------+
 ... (core cell TQ3080: [binary] is the WKB of the full TQ3080 polygon)
 """
 
 bng_cellunion_agg_sql_example_output = """
 # Heavyweight SQL (active tier = heavy/Scala) — STRUCT<cellid, core, chip>:
-+-------+--------------------+
-|cellid |union_chip          |
-+-------+--------------------+
-|TQ3080 |{TQ3080, true, null}|
-+-------+--------------------+
++------+--------------------+
+|cellid|union_chip          |
++------+--------------------+
+|TQ3080|{TQ3080, true, null}|
++------+--------------------+
 ... (core cell TQ3080: chip=null means the full cell polygon)
 
 # Lightweight SQL (active tier = pygx) — BINARY (dissolved chip WKB in EPSG:27700):
-+-------+----------+
-|cellid |union_chip|
-+-------+----------+
-|TQ3080 |[binary]  |
-+-------+----------+
++------+----------+
+|cellid|union_chip|
++------+----------+
+|TQ3080|[binary]  |
++------+----------+
 ... (core cell TQ3080: [binary] is the WKB of the full TQ3080 polygon)
 """
 
@@ -674,11 +674,11 @@ quadbin_aswkb_sql_example_output = """
 """
 
 quadbin_centroid_sql_example_output = """
-+-----------+
-|centroid   |
-+-----------+
-|[binary]   |
-+-----------+
++--------+
+|centroid|
++--------+
+|[binary]|
++--------+
 ... (EWKB binary — POINT at SF z10 cell centroid, SRID 4326)
 """
 
@@ -691,11 +691,11 @@ quadbin_resolution_sql_example_output = """
 """
 
 quadbin_distance_sql_example_output = """
-+--+
-|d |
-+--+
-|1 |
-+--+
++-+
+|d|
++-+
+|1|
++-+
 """
 
 quadbin_kring_sql_example_output = """
@@ -726,11 +726,11 @@ quadbin_tessellate_sql_example_output = """
 """
 
 quadbin_cellunion_sql_example_output = """
-+-----------+
-|union_geom |
-+-----------+
-|[binary]   |
-+-----------+
++----------+
+|union_geom|
++----------+
+|[binary]  |
++----------+
 ... (EWKB binary — MultiPolygon dissolving the SF z10 kring, SRID 4326)
 """
 
@@ -798,11 +798,11 @@ custom_grid_sql_example_output = """
 """
 
 custom_pointascell_sql_example_output = """
-+--------------------+
-|cell                |
-+--------------------+
-|360287970373976640  |
-+--------------------+
++------------------+
+|cell              |
++------------------+
+|360287970373976640|
++------------------+
 """
 
 custom_cellaswkb_sql_example_output = """
@@ -823,11 +823,11 @@ custom_cellaswkt_sql_example_output = """
 """
 
 custom_centroid_sql_example_output = """
-+-----------+
-|centroid   |
-+-----------+
-|[binary]   |
-+-----------+
++--------+
+|centroid|
++--------+
+|[binary]|
++--------+
 ... (WKB binary — POINT at the center of the 31.25m × 31.25m custom grid cell)
 """
 

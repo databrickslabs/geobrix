@@ -5,6 +5,11 @@ import rasterio
 
 from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition
 from databricks.labs.gbx.pyrx.core import cog
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+# metadata's position in the v2 tile tuple. path_mode was appended after it, so
+# metadata is no longer the last field — index it by name to stay append-proof.
+_MD = V2_TILE_SCHEMA.fieldNames().index("metadata")
 
 
 def _write_striped(path, w=4000, h=4000):
@@ -76,10 +81,10 @@ def test_optin_split_emits_gtiff_not_cog(tmp_path):
     assert len(rows) > 1
     # Split tiles must be plain GTiff (not COG — COG is a writer concern).
     # read() now yields a raw v2 tile tuple in V2_TILE_SCHEMA order
-    # (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata);
-    # metadata is the last field.
+    # (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata,
+    # path_mode); metadata is indexed by name (path_mode is the last field).
     _, tile = rows[0]
-    md = tile[-1]
+    md = tile[_MD]
     assert md[cog.GBX_FORMAT] == "gtiff"
 
 

@@ -6,6 +6,11 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+# metadata's position in the v2 tile tuple. path_mode was appended after it, so
+# metadata is no longer the last field — index it by name to stay append-proof.
+_MD = V2_TILE_SCHEMA.fieldNames().index("metadata")
 
 EXPECTED_METADATA_KEYS = {
     "path",
@@ -337,8 +342,9 @@ def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
 
     for p in parts:
         for _, tile in reader.read(p):
-            # read() emits a raw v2 tuple in V2_TILE_SCHEMA order; metadata is last.
-            md = tile[-1]
+            # read() emits a raw v2 tuple in V2_TILE_SCHEMA order; metadata is
+            # indexed by name (path_mode is the last field, appended after it).
+            md = tile[_MD]
             assert (
                 md.get(cog_mod.GBX_FORMAT) == "gtiff"
             ), f"split tiles must be plain gtiff; got {md.get(cog_mod.GBX_FORMAT)!r}"

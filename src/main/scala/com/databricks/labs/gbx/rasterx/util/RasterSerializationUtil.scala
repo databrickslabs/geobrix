@@ -33,7 +33,13 @@ object RasterSerializationUtil {
 
     private def tileLayout(row: InternalRow): TileLayout = row.numFields match {
         case 3    => TileLayout(cellid = 0, raster = 1, metadata = 2, path = None, isV2 = false)
-        case 8 | 9 => TileLayout(cellid = 0, raster = 1, metadata = 7, path = Some(2), isV2 = true)
+        case 8 | 9 => TileLayout(
+            cellid   = V2Tile.idx("cellid"),
+            raster   = V2Tile.idx("raster"),
+            metadata = V2Tile.idx("metadata"),
+            path     = Some(V2Tile.idx("path")),
+            isV2     = true
+        )
         case n => throw new IllegalArgumentException(
             s"Unrecognized raster tile struct: expected a v1 (3-field) or v2 (8- or 9-field) tile, got $n fields.")
     }
@@ -90,18 +96,11 @@ object RasterSerializationUtil {
             } else {
                 RasterDriver.writeToBytes(tuple._2, tuple._3)
             }
-        InternalRow.fromSeq(
-          Seq(
-            tuple._1, // cellid
-            bytes,    // raster (binary)
-            null,     // path (null — bytes are self-describing)
-            null,     // window
-            null,     // clip_polygon
-            clipCrs.map(org.apache.spark.unsafe.types.UTF8String.fromString).orNull, // clip_crs
-            null,     // crs
-            metadata, // metadata (position 7)
-            null      // path_mode (position 8, null for materialized tiles)
-          )
+        V2Tile.row(
+            cellid  = tuple._1,
+            raster  = bytes,
+            clipCrs = clipCrs.map(org.apache.spark.unsafe.types.UTF8String.fromString).orNull,
+            metadata = metadata
         )
     }
 
@@ -118,21 +117,23 @@ object RasterSerializationUtil {
         if (lyt.isV2 && row.numFields == 9) row
         else if (lyt.isV2) {
             // 8-field v2: widen by appending null path_mode at position 8
-            val cellid      = row.getLong(0)
-            val raster      = if (row.isNullAt(1)) null else row.getBinary(1)
-            val path        = if (row.isNullAt(2)) null else row.getUTF8String(2)
-            val window      = if (row.isNullAt(3)) null else row.getStruct(3, 4)
-            val clipPolygon = if (row.isNullAt(4)) null else row.getBinary(4)
-            val clipCrs     = if (row.isNullAt(5)) null else row.getUTF8String(5)
-            val crs         = if (row.isNullAt(6)) null else row.getUTF8String(6)
-            val metadata    = if (row.isNullAt(7)) null else row.getMap(7)
-            InternalRow.fromSeq(Seq(cellid, raster, path, window, clipPolygon, clipCrs, crs, metadata, null))
+            V2Tile.row(
+                cellid      = V2Tile.getCellId(row),
+                raster      = V2Tile.getRaster(row),
+                path        = V2Tile.getPath(row),
+                window      = V2Tile.getWindow(row),
+                clipPolygon = V2Tile.getClipPolygon(row),
+                clipCrs     = V2Tile.getClipCrs(row),
+                crs         = V2Tile.getCrs(row),
+                metadata    = V2Tile.getMetadata(row),
+                pathMode    = null
+            )
         } else {
-            // v1: cellid@0, raster@1, metadata@2 → v2: cellid@0, raster@1, [null×5], metadata@7, null
+            // v1: cellid@0, raster@1, metadata@2 → v2 9-field row; read v1 by its own positional layout
             val cellid   = row.getLong(lyt.cellid)
             val raster   = if (row.isNullAt(lyt.raster))   null else row.getBinary(lyt.raster)
             val metadata = if (row.isNullAt(lyt.metadata)) null else row.getMap(lyt.metadata)
-            InternalRow.fromSeq(Seq(cellid, raster, null, null, null, null, null, metadata, null))
+            V2Tile.row(cellid = cellid, raster = raster, metadata = metadata)
         }
     }
 

@@ -343,7 +343,7 @@ def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
     for p in parts:
         for _, tile in reader.read(p):
             # read() emits a raw v2 tuple in V2_TILE_SCHEMA order; metadata is
-            # indexed by name (path_mode is the last field, appended after it).
+            # indexed by name (it is the last field; path_mode sits after path).
             md = tile[_MD]
             assert (
                 md.get(cog_mod.GBX_FORMAT) == "gtiff"

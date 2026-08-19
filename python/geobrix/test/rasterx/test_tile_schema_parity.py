@@ -3,7 +3,7 @@ v2 tile schema, field-for-field.
 
 Prevents the two tiers silently diverging — the class of bug that left the light
 tier emitting a legacy 3-field struct while the heavy tier was already on the
-8-field v2 struct. The heavy field contract is mirrored from Scala
+v2 struct. The heavy field contract is mirrored from Scala
 ``RST_ExpressionUtil.v2TileType`` (kept in lock-step; a change on either side that
 breaks this is a real cross-tier divergence to reconcile, not a test to relax).
 """

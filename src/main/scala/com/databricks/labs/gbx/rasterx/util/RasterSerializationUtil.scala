@@ -81,7 +81,7 @@ object RasterSerializationUtil {
         tileToRow(tuple, dataType, hconf, None)
 
     /** As above, plus an optional ``clipCrs`` canonical CRS string stamped into the
-      * v2 ``clip_crs`` field (position 5). Used by the GDAL/GTiff reader's clipCrs
+      * v2 ``clip_crs`` field. Used by the GDAL/GTiff reader's clipCrs
       * option (parity with the light reader); ``None`` leaves it null. */
     def tileToRow(
         tuple: (Long, Dataset, Map[String, String]),

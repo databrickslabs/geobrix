@@ -242,6 +242,15 @@ def main() -> int:
     do_wait = "--no-wait" not in sys.argv
     heavyweight = "--lightweight-only" not in sys.argv
     lightweight = "--heavyweight-only" not in sys.argv
+    # --serverless: submit to Serverless compute instead of an existing cluster. Light-only (no JAR).
+    # --env-version N: Serverless environment version to request (default 6; env v6 is the
+    # protobuf-6 regime, uses [light-dbr19] extras). Skips the cluster_id requirement.
+    serverless = "--serverless" in sys.argv
+    env_version = _arg("--env-version", "6")
+    if serverless:
+        # Serverless has no JAR; force light-only regardless of --heavyweight-only.
+        heavyweight = False
+        lightweight = True
     # --explain-only: print/persist each spark-path fn's physical plan, run nothing timed.
     # It's a lightweight spark-path-only diagnostic -- force that scope so the heavy JVM
     # path (which can't .explain) and the pure-core path stay out entirely.
@@ -438,7 +447,7 @@ def main() -> int:
     cluster_id = _strip_invisible(
         _arg("--existing-cluster-id", "") or os.environ.get("CLUSTER_ID") or ""
     )
-    if not cluster_id:
+    if not serverless and not cluster_id:
         print(
             "Set CLUSTER_ID env var or pass --existing-cluster-id <id>",
             file=sys.stderr,
@@ -571,6 +580,10 @@ def main() -> int:
         input_tile=input_tile,
         #  --disable-file: set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg).
         disable_file=disable_file,
+        #  --serverless: use Serverless compute (light-only, no JAR). --env-version N selects
+        #  the environment version to pin (default 6 = protobuf-6 / [light-dbr19] regime).
+        serverless=serverless,
+        env_version=env_version,
     )
     if explain_only:
         # Plans are a spark-path concern only; never run the pure-core sections.
@@ -636,8 +649,12 @@ def main() -> int:
 
     # Pre-flight: show the operator exactly what will run before submitting.
     print("=" * 64)
-    print("gbx:bench:cluster pre-flight")
-    print(f"  cluster_id : {cluster_id}")
+    if serverless:
+        print("gbx:bench:cluster pre-flight (SERVERLESS)")
+        print(f"  env_version: {env_version}")
+    else:
+        print("gbx:bench:cluster pre-flight")
+        print(f"  cluster_id : {cluster_id}")
     print(f"  scope      : heavyweight={heavyweight}  lightweight={lightweight}")
     print(f"  run_id     : {run_id}")
     print(f"  functions  : {functions or f'(set={sel})'}")
@@ -756,25 +773,55 @@ def main() -> int:
     # Attach the bench tests.jar only for the heavyweight leg (it carries the bench Scala classes).
     libraries = [compute.Library(jar=tests_jar)] if heavyweight else None
 
-    print("Submitting one-off benchmark run on cluster...")
-    submit_waiter = w.jobs.submit(
-        run_name=f"geobrix-bench-{run_id}",
-        # 6h: the full 1000-row both-run is dominated by the slow light spark-path fns
-        # (the perf gap being measured). 2h timed out mid light-spark-path; 6h covers
-        # light+heavy spark-path even before cluster upsizing parallelizes it.
-        timeout_seconds=21600,
-        tasks=[
-            jobs.SubmitTask(
-                task_key="run_bench",
-                existing_cluster_id=cluster_id,
-                notebook_task=jobs.NotebookTask(
-                    notebook_path=notebook_path,
-                    source=jobs.Source.WORKSPACE,
-                ),
-                libraries=libraries,
-            )
-        ],
-    )
+    if serverless:
+        # Serverless submission: environment_version-pinned compute, no cluster_id, no JAR.
+        # max_retries=0: a failed bench task must surface immediately, not auto-retry and mask
+        # the failure (standing bench rule).
+        env_version_str = str(env_version)
+        print(f"Submitting one-off benchmark run on Serverless (env v{env_version_str})...")
+        submit_waiter = w.jobs.submit(
+            run_name=f"geobrix-bench-{run_id}",
+            # 6h matches the classic timeout; Serverless light spark-path can still be slow
+            # on a large tile set with the virtual-tile reader path.
+            timeout_seconds=21600,
+            environments=[
+                jobs.JobEnvironment(
+                    environment_key="bench_env",
+                    spec=compute.Environment(environment_version=env_version_str),
+                )
+            ],
+            tasks=[
+                jobs.SubmitTask(
+                    task_key="run_bench",
+                    environment_key="bench_env",
+                    notebook_task=jobs.NotebookTask(
+                        notebook_path=notebook_path,
+                        source=jobs.Source.WORKSPACE,
+                    ),
+                    max_retries=0,
+                )
+            ],
+        )
+    else:
+        print("Submitting one-off benchmark run on cluster...")
+        submit_waiter = w.jobs.submit(
+            run_name=f"geobrix-bench-{run_id}",
+            # 6h: the full 1000-row both-run is dominated by the slow light spark-path fns
+            # (the perf gap being measured). 2h timed out mid light-spark-path; 6h covers
+            # light+heavy spark-path even before cluster upsizing parallelizes it.
+            timeout_seconds=21600,
+            tasks=[
+                jobs.SubmitTask(
+                    task_key="run_bench",
+                    existing_cluster_id=cluster_id,
+                    notebook_task=jobs.NotebookTask(
+                        notebook_path=notebook_path,
+                        source=jobs.Source.WORKSPACE,
+                    ),
+                    libraries=libraries,
+                )
+            ],
+        )
 
     remote_run_id = submit_waiter.run_id
 

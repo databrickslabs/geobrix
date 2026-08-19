@@ -35,12 +35,16 @@ Options:
   --netcdf-only         Run ONLY the NetCDF reader benchmark (no fn benchmarks)
   --input-tile <mode>   Input tile for the light spark-path leg: materialized (default) or virtual
   --disable-file        Set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg; use with --input-tile virtual)
+  --serverless          Submit to Serverless compute (light-only, no JAR). Skips --cluster-id.
+                        Profile must point to a workspace that supports Serverless jobs (e.g. dogfood).
+  --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).
+                        Only used with --serverless.
   --no-wait             Submit without blocking on completion
   --help, -h            Show help
 
-NOTE: this submits a job to a real cluster and consumes compute. The operator
-must have provisioned the cluster (init script + bundle + wheel for heavyweight,
-or just the [light] wheel for lightweight/ARM) and filled databricks_cluster_config.env.
+NOTE: this submits a job to a real cluster (or Serverless) and consumes compute. For classic
+cluster runs the operator must have provisioned the cluster and filled databricks_cluster_config.env.
+For --serverless, set DATABRICKS_CONFIG_PROFILE to a workspace with Serverless enabled (e.g. dogfood).
 EOF
 }
 

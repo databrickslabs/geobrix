@@ -2941,25 +2941,48 @@ def build_bench_notebook(cfg: dict) -> dict:
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
     # (light, heavy) then spark-path (light, heavy).
+    # Choose the install cell based on whether this is a Serverless job or a classic cluster.
+    # Serverless: %pip magic is not available in a running notebook job cell; install via
+    # subprocess so we control the restart precisely. Classic: the single %pip cell is
+    # preferred (ONE kernel restart, no manual dbutils.library.restartPython() needed, and
+    # avoids the triple-restart failure on DBR 19.x-snapshot).
+    if cfg.get("serverless"):
+        _install_cell_src = (
+            "import subprocess, sys\n"
+            "WHL = {wheel!r}\n"
+            "r = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet', '--force-reinstall',\n"
+            "     '--no-deps', WHL],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('whl install rc:', r.returncode, flush=True)\n"
+            "if r.returncode != 0:\n"
+            "    raise RuntimeError('whl install failed: '\n"
+            "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
+            "r2 = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
+            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('deps install rc:', r2.returncode, flush=True)\n"
+            "if r2.returncode != 0:\n"
+            "    raise RuntimeError('deps install failed: '\n"
+            "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
+            "print('installs done; restarting Python', flush=True)\n"
+            "dbutils.library.restartPython()\n"
+        ).format(wheel=cfg["wheel"])
+    else:
+        # Classic cluster: single %pip cell = one kernel restart; dbutils.library.restartPython()
+        # is NOT called (the %pip magic already triggers it; a second restart crashes on
+        # DBR 19.x-snapshot). PEP 508 URL-reference form resolves extras from the wheel file.
+        _install_cell_src = '%pip install --quiet "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
+            wheel=cfg["wheel"]
+        )
     cells = [
         # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.
         # [light-dbr19] is the classic DBR 19 variant of [light]: it drops the
         # mapbox-vector-tile<2.2 cap that conflicts with DBR 19's protobuf>=6.31.1.
-        # Use the PEP 508 URL-reference form `"geobrix[light-dbr19] @ file:///path"`
-        # which pins the exact wheel file and resolves extras from it -- even when the
-        # same version is already cached. The plain `'path[extra]'` form is not valid
-        # pip syntax for extras from a local file and fails silently.
-        # NOTE: single %pip cell = ONE kernel restart. The earlier pattern
-        # (%pip uninstall + %pip install + dbutils.library.restartPython()) triggered three
-        # restarts and caused kernel startup failures on DBR 19.x-snapshot. The explicit
-        # dbutils.library.restartPython() is omitted here because %pip install already
-        # restarts the Python environment; a second restart after it is redundant and
-        # causes kernel crash on DBR 19.x. `markdown` powers the displayHTML summaries.
-        _cell(
-            '%pip install --quiet "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
-                wheel=cfg["wheel"]
-            )
-        ),
+        _cell(_install_cell_src),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),

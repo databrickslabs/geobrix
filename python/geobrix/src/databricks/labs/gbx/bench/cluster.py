@@ -314,12 +314,18 @@ for _ck, _cv in (
         spark.conf.set(_ck, _cv)
     except Exception as _e:
         print(f"could not set {{_ck}}: {{_e}}")
-print(
-    "AQE: adaptive.enabled="
-    + str(spark.conf.get("spark.sql.adaptive.enabled", "?"))
-    + " databricks.adaptive="
-    + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
-)
+try:
+    print(
+        "AQE: adaptive.enabled="
+        + str(spark.conf.get("spark.sql.adaptive.enabled", "?"))
+        + " databricks.adaptive="
+        + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
+    )
+except Exception as _e:
+    # Serverless / Spark Connect refuses to GET these configs (CONFIG_NOT_AVAILABLE),
+    # even with a default. The AQE-off SETs above are already best-effort; on serverless
+    # the bench simply runs with the platform defaults.
+    print(f"AQE: config readback unavailable (serverless/Connect): {{_e}}")
 # Reader-only runs (readers/pmtiles/vector/mvt/pmtiles-agg/tin/grid/fanout/netcdf --*-only) stage
 # their OWN corpus (a reader pool, a vector corpus, synthetic in-memory rows, or -- for netcdf --
 # the {{CORPUS}}/netcdf + {{CORPUS}}/netcdf-swath pools). They do NOT use the function-bench row

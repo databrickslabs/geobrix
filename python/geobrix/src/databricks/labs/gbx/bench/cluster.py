@@ -312,28 +312,33 @@ MULTIWINDOW_CORPUS = {multiwindow_corpus!r} or (CORPUS + "/bench-corpus-cog-mult
 os.makedirs(OUT, exist_ok=True)
 # Disable AQE so it can't coalesce the spark-path repartition back toward
 # defaultParallelism (~slots) -- which reintroduces the straggler idle. The runner sets an
-# explicit partition count per fn; with AQE off it's respected. Set both the Apache and the
-# Databricks switches at runtime, then echo the effective values so the run log shows it took.
-for _ck, _cv in (
-    ("spark.sql.adaptive.enabled", "false"),
-    ("spark.databricks.optimizer.adaptive.enabled", "false"),
-):
+# explicit partition count per fn; with AQE off it's respected. This is a CLASSIC-cluster
+# optimization: on Serverless / Spark Connect these configs are not settable
+# (CONFIG_NOT_AVAILABLE, even to GET with a default) and AQE-off does not apply -- so detect
+# Connect and skip cleanly rather than attempt-and-catch (which logged a misleading
+# "could not set ... CONFIG_NOT_AVAILABLE" that reads like a failure). See the serverless
+# forbidden-config guidance: never attempt a restricted conf on Connect, detect and skip.
+if "connect" in type(spark).__module__:
+    print("AQE: skipped on Serverless/Connect (configs not settable; using platform defaults)")
+else:
+    # Classic: set both the Apache and the Databricks switches, then echo the effective values.
+    for _ck, _cv in (
+        ("spark.sql.adaptive.enabled", "false"),
+        ("spark.databricks.optimizer.adaptive.enabled", "false"),
+    ):
+        try:
+            spark.conf.set(_ck, _cv)
+        except Exception as _e:
+            print(f"could not set {{_ck}}: {{_e}}")
     try:
-        spark.conf.set(_ck, _cv)
+        print(
+            "AQE: adaptive.enabled="
+            + str(spark.conf.get("spark.sql.adaptive.enabled", "?"))
+            + " databricks.adaptive="
+            + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
+        )
     except Exception as _e:
-        print(f"could not set {{_ck}}: {{_e}}")
-try:
-    print(
-        "AQE: adaptive.enabled="
-        + str(spark.conf.get("spark.sql.adaptive.enabled", "?"))
-        + " databricks.adaptive="
-        + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
-    )
-except Exception as _e:
-    # Serverless / Spark Connect refuses to GET these configs (CONFIG_NOT_AVAILABLE),
-    # even with a default. The AQE-off SETs above are already best-effort; on serverless
-    # the bench simply runs with the platform defaults.
-    print(f"AQE: config readback unavailable (serverless/Connect): {{_e}}")
+        print(f"AQE: config readback unavailable: {{_e}}")
 # Reader-only runs (readers/pmtiles/vector/mvt/pmtiles-agg/tin/grid/fanout/netcdf --*-only) stage
 # their OWN corpus (a reader pool, a vector corpus, synthetic in-memory rows, or -- for netcdf --
 # the {{CORPUS}}/netcdf + {{CORPUS}}/netcdf-swath pools). They do NOT use the function-bench row

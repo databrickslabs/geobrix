@@ -56,6 +56,9 @@ test-logs/bench/
 
 # Agent/session scratch + local tooling (never committed)
 /.superpowers/
+# Internal planning docs (specs, plans, perf notes) — NOT public. The public
+# representation of decisions lives in docs/docs/. Kept locally, untracked.
+/docs/superpowers/
 /.isaac/
 /.tmp
 /scratchpad/

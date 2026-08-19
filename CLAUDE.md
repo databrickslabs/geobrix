@@ -315,7 +315,7 @@ some agent. State the relevant ones up front so the agent doesn't burn a run on 
   named-argument support, so an extra wrapper argument is silently dropped rather than erroring.
 - **Doc tests only run in Docker** (they need the full env + sample data under `/Volumes`).
   Corpus tests skip unless the container was started with the sample-data mounts.
-- **`/prompts/` is gitignored** scratch; `docs/superpowers/` is version-controlled.
+- **`/prompts/` and `docs/superpowers/` are gitignored** scratch (internal planning; the public representation of decisions lives in `docs/docs/`).
 - Non-EPSG / authority-less CRS may render as different-but-equivalent strings across tiers.
   Parity means CRS-equivalence, not string equality.
 
@@ -404,7 +404,7 @@ For unattended/CI work, U2M is the wrong credential: use an OAuth **M2M service 
 
 Two locations, by artifact class:
 
-- **Design specs and implementation plans** (the `superpowers` workflow outputs) live under `docs/superpowers/` — specs (brainstorming-skill output, the `*-design.md` files) under `docs/superpowers/specs/YYYY-MM-DD-<kebab-topic>-design.md`, and plans (writing-plans-skill output) under `docs/superpowers/plans/YYYY-MM-DD-<kebab-topic>.md`. This tree is **version-controlled** — specs and plans are committed alongside the work they describe.
+- **Design specs and implementation plans** (the `superpowers` workflow outputs) live under `docs/superpowers/` — specs (brainstorming-skill output, the `*-design.md` files) under `docs/superpowers/specs/YYYY-MM-DD-<kebab-topic>-design.md`, and plans (writing-plans-skill output) under `docs/superpowers/plans/YYYY-MM-DD-<kebab-topic>.md`. This tree is **gitignored** — internal planning scratch kept locally across sessions, not committed. The public representation of decisions is `docs/docs/` (release notes, package pages), not the planning tree.
 - **Everything else** (session summaries, analyses, progress notes, scoping drafts) goes under `prompts/<category>/YYYY-MM-DD-<kebab-topic>.md`. Categories include `features/`, `documentation/`, `refactoring/`, `testing/`, `bugfixes/`. **`/prompts/` is gitignored** — local scratch, not committed.
 
 ## What used to live under `.cursor/`

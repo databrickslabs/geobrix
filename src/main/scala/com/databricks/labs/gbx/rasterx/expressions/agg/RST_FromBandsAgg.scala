@@ -38,7 +38,7 @@ case class RST_FromBandsAgg(
 
     lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
-    /** Field count of the input tile struct (3 for v1, 8 for v2), from the declared element schema. */
+    /** Field count of the input tile struct (3 for v1, 9 for v2), from the declared element schema. */
     private lazy val tileFieldCount: Int = tile.dataType match {
         case st: org.apache.spark.sql.types.StructType => st.fields.length
         case _                                         => 3

@@ -26,7 +26,7 @@ case class RST_MapAlgebra(
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
         RST_MapAlgebra.name, tiles, aggHint = None
     )
-    /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
+    /** Element field count from the declared input array element struct (3 for v1, 9 for v2). */
     private lazy val elementFieldCountLit: Expression =
         Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tiles), IntegerType)
     override def children: Seq[Expression] = Seq(tiles, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit)
@@ -47,7 +47,7 @@ object RST_MapAlgebra extends WithExpressionInfo {
         eval(array, spec, conf, 3)
 
     // Called by Spark reflection when children = [tile, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit].
-    // elementFieldCount is derived from the declared input array element struct (3=v1, 8=v2).
+    // elementFieldCount is derived from the declared input array element struct (3=v1, 9=v2).
     def eval(array: ArrayData, spec: UTF8String, conf: UTF8String, elementFieldCount: Int): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {

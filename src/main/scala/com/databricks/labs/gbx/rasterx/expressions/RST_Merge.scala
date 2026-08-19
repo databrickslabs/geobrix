@@ -21,7 +21,7 @@ case class RST_Merge(
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
         RST_Merge.name, tiles, aggHint = Some("gbx_rst_merge_agg")
     )
-    /** Element field count from the declared input array element struct (3 for v1, 8 for v2). */
+    /** Element field count from the declared input array element struct (3 for v1, 9 for v2). */
     private lazy val elementFieldCountLit: Expression =
         Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tiles), IntegerType)
     override def children: Seq[Expression] = Seq(tiles, ExpressionConfigExpr(), elementFieldCountLit)
@@ -40,7 +40,7 @@ object RST_Merge extends WithExpressionInfo {
     def eval(array: ArrayData, conf: UTF8String): InternalRow = eval(array, conf, 3)
 
     // Called by Spark reflection when children = [tile, ExpressionConfigExpr(), elementFieldCountLit].
-    // elementFieldCount is derived from the declared input array element struct (3=v1, 8=v2).
+    // elementFieldCount is derived from the declared input array element struct (3=v1, 9=v2).
     def eval(array: ArrayData, conf: UTF8String, elementFieldCount: Int): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {

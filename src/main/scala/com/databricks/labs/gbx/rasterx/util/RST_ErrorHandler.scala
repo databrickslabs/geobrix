@@ -61,7 +61,7 @@ object RST_ErrorHandler extends Logging {
       * VirtualTileExceptions are always re-thrown — they indicate a virtual tile reaching a
       * heavyweight function and must surface as hard failures, not silent error rows.
       *
-      * @param elementFieldCount the declared field count of each element struct (3 for v1, 8 for v2).
+      * @param elementFieldCount the declared field count of each element struct (3 for v1, 9 for v2).
       *                          Passed from the expression's declared input schema.
       */
     def safeEval(eval: () => InternalRow, rows: ArrayData, rasterType: DataType, elementFieldCount: Int = 3): InternalRow = {

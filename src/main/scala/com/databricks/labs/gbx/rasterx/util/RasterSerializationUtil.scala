@@ -32,8 +32,8 @@ object RasterSerializationUtil {
     private case class TileLayout(cellid: Int, raster: Int, metadata: Int, path: Option[Int], isV2: Boolean)
 
     private def tileLayout(row: InternalRow): TileLayout = row.numFields match {
-        case 3    => TileLayout(cellid = 0, raster = 1, metadata = 2, path = None, isV2 = false)
-        case 8 | 9 => TileLayout(
+        case 3 => TileLayout(cellid = 0, raster = 1, metadata = 2, path = None, isV2 = false)
+        case 9 => TileLayout(
             cellid   = V2Tile.idx("cellid"),
             raster   = V2Tile.idx("raster"),
             metadata = V2Tile.idx("metadata"),
@@ -41,7 +41,7 @@ object RasterSerializationUtil {
             isV2     = true
         )
         case n => throw new IllegalArgumentException(
-            s"Unrecognized raster tile struct: expected a v1 (3-field) or v2 (8- or 9-field) tile, got $n fields.")
+            s"Unrecognized raster tile struct: expected a v1 (3-field) or v2 (9-field) tile, got $n fields.")
     }
 
     private def guardMaterialized(row: InternalRow, lyt: TileLayout): Unit =
@@ -104,31 +104,18 @@ object RasterSerializationUtil {
         )
     }
 
-    /** Reshape a v1 (3-field) OR v2 (8- or 9-field) tile InternalRow to the canonical v2 9-field
-      * layout WITHOUT opening / re-encoding the raster. v2 rows are widened from 8 to 9 if
-      * needed; v1 rows are widened: (cellid, raster, metadata) → (cellid, raster, null×5, metadata, null).
+    /** Reshape a v1 (3-field) or v2 (9-field) tile InternalRow to the canonical v2 9-field
+      * layout WITHOUT opening / re-encoding the raster. v2 (9-field) rows pass through unchanged;
+      * v1 rows are widened: (cellid, raster, metadata) → (cellid, raster, null×6, metadata).
       *
       * Use this at aggregator update() time so every buffered row is 9-field, making the
       * size==1 fast-path passthrough and the serialize UnsafeProjection (which is created
-      * over the 9-field dataType) both safe on v1 or 8-field v2 input.
+      * over the 9-field dataType) both safe on v1 input.
       */
     def normalizeToV2Row(row: InternalRow): InternalRow = {
         val lyt = tileLayout(row)
-        if (lyt.isV2 && row.numFields == 9) row
-        else if (lyt.isV2) {
-            // 8-field v2: widen by appending null path_mode at position 8
-            V2Tile.row(
-                cellid      = V2Tile.getCellId(row),
-                raster      = V2Tile.getRaster(row),
-                path        = V2Tile.getPath(row),
-                window      = V2Tile.getWindow(row),
-                clipPolygon = V2Tile.getClipPolygon(row),
-                clipCrs     = V2Tile.getClipCrs(row),
-                crs         = V2Tile.getCrs(row),
-                metadata    = V2Tile.getMetadata(row),
-                pathMode    = null
-            )
-        } else {
+        if (lyt.isV2) row
+        else {
             // v1: cellid@0, raster@1, metadata@2 → v2 9-field row; read v1 by its own positional layout
             val cellid   = row.getLong(lyt.cellid)
             val raster   = if (row.isNullAt(lyt.raster))   null else row.getBinary(lyt.raster)

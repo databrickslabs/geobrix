@@ -208,10 +208,10 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         )
         val confB64 = UTF8String.fromString(conf.toB64)
 
-        // Minimal v2 row (not a virtual tile — raster field is empty bytes at position 1)
+        // Minimal v2 (9-field) row (not a virtual tile — raster field is empty bytes at position 1)
         val metadataMapData = SerializationUtil.toMapData[String, String](Map.empty[String, String])
         val row: InternalRow = new GenericInternalRow(Array[Any](
-            1L, Array.emptyByteArray, null, null, null, null, null, metadataMapData))
+            1L, Array.emptyByteArray, null, null, null, null, null, null, metadataMapData))
 
         // Thunk throws a plain IAE (not VirtualTileException) — should be swallowed → null
         val plainIAEResult = RST_ErrorHandler.safeEval(

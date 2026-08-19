@@ -46,6 +46,27 @@ def test_read_projects_plain_columns_into_v2_tile(spark):
     assert rows["/Volumes/main/s/v/a.tif"] == "external"
 
 
+def test_tile_struct_field_order_matches_v2_tile_schema(spark):
+    """read_file_table tile struct field names must match V2_TILE_SCHEMA order exactly.
+
+    Regression test for the reorder-consequence bug where path_mode was appended
+    last in the F.struct builder instead of following V2_TILE_SCHEMA (index 3,
+    immediately after path).  A name-driven builder iterating V2_TILE_SCHEMA
+    fieldNames() locks this invariant for future reorders too.
+    """
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    _make_plain_table(spark, "file_tbl_schema_order")
+    out = read_file_table(spark, "file_tbl_schema_order")
+    actual_names = [f.name for f in out.schema["tile"].dataType.fields]
+    expected_names = V2_TILE_SCHEMA.fieldNames()
+    assert actual_names == expected_names, (
+        f"tile struct field order diverges from V2_TILE_SCHEMA.\n"
+        f"  expected: {expected_names}\n"
+        f"  actual:   {actual_names}"
+    )
+
+
 def _make_no_cellid_table(spark, name):
     """Table without a cellid column — tests absent-field type safety."""
     spark.sql(f"DROP TABLE IF EXISTS {name}")

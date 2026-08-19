@@ -14,6 +14,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import BinaryType, LongType, StringType
 
 from . import _file_ref, file_props
+from .core.virtual_tile import V2_TILE_SCHEMA
 
 
 def _strip_dbfs_scheme(uri):
@@ -168,27 +169,29 @@ def read_file_table(
         [c for c in present if c != "path"] if use_managed_uri else present
     )
 
+    # Build the struct by iterating V2_TILE_SCHEMA.fieldNames() so the emitted
+    # field order exactly matches the schema regardless of future reorders.
+    # Two computed columns get special treatment:
+    #   path      — managed+capable branch uses the uri-derived expression;
+    #               all other branches fall through to present/absent.
+    #   path_mode — always the computed path_mode_col (not in present/absent).
     tile_struct = F.struct(
         *[
             (
                 path_col.alias("path")
                 if c == "path" and use_managed_uri
                 else (
-                    F.col(c).alias(c) if c in present_for_struct else absent[c].alias(c)
+                    path_mode_col.alias("path_mode")
+                    if c == "path_mode"
+                    else (
+                        F.col(c).alias(c)
+                        if c in present_for_struct
+                        else absent[c].alias(c)
+                    )
                 )
             )
-            for c in (
-                "cellid",
-                "raster",
-                "path",
-                "window",
-                "clip_polygon",
-                "clip_crs",
-                "crs",
-                "metadata",
-            )
-        ],
-        path_mode_col.alias("path_mode"),
+            for c in V2_TILE_SCHEMA.fieldNames()
+        ]
     )
     # "raster" is intentionally absent from a FILE table (null BINARY).
     out = base.withColumn("tile", tile_struct)

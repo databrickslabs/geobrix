@@ -730,7 +730,7 @@ Expected: `uploaded ... -> /Volumes/.../geobrix-0.4.0-py3-none-any.whl`.
 cd /Users/mjohns/IdeaProjects/geobrix
 bash scripts/commands/gbx-test-notebooks-serverless.sh \
   --notebook "notebooks/examples/helios/02. Visual Basemap (XYZ).ipynb" \
-  --ws-dir "/Users/mjohns@databricks.com/GeoBrix/helios" \
+  --ws-dir "/Users/<your-workspace-user>/GeoBrix/helios" \
   --extra-deps rich \
   --log notebooks-serverless-rescale.log
 ```

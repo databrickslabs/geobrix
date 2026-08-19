@@ -1534,6 +1534,68 @@ def _run_sp_scalar_fn(
     return rows
 
 
+def _is_spark_connect(spark) -> bool:
+    """True on a Spark Connect (Serverless) session, False on a classic cluster.
+
+    Connect sessions live under ``pyspark.sql.connect.*``; classic sessions do
+    not. We branch on this rather than feature-probing because the Connect
+    surface deliberately omits ``SparkContext`` and ``DataFrame.rdd`` (they raise
+    on access), and an explicit branch keeps genuine classic-path failures from
+    being masked by a broad ``except``.
+    """
+    return "connect" in type(spark).__module__
+
+
+def _bench_parallelism(spark, default: int = 8) -> int:
+    """Connect-safe partition count for repartitioning the bench row DataFrame.
+
+    Classic clusters expose ``sparkContext.defaultParallelism`` (~ total executor
+    cores), which the spark-path bench used to reproduce the createDataFrame
+    layout so per-row timing stays comparable across runs. Spark Connect
+    (Serverless) has no ``SparkContext``, so fall back to
+    ``spark.sql.shuffle.partitions`` (when it is a plain integer) and finally to a
+    fixed sensible default. Classic behavior is unchanged.
+    """
+    if not _is_spark_connect(spark):
+        try:
+            return max(1, spark.sparkContext.defaultParallelism)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        return max(1, int(spark.conf.get("spark.sql.shuffle.partitions")))
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _one_row_per_partition(spark, df):
+    """One row per partition of ``df``, preserving ``df``'s schema.
+
+    Warm-up intent: touch exactly one row on every executor slot's Python worker
+    so a warm-up pass exercises each slot's UDF once without paying the full
+    row-count cost.
+
+    Classic clusters do this with ``df.rdd.mapPartitions(take 1)``. Spark Connect
+    has no ``.rdd``, so tag each row with its (pre-shuffle) partition id via the
+    DataFrame-native ``spark_partition_id()``, keep one row per distinct id, then
+    drop the tag. Same intent (one warm row per source partition); the rows chosen
+    per partition may differ from the classic "first row", which does not matter
+    for warm-up.
+    """
+    from pyspark.sql import functions as F
+
+    if _is_spark_connect(spark):
+        return (
+            df.withColumn("_bench_pid", F.spark_partition_id())
+            .dropDuplicates(["_bench_pid"])
+            .drop("_bench_pid")
+        )
+    import itertools as _it
+
+    return spark.createDataFrame(
+        df.rdd.mapPartitions(lambda _p: _it.islice(_p, 1)), df.schema
+    )
+
+
 def run_spark_path(  # noqa: C901
     spark,
     corpus_root,
@@ -1623,7 +1685,7 @@ def run_spark_path(  # noqa: C901
     # repartition to defaultParallelism to reproduce the previous createDataFrame layout
     # (e.g. a 12-core cluster -> 12 partitions, so 12 Spark tasks for 10 rows, 2 empty),
     # keeping per-row timing comparable to prior runs. We deliberately DON'T coalesce.
-    _nparts = max(1, spark.sparkContext.defaultParallelism)
+    _nparts = _bench_parallelism(spark)
     df_all = (
         raw.select(_to_tile(F.col("path"), F.col("content")).alias("tile"))
         # repartition by F.rand() not the tile struct (hashing the raster payload would
@@ -1702,11 +1764,7 @@ def run_spark_path(  # noqa: C901
     # paying the full row-count cost. (df.limit(N) would pull all N rows from the first
     # couple of partitions, warming only a slot or two.) The measured iterations run the
     # cached df_all directly (repartitioned); only the warm-up uses this slot-spread DF.
-    import itertools as _it
-
-    _warm_df = spark.createDataFrame(
-        df_all.rdd.mapPartitions(lambda _p: _it.islice(_p, 1)), df_all.schema
-    ).cache()
+    _warm_df = _one_row_per_partition(spark, df_all).cache()
     _warm_df.count()  # materialize so building it isn't charged to any fn's timing
 
     # GB tile DataFrame for BNG raster->grid / tessellate fns (gb_tile=True).
@@ -1739,9 +1797,7 @@ def run_spark_path(  # noqa: C901
                 .cache()
             )
             df_gb.count()
-            warm_df_gb = spark.createDataFrame(
-                df_gb.rdd.mapPartitions(lambda _p: _it.islice(_p, 1)), df_gb.schema
-            ).cache()
+            warm_df_gb = _one_row_per_partition(spark, df_gb).cache()
             warm_df_gb.count()
 
     # --explain-only: build each fn's spark-path DataFrame and PRINT its physical plan,

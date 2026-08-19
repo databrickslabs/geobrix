@@ -300,6 +300,14 @@ VECTOR_FORMATS = {vector_formats!r}
 # "virtual"). "materialized" is the classic path (bytes from binaryFile); "virtual" passes
 # a path+window tile struct and triggers the virtual-tile reader code path.
 INPUT_TILE = {input_tile!r}
+# --grouped-file: also run the grouped FILE-amortization benchmark (rst_clip_grouped +
+# pixel-op _grouped fns) over a MULTIWINDOW COG corpus, across three tile modes
+# (materialized / virtual+FILE-off / virtual+FILE-on). --grouped-file-only: ONLY run it.
+# --multiwindow-corpus: the corpus dir (holds cog_multiwindow_manifest.json); default is
+# CORPUS + "/bench-corpus-cog-multiwindow". Skips cleanly when the manifest is absent.
+BENCHMARK_GROUPED_FILE = {benchmark_grouped_file!r}
+GROUPED_FILE_ONLY = {grouped_file_only!r}
+MULTIWINDOW_CORPUS = {multiwindow_corpus!r} or (CORPUS + "/bench-corpus-cog-multiwindow")
 
 os.makedirs(OUT, exist_ok=True)
 # Disable AQE so it can't coalesce the spark-path repartition back toward
@@ -335,7 +343,7 @@ except Exception as _e:
 _READER_ONLY = (
     READERS_ONLY or PMTILES_ONLY or VECTOR_ONLY or MVT_ONLY or PMTILES_AGG_ONLY
     or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
-    or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY
+    or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY or GROUPED_FILE_ONLY
 )
 corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
 # Function-bench summaries annotate results with the row-pool size; reader-only runs have no
@@ -2656,6 +2664,44 @@ if _fanout_rows:
 FANOUT_ONLY = {"fanout"}
 BENCHMARK_FANOUT = {"fanout"}
 
+_CELL_GROUPED_FILE = """# Grouped FILE-amortization benchmark: rst_clip_grouped + pixel-op _grouped fns over a
+# MULTIWINDOW COG corpus, across three tile modes (materialized / virtual+FILE-off /
+# virtual+FILE-on). The win = grouped_tile_map amortizing one source .open() across a
+# source's windows; FILE-on vs FILE-off is the amortization spread (per-tile ms). LIGHT-only
+# (pure Python; no JAR). Skips cleanly when the multiwindow manifest is absent.
+import os as _os
+from databricks.labs.gbx.bench import grouped_file as _gf
+_gfile_manifest = _gf.resolve_manifest_path(corpus_path=MULTIWINDOW_CORPUS)
+if not _os.path.exists(_gfile_manifest):
+    print(
+        "grouped-file benchmark SKIPPED: no manifest at "
+        + str(_gfile_manifest)
+        + " (stage the multiwindow COG corpus first via "
+        + "datagen.generate_cog_multiwindow_corpus)"
+    )
+else:
+    _gfile_rows = _gf.run_grouped_file(
+        spark,
+        corpus_path=MULTIWINDOW_CORPUS,
+        warmup=SPARK_WARMUP,
+        measured=SPARK_MEASURED,
+        run_id=RUN_ID,
+        where="cluster",
+    )
+    _sink(_gfile_rows)
+    lw.extend(_gfile_rows)
+    if _gfile_rows:
+        _df_gfile = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'grouped-file'"
+        )
+        try:
+            display(_df_gfile)
+        except Exception:
+            _df_gfile.show(100, truncate=False)
+        _md = results.summarize(_gfile_rows)
+        _show_md(f"grouped FILE-amortization benchmark -- {RUN_ID}", _md)
+"""
+
 _CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr (+ row-count parity)
 # Two-leg pipeline (scaled branch):
 #   Leg 1 (reader): spark.read.format(fmt).load(copies/) -> Delta ingest table (forces
@@ -2905,6 +2951,9 @@ def build_bench_notebook(cfg: dict) -> dict:
         netcdf_writer_only=bool(cfg.get("netcdf_writer_only")),
         input_tile=str(cfg.get("input_tile", "materialized")),
         disable_file=bool(cfg.get("disable_file", False)),
+        benchmark_grouped_file=bool(cfg.get("benchmark_grouped_file")),
+        grouped_file_only=bool(cfg.get("grouped_file_only")),
+        multiwindow_corpus=str(cfg.get("multiwindow_corpus", "") or ""),
     )
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section
@@ -2943,6 +2992,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     netcdf_only = bool(cfg.get("netcdf_only"))
     benchmark_netcdf_writer = bool(cfg.get("benchmark_netcdf_writer"))
     netcdf_writer_only = bool(cfg.get("netcdf_writer_only"))
+    benchmark_grouped_file = bool(cfg.get("benchmark_grouped_file"))
+    grouped_file_only = bool(cfg.get("grouped_file_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
@@ -3010,6 +3061,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             fanout_only,
             netcdf_only,
             netcdf_writer_only,
+            grouped_file_only,
         )
     )
     if not _any_only:
@@ -3039,6 +3091,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         (benchmark_grid_bng or grid_bng_only, [_CELL_GRID_BNG]),
         (benchmark_grid_custom or grid_custom_only, [_CELL_GRID_CUSTOM]),
         (benchmark_fanout or fanout_only, [_CELL_FANOUT]),
+        (benchmark_grouped_file or grouped_file_only, [_CELL_GROUPED_FILE]),
     ]
     for _enabled, _cell_srcs in _bench_cells:
         if _enabled:

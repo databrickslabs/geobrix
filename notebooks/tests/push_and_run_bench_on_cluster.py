@@ -431,6 +431,18 @@ def main() -> int:
     # fall back to plain-path I/O (FILE type bypassed). Intended for the FILE-off A/B leg.
     # Only meaningful when --input-tile virtual; silently a no-op for materialized inputs.
     disable_file = "--disable-file" in sys.argv
+    # --grouped-file: also run the grouped FILE-amortization benchmark (rst_clip_grouped +
+    #   pixel-op _grouped fns) over a MULTIWINDOW COG corpus, across three tile modes
+    #   (materialized / virtual+FILE-off / virtual+FILE-on). This is the leg that actually
+    #   exercises grouped_tile_map's per-source open-cost amortization -- the FILE win the
+    #   scalar bench misses. The leg toggles FILE on/off internally per mode, so --disable-file
+    #   is NOT needed (and should not be combined with it).
+    # --grouped-file-only: ONLY run the grouped-file benchmark, skip all fn benchmarks.
+    benchmark_grouped_file = "--grouped-file" in sys.argv
+    grouped_file_only = "--grouped-file-only" in sys.argv
+    # --multiwindow-corpus PATH: the multiwindow COG corpus dir (holding
+    #   cog_multiwindow_manifest.json). Default (empty) -> CORPUS/bench-corpus-cog-multiwindow.
+    multiwindow_corpus = _arg("--multiwindow-corpus", "")
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
@@ -580,6 +592,11 @@ def main() -> int:
         input_tile=input_tile,
         #  --disable-file: set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg).
         disable_file=disable_file,
+        #  --grouped-file: also run the grouped FILE-amortization benchmark (multiwindow COG,
+        #  3 tile modes). --grouped-file-only: ONLY that leg. --multiwindow-corpus: its corpus dir.
+        benchmark_grouped_file=benchmark_grouped_file,
+        grouped_file_only=grouped_file_only,
+        multiwindow_corpus=multiwindow_corpus,
         #  --serverless: use Serverless compute (light-only, no JAR). --env-version N selects
         #  the environment version to pin (default 6 = protobuf-6 / [light-dbr19] regime).
         serverless=serverless,
@@ -620,6 +637,9 @@ def main() -> int:
         cfg["modes"] = "spark-path"
     if netcdf_writer_only:
         # NetCDF writer benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if grouped_file_only:
+        # Grouped FILE-amortization benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).
@@ -700,6 +720,7 @@ def main() -> int:
         or cfg.get("grid_custom_only")
         or cfg.get("fanout_only")
         or cfg.get("netcdf_only")
+        or cfg.get("grouped_file_only")
     )
     if (
         cfg["modes"] in ("spark-path", "both")

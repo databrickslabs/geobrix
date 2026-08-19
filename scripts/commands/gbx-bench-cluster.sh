@@ -35,6 +35,12 @@ Options:
   --netcdf-only         Run ONLY the NetCDF reader benchmark (no fn benchmarks)
   --input-tile <mode>   Input tile for the light spark-path leg: materialized (default) or virtual
   --disable-file        Set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg; use with --input-tile virtual)
+  --grouped-file        Also run the grouped FILE-amortization benchmark (rst_clip_grouped +
+                        pixel-op _grouped fns over a MULTIWINDOW COG corpus; materialized /
+                        virtual+FILE-off / virtual+FILE-on modes). Toggles FILE per-mode internally.
+  --grouped-file-only   Run ONLY the grouped FILE-amortization benchmark (no fn benchmarks)
+  --multiwindow-corpus <path>  Multiwindow COG corpus dir (holds cog_multiwindow_manifest.json).
+                        Default: <corpus>/bench-corpus-cog-multiwindow.
   --serverless          Submit to Serverless compute (light-only, no JAR). Skips --cluster-id.
                         Profile must point to a workspace that supports Serverless jobs (e.g. dogfood).
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).

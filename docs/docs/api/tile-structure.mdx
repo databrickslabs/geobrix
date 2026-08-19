@@ -97,20 +97,25 @@ Access tile components for custom processing:
 
 <CodeFromTest code={tileStructureExamples} functionName="using_tiles_in_custom_udfs" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="using_tiles_in_custom_udfs_output" />
 
-### Processing Binary Raster Data
+### Materialized vs Virtual: path and raster
 
-Access the `path` and `raster` fields to distinguish virtual from materialized tiles:
+A virtual tile has `tile.raster = null` and `tile.path` set to the source file path. A materialized tile is the opposite — `tile.raster` carries the encoded bytes and `tile.path` is null. Check both fields to classify a tile at runtime:
 
 <CodeFromTest code={tileStructureExamples} functionName="access_path_and_binary" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_path_and_binary_output" />
 
-When the `raster` field contains binary data, use it with rasterio or GDAL:
+### Tile Storage Mode
+
+`tile.path_mode` records the storage model used by a virtual tile's backing data. It is `null` for both materialized tiles and plain FUSE-path virtual tiles. Use `tile.raster is null` (or check `tile.path`) to distinguish those two cases. The field carries `"external"` for FILE EXTERNAL tiles and `"managed"` for FILE MANAGED tiles (governed lifecycle via Delta):
+
+<CodeFromTest code={tileStructureExamples} functionName="tile_path_mode_storage" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="tile_path_mode_storage_output" />
+
+When `tile.raster` contains binary data, use it with rasterio or GDAL:
 
 <CodeFromTest code={tileStructureExamples} functionName="processing_binary_raster_data" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="processing_binary_raster_data_output" />
 
 ### Comparing `rst_fromfile` vs `rst_fromcontent`
 
-Both produce tiles whose `raster` field is binary. Use `rst_fromfile` when you have a path,
-and `rst_fromcontent` when you already have bytes (e.g. from `spark.read.format("binaryFile")`).
+`rst_fromfile` takes a path and returns a **virtual** tile in the light tier (bytes-free by default; pass `materialize=True` to force bytes). `rst_fromcontent` always returns a **materialized** tile — it takes bytes you already have (e.g. from `spark.read.format("binaryFile")`) and embeds them directly.
 
 <CodeFromTest code={tileStructureExamples} functionName="comparing_fromfile_vs_fromcontent_tiles" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="comparing_fromfile_vs_fromcontent_tiles_output" />
 

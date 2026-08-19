@@ -20,9 +20,13 @@ import java.nio.file.Files
   *
   * Covers:
   *  - v1 (3-field) binary tile: metadata read at position 2
-  *  - v2 (9-field) materialized tile: metadata read at position 7, not 2
+  *  - v2 (9-field) materialized tile: metadata read at position 8 (last), not 2
   *  - v2 virtual tile (raster null, path set): guard throws with actionable message
   *  - unrecognized field count: clear error mentioning the count
+  *
+  * v2 field order (see [[RST_ExpressionUtil.v2TileType]]):
+  *   cellid(0), raster(1), path(2), path_mode(3), window(4), clip_polygon(5),
+  *   clip_crs(6), crs(7), metadata(8).
   */
 class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -63,11 +67,13 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
     private def v1BinaryRow(cellid: Long, bytes: Array[Byte]): InternalRow =
         new GenericInternalRow(Array[Any](cellid, bytes, emptyMap))
 
+    // v2 order: cellid(0), raster(1), path(2), path_mode(3), window(4),
+    //           clip_polygon(5), clip_crs(6), crs(7), metadata(8).
     private def v2MaterializedRow(cellid: Long, bytes: Array[Byte], md: MapData): InternalRow =
-        new GenericInternalRow(Array[Any](cellid, bytes, null, null, null, null, null, md, null))
+        new GenericInternalRow(Array[Any](cellid, bytes, null, null, null, null, null, null, md))
 
     private def v2VirtualRow(cellid: Long, path: String): InternalRow =
-        new GenericInternalRow(Array[Any](cellid, null, UTF8String.fromString(path), null, null, null, null, emptyMap, null))
+        new GenericInternalRow(Array[Any](cellid, null, UTF8String.fromString(path), null, null, null, null, null, emptyMap))
 
     /** Open a minimal in-memory GeoTIFF as a live Dataset (caller must releaseDataset). */
     private def openTinyGeotiff(): org.gdal.gdal.Dataset = {
@@ -86,12 +92,12 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         RasterDriver.releaseDataset(ds)
     }
 
-    test("rowToTile reads a v2 (9-field) materialized tile; metadata at position 7") {
+    test("rowToTile reads a v2 (9-field) materialized tile; metadata at position 8 (last)") {
         val md = toMapData(Map("k" -> "v"))
         val (cell, ds, meta) = RasterSerializationUtil.rowToTile(
             v2MaterializedRow(9L, tinyGeotiff(), md), BinaryType)
         assert(cell == 9L)
-        assert(meta.get("k").contains("v"), s"Expected metadata key 'k'='v' from position 7, got: $meta")
+        assert(meta.get("k").contains("v"), s"Expected metadata key 'k'='v' from position 8, got: $meta")
         RasterDriver.releaseDataset(ds)
     }
 
@@ -114,17 +120,29 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
             s"Expected field count '2' in message: ${ex.getMessage}")
     }
 
-    test("v2TileType carries path_mode as the 9th field") {
+    test("v2TileType carries metadata as the 9th (last) field and path_mode as the 4th") {
         val fields = RST_ExpressionUtil.v2TileType.fields
         assert(fields.length == 9, s"expected 9 fields, got ${fields.length}")
-        assert(fields.last.name == "path_mode")
-        assert(fields.last.dataType == StringType)
+        // metadata is now the last field ...
+        assert(fields.last.name == "metadata")
+        assert(fields.last.dataType == MapType(StringType, StringType))
         assert(fields.last.nullable)
+        // ... and path_mode moved to the 4th field (index 3), right after path.
+        assert(fields(3).name == "path_mode")
+        assert(fields(3).dataType == StringType)
+        assert(fields(3).nullable)
+    }
+
+    test("v2 tile field-order invariant: metadata is last AND path_mode immediately follows path") {
+        val names = RST_ExpressionUtil.v2TileType.fieldNames.toSeq
+        assert(names.last == "metadata", s"metadata must be the last field; got ${names.last}")
+        assert(names(names.indexOf("path") + 1) == "path_mode",
+            s"path_mode must immediately follow path; got ${names(names.indexOf("path") + 1)}")
     }
 
     test("v2TileType matches the light V2 schema exactly") {
         val t = RST_ExpressionUtil.v2TileType
-        assert(t.fieldNames.toSeq == Seq("cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata", "path_mode"))
+        assert(t.fieldNames.toSeq == Seq("cellid", "raster", "path", "path_mode", "window", "clip_polygon", "clip_crs", "crs", "metadata"))
         assert(t("cellid").dataType == LongType && !t("cellid").nullable)
         assert(t("raster").dataType == BinaryType && t("raster").nullable)
         val w = t("window").dataType.asInstanceOf[org.apache.spark.sql.types.StructType]
@@ -137,9 +155,11 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         val ds = openTinyGeotiff()
         val row = RasterSerializationUtil.tileToRow((5L, ds, Map("d" -> "GTiff")), BinaryType, hconf)
         assert(row.numFields == 9 && row.getLong(0) == 5L && !row.isNullAt(1))
-        assert(row.isNullAt(2) && row.isNullAt(3) && row.isNullAt(4) && row.isNullAt(5) && row.isNullAt(6))
-        assert(!row.isNullAt(7))
-        assert(row.isNullAt(8), "path_mode at position 8 must be null for a materialized tile")
+        // Pedigree fields all null: path(2), path_mode(3), window(4), clip_polygon(5), clip_crs(6), crs(7).
+        assert(row.isNullAt(2) && row.isNullAt(3) && row.isNullAt(4) &&
+               row.isNullAt(5) && row.isNullAt(6) && row.isNullAt(7))
+        assert(row.isNullAt(3), "path_mode at position 3 must be null for a materialized tile")
+        assert(!row.isNullAt(8), "metadata at position 8 (last) must be set")
         RasterDriver.releaseDataset(ds)
     }
 
@@ -147,7 +167,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
         val ds = openTinyGeotiff()
         val row = RasterSerializationUtil.tileToRow((99L, ds, Map.empty), BinaryType, hconf)
         assert(row.numFields == 9, s"expected 9 fields, got ${row.numFields}")
-        assert(row.isNullAt(8), "path_mode (position 8) should be null for a materialized tile")
+        assert(row.isNullAt(3), "path_mode (position 3) should be null for a materialized tile")
         RasterDriver.releaseDataset(ds)
     }
 

@@ -41,8 +41,8 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
     }
 
     private def getMetadata(row: InternalRow): Map[String, String] = {
-        // metadata is at position 7 in the v2 8-field tile schema
-        SerializationUtil.createMap[String, String](row.getMap(7))
+        // safeEval error rows are canonical 9-field v2 rows; metadata is the LAST field (position 8).
+        SerializationUtil.createMap[String, String](row.getMap(8))
     }
 
     test("safeEval (InternalRow) when eval succeeds should return eval result") {

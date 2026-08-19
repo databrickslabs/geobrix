@@ -31,17 +31,20 @@ _WINDOW_STRUCT = StructType(
     ]
 )
 
+# Field order invariant: ``path_mode`` sits immediately after ``path`` (grouping the
+# two path-provenance fields), and ``metadata`` is always the LAST field. Kept in
+# lock-step with the heavy-tier Scala ``RST_ExpressionUtil.v2TileType``.
 V2_TILE_SCHEMA = StructType(
     [
         StructField("cellid", LongType(), nullable=False),
         StructField("raster", BinaryType(), nullable=True),
         StructField("path", StringType(), nullable=True),
+        StructField("path_mode", StringType(), nullable=True),
         StructField("window", _WINDOW_STRUCT, nullable=True),
         StructField("clip_polygon", BinaryType(), nullable=True),
         StructField("clip_crs", StringType(), nullable=True),
         StructField("crs", StringType(), nullable=True),
         StructField("metadata", MapType(StringType(), StringType()), nullable=True),
-        StructField("path_mode", StringType(), nullable=True),
     ]
 )
 
@@ -51,12 +54,12 @@ class VirtualTile:
     cellid: int
     raster: Optional[bytes] = None
     path: Optional[str] = None
+    path_mode: Optional[str] = None
     window: Optional[Window4] = None
     clip_polygon: Optional[bytes] = None
     clip_crs: Optional[str] = None
     crs: Optional[str] = None
     metadata: Dict[str, str] = field(default_factory=dict)
-    path_mode: Optional[str] = None
 
     def __post_init__(self):
         if self.raster is None and self.path is None:
@@ -76,12 +79,12 @@ class VirtualTile:
             "cellid": int(self.cellid),
             "raster": self.raster,
             "path": self.path,
+            "path_mode": self.path_mode,
             "window": win,
             "clip_polygon": self.clip_polygon,
             "clip_crs": self.clip_crs,
             "crs": self.crs,
             "metadata": dict(self.metadata) if self.metadata else {},
-            "path_mode": self.path_mode,
         }
 
     @classmethod

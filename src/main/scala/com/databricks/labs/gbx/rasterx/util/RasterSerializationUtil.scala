@@ -20,7 +20,7 @@ final class VirtualTileException(msg: String) extends IllegalArgumentException(m
   *
   * Supports two tile layouts:
   *  - v1 (3 fields): (cellid, raster, metadata)
-  *  - v2 (9 fields): (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode)
+  *  - v2 (9 fields): (cellid, raster, path, path_mode, window, clip_polygon, clip_crs, crs, metadata)
   *
   * Raster is binary content (BinaryType only). A v2 tile with raster=null and path set is a
   * virtual tile; the heavy tier cannot process it — callers must materialize first.

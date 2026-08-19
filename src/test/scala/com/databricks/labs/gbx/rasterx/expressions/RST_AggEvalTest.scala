@@ -596,9 +596,9 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
         // Decode metadata from the returned InternalRow to confirm last_error was stamped.
         val outRow = out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow]
-        // v2 tile schema: cellid(0), raster(1), path(2), window(3), clip_polygon(4),
-        // clip_crs(5), crs(6), metadata(7).
-        val mdMap = outRow.getMap(7)
+        // v2 tile schema: cellid(0), raster(1), path(2), path_mode(3), window(4),
+        // clip_polygon(5), clip_crs(6), crs(7), metadata(8).
+        val mdMap = outRow.getMap(8)
         assert(mdMap != null, "metadata map must not be null")
         import org.apache.spark.unsafe.types.UTF8String
         val keys   = mdMap.keyArray().toArray[UTF8String](org.apache.spark.sql.types.StringType)
@@ -616,15 +616,15 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         n.numFields shouldBe 9
         n.getLong(0) shouldBe 42L
         n.getBinary(1) shouldBe Array[Byte](1, 2, 3)
-        // Fields 2..6 (pedigree) must be null
-        (2 to 6).foreach(i => n.isNullAt(i) shouldBe true)
-        // metadata still present at position 7
-        n.isNullAt(7) shouldBe false
-        // path_mode at position 8 must be null
-        n.isNullAt(8) shouldBe true
+        // Pedigree fields 2..7 (path, path_mode, window, clip_polygon, clip_crs, crs) must be null
+        (2 to 7).foreach(i => n.isNullAt(i) shouldBe true)
+        // path_mode is at position 3 (immediately after path) and must be null
+        n.isNullAt(3) shouldBe true
+        // metadata now present at position 8 (last)
+        n.isNullAt(8) shouldBe false
 
         // v2 row passes through unchanged (same object reference)
-        val v2 = new GenericInternalRow(Array[Any](7L, Array[Byte](9), null, null, null, null, null, emptyMap, null))
+        val v2 = new GenericInternalRow(Array[Any](7L, Array[Byte](9), null, null, null, null, null, null, emptyMap))
         RasterSerializationUtil.normalizeToV2Row(v2) should be theSameInstanceAs v2
     }
 

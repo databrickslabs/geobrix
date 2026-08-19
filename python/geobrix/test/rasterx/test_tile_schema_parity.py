@@ -17,12 +17,12 @@ _HEAVY_V2_FIELDS = [
     "cellid",
     "raster",
     "path",
+    "path_mode",
     "window",
     "clip_polygon",
     "clip_crs",
     "crs",
     "metadata",
-    "path_mode",
 ]
 
 

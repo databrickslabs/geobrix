@@ -72,13 +72,22 @@ def test_v2_schema_field_contract():
         "cellid",
         "raster",
         "path",
+        "path_mode",
         "window",
         "clip_polygon",
         "clip_crs",
         "crs",
         "metadata",
-        "path_mode",
     ]
+
+
+def test_v2_field_order_invariant():
+    """Positive invariant: metadata is the LAST field AND path_mode immediately follows path."""
+    names = [fld.name for fld in V2_TILE_SCHEMA.fields]
+    assert names[-1] == "metadata", f"metadata must be the last field; got {names[-1]}"
+    assert (
+        names[names.index("path") + 1] == "path_mode"
+    ), f"path_mode must immediately follow path; got {names[names.index('path') + 1]}"
 
 
 def test_no_legacy_tile_schema_as_function_output():

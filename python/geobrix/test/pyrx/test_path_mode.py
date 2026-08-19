@@ -6,10 +6,13 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import (
 )
 
 
-def test_schema_has_path_mode_last():
+def test_schema_path_mode_after_path_metadata_last():
     names = [f.name for f in V2_TILE_SCHEMA.fields]
-    assert names[-1] == "path_mode"
     assert len(names) == 9
+    # path_mode moved to right after path (index 3); metadata is now the last field.
+    assert names.index("path_mode") == 3
+    assert names[names.index("path") + 1] == "path_mode"
+    assert names[-1] == "metadata"
     assert V2_TILE_SCHEMA["path_mode"].nullable is True
 
 

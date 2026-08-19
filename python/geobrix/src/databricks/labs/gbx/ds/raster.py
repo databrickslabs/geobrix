@@ -210,12 +210,12 @@ def _v2_tile_row(
         int(cellid),
         raster,
         path,
+        None,  # path_mode: materialized/unknown; effective_path_mode() infers downstream
         win,
         clip_polygon,
         clip_crs,
         crs,
         metadata,
-        None,  # path_mode: materialized/unknown; effective_path_mode() infers downstream
     )
 
 

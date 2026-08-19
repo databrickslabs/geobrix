@@ -62,7 +62,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         // Output schema must be the v2 9-field struct.
         val tileType = out.schema("t").dataType.asInstanceOf[StructType]
         tileType.fieldNames.toSeq should equal(
-            Seq("cellid", "raster", "path", "window", "clip_polygon", "clip_crs", "crs", "metadata", "path_mode"))
+            Seq("cellid", "raster", "path", "path_mode", "window", "clip_polygon", "clip_crs", "crs", "metadata"))
 
         // The raster field must be non-null (materialized bytes, not a virtual tile).
         val row = out.head.getAs[Row]("t")
@@ -125,12 +125,12 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             0L,                    // cellid
             null,                  // raster (null → virtual)
             "/some/virtual.tif",   // path (set → this is a virtual tile)
+            null,                  // path_mode
             null,                  // window
             null,                  // clip_polygon
             null,                  // clip_crs
             null,                  // crs
-            Map.empty[String, String], // metadata
-            null                   // path_mode
+            Map.empty[String, String] // metadata (last)
         ))
 
         val dfVirtual = spark.createDataFrame(
@@ -170,9 +170,9 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             0L,
             null,                  // raster = null → virtual
             "/some/virtual.tif",   // path set
-            null, null, null, null,
-            Map.empty[String, String],
-            null))                 // path_mode
+            null,                  // path_mode
+            null, null, null, null, // window, clip_polygon, clip_crs, crs
+            Map.empty[String, String]))  // metadata (last)
 
         val dfVirtual = spark.createDataFrame(
             spark.sparkContext.parallelize(Seq(virtualRow)),

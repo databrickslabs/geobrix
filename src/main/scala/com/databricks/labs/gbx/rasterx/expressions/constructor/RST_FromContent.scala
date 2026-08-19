@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.constructor
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.GDAL
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, V2Tile}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -43,8 +43,7 @@ object RST_FromContent extends WithExpressionInfo {
                   "size" -> content.length.toString
                 )
                 val mapData = SerializationUtil.toMapData[String, String](mtd)
-                // v2 9-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode
-                InternalRow.fromSeq(Seq(null, content, null, null, null, null, null, mapData, null))
+                V2Tile.row(raster = content, metadata = mapData)
             },
             null,
             BinaryType,

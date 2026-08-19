@@ -22,6 +22,7 @@ _HEAVY_V2_FIELDS = [
     "clip_crs",
     "crs",
     "metadata",
+    "path_mode",
 ]
 
 

@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.grid
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -290,8 +290,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
             "last_command" -> "gdal.Grid(invdist)"
         )
         val mapData = SerializationUtil.toMapData[String, String](mtd)
-        // v2 9-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode
-        InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, mapData, null))
+        V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
     }
 
     override def name: String = "gbx_rst_gridfrompoints"

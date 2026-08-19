@@ -9,7 +9,7 @@ package com.databricks.labs.gbx.rasterx.expressions
  */
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.vectorx.jts.InterpolateElevation
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -182,8 +182,7 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
             "all_parents" -> "",
             "last_command" -> "gbx_rst_dtmfromgeoms"
         )
-        // v2 9-field tile: cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode
-        InternalRow.fromSeq(Seq(0L, bytes, null, null, null, null, null, SerializationUtil.toMapData[String, String](mtd), null))
+        V2Tile.row(cellid = 0L, raster = bytes, metadata = SerializationUtil.toMapData[String, String](mtd))
     }
 
     override def name: String = "gbx_rst_dtmfromgeoms"

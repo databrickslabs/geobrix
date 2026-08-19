@@ -196,9 +196,7 @@ def test_make_opener_lru_eviction_deletes_staged_temp(tmp_path, monkeypatch):
         "uri_b"
     )  # opens staged_b; evicts uri_a (max_count=1), close deletes staged_a
 
-    assert (
-        not staged_a.exists()
-    ), "evicted entry's staged temp must be deleted by close"
+    assert not staged_a.exists(), "evicted entry's staged temp must be deleted by close"
     assert (
         staged_b.exists()
     ), "current (non-evicted) entry's staged temp must still exist"

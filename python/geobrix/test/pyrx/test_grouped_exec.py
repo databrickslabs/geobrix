@@ -102,9 +102,9 @@ def test_make_opener_returns_four_items_not_five():
     from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
 
     ctx = _OpenerContext()
-    assert isinstance(ctx.fr_holder, list) and len(ctx.fr_holder) == 1, (
-        "fr_holder must be a one-element list (T9b contract)"
-    )
+    assert (
+        isinstance(ctx.fr_holder, list) and len(ctx.fr_holder) == 1
+    ), "fr_holder must be a one-element list (T9b contract)"
     assert callable(ctx.open), "_OpenerContext.open must be callable"
     assert callable(ctx.close), "_OpenerContext.close must be callable"
     assert callable(ctx.weigh), "_OpenerContext.weigh must be callable"

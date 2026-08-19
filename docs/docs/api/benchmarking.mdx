@@ -9,7 +9,7 @@ import TabItem from '@theme/TabItem';
 
 GeoBrix ships a benchmark suite that compares the two [execution tiers](./execution-tiers) — **Heavyweight (rasterx)** and **Lightweight (pyrx)** — on the **same inputs**, reporting both **performance** (per-function timing) and **output consistency** (do the two tiers produce the same result?).
 
-This page explains what the benchmark measures, how to run it **on a Databricks cluster** (the primary, same-hardware comparison), how to run it **locally**, how to read the output, and full tables of representative results — both the **pure-core** (algorithm-in-isolation) view and the **spark-path at scale** view from a cluster.
+This page leads with the headline results (**[At a glance](#at-a-glance)**), then full tables of representative results by function family — both the **pure-core** (algorithm-in-isolation) view and the **spark-path at scale** view from a cluster. How the benchmark works, and how to run it yourself on a Databricks cluster or locally, is covered at the end.
 
 :::note Runtime support vs. benchmark environment
 GeoBrix is [supported on both DBR 17.3 LTS and DBR 18 LTS](../installation#supported-databricks-runtimes). The per-result **Environment** stamps below record the specific cluster each benchmark actually ran on (DBR 17.3 LTS); they are factual records of the run, not a statement that DBR 18 is unsupported.

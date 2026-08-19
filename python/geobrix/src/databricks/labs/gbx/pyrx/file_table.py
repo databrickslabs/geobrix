@@ -161,7 +161,7 @@ def read_file_table(
     absent = _absent_fields()
 
     # field order/types match V2_TILE_SCHEMA
-    # (cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode)
+    # (cellid, raster, path, path_mode, window, clip_polygon, clip_crs, crs, metadata)
     # For `path`: managed+capable branch uses the uri-derived expression; otherwise
     # falls through to the standard present/absent logic.
     present_for_struct = (

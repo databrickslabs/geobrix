@@ -4,9 +4,9 @@ Both the lightweight (pyrx) and heavyweight (rasterx) tiers share the v2 tile
 struct defined in ``pyrx.core.virtual_tile.V2_TILE_SCHEMA``:
 
     struct<cellid: bigint, raster: binary, path: string,
-           window: struct<col_off,row_off,width,height>,
+           path_mode: string, window: struct<col_off,row_off,width,height>,
            clip_polygon: binary, clip_crs: string, crs: string,
-           metadata: map<string,string>, path_mode: string>
+           metadata: map<string,string>>
 
 A materialized tile carries raster bytes (``raster`` is not null); the provenance
 fields (``path``, ``window``, ``clip_polygon``, ``clip_crs``, ``crs``) are null for

@@ -65,6 +65,8 @@ FIELDS = [
           "Encoded raster bytes — null when virtual", A_RASTER, T_RASTER),
     Field("path", "string", True, "REFERENCE",
           "Source path — set when virtual (bytes-free)", A_REF, T_REF),
+    Field("path_mode", "string", True, "STORAGE",
+          "null / 'external' / 'managed' (FILE storage mode)", A_STORAGE, T_STORAGE),
     Field("window", "struct<col,row,w,h>", True, "REFERENCE",
           "Pixel window to read / already read", A_REF, T_REF),
     Field("clip_polygon", "binary", True, "PROVENANCE",
@@ -75,8 +77,6 @@ FIELDS = [
           "Working / target CRS", A_PROV, T_PROV),
     Field("metadata", "map<string,string>", True, "META",
           "driver, extension, size, format keys", A_META, T_META),
-    Field("path_mode", "string", True, "STORAGE",
-          "null / 'external' / 'managed' (FILE storage mode)", A_STORAGE, T_STORAGE),
 ]
 
 # Example tiles: materialized vs virtual
@@ -84,23 +84,23 @@ MATERIALIZED_EXAMPLE = [
     ("cellid", "null"),
     ("raster", "<GeoTIFF · 184 KB>"),
     ("path", "null"),
+    ("path_mode", "null"),
     ("window", "0,0,512,512"),
     ("clip_polygon", "null"),
     ("clip_crs", "null"),
     ("crs", "EPSG:32633"),
     ("metadata", '{driver→"GTiff", size→"188416"}'),
-    ("path_mode", "null"),
 ]
 VIRTUAL_EXAMPLE = [
     ("cellid", "null"),
     ("raster", "null            ← bytes-free"),
     ("path", "/Vol/…/scene.cog"),
+    ("path_mode", '"external"'),
     ("window", "512,0,512,512"),
     ("clip_polygon", "<WKB polygon>"),
     ("clip_crs", "EPSG:4326"),
     ("crs", "EPSG:32633"),
     ("metadata", '{driver→"GTiff"}'),
-    ("path_mode", '"external"'),
 ]
 
 # --- Layout -------------------------------------------------------------------
@@ -256,7 +256,7 @@ def render():
     parts.append(text(PAD + HERO_PAD, hero_y + 30, "TILE SCHEMA — 9 FIELDS",
                       size=11, weight=700, fill=C_MUTED_3, letter_spacing="1.6"))
     parts.append(mono(CANVAS_W - PAD - HERO_PAD, hero_y + 30,
-                      "struct<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata, path_mode>",
+                      "struct<cellid, raster, path, path_mode, window, clip_polygon, clip_crs, crs, metadata>",
                       size=12.5, weight=600, fill=C_MUTED, anchor="end"))
     # field grid
     field_w = (inner_w - 2 * HERO_PAD - (GRID_COLS - 1) * CARD_GAP) / GRID_COLS

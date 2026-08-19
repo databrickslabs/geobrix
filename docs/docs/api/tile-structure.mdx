@@ -18,19 +18,19 @@ In GeoBrix, a **tile** is not a simple binary column—it's a **structured type*
 
 A tile has the following structure:
 
-![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, nullable), path/window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string), path_mode (string, storage mode: null / 'external' / 'managed')](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
+![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, nullable), path (string, nullable), path_mode (string, storage mode: null / 'external' / 'managed'), window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string, last field)](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
 
 ```
 struct<
   cellid: bigint,                                -- Grid cell ID (nullable)
   raster: binary,                                -- Raster bytes (NULL when virtual)
   path: string,                                  -- Source path (set when virtual)
+  path_mode: string,                             -- Storage mode: null, 'external', or 'managed'
   window: struct<col_off,row_off,width,height>,  -- Pixel window
   clip_polygon: binary,                          -- Optional clip geometry (WKB)
   clip_crs: string,                              -- CRS for clip_polygon
   crs: string,                                   -- Working/target CRS
-  metadata: map<string,string>,                  -- Driver, extension, size, etc.
-  path_mode: string                              -- Storage mode: null, 'external', or 'managed'
+  metadata: map<string,string>                   -- Driver, extension, size, etc.
 >
 ```
 
@@ -43,12 +43,12 @@ A tile is **materialized** when `raster` carries the encoded bytes (the common c
 | `cellid` | `bigint` (Long) | Yes | Grid cell identifier for tessellated rasters. `null` for non-tessellated rasters. |
 | `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
 | `path` | `string` | Yes | Source path for a virtual tile; `null` for a materialized tile. |
+| `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
 | `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. |
 | `clip_polygon` | `binary` | Yes | Optional clip geometry (WKB). Instruction on a virtual tile; applied-provenance on a materialized tile. |
 | `clip_crs` | `string` | Yes | CRS for `clip_polygon` (e.g. `"EPSG:4326"`). |
 | `crs` | `string` | Yes | Working/target CRS. |
 | `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. |
-| `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
 
 :::note Reference vs. instruction
 On a **materialized** tile, `window` / `clip_polygon` / `clip_crs` / `crs` are **provenance** — a record of what was already applied to produce the bytes. On a **virtual** tile they are **instructions** — pending operations applied when the tile is read. See [Virtual Tiles](./virtual-tiles#reference-vs-instruction).

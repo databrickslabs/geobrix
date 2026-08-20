@@ -65,7 +65,20 @@ __all__ = [
     "open_windowed_via_fileref",
     "FileRefReadError",
     "StageTooLargeError",
+    "_accept_basename",
+    "list_local_files",
 ]
+
+# ===========================================================================
+# SESSION-DEPENDENT (driver / function-layer only — a SparkSession is required;
+# NEVER call these from inside a session-less DataSource reader/writer):
+#   file_access_tier, resolve_access, enumerate_files (FILE tiers),
+#   file_supported, file_ref_arg, open_windowed_via_fileref,
+#   open_for_write, ingest_files, gbx_file_read, gbx_file_write.
+# SESSION-FREE (safe in a session-less DataSource reader/writer):
+#   to_local_path, to_spark_uri, _accept_basename, list_local_files,
+#   _enumerate_fuse, resolve_local_path (FUSE), _stage_local_if_needed.
+# ===========================================================================
 
 # ---------------------------------------------------------------------------
 # Capability tier detection
@@ -528,6 +541,27 @@ def _should_skip_file(filename: str, include_hidden: bool) -> bool:
     return filename.startswith("_") or filename.startswith(".")
 
 
+def _accept_basename(
+    filename: str,
+    *,
+    include_hidden: bool,
+    glob_patterns: Optional[list[str]],
+) -> bool:
+    """Single shared accept predicate for every session-free listing path.
+
+    Consolidates the hidden-file skip (:func:`_should_skip_file`) and the positive
+    glob filter (:func:`_fuse_matches_filter`).  Returns True iff *filename*
+    survives the hidden-skip AND — when *glob_patterns* is given — matches at least
+    one pattern (case-insensitive).  ``enumerate_files`` (FUSE tier) and
+    ``list_local_files`` both route through this so their behavior is identical.
+    """
+    if _should_skip_file(filename, include_hidden):
+        return False
+    if glob_patterns is not None and not _fuse_matches_filter(filename, glob_patterns):
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Positive path filter helpers (Task 8b)
 # ---------------------------------------------------------------------------
@@ -665,13 +699,9 @@ def _enumerate_fuse(
     abspath = os.path.abspath(local_path)
 
     def _accept(filename: str) -> bool:
-        if _should_skip_file(filename, include_hidden):
-            return False
-        if glob_patterns is not None and not _fuse_matches_filter(
-            filename, glob_patterns
-        ):
-            return False
-        return True
+        return _accept_basename(
+            filename, include_hidden=include_hidden, glob_patterns=glob_patterns
+        )
 
     results = []
 
@@ -716,6 +746,34 @@ def _enumerate_fuse(
         )
 
     return sorted(results, key=lambda r: r["path"])
+
+
+def list_local_files(
+    path: str,
+    *,
+    recursive: bool = True,
+    include_hidden: bool = False,
+    extensions: Optional[tuple[str, ...]] = None,
+    path_glob_filter: Optional[str] = None,
+) -> list[str]:
+    """Session-free: return sorted local (FUSE) file paths under *path*.
+
+    The single enumeration routine every DataSource reader consumes — no
+    SparkSession, no FILE-tier SQL, safe inside a session-less DataSource on
+    Spark Connect.  Applies the same hidden-skip + positive-glob semantics as
+    ``enumerate_files`` (FUSE tier) via :func:`_accept_basename`.
+
+    Raises ``FileNotFoundError`` when no files match, ``ValueError`` if both
+    ``extensions`` and ``path_glob_filter`` are given.
+    """
+    glob_patterns = _build_glob_filter(extensions, path_glob_filter)
+    rows = _enumerate_fuse(
+        path,
+        recursive=recursive,
+        include_hidden=include_hidden,
+        glob_patterns=glob_patterns,
+    )
+    return [r["path"] for r in rows]
 
 
 # ---------------------------------------------------------------------------

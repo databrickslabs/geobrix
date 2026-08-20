@@ -236,6 +236,10 @@ def build_create_sql(
     if file_mode == "managed" and not filespace:
         raise ValueError("managed file_mode requires a filespace (/Volumes/...)")
 
+    from databricks.labs.gbx.ds.file_gbx import _validate_layout
+
+    _validate_layout(layout)
+
     col_defs = ", ".join(f"{name} {dtype}" for name, dtype in plain_cols)
     file_kw = "MANAGED" if file_mode == "managed" else "EXTERNAL"
     cluster = layout == "cluster"
@@ -311,6 +315,10 @@ def write_file_table(
         raise ValueError(f"file_mode must be external|managed, got {file_mode!r}")
     if file_mode == "managed" and not filespace:
         raise ValueError("managed file_mode requires a filespace (/Volumes/...)")
+
+    from databricks.labs.gbx.ds.file_gbx import _validate_layout
+
+    _validate_layout(layout)
 
     # M4: unique view name to avoid cross-request clobber.
     view = f"_gbx_file_src_{uuid.uuid4().hex}"

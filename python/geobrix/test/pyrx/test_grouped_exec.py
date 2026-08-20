@@ -409,3 +409,37 @@ def test_make_opener_weigher_uses_fileref_size():
     assert (
         ctx.weigh(src, "uri") == 500_000_000
     ), "weigh must return fr_holder[0].size, not STREAM_NOMINAL_BYTES"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: byte-identical regression lock on the materialized grouped read path
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_tile_map_materialized_is_byte_identical(spark, gtiff_bytes):
+    """Protected path: a materialized tile passed through grouped_tile_map with a
+    pixel-read core_fn round-trips the pixels byte-identically.
+
+    Uses the fallback opener path (file_supported()=False locally) over materialized
+    tiles.  If this test FAILS, the composition changed byte output and must be
+    fixed — do not weaken this test.
+    """
+    import rasterio
+    from pyspark.sql.types import BinaryType, StructField
+
+    def _read_pixels(ds, cellid):
+        return bytearray(ds.read(1).tobytes())
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        _read_pixels,
+        return_field=StructField("pixels", BinaryType()),
+        view="pixels",
+    ).collect()
+
+    with rasterio.open(rasterio.io.MemoryFile(gtiff_bytes)) as ds:
+        expected = ds.read(1).tobytes()
+
+    assert all(
+        bytes(r["pixels"]) == expected for r in out
+    ), "grouped_tile_map materialized path is not byte-identical — composition changed"

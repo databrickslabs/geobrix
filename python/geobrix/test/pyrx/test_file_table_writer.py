@@ -301,3 +301,22 @@ def test_write_file_table_plain_layout_no_order_by():
         "external:plain" in create_sqls[0]
     ), f"write_strategy should be external:plain; got:\n{create_sqls[0]}"
     assert "CLUSTER BY" not in create_sqls[0], "unexpected CLUSTER BY in plain layout"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: build_create_sql/write_file_table compose file_gbx._validate_layout
+# ---------------------------------------------------------------------------
+
+
+def test_build_create_sql_rejects_zorder_layout_via_shared_validator():
+    from databricks.labs.gbx.pyrx import file_table
+
+    with pytest.raises(ValueError, match="layout must be one of"):
+        file_table.build_create_sql(
+            "t",
+            plain_cols=[("path", "string")],
+            file_col="tile_file",
+            file_mode="external",
+            filespace=None,
+            layout="zorder",
+        )

@@ -156,8 +156,10 @@ tier = file_access_tier(spark)
 # Returns: "read_files" (DBR 13.3+), "list_files" (DBR 18+), or "fuse" (always)
 ```
 
-`open_for_read(source, access="auto")` is the read resolver used by every lightweight
-reader. With `access="auto"` it silently uses the best available tier. Passing
+`open_for_read(source, access="auto")` is the read resolver every lightweight reader calls:
+it validates the access mode and enforces the no-gating rule (the size-adaptive routing —
+FILE byte-range stream, FUSE-of-FILE, or staging — runs in the reader layer on top of it).
+With `access="auto"` it accepts the best available tier and never errors. Passing
 `access="managed"` or `access="external"` on a FUSE-only runtime raises a clear error:
 
 ```python

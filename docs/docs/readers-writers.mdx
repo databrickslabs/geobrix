@@ -81,8 +81,8 @@ and writers use their own GDAL/OGR access paths.
 | `list_files` | DBR 18 LTS + | `list_files(…)` — metadata + FILE refs, directory listing only |
 | `fuse` | All runtimes (OSS / DBR < 13) | `os.walk` + FUSE mount — always available; no FILE column |
 
-The **no-gating rule**: `access="auto"` (the default on every lightweight reader and writer)
-silently downgrades to the best available tier and never errors. Explicitly requesting
+The **no-gating rule**: the auto default (`access="auto"` on readers, `file_mode="auto"` on
+writers) silently downgrades to the best available tier and never errors. Explicitly requesting
 `"managed"` or `"external"` on a FUSE-only runtime raises a clear, actionable error
 describing the upgrade path. Your pipelines run on any runtime without code changes; you
 only need to opt in to FILE when you want the governance and lifecycle benefits.

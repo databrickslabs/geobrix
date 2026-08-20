@@ -11,11 +11,14 @@ Exports:
 - resolve_access(requested, tier) -> str
   Implements the NO-GATING rule: explicit FILE on FUSE tier raises error;
   "auto" downgrades silently.
+- enumerate_files(path, *, recursive, include_hidden, spark) -> list | DataFrame
+  Enumerates files in a directory, returning path + size + FILE reference (when available).
 """
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+import os
+from typing import Any, Literal, Optional
 
 from pyspark.sql import SparkSession
 
@@ -34,6 +37,7 @@ __all__ = [
     "_retry_transient",
     "file_access_tier",
     "resolve_access",
+    "enumerate_files",
 ]
 
 # ---------------------------------------------------------------------------
@@ -202,3 +206,218 @@ def resolve_access(
     raise ValueError(
         f"Unknown access mode: {requested!r}. Must be 'auto', 'managed', or 'external'."
     )
+
+
+# ---------------------------------------------------------------------------
+# Enumeration (enumerate_files)
+# ---------------------------------------------------------------------------
+
+
+def enumerate_files(
+    path: str,
+    *,
+    recursive: bool = True,
+    include_hidden: bool = False,
+    spark: Optional[SparkSession] = None,
+) -> Any:
+    """Enumerate files in a directory, returning path + size + FILE reference (when available).
+
+    Uses the best available tier at runtime:
+    - **read_files tier** (DBR 13.3+): `SELECT _metadata.file_path, _metadata.file_size, file FROM read_files(..., format=>'file')`
+      Returns a Spark DataFrame with columns: path, size, file (FILE reference).
+    - **list_files tier** (DBR 18+): `SELECT path, size, file FROM list_files(...)`
+      Returns a Spark DataFrame with columns: path, size, file (FILE reference).
+    - **FUSE tier** (always available): `os.walk(...) + os.stat(...)`
+      Returns a list of dicts with keys: path, size, file (None for FUSE tier).
+
+    Default behavior:
+    - SKIP files starting with `_` or `.` (Spark/Hadoop convention: `_SUCCESS`, `_committed_*`,
+      `_started_*`, `_delta_log`, `.crc`, hidden files) so metadata files are never listed.
+    - INCLUDE them on `include_hidden=True`.
+    - RECURSIVE listing by default; set `recursive=False` for top-level files only.
+
+    Note:
+    - read_files/list_files tiers already skip `_*`/`.*` files natively.
+    - FUSE tier replicates this skip exactly via filename filtering, so all tiers behave identically.
+    - For read_files/list_files tiers, size comes from `_metadata.file_size` (native, no extra stat).
+    - For FUSE tier, size comes from `os.stat(...).st_size` (with transient-retry on UC Volumes).
+    - Connect-safe: no sparkContext, .rdd, _jvm; guards any conf access.
+
+    Args:
+        path: Directory path to enumerate. Can be a bare FUSE path (/Volumes/...) or a scheme-qualified
+              URI (dbfs:/Volumes/..., s3://..., etc.).
+        recursive: If True (default), recursively list subdirectories. If False, list top-level files only.
+        include_hidden: If False (default), skip files starting with `_` or `.`. If True, include them.
+        spark: Optional SparkSession. If None, uses SparkSession.getActiveSession() or
+               SparkSession.builder.getOrCreate(). Explicit passing is preferred on Spark Connect.
+
+    Returns:
+        - For read_files/list_files tiers: a Spark DataFrame with columns [path, size, file].
+        - For FUSE tier: a list of dicts with keys {path, size, file} where file is None.
+
+    Raises:
+        FileNotFoundError: If path does not exist or contains no files.
+        ValueError: If spark cannot be obtained and the tier requires it.
+    """
+    tier = file_access_tier(spark)
+
+    if tier == "read_files":
+        return _enumerate_read_files(
+            path, recursive=recursive, include_hidden=include_hidden, spark=spark
+        )
+    elif tier == "list_files":
+        return _enumerate_list_files(
+            path, recursive=recursive, include_hidden=include_hidden, spark=spark
+        )
+    else:  # tier == "fuse"
+        return _enumerate_fuse(path, recursive=recursive, include_hidden=include_hidden)
+
+
+def _enumerate_read_files(
+    path: str,
+    *,
+    recursive: bool,
+    include_hidden: bool,
+    spark: Optional[SparkSession],
+) -> Any:
+    """Enumerate via read_files(format=>'file') SQL call.
+
+    Returns a Spark DataFrame with columns [path, size, file].
+    """
+    if spark is None:
+        spark = SparkSession.getActiveSession()
+    if spark is None:
+        spark = SparkSession.builder.getOrCreate()
+
+    # Normalize path to FUSE form for the SQL string (read_files accepts bare paths).
+    local_path = to_local_path(path)
+
+    recursiveFileLookup = "true" if recursive else "false"
+    include_hidden_clause = (
+        "" if include_hidden else "AND NOT (file_name LIKE '_%' OR file_name LIKE '.%')"
+    )
+
+    sql_query = f"""
+        SELECT
+            _metadata.file_path AS path,
+            _metadata.file_size AS size,
+            file
+        FROM read_files(
+            '{local_path}',
+            format => 'file',
+            recursiveFileLookup => {recursiveFileLookup}
+        )
+        WHERE 1=1
+        {include_hidden_clause}
+    """
+
+    return spark.sql(sql_query)
+
+
+def _enumerate_list_files(
+    path: str,
+    *,
+    recursive: bool,
+    include_hidden: bool,
+    spark: Optional[SparkSession],
+) -> Any:
+    """Enumerate via list_files(...) SQL call.
+
+    Returns a Spark DataFrame with columns [path, size, file].
+    """
+    if spark is None:
+        spark = SparkSession.getActiveSession()
+    if spark is None:
+        spark = SparkSession.builder.getOrCreate()
+
+    # Normalize path to FUSE form for the SQL string (list_files accepts bare paths).
+    local_path = to_local_path(path)
+
+    recursive_param = "true" if recursive else "false"
+    include_hidden_clause = (
+        ""
+        if include_hidden
+        else "AND NOT (path LIKE '%/_%' AND NOT path LIKE '%/._' OR path LIKE '%/._%')"
+    )
+
+    sql_query = f"""
+        SELECT
+            path,
+            size,
+            file
+        FROM list_files(
+            '{local_path}',
+            recursive => {recursive_param}
+        )
+        WHERE 1=1
+        {include_hidden_clause}
+    """
+
+    return spark.sql(sql_query)
+
+
+def _should_skip_file(filename: str, include_hidden: bool) -> bool:
+    """Return True if the file should be skipped (Hadoop/Spark convention).
+
+    Skips files starting with `_` or `.` by default (metadata/hidden files).
+    If include_hidden=True, nothing is skipped.
+    """
+    if include_hidden:
+        return False
+    return filename.startswith("_") or filename.startswith(".")
+
+
+def _enumerate_fuse(
+    path: str,
+    *,
+    recursive: bool,
+    include_hidden: bool,
+) -> list[dict[str, Any]]:
+    """Enumerate via os.walk (FUSE-only fallback).
+
+    Returns a list of dicts with keys {path, size, file} where file is None.
+    """
+    local_path = to_local_path(path)
+    abspath = os.path.abspath(local_path)
+
+    results = []
+
+    if os.path.isfile(abspath):
+        # Single file case
+        filename = os.path.basename(abspath)
+        if not _should_skip_file(filename, include_hidden):
+            size = _retry_transient(lambda: os.stat(abspath).st_size)
+            results.append({"path": abspath, "size": size, "file": None})
+    else:
+        # Directory case
+        if recursive:
+            for root, _dirs, names in os.walk(abspath):
+                for name in names:
+                    if not _should_skip_file(name, include_hidden):
+                        full_path = os.path.join(root, name)
+                        size = _retry_transient(
+                            lambda fp=full_path: os.stat(fp).st_size
+                        )
+                        results.append({"path": full_path, "size": size, "file": None})
+        else:
+            # Non-recursive: only top-level files
+            try:
+                names = os.listdir(abspath)
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(f"Path does not exist: {path!r}") from exc
+
+            for name in names:
+                if not _should_skip_file(name, include_hidden):
+                    full_path = os.path.join(abspath, name)
+                    if os.path.isfile(full_path):
+                        size = _retry_transient(
+                            lambda fp=full_path: os.stat(fp).st_size
+                        )
+                        results.append({"path": full_path, "size": size, "file": None})
+
+    if not results:
+        raise FileNotFoundError(
+            f"No files found under {path!r} (recursive={recursive}, include_hidden={include_hidden})"
+        )
+
+    return sorted(results, key=lambda r: r["path"])

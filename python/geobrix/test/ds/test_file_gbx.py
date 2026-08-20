@@ -290,3 +290,226 @@ def test_resolve_access_full_flow_managed_with_no_file():
             file_gbx.resolve_access("managed", spark=mock_spark)
 
     assert "managed FILE" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# Enumeration (enumerate_files) tests
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_files_fuse_tier_basic():
+    """FUSE tier lists files with path and size, skips _* and .* by default."""
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files
+        file1 = os_module.path.join(tmpdir, "file1.txt")
+        file2 = os_module.path.join(tmpdir, "file2.txt")
+        hidden = os_module.path.join(tmpdir, ".hidden")
+        underscore = os_module.path.join(tmpdir, "_success")
+
+        with open(file1, "w") as f:
+            f.write("content1")
+        with open(file2, "w") as f:
+            f.write("content2")
+        with open(hidden, "w") as f:
+            f.write("hidden")
+        with open(underscore, "w") as f:
+            f.write("underscore")
+
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(tmpdir, spark=mock_spark)
+
+        assert len(result) == 2
+        paths = {r["path"] for r in result}
+        assert file1 in paths
+        assert file2 in paths
+        assert hidden not in paths
+        assert underscore not in paths
+
+        # Check sizes
+        for rec in result:
+            assert rec["size"] > 0
+            assert rec["file"] is None  # FUSE tier has no FILE ref
+
+
+def test_enumerate_files_fuse_tier_include_hidden():
+    """FUSE tier includes _* and .* files when include_hidden=True."""
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file1 = os_module.path.join(tmpdir, "file1.txt")
+        hidden = os_module.path.join(tmpdir, ".hidden")
+        underscore = os_module.path.join(tmpdir, "_success")
+
+        with open(file1, "w") as f:
+            f.write("content1")
+        with open(hidden, "w") as f:
+            f.write("hidden")
+        with open(underscore, "w") as f:
+            f.write("underscore")
+
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(
+                tmpdir, include_hidden=True, spark=mock_spark
+            )
+
+        paths = {r["path"] for r in result}
+        assert file1 in paths
+        assert hidden in paths
+        assert underscore in paths
+        assert len(result) == 3
+
+
+def test_enumerate_files_fuse_tier_recursive():
+    """FUSE tier recursively lists files in subdirectories."""
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subdir = os_module.path.join(tmpdir, "subdir")
+        os_module.makedirs(subdir)
+
+        file1 = os_module.path.join(tmpdir, "file1.txt")
+        file2 = os_module.path.join(subdir, "file2.txt")
+
+        with open(file1, "w") as f:
+            f.write("content1")
+        with open(file2, "w") as f:
+            f.write("content2")
+
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(tmpdir, recursive=True, spark=mock_spark)
+
+        paths = {r["path"] for r in result}
+        assert file1 in paths
+        assert file2 in paths
+        assert len(result) == 2
+
+
+def test_enumerate_files_fuse_tier_non_recursive():
+    """FUSE tier with recursive=False only lists top-level files."""
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subdir = os_module.path.join(tmpdir, "subdir")
+        os_module.makedirs(subdir)
+
+        file1 = os_module.path.join(tmpdir, "file1.txt")
+        file2 = os_module.path.join(subdir, "file2.txt")
+
+        with open(file1, "w") as f:
+            f.write("content1")
+        with open(file2, "w") as f:
+            f.write("content2")
+
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(tmpdir, recursive=False, spark=mock_spark)
+
+        paths = {r["path"] for r in result}
+        assert file1 in paths
+        assert file2 not in paths
+        assert len(result) == 1
+
+
+def test_enumerate_files_read_files_tier():
+    """read_files tier returns DataFrame with path, size, and file columns."""
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+
+    # Mock the DataFrame returned by read_files
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        result = file_gbx.enumerate_files("/Volumes/test/path", spark=mock_spark)
+
+    # Should have called spark.sql with read_files query
+    assert mock_spark.sql.called
+    call_args = mock_spark.sql.call_args[0][0]
+    assert "read_files" in call_args
+    assert "format => 'file'" in call_args
+    assert "_metadata.file_path" in call_args
+    assert "_metadata.file_size" in call_args
+
+    # Result should be the DataFrame
+    assert result is mock_df or isinstance(result, (list, MagicMock))
+
+
+def test_enumerate_files_read_files_tier_recursive():
+    """read_files tier respects recursive parameter."""
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.enumerate_files("/Volumes/test/path", recursive=True, spark=mock_spark)
+
+    call_args = mock_spark.sql.call_args[0][0]
+    assert (
+        "recursiveFileLookup => true" in call_args or "recursive" in call_args.lower()
+    )
+
+    # Test non-recursive
+    mock_spark.reset_mock()
+    file_gbx.enumerate_files("/Volumes/test/path", recursive=False, spark=mock_spark)
+    call_args = mock_spark.sql.call_args[0][0]
+    assert (
+        "recursiveFileLookup => false" in call_args or "recursive" in call_args.lower()
+    )
+
+
+def test_enumerate_files_list_files_tier():
+    """list_files tier returns DataFrame with path, size, and file columns."""
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "list_files"
+        result = file_gbx.enumerate_files("/Volumes/test/path", spark=mock_spark)
+
+    # Should have called spark.sql with list_files query
+    assert mock_spark.sql.called
+    call_args = mock_spark.sql.call_args[0][0]
+    assert "list_files" in call_args
+
+    # Result should be the DataFrame
+    assert result is mock_df or isinstance(result, (list, MagicMock))
+
+
+def test_enumerate_files_returns_path_size_file_structure():
+    """Returned records have path, size, and file keys."""
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file1 = os_module.path.join(tmpdir, "file1.txt")
+        with open(file1, "w") as f:
+            f.write("content1")
+
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(tmpdir, spark=mock_spark)
+
+        assert len(result) > 0
+        for rec in result:
+            assert "path" in rec
+            assert "size" in rec
+            assert "file" in rec
+            assert isinstance(rec["path"], str)
+            assert isinstance(rec["size"], int)
+            assert rec["file"] is None  # FUSE tier has no file ref

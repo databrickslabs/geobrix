@@ -233,7 +233,7 @@ SELECT
 FROM
   points_table  p
   JOIN dem_rasters d
-    ON gbx_st_intersects(d.tile_bounds, p.geom)
+    ON st_intersects(d.tile_bounds, p.geom)
 WHERE d.tile_bounds IS NOT NULL;
 ```
 
@@ -242,7 +242,7 @@ WHERE d.tile_bounds IS NOT NULL;
 
 ```python
 from databricks.labs.gbx.pyrx import functions as rx
-import databricks.labs.gbx.vectorx.functions as vx
+from pyspark.sql import functions as F
 
 points = spark.table("points_table")
 tiles  = spark.table("dem_rasters")
@@ -250,7 +250,8 @@ tiles  = spark.table("dem_rasters")
 result = (
     points.join(
         tiles,
-        vx.st_intersects(tiles["tile_bounds"], points["geom"]),
+        # st_intersects is a Databricks built-in spatial predicate (not a GeoBrix function)
+        F.expr("st_intersects(tile_bounds, geom)"),
         "inner",
     )
     .select(

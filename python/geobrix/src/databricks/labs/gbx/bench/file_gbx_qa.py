@@ -191,7 +191,7 @@ def _check_open_for_read_explicit_modes(
             # On FILE-capable tier, both should succeed
             r1 = open_for_read(raster_path, access="managed", spark=spark)
             r2 = open_for_read(raster_path, access="external", spark=spark)
-            return _pass(name, f"managed={r1!r[:40]}  external={r2!r[:40]}")
+            return _pass(name, f"managed={repr(r1)[:40]}  external={repr(r2)[:40]}")
     except Exception as exc:
         return _fail(name, exc)
 
@@ -361,7 +361,7 @@ def _check_write_managed(
 
 
 def _check_write_external(
-    spark, raster_path: str, catalog: str, schema: str, filespace: str, ts: int
+    spark, raster_path: str, catalog: str, schema: str, ts: int, filespace: Optional[str] = None
 ) -> Dict[str, Any]:
     """open_for_write file_mode='external' → try_to_file → round-trip read."""
     name = "write_external"
@@ -741,17 +741,13 @@ def run_qa(
     print(f"[file_gbx_qa] {r['check']}: {r['status']}  {r['note']}", flush=True)
 
     # --- 6. Raster write × mode ------------------------------------------------
-    for write_fn, args in [
+    for write_fn, kw in [
         (_check_write_managed, dict(filespace=filespace)),
         (_check_write_external, {}),
         (_check_write_fuse, {}),
         (_check_write_auto, {}),
     ]:
-        try:
-            r = write_fn(spark, raster_path, catalog, schema, ts=ts, **args)
-        except TypeError:
-            # Some write_fn don't accept filespace
-            r = write_fn(spark, raster_path, catalog, schema, ts=ts)
+        r = write_fn(spark, raster_path, catalog, schema, ts=ts, **kw)
         results.append(r)
         print(f"[file_gbx_qa] {r['check']}: {r['status']}  {r['note']}", flush=True)
 

@@ -57,6 +57,9 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
     from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
 
+    import shutil
+    import tempfile
+
     data = np.random.default_rng(42).random((1, px, px)).astype("float32")
     transform = from_bounds(-1.0, -1.0, 1.0, 1.0, px, px)
     profile = dict(
@@ -70,8 +73,19 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
         compress="DEFLATE",
     )
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    with rasterio.open(out_path, "w", **profile) as dst:
-        dst.write(data)
+    # COG driver requires seekable writes (backward offset tables); UC Volume paths
+    # don't support seek on write.  Write to a local temp file first, then copy.
+    fd, tmp = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    try:
+        with rasterio.open(tmp, "w", **profile) as dst:
+            dst.write(data)
+        shutil.copy(tmp, out_path)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
 
 
 def _make_tiny_geojson(out_path: str) -> int:
@@ -500,14 +514,23 @@ def _check_ingest_files(
 
 
 def _check_vector_write_modes(
-    spark, geojson_path: str, catalog: str, schema: str, filespace: str, ts: int
+    spark, geojson_path: str, catalog: str, schema: str, filespace: str, ts: int,
+    work_dir: str = "/tmp/gbx_qa_work",
 ) -> List[Dict[str, Any]]:
-    """Vector write via VectorGbxWriter across fuse/managed/external modes."""
+    """Vector write via VectorGbxWriter across fuse/managed/external modes.
+
+    Fuse target lives under *work_dir* (a shared Volume path) so executor-written
+    Arrow IPC scratch fragments are readable by the driver at commit time.
+    Using /tmp causes per-executor local isolation that the driver can't read.
+    """
     results = []
     for mode in ("fuse", "managed", "external"):
         name = f"vector_write_{mode}"
         if mode == "fuse":
-            target_dir = f"/tmp/gbx_qa_vec_{ts}_{mode}"
+            # Must be a shared path (Volume), not /tmp — VectorGbxWriter's scratch
+            # lives under the target's parent; executors write there and the driver
+            # reads back at commit, so /tmp causes unreadable-fragment errors.
+            target_dir = os.path.join(work_dir, f"vec_fuse_{ts}")
         else:
             target_table = f"`{catalog}`.`{schema}`.`_filegbx_qa_vec_{mode}_{ts}`"
 
@@ -763,7 +786,7 @@ def run_qa(
 
     # --- 9. Vector write × mode -----------------------------------------------
     for r in _check_vector_write_modes(
-        spark, geojson_path, catalog, schema, filespace, ts
+        spark, geojson_path, catalog, schema, filespace, ts, work_dir=work_dir
     ):
         results.append(r)
         print(f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note','')}", flush=True)

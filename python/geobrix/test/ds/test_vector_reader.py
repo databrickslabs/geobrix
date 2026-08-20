@@ -201,11 +201,7 @@ def test_vector_file_read_managed_tier_returns_same_rows(tmp_path):
     fuse_rows = _read_all(rdr_fuse)
 
     # FILE read: mock the tier as FILE-capable so managed access is allowed
-    with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
-        patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec,
-    ):
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec:
         mock_tier_vec.return_value = "read_files"
         rdr_file = VectorGbxReader({"path": p, "access": "managed"})
         file_rows = _read_all(rdr_file)

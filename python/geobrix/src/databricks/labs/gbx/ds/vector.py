@@ -51,6 +51,7 @@ _VEC_STAGE_DIR: Optional[str] = None
 
 
 def _ensure_vec_stage_dir() -> str:
+    """Return (creating if needed) the process-wide stage directory. Must be called while holding `_VEC_STAGE_LOCK`."""
     global _VEC_STAGE_DIR
     if _VEC_STAGE_DIR is None:
         _VEC_STAGE_DIR = tempfile.mkdtemp(prefix="gbx_vecstage_")
@@ -86,9 +87,12 @@ def _get_or_stage_vec(source_path: str) -> str:
             return _VEC_STAGED_FILES[source_path]
 
         stage_dir = _ensure_vec_stage_dir()
-        # Disambiguate in case two different paths share the same basename.
+        # Use uuid4 to guarantee a collision-free on-disk name even when two
+        # different source paths share the same basename.  The cache key remains
+        # source_path, so a repeat call for the same path returns the cached
+        # entry above and never reaches this branch.
         basename = os.path.basename(source_path.rstrip("/")) or "vector_src"
-        safe_name = f"{abs(hash(source_path)):x}_{basename}"
+        safe_name = f"{uuid.uuid4().hex}_{basename}"
         local = os.path.join(stage_dir, safe_name)
 
         if os.path.isdir(source_path):

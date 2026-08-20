@@ -20,11 +20,12 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Any, Callable, Literal, Optional
 
-from pyspark.sql import Column, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as F
 
 # Re-export listing helpers for backward compatibility
@@ -44,6 +45,8 @@ __all__ = [
     "resolve_access",
     "enumerate_files",
     "open_for_read",
+    "open_for_write",
+    "ingest_files",
     # FILE read engine (for pyrx shims + direct use)
     "GBX_LRU_MAX_BYTES",
     "GBX_STREAM_MAX_BYTES",
@@ -1103,3 +1106,253 @@ def open_for_read(
     # Simple passthrough: return the source path (caller adapts based on tier).
     # In future, this can be extended to return structured metadata (FILE ref, size, etc.).
     return source
+
+
+# =============================================================================
+# Write committer: open_for_write + ingest_files
+# =============================================================================
+
+# Valid layout values — shared between open_for_write and ingest_files.
+_VALID_LAYOUTS = frozenset({"order", "cluster", "plain"})
+
+
+def _validate_layout(layout: str) -> None:
+    """Raise ValueError for invalid layout values.
+
+    Rejects any layout not in {"order", "cluster", "plain"}, including any attempt
+    to pass a partition-by value or other unsupported strategy.
+    """
+    if layout not in _VALID_LAYOUTS:
+        raise ValueError(
+            f"layout must be one of {sorted(_VALID_LAYOUTS)!r}, got {layout!r}. "
+            "partition_by and ZORDER are not supported. Use layout='order' (default), "
+            "'cluster' (CLUSTER BY + OPTIMIZE), or 'plain' (no ordering)."
+        )
+
+
+def _fuse_select_expr(df_schema) -> str:
+    """Build a SQL SELECT expression for flattening a tile-struct schema.
+
+    If the schema has a top-level 'tile' struct, returns 'tile.f1 AS f1, tile.f2 AS f2, …'
+    (excluding 'path_mode') plus any other non-tile top-level columns.
+    If the schema is already flat, returns '*'.
+
+    This is a pure string operation — no SparkContext required.
+    """
+    field_names = [f.name for f in df_schema.fields]
+    if "tile" not in field_names:
+        return "*"
+
+    tile_fields = [
+        f.name for f in df_schema["tile"].dataType.fields if f.name != "path_mode"
+    ]
+    other_fields = [name for name in field_names if name != "tile"]
+    parts = [f"tile.{name} AS {name}" for name in tile_fields] + other_fields
+    return ", ".join(parts)
+
+
+def open_for_write(
+    spark: "SparkSession",
+    df: "DataFrame",
+    target: str,
+    *,
+    file_mode: str = "auto",
+    filespace: Optional[str] = None,
+    layout: str = "order",
+    overwrite: bool = False,
+    file_col: str = "tile_file",
+) -> None:
+    """Write df to a Delta table, routing via FILE MANAGED / EXTERNAL / FUSE.
+
+    Mode selection (``file_mode`` parameter):
+
+    - **"auto"** (default):
+      - FILE-capable runtime + ``filespace`` provided → ``"managed"``
+        (FILE MANAGED via ``create_file``).
+      - FILE-capable runtime + no ``filespace`` → ``"external"``
+        (FILE EXTERNAL via ``try_to_file``).
+      - No-FILE runtime (fuse tier) → ``"fuse"`` (plain Delta write, no FILE column).
+    - **"managed"** or **"external"**: explicit FILE mode.  Raises ``ValueError`` if
+      FILE is not available on this runtime (tier='fuse').
+    - **"fuse"**: plain Delta write regardless of FILE capability.
+
+    Fuse mode writes the DataFrame as a plain Delta table with tile columns as
+    ordinary columns (``path`` → STRING, ``raster`` → BINARY).  No FILE column,
+    no ``create_file`` / ``try_to_file``.  The path column is used to order writes
+    according to the ``layout`` strategy.
+
+    Args:
+        spark: SparkSession.
+        df: DataFrame to write.  Must have a ``tile`` struct column or be pre-flattened.
+        target: Fully-qualified Delta table name (e.g. ``"catalog.schema.table"``).
+        file_mode: ``"auto"`` (default), ``"managed"``, ``"external"``, or ``"fuse"``.
+        filespace: Required for managed mode — the filespace path (``/Volumes/…``).
+        layout: Write strategy: ``"order"`` (ORDER BY path, default), ``"cluster"``
+                (CLUSTER BY path + ORDER BY; emits an OPTIMIZE reminder), or
+                ``"plain"`` (no ordering).  Any other value raises ``ValueError``.
+        overwrite: If ``True``, drop and recreate the target table before writing.
+        file_col: Name of the FILE-typed column (managed/external modes only).
+
+    Raises:
+        ValueError: If ``layout`` is invalid, or if an explicit ``"managed"`` /
+                    ``"external"`` mode is requested on a fuse-only runtime.
+    """
+    import warnings
+
+    from databricks.labs.gbx.pyrx.file_table import write_file_table
+
+    # 1. Validate layout before any side effects.
+    _validate_layout(layout)
+
+    # 2. Resolve effective write mode.
+    tier = file_access_tier(spark)
+    if file_mode == "auto":
+        if tier != "fuse":
+            effective_mode = "managed" if filespace else "external"
+        else:
+            effective_mode = "fuse"
+    elif file_mode in ("managed", "external"):
+        # Delegate to resolve_access; raises clear, actionable error if FILE is unavailable.
+        resolve_access(file_mode, tier=tier, spark=spark)
+        effective_mode = file_mode
+    elif file_mode == "fuse":
+        effective_mode = "fuse"
+    else:
+        raise ValueError(
+            f"file_mode must be 'auto', 'managed', 'external', or 'fuse'; got {file_mode!r}"
+        )
+
+    # 3. Emit OPTIMIZE reminder for cluster layout on FILE paths.
+    if layout == "cluster" and effective_mode != "fuse":
+        warnings.warn(
+            f"layout='cluster' writes CLUSTER BY (path) at table-creation time, but "
+            f"durable clustering is only applied when you run: OPTIMIZE {target}",
+            stacklevel=2,
+        )
+
+    # 4. Route to the appropriate writer.
+    if effective_mode == "fuse":
+        # Fuse path: plain Delta write via CTAS, no FILE column.
+        # Uses SQL (via spark.sql) for the same mockability as write_file_table.
+        view = f"_gbx_fuse_src_{uuid.uuid4().hex}"
+        df.createOrReplaceTempView(view)
+        try:
+            if overwrite:
+                spark.sql(f"DROP TABLE IF EXISTS {target}")
+            order_clause = " ORDER BY path" if layout in ("order", "cluster") else ""
+            select_expr = _fuse_select_expr(df.schema)
+            spark.sql(
+                f"CREATE TABLE {target} USING DELTA AS "
+                f"SELECT {select_expr} FROM {view}{order_clause}"
+            )
+        finally:
+            try:
+                spark.sql(f"DROP VIEW IF EXISTS {view}")
+            except Exception:
+                pass
+    else:
+        # FILE path: delegate to write_file_table (handles create_file / try_to_file).
+        write_file_table(
+            spark,
+            df,
+            target,
+            file_mode=effective_mode,
+            filespace=filespace,
+            layout=layout,
+            overwrite=overwrite,
+            file_col=file_col,
+        )
+
+
+def ingest_files(
+    spark: "SparkSession",
+    src: str,
+    target: str,
+    *,
+    filespace: str,
+    file_col: str = "tile_file",
+    layout: str = "order",
+    recursive: bool = True,
+    overwrite: bool = False,
+) -> None:
+    """Ingest existing external files into a managed FILE-column Delta table.
+
+    Reads files from ``src`` via ``read_files(src, format=>'file')`` (DBR 13.3+)
+    and INSERTs them into a managed FILE-column Delta table at ``target``.
+
+    The managed table is created on first call (``CREATE TABLE IF NOT EXISTS``).
+    Schema: ``path STRING, <file_col> FILE MANAGED``.
+
+    Requires a FILE-capable runtime (tier ``"read_files"`` or ``"list_files"``).
+    Raises ``ValueError`` on a fuse-only runtime — use ``open_for_write(file_mode='fuse')``
+    for a plain Delta write without FILE column registration.
+
+    Args:
+        spark: SparkSession.
+        src: Source directory path (``/Volumes/…`` or other FUSE-accessible path).
+             Single quotes in the path are escaped safely.
+        target: Destination managed FILE-column Delta table name.
+        filespace: Filespace path (``/Volumes/…``) for the managed table.
+        file_col: Name of the FILE-typed column (default ``"tile_file"``).
+        layout: Write strategy: ``"order"`` (ORDER BY path, default), ``"cluster"``,
+                or ``"plain"``.
+        recursive: If ``True`` (default), ingest files recursively under ``src``.
+        overwrite: If ``True``, drop and recreate the managed table before ingesting.
+
+    Raises:
+        ValueError: If FILE support is unavailable (tier='fuse'), or ``layout`` is
+                    invalid.
+    """
+    from databricks.labs.gbx.pyrx.file_table import build_create_sql
+
+    # 1. Validate layout before any side effects.
+    _validate_layout(layout)
+
+    # 2. Require FILE-capable tier; raise the actionable error on fuse-only runtimes.
+    tier = file_access_tier(spark)
+    if tier == "fuse":
+        raise ValueError(
+            "ingest_files requires FILE support (read_files with format=>'file'), "
+            "which is not available on this runtime (tier='fuse'). "
+            "FILE requires Databricks Runtime 13.3 LTS or later. "
+            "Upgrade your cluster to DBR 13.3+ to use ingest_files, or use "
+            "open_for_write(file_mode='fuse') for a plain Delta write without a FILE column."
+        )
+
+    # 3. Normalize and escape the source path (single quotes → doubled).
+    local_src = to_local_path(src)
+    escaped_src = local_src.replace("'", "''")
+    recursive_param = "true" if recursive else "false"
+
+    # 4. Build CREATE TABLE DDL for the managed FILE-column table.
+    #    Schema: path STRING, <file_col> FILE MANAGED.
+    create_ddl = build_create_sql(
+        target,
+        plain_cols=[("path", "string")],
+        file_col=file_col,
+        file_mode="managed",
+        filespace=filespace,
+        layout=layout,
+    )
+
+    if overwrite:
+        spark.sql(f"DROP TABLE IF EXISTS {target}")
+        spark.sql(create_ddl)
+    else:
+        # Idempotent: only create if the table does not already exist.
+        create_ifne = create_ddl.replace(
+            "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1
+        )
+        spark.sql(create_ifne)
+
+    # 5. INSERT from read_files into the managed table.
+    #    file_col receives the FILE reference returned by read_files(format=>'file').
+    order_clause = " ORDER BY path" if layout in ("order", "cluster") else ""
+    insert_sql = (
+        f"INSERT INTO {target} "
+        f"SELECT _metadata.file_path AS path, file AS {file_col} "
+        f"FROM read_files('{escaped_src}', format => 'file', "
+        f"recursiveFileLookup => {recursive_param})"
+        f"{order_clause}"
+    )
+    spark.sql(insert_sql)

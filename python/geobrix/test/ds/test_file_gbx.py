@@ -2,9 +2,18 @@
 
 from __future__ import annotations
 
+import warnings as _warnings_mod
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pyspark.sql.types import (
+    BinaryType,
+    IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+)
 
 from databricks.labs.gbx.ds import file_gbx
 
@@ -700,3 +709,593 @@ def test_open_for_read_explicit_external_without_file_raises_error():
         mock_tier.return_value = "fuse"
         with pytest.raises(ValueError, match="Requested external FILE access mode"):
             file_gbx.open_for_read(source, access="external", spark=mock_spark)
+
+
+# ---------------------------------------------------------------------------
+# open_for_write tests
+# ---------------------------------------------------------------------------
+
+_WINDOW_STRUCT = StructType(
+    [
+        StructField("col_off", IntegerType()),
+        StructField("row_off", IntegerType()),
+        StructField("width", IntegerType()),
+        StructField("height", IntegerType()),
+    ]
+)
+_TILE_STRUCT = StructType(
+    [
+        StructField("cellid", LongType()),
+        StructField("raster", BinaryType()),
+        StructField("path", StringType()),
+        StructField("window", _WINDOW_STRUCT),
+        StructField("crs", StringType()),
+        StructField("path_mode", StringType()),
+    ]
+)
+_DF_SCHEMA = StructType([StructField("tile", _TILE_STRUCT)])
+
+
+def _make_tile_df():
+    df = MagicMock()
+    df.schema = _DF_SCHEMA
+    df.createOrReplaceTempView = MagicMock()
+    return df
+
+
+def test_open_for_write_auto_managed_routes_to_write_file_table():
+    """auto + filespace + FILE tier → write_file_table(file_mode='managed')."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_tier.return_value = "read_files"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="auto",
+            filespace="/Volumes/c/s/v",
+            layout="order",
+        )
+
+    mock_wft.assert_called_once_with(
+        mock_spark,
+        mock_df,
+        "cat.sch.t",
+        file_mode="managed",
+        filespace="/Volumes/c/s/v",
+        layout="order",
+        overwrite=False,
+        file_col="tile_file",
+    )
+
+
+def test_open_for_write_auto_external_no_filespace():
+    """auto + no filespace + FILE tier → write_file_table(file_mode='external')."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_tier.return_value = "list_files"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="auto",
+            filespace=None,
+            layout="order",
+        )
+
+    mock_wft.assert_called_once_with(
+        mock_spark,
+        mock_df,
+        "cat.sch.t",
+        file_mode="external",
+        filespace=None,
+        layout="order",
+        overwrite=False,
+        file_col="tile_file",
+    )
+
+
+def test_open_for_write_auto_fuse_tier_writes_plain_delta():
+    """auto + fuse tier → CTAS plain Delta write via spark.sql, no create_file / try_to_file."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_tier.return_value = "fuse"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="auto",
+            layout="order",
+        )
+
+    # write_file_table must NOT be called
+    mock_wft.assert_not_called()
+    # A CREATE TABLE USING DELTA AS SELECT was emitted
+    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
+    assert create_sqls, f"Expected CREATE TABLE; got: {captured}"
+    # No FILE SQL
+    for sql_str in captured:
+        assert "create_file" not in sql_str
+        assert "try_to_file" not in sql_str
+
+
+def test_open_for_write_explicit_managed_routes_to_write_file_table():
+    """Explicit file_mode='managed' on FILE-capable tier → write_file_table(managed)."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_tier.return_value = "read_files"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="managed",
+            filespace="/Volumes/c/s/v",
+        )
+
+    mock_wft.assert_called_once()
+    _, kwargs = mock_wft.call_args
+    assert kwargs["file_mode"] == "managed"
+
+
+def test_open_for_write_explicit_external_routes_to_write_file_table():
+    """Explicit file_mode='external' on FILE-capable tier → write_file_table(external)."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_tier.return_value = "read_files"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="external",
+        )
+
+    mock_wft.assert_called_once()
+    _, kwargs = mock_wft.call_args
+    assert kwargs["file_mode"] == "external"
+
+
+def test_open_for_write_explicit_managed_on_fuse_tier_raises():
+    """Explicit file_mode='managed' on fuse tier raises actionable ValueError."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.open_for_write(
+                mock_spark,
+                mock_df,
+                "cat.sch.t",
+                file_mode="managed",
+                filespace="/Volumes/c/s/v",
+            )
+
+    err = str(exc_info.value)
+    assert "managed FILE" in err
+    assert "not available" in err
+    assert "tier='fuse'" in err
+
+
+def test_open_for_write_explicit_external_on_fuse_tier_raises():
+    """Explicit file_mode='external' on fuse tier raises actionable ValueError."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.open_for_write(
+                mock_spark,
+                mock_df,
+                "cat.sch.t",
+                file_mode="external",
+            )
+
+    err = str(exc_info.value)
+    assert "external FILE" in err
+    assert "not available" in err
+
+
+def test_open_for_write_invalid_layout_raises():
+    """Invalid layout raises ValueError before any side effects."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_tier.return_value = "read_files"
+        with pytest.raises(ValueError, match="layout must be"):
+            file_gbx.open_for_write(
+                mock_spark,
+                mock_df,
+                "cat.sch.t",
+                layout="PARTITIONED BY path",
+            )
+
+    mock_wft.assert_not_called()
+
+
+def test_open_for_write_partition_layout_raises():
+    """Any partition-style layout string raises ValueError."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    for bad_layout in ("partition", "zorder", "bucket", "sorted"):
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "read_files"
+            with pytest.raises(ValueError, match="layout must be"):
+                file_gbx.open_for_write(
+                    mock_spark,
+                    mock_df,
+                    "cat.sch.t",
+                    layout=bad_layout,
+                )
+
+
+def test_open_for_write_cluster_layout_emits_optimize_warning():
+    """layout='cluster' on a FILE-mode write emits a warnings.warn about OPTIMIZE."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table"),
+        _warnings_mod.catch_warnings(record=True) as caught,
+    ):
+        _warnings_mod.simplefilter("always")
+        mock_tier.return_value = "read_files"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="external",
+            layout="cluster",
+        )
+
+    assert any(
+        "OPTIMIZE" in str(w.message) and "cat.sch.t" in str(w.message) for w in caught
+    ), f"Expected OPTIMIZE warning; got: {[str(w.message) for w in caught]}"
+
+
+def test_open_for_write_cluster_layout_no_warning_for_fuse():
+    """layout='cluster' on fuse mode does NOT emit the OPTIMIZE warning."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        _warnings_mod.catch_warnings(record=True) as caught,
+    ):
+        _warnings_mod.simplefilter("always")
+        mock_tier.return_value = "fuse"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="fuse",
+            layout="cluster",
+        )
+
+    optimize_warns = [w for w in caught if "OPTIMIZE" in str(w.message)]
+    assert (
+        not optimize_warns
+    ), f"Unexpected OPTIMIZE warning for fuse mode: {optimize_warns}"
+
+
+def test_open_for_write_create_sql_no_partitioned_by():
+    """Verify create SQL (via write_file_table) never contains PARTITIONED BY."""
+    from databricks.labs.gbx.pyrx import file_table as ft
+
+    sql = ft.build_create_sql(
+        "cat.sch.t",
+        plain_cols=[("path", "string"), ("cellid", "bigint")],
+        file_col="tile_file",
+        file_mode="external",
+        filespace=None,
+        layout="order",
+    )
+    assert "PARTITIONED BY" not in sql
+    assert "ZORDER" not in sql.upper()
+
+
+def test_open_for_write_fuse_sort_by_path_for_order_layout():
+    """Fuse mode with layout='order' emits ORDER BY path in the CTAS SQL."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+    mock_df = _make_tile_df()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="fuse",
+            layout="order",
+        )
+
+    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
+    assert create_sqls, f"Expected CREATE TABLE; got: {captured}"
+    assert "ORDER BY path" in create_sqls[0]
+
+
+def test_open_for_write_fuse_no_sort_for_plain_layout():
+    """Fuse mode with layout='plain' does NOT emit ORDER BY in the CTAS SQL."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+    mock_df = _make_tile_df()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="fuse",
+            layout="plain",
+        )
+
+    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
+    assert create_sqls
+    assert "ORDER BY" not in create_sqls[0]
+
+
+def test_open_for_write_fuse_overwrite_drops_before_create():
+    """Fuse mode with overwrite=True emits DROP TABLE IF EXISTS before the CREATE."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+    mock_df = _make_tile_df()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="fuse",
+            layout="order",
+            overwrite=True,
+        )
+
+    drop_sqls = [s for s in captured if "DROP TABLE" in s.upper()]
+    assert drop_sqls, f"Expected DROP TABLE IF EXISTS; got: {captured}"
+    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
+    assert create_sqls
+    # DROP must come before CREATE
+    assert captured.index(drop_sqls[0]) < captured.index(create_sqls[0])
+
+
+# ---------------------------------------------------------------------------
+# ingest_files tests
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_files_raises_on_fuse_tier():
+    """ingest_files raises a clear ValueError on a fuse-only runtime."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.ingest_files(
+                mock_spark,
+                "/Volumes/cat/s/v/src",
+                "cat.sch.dst",
+                filespace="/Volumes/cat/s/v",
+            )
+
+    err = str(exc_info.value)
+    assert "ingest_files requires FILE support" in err
+    assert "tier='fuse'" in err
+    assert "13.3 LTS" in err
+
+
+def test_ingest_files_builds_read_files_insert_sql():
+    """ingest_files emits CREATE IF NOT EXISTS + INSERT with read_files(format=>'file')."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/v/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+            layout="order",
+        )
+
+    insert_sqls = [s for s in captured if s.strip().upper().startswith("INSERT")]
+    assert insert_sqls, f"No INSERT captured; got: {captured}"
+    insert = insert_sqls[0]
+    assert "read_files(" in insert
+    assert "format => 'file'" in insert
+    assert "recursiveFileLookup => true" in insert
+    assert "_metadata.file_path AS path" in insert
+    assert "file AS tile_file" in insert
+    assert "ORDER BY path" in insert
+
+    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
+    assert create_sqls, f"No CREATE TABLE captured; got: {captured}"
+    create = create_sqls[0]
+    assert "IF NOT EXISTS" in create.upper()
+    assert "FILE MANAGED" in create
+    assert "PARTITIONED BY" not in create
+
+
+def test_ingest_files_order_by_in_insert():
+    """ingest_files with layout='order' emits ORDER BY path in the INSERT."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/v/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+            layout="order",
+        )
+
+    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
+    assert "ORDER BY path" in insert
+
+
+def test_ingest_files_no_order_by_for_plain_layout():
+    """ingest_files with layout='plain' does NOT emit ORDER BY in the INSERT."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/v/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+            layout="plain",
+        )
+
+    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
+    assert "ORDER BY" not in insert
+
+
+def test_ingest_files_escapes_single_quotes_in_src():
+    """ingest_files doubles single quotes in the src path to prevent SQL injection."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/o'reilly/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+        )
+
+    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
+    assert "o''reilly" in insert
+    assert "o'reilly" not in insert.replace("o''reilly", "")
+
+
+def test_ingest_files_overwrite_drops_and_recreates():
+    """ingest_files with overwrite=True emits DROP TABLE IF EXISTS + CREATE TABLE."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/v/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+            overwrite=True,
+        )
+
+    drop_sqls = [s for s in captured if "DROP TABLE" in s.upper()]
+    assert drop_sqls, "Expected DROP TABLE IF EXISTS; none captured"
+    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
+    assert create_sqls
+    # When overwrite=True, CREATE TABLE must NOT include IF NOT EXISTS
+    create = create_sqls[0]
+    assert "IF NOT EXISTS" not in create.upper()
+
+
+def test_ingest_files_non_recursive():
+    """ingest_files with recursive=False emits recursiveFileLookup => false."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/v/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+            recursive=False,
+        )
+
+    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
+    assert "recursiveFileLookup => false" in insert
+
+
+def test_ingest_files_invalid_layout_raises():
+    """ingest_files raises ValueError for invalid layout before emitting any SQL."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        with pytest.raises(ValueError, match="layout must be"):
+            file_gbx.ingest_files(
+                mock_spark,
+                "/Volumes/cat/s/v/src",
+                "cat.sch.dst",
+                filespace="/Volumes/cat/s/v",
+                layout="PARTITIONED BY path",
+            )
+
+    mock_spark.sql.assert_not_called()
+
+
+def test_ingest_files_custom_file_col():
+    """ingest_files uses the specified file_col name in the INSERT."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "list_files"
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/v/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+            file_col="my_file",
+        )
+
+    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
+    assert "file AS my_file" in insert
+    create = next(s for s in captured if "CREATE TABLE" in s.upper())
+    assert "my_file FILE MANAGED" in create

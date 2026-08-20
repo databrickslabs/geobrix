@@ -887,29 +887,6 @@ class RasterGbxReader(DataSourceReader):
                 "supply at most one."
             )
 
-        # Layout convention (T8): numPartitions / repartition — parallelism signal.
-        # Validated and stored; used as a hint by callers (classic ≈ 3–5× cores;
-        # serverless = worker-pull). NOT applied to per-tile partition regrouping
-        # here: merging multiple _TilePartition objects into a single InputPartition
-        # would cause a single read() call to hold several tiles' worth of decoded
-        # raster data in memory simultaneously, defeating the OOM-safe single-row
-        # emit design. Future bin-packing (when each partition can safely buffer N
-        # tiles) should wire it here.
-        _np_raw = options.get("numPartitions") or options.get("repartition")
-        if _np_raw is not None:
-            try:
-                _np = int(_np_raw)
-            except (ValueError, TypeError):
-                raise ValueError(
-                    f"raster_gbx: 'numPartitions' must be a positive integer; "
-                    f"got {_np_raw!r}"
-                )
-            if _np < 1:
-                raise ValueError(f"raster_gbx: 'numPartitions' must be >= 1; got {_np}")
-            self.num_partitions: Optional[int] = _np
-        else:
-            self.num_partitions = None
-
     def partitions(self) -> Sequence[InputPartition]:
         resolved_budget = _resolved_budget(self.size_mib, self.strategy)
 
@@ -941,9 +918,14 @@ class RasterGbxReader(DataSourceReader):
             # when a worker processes consecutive partitions from the same source.
             return sorted(parts, key=lambda p: p.file_path)
 
-        # Default path: list_files() returns paths in sorted order (layout
-        # convention T8 — files are already path-ordered); extending result
-        # file-by-file preserves that order so all tiles of a file are adjacent.
+        # Default path: walk self.path and plan partitions per file.
+        # Layout convention (T8): sort the final list by file_path so tiles
+        # from the same source are always adjacent, regardless of walk order.
+        # Maximises per-worker rasterio open/stage cache reuse.
+        # To control task parallelism or re-align after a join, use
+        #   df.repartition(n, 'source').sortWithinPartitions('source')
+        # on the read result; n is a parallelism signal (classic ≈ 3–5× cores),
+        # never n = file_count.
         files = _listing.list_files(self.path, self.filter_regex)
         result: list = []
         for f in files:
@@ -959,7 +941,7 @@ class RasterGbxReader(DataSourceReader):
                     emit_virtual=self.emit_virtual,
                 )
             )
-        return result
+        return sorted(result, key=lambda p: p.file_path)
 
     def read(self, partition: "_TilePartition") -> Iterator[Tuple]:
         import rasterio

@@ -544,28 +544,32 @@ def _glob_to_sql_basename_predicate(patterns: list[str], basename_expr: str) -> 
     """Convert a list of glob patterns to a SQL ``AND (...)`` clause for *basename_expr*.
 
     Strategy:
-    - Patterns without ``[`` or ``?`` use ``LOWER(basename_expr) LIKE '...'`` (SQL-safe,
-      no backslash escaping needed for the common ``*.ext`` form).
-    - Patterns with ``[`` or ``?`` use *basename_expr* ``RLIKE '...'`` via
-      :func:`_glob_to_sql_regex`.  Backslashes in the generated regex are doubled for
-      correct SQL string-literal embedding.
+    - Patterns that contain ``[``, ``?``, ``_``, or ``%`` use *basename_expr*
+      ``RLIKE '...'`` via :func:`_glob_to_sql_regex`.  This avoids the LIKE
+      wildcard semantics of ``_`` (single char) and ``%`` (multi-char), which would
+      diverge from ``fnmatch``'s literal treatment of those characters.
+      Backslashes in the generated regex are doubled for correct SQL string-literal
+      embedding.
+    - All other patterns (typically the ``*.ext`` form produced by ``extensions``)
+      use ``LOWER(basename_expr) LIKE '...'`` — no backslash escaping needed for
+      these simple suffix patterns.
 
     Multiple patterns are OR-ed.  Returns an empty string when *patterns* is empty.
 
-    The single-quote escape (``replace("'", "''")``) is applied to all embedded literals
-    consistent with the project-wide SQL escaping convention.
+    The single-quote escape (``replace("'", "''")``) is applied to all embedded
+    literals consistent with the project-wide SQL escaping convention.
     """
     if not patterns:
         return ""
     parts: list[str] = []
     for pat in patterns:
-        if "[" in pat or "?" in pat:
+        if "[" in pat or "?" in pat or "_" in pat or "%" in pat:
             sql_regex = _glob_to_sql_regex(pat)
             # Escape single quotes first, then double backslashes for SQL string literal.
             escaped = sql_regex.replace("'", "''").replace("\\", "\\\\")
             parts.append(f"{basename_expr} RLIKE '{escaped}'")
         else:
-            # Simple glob: convert * → %, no backslash issues in LIKE for .ext patterns.
+            # Simple glob (only * wildcard): convert * → %, safe for LIKE.
             sql_pat = pat.replace("'", "''").replace("*", "%")
             parts.append(f"LOWER({basename_expr}) LIKE '{sql_pat.lower()}'")
     clause = " OR ".join(parts)

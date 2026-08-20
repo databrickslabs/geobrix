@@ -1604,3 +1604,80 @@ def test_glob_to_sql_basename_predicate_multiple():
     assert "OR" in pred
     assert "%.tif" in pred
     assert "%.nc" in pred
+
+
+def test_glob_to_sql_basename_predicate_underscore_routes_to_rlike():
+    """Pattern with _ routes to RLIKE (not bare LIKE) to avoid SQL wildcard divergence.
+
+    SQL LIKE treats _ as 'any single character', while fnmatch treats it as a
+    literal underscore.  A pattern like ndvi_*.tif must produce RLIKE so that
+    ndvi2023.tif (no underscore) is NOT matched.
+    """
+    pred = file_gbx._glob_to_sql_basename_predicate(["ndvi_*.tif"], "file_name")
+    assert "RLIKE" in pred
+    # Must NOT be a bare LIKE (note: RLIKE contains "LIKE" as a substring —
+    # check that the predicate is not using SQL LIKE by verifying no "LOWER(" wrapper,
+    # which is the pattern used by the bare-LIKE branch).
+    assert "LOWER(" not in pred
+
+
+def test_enumerate_files_underscore_pattern_fuse_parity():
+    """path_glob_filter='ndvi_*.tif' treats _ as literal: ndvi_2023.tif matches,
+    ndvi2023.tif does NOT, and the SQL tiers emit an RLIKE (not a bare LIKE).
+    """
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        match_file = os_module.path.join(tmpdir, "ndvi_2023.tif")
+        no_match = os_module.path.join(tmpdir, "ndvi2023.tif")
+        other = os_module.path.join(tmpdir, "landsat.tif")
+
+        for p in (match_file, no_match, other):
+            with open(p, "w") as f:
+                f.write("x")
+
+        # FUSE end-to-end: _ is literal
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(
+                tmpdir, path_glob_filter="ndvi_*.tif", spark=mock_spark
+            )
+
+        basenames = {os_module.path.basename(r["path"]) for r in result}
+        assert "ndvi_2023.tif" in basenames
+        assert "ndvi2023.tif" not in basenames  # no literal _
+        assert "landsat.tif" not in basenames
+
+        # read_files tier: SQL must use RLIKE (not bare LIKE with _ wildcard)
+        mock_spark2 = MagicMock()
+        mock_spark2.sql.return_value = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "read_files"
+            file_gbx.enumerate_files(
+                tmpdir, path_glob_filter="ndvi_*.tif", spark=mock_spark2
+            )
+        sql_rf = mock_spark2.sql.call_args[0][0]
+        assert "RLIKE" in sql_rf
+        assert "ndvi_%.tif" not in sql_rf  # must NOT use LIKE with bare _
+
+        # list_files tier: same
+        mock_spark3 = MagicMock()
+        mock_spark3.sql.return_value = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "list_files"
+            file_gbx.enumerate_files(
+                tmpdir, path_glob_filter="ndvi_*.tif", spark=mock_spark3
+            )
+        sql_lf = mock_spark3.sql.call_args[0][0]
+        assert "RLIKE" in sql_lf
+        assert "ndvi_%.tif" not in sql_lf
+
+
+def test_glob_to_sql_basename_predicate_question_mark_routes_to_rlike():
+    """? pattern routes to RLIKE and the generated regex contains a bare dot."""
+    pred = file_gbx._glob_to_sql_basename_predicate(["tile?.tif"], "file_name")
+    assert "RLIKE" in pred
+    # The ? in tile? becomes . in the regex — verify a dot is present in the regex fragment
+    assert "tile." in pred

@@ -1,0 +1,292 @@
+"""Unit tests for file_gbx capability tier detection and access resolution."""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from databricks.labs.gbx.ds import file_gbx
+
+# ---------------------------------------------------------------------------
+# Tier detection tests
+# ---------------------------------------------------------------------------
+
+
+def test_file_access_tier_with_no_spark():
+    """When spark is None and cannot be obtained, falls back to FUSE."""
+    with patch("databricks.labs.gbx.ds.file_gbx.SparkSession") as mock_session_class:
+        mock_session_class.getActiveSession.return_value = None
+        mock_session_class.builder.getOrCreate.side_effect = RuntimeError("No spark")
+        tier = file_gbx.file_access_tier(None)
+    assert tier == "fuse"
+
+
+def test_file_access_tier_read_files_supported():
+    """When read_files(format=>'file') succeeds, tier is 'read_files'."""
+    mock_spark = MagicMock()
+    mock_spark.sql.return_value.collect.return_value = []
+
+    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier") as mock_detect:
+        mock_detect.return_value = "read_files"
+        tier = file_gbx.file_access_tier(mock_spark)
+
+    assert tier == "read_files"
+
+
+def test_file_access_tier_list_files_supported():
+    """When read_files fails but list_files succeeds, tier is 'list_files'."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier") as mock_detect:
+        mock_detect.return_value = "list_files"
+        tier = file_gbx.file_access_tier(mock_spark)
+
+    assert tier == "list_files"
+
+
+def test_file_access_tier_fuse_fallback():
+    """When both FILE probes fail, tier is 'fuse'."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier") as mock_detect:
+        mock_detect.return_value = "fuse"
+        tier = file_gbx.file_access_tier(mock_spark)
+
+    assert tier == "fuse"
+
+
+def test_file_access_tier_memoized():
+    """Tier detection is memoized per SparkSession object."""
+    mock_spark = MagicMock()
+    call_count = 0
+
+    def mock_detect(spark):
+        nonlocal call_count
+        call_count += 1
+        return "read_files"
+
+    # Clear the cache to ensure a clean test
+    file_gbx._TIER_CACHE.clear()
+
+    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier", side_effect=mock_detect):
+        tier1 = file_gbx.file_access_tier(mock_spark)
+        tier2 = file_gbx.file_access_tier(mock_spark)
+
+    assert tier1 == tier2 == "read_files"
+    assert call_count == 1  # Only called once, result was memoized
+
+
+def test_detect_tier_read_files_probe_success():
+    """_detect_tier probes read_files first and succeeds."""
+    mock_spark = MagicMock()
+    mock_spark.sql.return_value.collect.return_value = []
+
+    tier = file_gbx._detect_tier(mock_spark)
+
+    assert tier == "read_files"
+    # Verify sql was called with the read_files probe
+    assert mock_spark.sql.called
+    call_args = mock_spark.sql.call_args[0][0]
+    assert "read_files" in call_args
+    assert "format => 'file'" in call_args
+
+
+def test_detect_tier_read_files_fails_list_files_succeeds():
+    """_detect_tier falls through to list_files when read_files fails."""
+    mock_spark = MagicMock()
+    # First call (read_files) raises, second call (list_files) succeeds
+    mock_spark.sql.side_effect = [
+        MagicMock(collect=MagicMock(side_effect=Exception("read_files not supported"))),
+        MagicMock(collect=MagicMock(return_value=[])),
+    ]
+
+    tier = file_gbx._detect_tier(mock_spark)
+
+    assert tier == "list_files"
+
+
+def test_detect_tier_both_file_probes_fail_falls_back_to_fuse():
+    """_detect_tier falls through to FUSE when both FILE probes fail."""
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = Exception("FILE not supported")
+
+    tier = file_gbx._detect_tier(mock_spark)
+
+    assert tier == "fuse"
+
+
+# ---------------------------------------------------------------------------
+# Access resolution (NO-GATING rule) tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_access_auto_mode_downgrades_silently_to_read_files():
+    """Auto mode returns the available tier without error."""
+    tier = "read_files"
+    result = file_gbx.resolve_access("auto", tier=tier)
+    assert result == "read_files"
+
+
+def test_resolve_access_auto_mode_downgrades_silently_to_list_files():
+    """Auto mode returns list_files tier."""
+    tier = "list_files"
+    result = file_gbx.resolve_access("auto", tier=tier)
+    assert result == "list_files"
+
+
+def test_resolve_access_auto_mode_downgrades_silently_to_fuse():
+    """Auto mode returns FUSE tier when FILE is unavailable."""
+    tier = "fuse"
+    result = file_gbx.resolve_access("auto", tier=tier)
+    assert result == "fuse"
+
+
+def test_resolve_access_managed_succeeds_when_read_files_available():
+    """Explicit managed FILE mode succeeds when read_files is available."""
+    result = file_gbx.resolve_access("managed", tier="read_files")
+    assert result == "managed"
+
+
+def test_resolve_access_managed_succeeds_when_list_files_available():
+    """Explicit managed FILE mode succeeds when list_files is available."""
+    result = file_gbx.resolve_access("managed", tier="list_files")
+    assert result == "managed"
+
+
+def test_resolve_access_external_succeeds_when_read_files_available():
+    """Explicit external FILE mode succeeds when read_files is available."""
+    result = file_gbx.resolve_access("external", tier="read_files")
+    assert result == "external"
+
+
+def test_resolve_access_managed_raises_on_fuse_tier():
+    """Explicit managed FILE mode raises clear error when FILE unavailable."""
+    with pytest.raises(ValueError) as exc_info:
+        file_gbx.resolve_access("managed", tier="fuse")
+
+    error_msg = str(exc_info.value)
+    assert "managed FILE" in error_msg
+    assert "not available" in error_msg
+    assert "tier='fuse'" in error_msg
+    assert "13.3 LTS" in error_msg or "18 LTS" in error_msg
+    assert "Upgrade your cluster" in error_msg or "DBR" in error_msg
+
+
+def test_resolve_access_external_raises_on_fuse_tier():
+    """Explicit external FILE mode raises clear error when FILE unavailable."""
+    with pytest.raises(ValueError) as exc_info:
+        file_gbx.resolve_access("external", tier="fuse")
+
+    error_msg = str(exc_info.value)
+    assert "external FILE" in error_msg
+    assert "not available" in error_msg
+
+
+def test_resolve_access_invalid_mode_raises():
+    """Invalid access mode raises ValueError."""
+    with pytest.raises(ValueError) as exc_info:
+        file_gbx.resolve_access("invalid_mode", tier="read_files")
+
+    assert "Unknown access mode" in str(exc_info.value)
+
+
+def test_resolve_access_detects_tier_when_not_provided():
+    """resolve_access detects tier if not explicitly provided."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
+        mock_detect.return_value = "read_files"
+        result = file_gbx.resolve_access("auto", spark=mock_spark)
+
+    assert result == "read_files"
+    mock_detect.assert_called_once_with(mock_spark)
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility: re-exports from _listing
+# ---------------------------------------------------------------------------
+
+
+def test_reexport_to_local_path():
+    """to_local_path is re-exported from _listing."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    # Verify it's accessible from file_gbx
+    assert hasattr(file_gbx, "to_local_path")
+    # Verify it's callable
+    result = file_gbx.to_local_path("file:/tmp/x")
+    assert result == "/tmp/x"
+
+
+def test_reexport_to_spark_uri():
+    """to_spark_uri is re-exported from _listing."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    assert hasattr(file_gbx, "to_spark_uri")
+    result = file_gbx.to_spark_uri("/Volumes/cat/schema/vol/file.tif")
+    assert result.startswith("dbfs:")
+
+
+def test_reexport_list_files():
+    """list_files is re-exported from _listing."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    assert hasattr(file_gbx, "list_files")
+    assert callable(file_gbx.list_files)
+
+
+def test_reexport_retry_transient():
+    """_retry_transient is re-exported from _listing."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    assert hasattr(file_gbx, "_retry_transient")
+    assert callable(file_gbx._retry_transient)
+
+
+def test_existing_listing_importers_still_work():
+    """Existing direct imports from _listing still work (backward compat)."""
+    # This test verifies the import path doesn't break
+    from databricks.labs.gbx.ds._listing import to_local_path, to_spark_uri
+
+    assert callable(to_local_path)
+    assert callable(to_spark_uri)
+
+
+# ---------------------------------------------------------------------------
+# Integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_access_full_flow_auto_with_file_available():
+    """Full flow: auto mode with FILE available."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
+        mock_detect.return_value = "read_files"
+        result = file_gbx.resolve_access("auto", spark=mock_spark)
+
+    assert result == "read_files"
+
+
+def test_resolve_access_full_flow_managed_with_file_available():
+    """Full flow: explicit managed FILE with FILE available."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
+        mock_detect.return_value = "list_files"
+        result = file_gbx.resolve_access("managed", spark=mock_spark)
+
+    assert result == "managed"
+
+
+def test_resolve_access_full_flow_managed_with_no_file():
+    """Full flow: explicit managed FILE with FILE unavailable."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
+        mock_detect.return_value = "fuse"
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.resolve_access("managed", spark=mock_spark)
+
+    assert "managed FILE" in str(exc_info.value)

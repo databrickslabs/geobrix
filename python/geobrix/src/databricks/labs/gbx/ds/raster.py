@@ -964,6 +964,8 @@ class RasterGbxReader(DataSourceReader):
         # warp).  For virtual tiles the source CRS is implicit in the path.
         # ------------------------------------------------------------------
         if getattr(partition, "emit_virtual", False):
+            # Get file size for path_file_size metadata (enables sized-aware scheduling).
+            file_size = os.path.getsize(partition.file_path)
             with rasterio.open(partition.file_path) as ds:
                 meta = {
                     "sourcePath": partition.file_path,
@@ -972,6 +974,7 @@ class RasterGbxReader(DataSourceReader):
                     "width": str(ds.width),
                     "height": str(ds.height),
                     "count": str(ds.count),
+                    "path_file_size": str(file_size),  # virtual tile source size
                 }
                 # Lazy window (Approach 3): window=None at plan → resolve here
                 # from the actual raster dims. Pre-planned windows are used as-is.
@@ -1024,6 +1027,8 @@ class RasterGbxReader(DataSourceReader):
                 )
             if clipped is None:
                 return  # all-nodata / non-overlap -> skip (no tile)
+            # Add tile_size metadata (materialized raster byte length).
+            meta["tile_size"] = str(len(clipped))
             yield (
                 source,
                 _v2_tile_row(
@@ -1057,6 +1062,8 @@ class RasterGbxReader(DataSourceReader):
                 all_parents=partition.all_parents,
                 compression=compression,
             )
+            # Add tile_size metadata (materialized raster byte length).
+            meta["tile_size"] = str(len(raster_bytes))
             yield (
                 source,
                 _v2_tile_row(
@@ -1089,6 +1096,8 @@ class RasterGbxReader(DataSourceReader):
                     cog_blocksize=partition.cog_blocksize,
                     cog_overview_resampling=partition.cog_overview_resampling,
                 )
+        # Add tile_size metadata (materialized raster byte length).
+        meta["tile_size"] = str(len(raster_bytes))
         yield (
             source,
             _v2_tile_row(
@@ -1139,6 +1148,8 @@ class RasterGbxReader(DataSourceReader):
                     all_parents="",
                     compression=compression,
                 )
+                # Add tile_size metadata (materialized raster byte length).
+                meta["tile_size"] = str(len(raster_bytes))
                 yield (
                     source,
                     _v2_tile_row(
@@ -1194,6 +1205,8 @@ class RasterGbxReader(DataSourceReader):
                         all_parents="",
                         tile_format="gtiff",
                     )
+                    # Add tile_size metadata (materialized raster byte length).
+                    meta["tile_size"] = str(len(raster_bytes))
                     yield (
                         source,
                         _v2_tile_row(

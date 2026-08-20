@@ -239,3 +239,54 @@ def test_netcdf_gbx_still_materializes(spark, tmp_path):
     assert len(rows) >= 1, "netcdf_gbx should produce at least one row"
     t = rows[0]["tile"]
     assert t["raster"] is not None, "netcdf_gbx must materialize by default (unchanged)"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Tile size metadata (path_file_size / tile_size)
+# ---------------------------------------------------------------------------
+
+
+def test_virtual_tile_has_path_file_size_metadata(spark, tmp_path):
+    """Virtual tiles carry path_file_size in metadata matching the source file size."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    file_size = (tmp_path / "a.tiled.tif").stat().st_size
+
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "true")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "virtual tile must have no raster bytes"
+    metadata = t["metadata"]
+    assert "path_file_size" in metadata, "virtual tile must have path_file_size metadata"
+    assert int(metadata["path_file_size"]) == file_size, (
+        f"path_file_size={metadata['path_file_size']} must match file_size={file_size}"
+    )
+
+
+def test_materialized_tile_has_tile_size_metadata(spark, tmp_path):
+    """Materialized tiles carry tile_size in metadata matching the raster byte length."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "materialized tile must have raster bytes"
+    raster_bytes = t["raster"]
+    metadata = t["metadata"]
+    assert "tile_size" in metadata, "materialized tile must have tile_size metadata"
+    assert int(metadata["tile_size"]) == len(raster_bytes), (
+        f"tile_size={metadata['tile_size']} must match len(raster)={len(raster_bytes)}"
+    )

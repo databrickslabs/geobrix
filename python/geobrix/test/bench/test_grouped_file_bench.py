@@ -194,6 +194,7 @@ def test_lru_amortizes_source_opens(corpus, monkeypatch):
             fast_results.append(
                 _run_file_fast_path(
                     ctx.fr_holder,
+                    ctx.size_holder,
                     lru,
                     r["path"],
                     fr,

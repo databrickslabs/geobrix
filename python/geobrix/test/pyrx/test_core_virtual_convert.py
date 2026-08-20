@@ -29,10 +29,13 @@ def test_materialize_to_bytes_produces_heavy_useful_tile(tmp_path):
     path = _layouts.write_tiled_gtiff(str(tmp_path / "a.tif"), 512, 512, 256)
     virt = VirtualTile(cellid=8, path=path, window=WINDOW, metadata={"k": "v"})
     mat = ot.materialize_to_bytes(virt)
-    # materialized: raster set, provenance preserved
+    # materialized: raster set, provenance preserved + tile_byte_size stamped
     assert mat.raster is not None and not mat.is_virtual()
     assert mat.path == path and mat.window == WINDOW
-    assert mat.cellid == 8 and mat.metadata == {"k": "v"}
+    assert mat.cellid == 8 and mat.metadata == {
+        "k": "v",
+        "tile_byte_size": str(len(mat.raster)),
+    }
     # raster-precedence path yields exactly the window's pixels
     with ot.open_tile(mat) as ds:
         got = ds.read(1)

@@ -1,8 +1,22 @@
-"""Task 2: generic gbx_file_read (location + table modes)."""
+"""Task 2: gbx_file_read — new [path, size, file] reference contract.
+
+Old tests that asserted a `content` column have been replaced: the previous
+implementation returned bytes (via binaryFile / read_files SELECT content), which
+was both wrong (read_files(format=>'file') has no `content` column) and against
+the design (gbx_file_read returns a reference, never bytes).
+
+New contract: returns DataFrame[path STRING, size BIGINT, file <FILE-ref or null>].
+"""
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from databricks.labs.gbx.ds import file_gbx
+
+# ---------------------------------------------------------------------------
+# _classify_source (unchanged helper — kept as a smoke test)
+# ---------------------------------------------------------------------------
 
 
 def test_source_type_auto_classifies_path_vs_table():
@@ -12,60 +26,255 @@ def test_source_type_auto_classifies_path_vs_table():
     assert file_gbx._classify_source("catalog.schema.table") == "table"
 
 
-def test_location_fuse_tier_reads_via_binaryfile(tmp_path):
-    (tmp_path / "a.bin").write_bytes(b"hello")
-    (tmp_path / "b.bin").write_bytes(b"world")
+# ---------------------------------------------------------------------------
+# location + read_files tier → enumerate_files → DataFrame [path,size,file]
+# ---------------------------------------------------------------------------
+
+
+def test_location_read_files_tier_uses_enumerate_files_no_content():
+    """location + read_files tier: enumerate_files → DataFrame [path,size,file], no content."""
     mock_spark = MagicMock()
-    reader = mock_spark.read.format.return_value.load.return_value
-    reader.selectExpr.return_value = "BINARYFILE_DF"
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"):
-        out = file_gbx.gbx_file_read(mock_spark, str(tmp_path), source_type="location")
-    mock_spark.read.format.assert_called_with("binaryFile")
-    # Verify option kwargs are forwarded to load() — exercises the recursive/hidden logic.
-    mock_spark.read.format.return_value.load.assert_called_once_with(
-        str(tmp_path),
-        recursiveFileLookup="true",
-        pathGlobFilter="[!._]*",
-    )
-    assert out == "BINARYFILE_DF"
+    fake_df = MagicMock()
 
-
-def test_location_list_files_tier_falls_back_to_binaryfile(tmp_path):
-    """list_files tier (DBR-18 metadata-only) must not use read_files SQL; use binaryFile."""
-    mock_spark = MagicMock()
-    reader = mock_spark.read.format.return_value.load.return_value
-    reader.selectExpr.return_value = "LISTFILES_BF_DF"
-    with patch(
-        "databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="list_files"
-    ):
-        out = file_gbx.gbx_file_read(mock_spark, str(tmp_path), source_type="location")
-    mock_spark.read.format.assert_called_with("binaryFile")
-    mock_spark.sql.assert_not_called()
-    assert out == "LISTFILES_BF_DF"
-
-
-def test_location_file_tier_uses_read_files_content():
-    mock_spark = MagicMock()
-    mock_spark.sql.return_value = "READFILES_DF"
-    with patch(
-        "databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="read_files"
+    with (
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.file_access_tier",
+            return_value="read_files",
+        ),
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.enumerate_files", return_value=fake_df
+        ) as mock_enum,
     ):
         out = file_gbx.gbx_file_read(
             mock_spark, "/Volumes/c/s/v", source_type="location"
         )
-    sql = mock_spark.sql.call_args[0][0]
-    assert "read_files" in sql and "format => 'file'" in sql
-    assert "content" in sql
-    assert out == "READFILES_DF"
+
+    mock_enum.assert_called_once()
+    # Must not fall back to binaryFile or run raw SQL
+    mock_spark.read.format.assert_not_called()
+    # The returned DataFrame comes directly from enumerate_files (no re-selection)
+    assert out is fake_df
+
+
+# ---------------------------------------------------------------------------
+# location + FUSE tier → enumerate_files → list → createDataFrame
+# ---------------------------------------------------------------------------
+
+
+def test_location_fuse_tier_normalizes_list_to_dataframe():
+    """location + FUSE tier: enumerate_files → list of dicts → createDataFrame [path,size,file]."""
+    mock_spark = MagicMock()
+    fuse_list = [
+        {"path": "/Volumes/c/s/v/a.tif", "size": 100, "file": None},
+        {"path": "/Volumes/c/s/v/b.tif", "size": 200, "file": None},
+    ]
+    fake_df = MagicMock()
+    mock_spark.createDataFrame.return_value = fake_df
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"),
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.enumerate_files", return_value=fuse_list
+        ),
+    ):
+        out = file_gbx.gbx_file_read(
+            mock_spark, "/Volumes/c/s/v", source_type="location"
+        )
+
+    mock_spark.createDataFrame.assert_called_once()
+    call_args = mock_spark.createDataFrame.call_args
+    # First positional arg is the data list
+    passed_data = call_args[0][0]
+    assert passed_data == fuse_list
+    # Schema keyword arg must be a StructType with path, size, file
+    schema_arg = call_args[1].get("schema") or (
+        call_args[0][1] if len(call_args[0]) > 1 else None
+    )
+    assert schema_arg is not None, "schema argument must be passed to createDataFrame"
+    field_names = [f.name for f in schema_arg.fields]
+    assert field_names == ["path", "size", "file"]
+    # file column must be nullable (holds None on FUSE)
+    file_field = next(f for f in schema_arg.fields if f.name == "file")
+    assert file_field.nullable
+    # Must NOT call binaryFile
+    mock_spark.read.format.assert_not_called()
+    assert out is fake_df
+
+
+# ---------------------------------------------------------------------------
+# location + list_files tier → enumerate_files → DataFrame (no normalization)
+# ---------------------------------------------------------------------------
+
+
+def test_location_list_files_tier_uses_enumerate_files():
+    """location + list_files tier: enumerate_files returns DataFrame directly."""
+    mock_spark = MagicMock()
+    fake_df = MagicMock()
+
+    with (
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.file_access_tier",
+            return_value="list_files",
+        ),
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.enumerate_files", return_value=fake_df
+        ) as mock_enum,
+    ):
+        out = file_gbx.gbx_file_read(
+            mock_spark, "/Volumes/c/s/v", source_type="location"
+        )
+
+    mock_enum.assert_called_once()
+    # DataFrame path: no createDataFrame, no binaryFile, no raw SQL
+    mock_spark.createDataFrame.assert_not_called()
+    mock_spark.read.format.assert_not_called()
+    mock_spark.sql.assert_not_called()
+    assert out is fake_df
+
+
+# ---------------------------------------------------------------------------
+# access gating: external on FUSE tier raises
+# ---------------------------------------------------------------------------
+
+
+def test_access_external_on_fuse_tier_raises():
+    """access='external' on fuse tier raises a clear ValueError."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"):
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.gbx_file_read(
+                mock_spark,
+                "/Volumes/c/s/v",
+                source_type="location",
+                access="external",
+            )
+
+    err = str(exc_info.value)
+    assert "external" in err.lower()
+    # Must name the requirement and suggest auto
+    assert "DBR" in err or "FILE" in err
+    assert "auto" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# access gating: managed on location source raises
+# ---------------------------------------------------------------------------
+
+
+def test_access_managed_on_location_source_raises():
+    """access='managed' on a location/path source raises a clear ValueError."""
+    mock_spark = MagicMock()
+
+    # Tier detection should not even be needed for this path, but patching for safety
+    with patch(
+        "databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="read_files"
+    ):
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.gbx_file_read(
+                mock_spark,
+                "/Volumes/c/s/v",
+                source_type="location",
+                access="managed",
+            )
+
+    err = str(exc_info.value)
+    assert "managed" in err.lower()
+    # Must suggest alternatives
+    assert "external" in err.lower() or "table" in err.lower() or "auto" in err.lower()
+    # Must not suggest a silent downgrade
+    assert "silently" not in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# access gating: managed on table source → delegates to read_file_table
+# ---------------------------------------------------------------------------
+
+
+def test_access_managed_on_table_source_delegates_read_file_table():
+    """access='managed' on table source delegates to read_file_table → [path,size,file]."""
+    mock_spark = MagicMock()
+    tile_df = MagicMock()
+    projected_df = MagicMock()
+    tile_df.selectExpr.return_value = projected_df
+
+    with (
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.file_access_tier",
+            return_value="read_files",
+        ),
+        patch(
+            "databricks.labs.gbx.pyrx.file_table.read_file_table", return_value=tile_df
+        ) as rft,
+    ):
+        out = file_gbx.gbx_file_read(
+            mock_spark, "cat.sch.tbl", source_type="table", access="managed"
+        )
+
+    rft.assert_called_once_with(mock_spark, "cat.sch.tbl")
+    tile_df.selectExpr.assert_called_once()
+    expr_args = tile_df.selectExpr.call_args[0]
+    # Must project path, size, and file — no content
+    assert any("path" in e for e in expr_args)
+    assert any("size" in e for e in expr_args)
+    assert any("file" in e for e in expr_args)
+    assert not any("content" in e for e in expr_args)
+    assert out is projected_df
+
+
+# ---------------------------------------------------------------------------
+# access gating: auto on FUSE tier never raises
+# ---------------------------------------------------------------------------
+
+
+def test_access_auto_on_fuse_tier_does_not_raise():
+    """access='auto' on fuse tier never raises; normalizes FUSE list to DataFrame."""
+    mock_spark = MagicMock()
+    fuse_list = [{"path": "/Volumes/c/s/v/a.tif", "size": 100, "file": None}]
+    fake_df = MagicMock()
+    mock_spark.createDataFrame.return_value = fake_df
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"),
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.enumerate_files", return_value=fuse_list
+        ),
+    ):
+        # Must not raise
+        out = file_gbx.gbx_file_read(
+            mock_spark, "/Volumes/c/s/v", source_type="location", access="auto"
+        )
+
+    mock_spark.createDataFrame.assert_called_once()
+    assert out is fake_df
+
+
+# ---------------------------------------------------------------------------
+# table mode (default access="auto"): delegates to read_file_table
+# ---------------------------------------------------------------------------
 
 
 def test_table_mode_delegates_to_read_file_table():
+    """table mode (default access='auto') delegates to read_file_table and returns [path,size,file]."""
     mock_spark = MagicMock()
     tile_df = MagicMock()
-    tile_df.selectExpr.return_value = "PATH_DF"
-    with patch(
-        "databricks.labs.gbx.pyrx.file_table.read_file_table", return_value=tile_df
-    ) as rft:
+    projected_df = MagicMock()
+    tile_df.selectExpr.return_value = projected_df
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"),
+        patch(
+            "databricks.labs.gbx.pyrx.file_table.read_file_table", return_value=tile_df
+        ) as rft,
+    ):
         out = file_gbx.gbx_file_read(mock_spark, "cat.sch.tbl", source_type="table")
+
     rft.assert_called_once_with(mock_spark, "cat.sch.tbl")
-    assert out == "PATH_DF"
+    tile_df.selectExpr.assert_called_once()
+    expr_args = tile_df.selectExpr.call_args[0]
+    # Must project to [path, size, file] — no content, no bytes
+    assert any("path" in e for e in expr_args)
+    assert any("size" in e for e in expr_args)
+    assert any("file" in e for e in expr_args)
+    assert not any("content" in e for e in expr_args)
+    assert out is projected_df

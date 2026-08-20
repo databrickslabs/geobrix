@@ -1811,72 +1811,128 @@ def gbx_file_read(
     source_type: str = "auto",
     recursive: bool = True,
     include_hidden: bool = False,
+    access: str = "auto",
+    extensions: Optional[tuple[str, ...]] = None,
+    path_glob_filter: Optional[str] = None,
 ) -> "DataFrame":
-    """Generic, format-agnostic, session-ful read → DataFrame of raw FILE/bytes.
+    """Generic, format-agnostic, session-ful read → DataFrame of FILE/FUSE references.
 
-    Session-ful (driver/function-layer): resolves the runtime FILE tier and
-    delegates natively.  Two source kinds:
+    Returns a DataFrame with columns **``[path, size, file]``** — NEVER bytes/content:
 
-    - **location** (Path/Volume): FILE-capable runtimes read
-      ``read_files(source, format=>'file')`` → ``[path, content, size]`` (native
-      bytes + metadata); FUSE-only runtimes fall back to
-      ``spark.read.format("binaryFile")`` → the same three columns.
+    - ``path``: STRING — the ``/Volumes/...`` path.
+    - ``size``: BIGINT — file size where available (null for table read-backs).
+    - ``file``: a **MANAGED | EXTERNAL FILE** reference when the runtime supports
+      FILE (``enumerate_files`` on a FILE-capable tier), else **null** (FUSE floor or
+      table read-back where FILE column is not surfaced).
+
+    Two source kinds:
+
+    - **location** (path/Volume): composes :func:`enumerate_files`, which already
+      returns ``[path, size, file]`` on FILE-capable tiers and a list of dicts
+      ``{path, size, file: None}`` on the FUSE tier.  The FUSE list is normalized
+      to a DataFrame via ``spark.createDataFrame``.
     - **table** (FILE-column Delta table): delegates to
-      ``file_table.read_file_table`` (resolves the FILE ``.uri`` → path,
-      Serverless-GC-safe) and projects the ``tile.path`` column as ``path``.
+      ``file_table.read_file_table`` and projects ``tile.path AS path`` (``size``
+      and ``file`` are null — the tile read-back does not surface a raw FILE ref).
+
+    ``access`` gating (owner-confirmed, see task brief):
+
+    - ``"auto"`` (default): never raises; returns FILE refs when capable, null ``file``
+      on FUSE.
+    - ``"external"``: requires a FILE-capable runtime (``read_files`` or ``list_files``
+      tier); raises ``ValueError`` on a FUSE-only runtime.
+    - ``"managed"``: valid **only** for a table source (MANAGED FILE-column table
+      read-back).  Raises ``ValueError`` for any location/path source — a Volume path
+      cannot yield a MANAGED reference; that is minted on write via
+      :func:`gbx_file_write`.
 
     ``source_type="auto"`` classifies via :func:`_classify_source`.
-    Compose with a decoder, e.g. ``gbx_file_read(spark, path) →
-    rst_fromcontent(content, driver)``.
 
     Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
     """
+    from pyspark.sql.types import LongType, StringType, StructField, StructType
+
+    # Validate access mode.
+    if access not in ("auto", "external", "managed"):
+        raise ValueError(
+            f"access must be 'auto', 'external', or 'managed'; got {access!r}"
+        )
+
+    # Classify source.
     st = _classify_source(source) if source_type == "auto" else source_type
-    if st == "table":
-        from databricks.labs.gbx.pyrx.file_table import read_file_table
-
-        tile_df = read_file_table(spark, source)
-        return tile_df.selectExpr("tile.path AS path")
-
-    if st != "location":
+    if st not in ("location", "table"):
         raise ValueError(
             f"source_type must be 'auto', 'location', or 'table'; got {source_type!r}"
         )
 
-    tier = file_access_tier(spark)
-    if tier != "read_files":
-        # binaryFile fallback for both "fuse" and "list_files" tiers.
-        # "list_files" (DBR-18) exposes metadata-only listing; read_files(format=>'file')
-        # is NOT available there, so content reads fall back to binaryFile like fuse.
-        # "read_files" (DBR-19+) is the only tier where the FILE-native SQL path works.
-        # Pass options directly to load() so the fluent chain stays as
-        # spark.read.format(...).load(path, **opts) — avoids .option().option()
-        # chaining that complicates mock-based unit tests.
-        load_opts: dict[str, str] = {}
-        if recursive:
-            load_opts["recursiveFileLookup"] = "true"
-        if not include_hidden:
-            load_opts["pathGlobFilter"] = "[!._]*"
-        return (
-            spark.read.format("binaryFile")
-            .load(to_local_path(source), **load_opts)
-            .selectExpr("path AS path", "content AS content", "length AS size")
+    # access="managed" is only valid for a managed FILE-column table source.
+    # Raise immediately — no tier detection needed — for a location source.
+    if access == "managed" and st == "location":
+        raise ValueError(
+            "access='managed' is only valid for a MANAGED FILE-column table source. "
+            "A Volume path/directory cannot yield a MANAGED FILE reference — that is "
+            "minted on write via gbx_file_write. "
+            "Use access='external' for FILE EXTERNAL references to existing Volume "
+            "files, access='auto' for graceful FILE/FUSE fallback, or point at a "
+            "MANAGED FILE-column table."
         )
 
-    # FILE tier: read_files(format=>'file') exposes content bytes + _metadata.
-    escaped = to_local_path(source).replace("'", "''")
-    recursive_lookup = "true" if recursive else "false"
-    hidden_clause = (
-        ""
-        if include_hidden
-        else "WHERE NOT (_metadata.file_name LIKE '_%' OR _metadata.file_name LIKE '.%')"
+    # Detect tier for access gating.
+    tier = file_access_tier(spark)
+    file_capable = tier != "fuse"
+
+    # access="external" requires FILE support.
+    if access == "external" and not file_capable:
+        raise ValueError(
+            f"access='external' requires FILE support (Databricks Runtime 19+ with "
+            f"read_files(format=>'file') or list_files), but this runtime only has FUSE "
+            f"(tier={tier!r}). "
+            f"Upgrade to DBR 19+ for FILE support, or use access='auto' for graceful "
+            f"FILE/FUSE fallback."
+        )
+
+    # --- table source: delegate to read_file_table ---
+    if st == "table":
+        from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+        tile_df = read_file_table(spark, source)
+        # Project to [path, size, file]: size and file are not available from the
+        # tile read-back (FILE column is consumed into tile.path; no raw FILE ref
+        # is surfaced).  Null those columns but keep the 3-column contract.
+        return tile_df.selectExpr(
+            "tile.path AS path",
+            "CAST(NULL AS BIGINT) AS size",
+            "CAST(NULL AS STRING) AS file",
+        )
+
+    # --- location source: compose enumerate_files ---
+    local_path = to_local_path(source)
+    result = enumerate_files(
+        local_path,
+        recursive=recursive,
+        include_hidden=include_hidden,
+        extensions=extensions,
+        path_glob_filter=path_glob_filter,
+        spark=spark,
     )
-    return spark.sql(f"""
-        SELECT _metadata.file_path AS path, content, _metadata.file_size AS size
-        FROM read_files('{escaped}', format => 'file',
-                        recursiveFileLookup => {recursive_lookup})
-        {hidden_clause}
-        """)
+
+    # enumerate_files returns a DataFrame on FILE tiers, a list of dicts on FUSE.
+    if isinstance(result, list):
+        # FUSE tier: normalize list of dicts {path, size, file: None} to a DataFrame.
+        # Use a nullable StringType for 'file' — it holds None on FUSE and is
+        # type-compatible with file-tier DataFrames for downstream union/concat.
+        fuse_schema = StructType(
+            [
+                StructField("path", StringType(), nullable=True),
+                StructField("size", LongType(), nullable=True),
+                StructField("file", StringType(), nullable=True),
+            ]
+        )
+        return spark.createDataFrame(result, schema=fuse_schema)
+
+    # FILE tiers (read_files / list_files): enumerate_files already returns
+    # a DataFrame with columns [path, size, file] — return it directly.
+    return result
 
 
 # =============================================================================

@@ -138,9 +138,9 @@ AccessMode = Literal["auto", "managed", "external"]
 
 def resolve_access(
     requested: AccessMode,
-    tier: Literal["read_files", "list_files", "fuse"] = None,
+    tier: Optional[Literal["read_files", "list_files", "fuse"]] = None,
     spark: Optional[SparkSession] = None,
-) -> Literal["fuse", "managed", "external"]:
+) -> Literal["read_files", "list_files", "fuse", "managed", "external"]:
     """Resolve the effective file-access mode, implementing the NO-GATING rule.
 
     NO-GATING rule:
@@ -176,7 +176,7 @@ def resolve_access(
     if requested == "auto":
         # Auto: downgrade silently to the best available tier.
         # Tier itself is fine for read/write; just return it.
-        return tier  # type: ignore[return-value]
+        return tier
 
     if requested in ("managed", "external"):
         # Explicit FILE request.

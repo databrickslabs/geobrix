@@ -1027,7 +1027,6 @@ class VectorGbxWriter(DataSourceWriter):
             _is_single = (
                 self.driver in ("GPKG", "GeoJSON")
                 or self.zip  # Shapefile+zip=true → .shp.zip; FileGDB+zip=true → .gdb.zip
-                or (self.driver == "OpenFileGDB" and not self.zip)  # .gdb dir → allowed
             )
             if not _is_single:
                 raise ValueError(
@@ -1236,7 +1235,6 @@ class VectorGbxWriter(DataSourceWriter):
         spark.createDataFrame is driver-only and Connect-safe.
         """
         from pyspark.sql import SparkSession
-        from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
         if spark is None:
             spark = SparkSession.getActiveSession()

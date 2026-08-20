@@ -105,6 +105,39 @@ def test_vector_writer_file_mode_managed_no_filespace_raises():
         )
 
 
+def test_vector_writer_file_mode_opengdb_no_zip_raises():
+    """file_mode=managed with OpenFileGDB and zip=false raises ValueError.
+
+    OpenFileGDB+zip=false produces a .gdb DIRECTORY, not a single FILE URI.
+    The gate must reject this in FILE mode; FUSE mode is unaffected.
+    """
+    with pytest.raises(ValueError, match="single-file"):
+        _make_writer(
+            "cat.sch.roads",
+            "OpenFileGDB",
+            extra_opts={
+                "fileMode": "managed",
+                "filespace": "/Volumes/c/s/v",
+                # zip not set → defaults to False → .gdb dir → not single-file
+            },
+        )
+
+
+def test_vector_writer_file_mode_opengdb_zip_true_allowed():
+    """OpenFileGDB + zip=true + file_mode=managed passes the gate (produces .gdb.zip)."""
+    w = _make_writer(
+        "cat.sch.roads",
+        "OpenFileGDB",
+        extra_opts={
+            "fileMode": "managed",
+            "filespace": "/Volumes/c/s/v",
+            "zip": "true",
+        },
+    )
+    assert w._file_mode == "managed"
+    assert w.zip is True
+
+
 def test_vector_writer_file_mode_nonzip_shapefile_raises():
     """file_mode=managed with ESRI Shapefile and zip=false raises ValueError."""
     with pytest.raises(ValueError, match="single-file"):

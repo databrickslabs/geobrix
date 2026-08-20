@@ -916,7 +916,8 @@ class RasterGbxReader(DataSourceReader):
             # Layout convention (T8): sort by source file path so tiles from the
             # same file are adjacent. Maximises per-worker open/stage cache reuse
             # when a worker processes consecutive partitions from the same source.
-            return sorted(parts, key=lambda p: p.file_path)
+            # None-safe: place None values at the end (deterministic ordering).
+            return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
 
         # Default path: walk self.path and plan partitions per file.
         # Layout convention (T8): sort the final list by file_path so tiles
@@ -941,7 +942,8 @@ class RasterGbxReader(DataSourceReader):
                     emit_virtual=self.emit_virtual,
                 )
             )
-        return sorted(result, key=lambda p: p.file_path)
+        # None-safe: place None values at the end (deterministic ordering).
+        return sorted(result, key=lambda p: (p.file_path is None, p.file_path or ""))
 
     def read(self, partition: "_TilePartition") -> Iterator[Tuple]:
         import rasterio

@@ -595,14 +595,37 @@ class VectorGbxReader(DataSourceReader):
     }
 
     def __init__(self, options: Dict[str, str]):
-        from databricks.labs.gbx.ds._listing import to_local_path
-
         raw_path = options.get("path")
         if not raw_path:
             raise ValueError("vector_gbx requires a 'path' (e.g. .load(path)).")
-        # Columns/options may carry a dbfs:-qualified path; strip the scheme once
-        # so all os.* + pyogrio reads use the bare FUSE path.
-        self.path = to_local_path(raw_path)
+        # FILE access mode: "auto" (default, gracefully downgrades to FUSE if FILE
+        # unavailable), "managed" (FILE MANAGED), or "external" (FILE EXTERNAL).
+        # The NO-GATING rule is enforced here (__init__ = driver-side), NOT in read()
+        # (which runs on executors). On Spark Connect workers (Serverless DBR 19+),
+        # SparkSession.getActiveSession() returns None, so file_access_tier() called
+        # from read() always resolves to "fuse" — causing a false ValueError for
+        # explicit managed/external on FILE-capable runtimes.
+        access = options.get("access", "auto")
+        if access not in ("auto", "managed", "external"):
+            raise ValueError(
+                f"vector_gbx 'access' option must be 'auto', 'managed', or 'external'; "
+                f"got {access!r}"
+            )
+        self.access = access
+
+        # Driver-side capability probe: get the active driver SparkSession explicitly
+        # to avoid the getOrCreate() path on workers.
+        from pyspark.sql import SparkSession as _SpSess
+
+        from databricks.labs.gbx.ds.file_gbx import resolve_local_path
+
+        _driver_spark = _SpSess.getActiveSession()
+        # Resolve through resolve_local_path (not inline to_local_path) so vector
+        # reader's local-path resolution goes through the base API and is not
+        # decorative. This validates access mode and returns the local FUSE path.
+        self.path = resolve_local_path(
+            raw_path, access=self.access, spark=_driver_spark
+        )
         self.driver = options.get("driverName", "") or self._DRIVER
         # `multi=true` reads a DIRECTORY of newline-delimited GeoJSONL shards (the
         # output of geojsonl_gbx): switch a GeoJSON reader to the GeoJSONSeq driver so
@@ -631,28 +654,10 @@ class VectorGbxReader(DataSourceReader):
         else:
             self.bbox = None
         self.where = options.get("where") or None
-        # FILE access mode: "auto" (default, gracefully downgrades to FUSE if FILE
-        # unavailable), "managed" (FILE MANAGED), or "external" (FILE EXTERNAL).
-        # The NO-GATING rule is enforced here (__init__ = driver-side), NOT in read()
-        # (which runs on executors). On Spark Connect workers (Serverless DBR 19+),
-        # SparkSession.getActiveSession() returns None, so file_access_tier() called
-        # from read() always resolves to "fuse" — causing a false ValueError for
-        # explicit managed/external on FILE-capable runtimes.
-        access = options.get("access", "auto")
-        if access not in ("auto", "managed", "external"):
-            raise ValueError(
-                f"vector_gbx 'access' option must be 'auto', 'managed', or 'external'; "
-                f"got {access!r}"
-            )
-        self.access = access
 
-        # Driver-side capability probe: get the active driver SparkSession explicitly
-        # to avoid the getOrCreate() path on workers. Raises ValueError here (at plan
-        # time) for explicit FILE on a fuse-only runtime — once, on the driver, not
-        # per-partition on executor workers.
-        from pyspark.sql import SparkSession as _SpSess
-
-        _driver_spark = _SpSess.getActiveSession()
+        # Driver-side capability probe via resolve_access: validates access mode against
+        # detected tier. Raises ValueError here (at plan time) for explicit FILE on a
+        # fuse-only runtime — once, on the driver, not per-partition on executor workers.
         self._resolved_tier = file_access_tier(spark=_driver_spark)
         resolve_access(self.access, tier=self._resolved_tier)
 

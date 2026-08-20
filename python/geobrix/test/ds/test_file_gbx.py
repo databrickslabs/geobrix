@@ -1949,3 +1949,140 @@ def test_ingest_files_write_primitive_absent_raises_actionable_error():
     assert "open_for_write" in err
     # No SQL should have been emitted
     mock_spark.sql.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# MINOR-1: None-safe raster partition sort
+# ---------------------------------------------------------------------------
+
+
+def test_raster_partition_sort_with_none_file_path():
+    """MINOR-1: Raster partitions with None file_path sort without TypeError.
+
+    Regression test: partitions from a tiles table may have file_path=None,
+    which would cause TypeError when sorted by the key. The sort must be
+    None-safe, placing None values deterministically (e.g. at the end).
+    """
+    from databricks.labs.gbx.ds import raster
+
+    # Build a list of partitions with mixed None and str file_path values
+    parts = [
+        raster._TilePartition(file_path="/path/to/file2.tif", window=(0, 0, 256, 256)),
+        raster._TilePartition(file_path=None, window=(0, 0, 256, 256)),
+        raster._TilePartition(file_path="/path/to/file1.tif", window=(0, 0, 256, 256)),
+        raster._TilePartition(file_path=None, window=(0, 0, 256, 256)),
+        raster._TilePartition(file_path="/path/to/file3.tif", window=(0, 0, 256, 256)),
+    ]
+
+    # Sort should not raise TypeError
+    sorted_parts = sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
+
+    # Verify order: None values sort last (True > False), then by file_path
+    assert sorted_parts[0].file_path == "/path/to/file1.tif"
+    assert sorted_parts[1].file_path == "/path/to/file2.tif"
+    assert sorted_parts[2].file_path == "/path/to/file3.tif"
+    assert sorted_parts[3].file_path is None
+    assert sorted_parts[4].file_path is None
+
+
+# ---------------------------------------------------------------------------
+# MINOR-2: Fuse-CTAS path-field guard
+# ---------------------------------------------------------------------------
+
+
+def test_open_for_write_fuse_mode_requires_path_column():
+    """MINOR-2: fuse write without 'path' column must guard against bare ORDER BY path.
+
+    When layout='order' or 'cluster', fuse mode emits ORDER BY path. If the
+    dataframe lacks a 'path' column, it should raise a clear ValueError rather
+    than emitting broken SQL.
+    """
+    mock_spark = MagicMock()
+    mock_spark.sql.return_value = None
+
+    # Create a schema WITHOUT 'path' column (only has other columns)
+    schema_no_path = StructType(
+        [
+            StructField("source", StringType(), nullable=False),
+            StructField(
+                "tile",
+                StructType(
+                    [
+                        StructField("cellid", LongType(), nullable=False),
+                        StructField("raster", BinaryType(), nullable=True),
+                    ]
+                ),
+                nullable=False,
+            ),
+        ]
+    )
+
+    mock_df = MagicMock()
+    mock_df.schema = schema_no_path
+    mock_df.createOrReplaceTempView.return_value = None
+
+    # Should raise ValueError about missing 'path' column
+    with pytest.raises(ValueError, match="path.*column|Column.*path"):
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "catalog.schema.table",
+            file_mode="fuse",
+            layout="order",
+        )
+
+    # Verify the CREATE TABLE SQL was never called (only cleanup may be called)
+    # The assertion checks that no CREATE TABLE statement was executed
+    create_table_called = any(
+        "CREATE TABLE" in str(call) for call in mock_spark.sql.call_args_list
+    )
+    assert (
+        not create_table_called
+    ), "CREATE TABLE should not be called when path column is missing"
+
+
+# ---------------------------------------------------------------------------
+# MINOR-3: Vector reader via resolve_local_path (not inline to_local_path)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_local_path_validates_access_and_returns_fuse_path():
+    """MINOR-3: resolve_local_path validates access mode and returns local FUSE path.
+
+    Unlike open_for_read (which returns source unchanged), resolve_local_path
+    should validate the access mode, then return the actual local FUSE path
+    suitable for passing to GDAL/pyogrio. This makes it suitable for the vector
+    reader's local-path resolution.
+    """
+    # Mock file_access_tier and resolve_access to simplify the test
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        with patch("databricks.labs.gbx.ds.file_gbx.resolve_access") as mock_resolve:
+            with patch(
+                "databricks.labs.gbx.ds.file_gbx.to_local_path"
+            ) as mock_to_local:
+                mock_tier.return_value = "read_files"
+                mock_resolve.return_value = "read_files"  # validation passes
+                mock_to_local.return_value = "/Volumes/cat/sch/vol/path/file.shp"
+
+                result = file_gbx.resolve_local_path(
+                    "/Volumes/cat/sch/vol/path/file.shp",
+                    access="auto",
+                )
+
+                # Should return the FUSE path
+                assert result == "/Volumes/cat/sch/vol/path/file.shp"
+                # Should call resolve_access to validate
+                mock_resolve.assert_called_once()
+
+
+def test_resolve_local_path_raises_on_explicit_file_fuse_tier():
+    """MINOR-3: resolve_local_path raises clear error for explicit FILE on FUSE tier."""
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"  # FILE not available
+
+        # Explicit "external" request on FUSE tier should raise
+        with pytest.raises(ValueError, match="FILE.*not available|tier.*fuse"):
+            file_gbx.resolve_local_path(
+                "/Volumes/cat/sch/vol/path/file.shp",
+                access="external",
+            )

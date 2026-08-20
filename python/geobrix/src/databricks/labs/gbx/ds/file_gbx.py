@@ -1590,6 +1590,19 @@ def open_for_write(
         try:
             if overwrite:
                 spark.sql(f"DROP TABLE IF EXISTS {target}")
+            # Check if 'path' column exists before emitting ORDER BY path.
+            # The flattened tile schema includes 'path'; if absent, layout cannot use ORDER BY.
+            field_names = [f.name for f in df.schema.fields]
+            tile_fields = []
+            if "tile" in field_names:
+                tile_fields = [f.name for f in df.schema["tile"].dataType.fields]
+            has_path = "path" in field_names or "path" in tile_fields
+            if layout in ("order", "cluster") and not has_path:
+                raise ValueError(
+                    f"layout='{layout}' requires a 'path' column for ordering, but the "
+                    f"dataframe has no 'path' column. Schema fields: {field_names}. "
+                    f"Ensure the dataframe includes a path column, or use layout='plain'."
+                )
             order_clause = " ORDER BY path" if layout in ("order", "cluster") else ""
             select_expr = _fuse_select_expr(df.schema)
             spark.sql(

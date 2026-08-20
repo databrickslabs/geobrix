@@ -8,6 +8,10 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # Shapefile Writer
 
+:::note Lightweight file access
+The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
+:::
+
 `shapefile_gbx` — pyogrio-backed, pure-Python DataSource V2 writer with the OGR
 driver preset to `ESRI Shapefile`. It round-trips with the matching `shapefile_gbx`
 reader; the schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared

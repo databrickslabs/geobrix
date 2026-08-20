@@ -12,6 +12,10 @@ import gdalWriteScala from '!!raw-loader!../../tests/scala/writers/GDALWriteExam
 
 # Raster Writer
 
+:::note Lightweight file access
+The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
+:::
+
 Write raster tiles from the shared `(source, tile)` schema. The **lightweight**
 `raster_gbx` writer (`rasterio`-backed, JAR-free, supports `overwrite`) and the
 **heavyweight** GDAL-backed `gdal` writer (append-only) take the same schema — see

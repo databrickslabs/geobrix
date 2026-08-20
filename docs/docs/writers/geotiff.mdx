@@ -11,6 +11,10 @@ import gdalWriteExamples from '!!raw-loader!../../tests/python/writers/gdal_exam
 
 # GeoTIFF Writer
 
+:::note Lightweight file access
+The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
+:::
+
 Write GeoTIFF tiles. The **lightweight** `gtiff_gbx` writer (the `raster_gbx`
 writer with the GeoTIFF driver forced) and the **heavyweight** `gtiff_gdal` writer
 (the GDAL writer restricted to the GTiff driver) are interchangeable — see

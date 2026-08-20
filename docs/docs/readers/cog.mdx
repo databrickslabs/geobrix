@@ -8,6 +8,10 @@ import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_example
 
 # COG Reader
 
+:::note Lightweight file access
+The lightweight `*_gbx` reader uses the [shared `file_gbx` base](../readers-writers#file-gbx) for FILE / FUSE routing and directory enumeration.
+:::
+
 `cog_gbx` reads Cloud-Optimized GeoTIFFs (COGs) into the shared `(source, tile)`
 schema. Its defining feature is **area-of-interest clipping**: pass one or more
 clip polygons and the reader issues HTTP range-requests (or FUSE range-reads)

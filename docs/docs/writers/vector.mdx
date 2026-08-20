@@ -8,6 +8,10 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # Vector Writer
 
+:::note Lightweight file access
+The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
+:::
+
 `vector_gbx` — pyogrio-backed, pure-Python DataSource V2 writer. It is the generic
 catch-all vector writer: pass any OGR-supported driver via `driverName` and it
 round-trips with the matching `vector_gbx` reader. For common formats, use the named

@@ -12,6 +12,10 @@ import gtiffScala from '!!raw-loader!../../tests/scala/readers/GTiffExamples.sca
 
 # GeoTIFF Reader
 
+:::note Lightweight file access
+The lightweight `*_gbx` reader uses the [shared `file_gbx` base](../readers-writers#file-gbx) for FILE / FUSE routing and directory enumeration.
+:::
+
 Read GeoTIFFs into the shared `(source, tile)` schema. The **lightweight**
 `gtiff_gbx` reader (the `raster_gbx` catch-all with the GeoTIFF driver preset,
 `rasterio`-backed, JAR-free) and the **heavyweight** `gtiff_gdal` reader are

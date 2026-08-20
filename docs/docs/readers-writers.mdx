@@ -64,6 +64,110 @@ from databricks.labs.gbx.ds.register import register
 register(spark)
 ```
 
+## Shared file-access base {#file-gbx}
+
+All lightweight (`*_gbx`) readers and writers share a common **file-access base** — the
+`file_gbx` module — that centralises FILE and FUSE routing, directory enumeration, and
+write-mode selection. This is a light-tier concern; the heavyweight (JAR-backed) readers
+and writers use their own GDAL/OGR access paths.
+
+### Capability tiers
+
+`file_gbx` probes the runtime **once per session** and picks the best available tier:
+
+| Tier | Available on | Capabilities |
+|---|---|---|
+| `read_files` | DBR 13.3 LTS + | `read_files(format=>'file')` — native FILE refs, file metadata, recursive listing |
+| `list_files` | DBR 18 LTS + | `list_files(…)` — metadata + FILE refs, directory listing only |
+| `fuse` | All runtimes (OSS / DBR < 13) | `os.walk` + FUSE mount — always available; no FILE column |
+
+The **no-gating rule**: `access="auto"` (the default on every lightweight reader and writer)
+silently downgrades to the best available tier and never errors. Explicitly requesting
+`"managed"` or `"external"` on a FUSE-only runtime raises a clear, actionable error
+describing the upgrade path. Your pipelines run on any runtime without code changes; you
+only need to opt in to FILE when you want the governance and lifecycle benefits.
+
+### Read resolver
+
+When a lightweight reader opens a source file it calls `open_for_read(source, access="auto")`.
+The resolver checks the tier and picks a strategy:
+
+- **FILE-capable runtime (DBR 13.3+):** routes to the FILE API. Small tiled/COG files
+  (≤ `GBX_STREAM_MAX_BYTES`, default 256 MiB on classic / 64 MiB on Serverless) open a
+  byte-range **stream**; larger or striped files fall through to `as_local_file()` (a FUSE
+  path backed by the FILE handle). Open dataset handles are held in a per-partition LRU
+  cache keyed by source path, amortising the open cost across all windows of the same source.
+- **FUSE fallback (OSS / DBR < 13):** resolves to the bare `/Volumes/…` path and uses a
+  probe-then-stage strategy — tries random-access directly; falls back to a sequential
+  copy only if the probe fails.
+
+### Write committer
+
+Writers call `open_for_write(spark, df, target, file_mode="auto", filespace=…, layout=…)`.
+`file_mode="auto"` resolves as follows:
+
+| Condition | Effective mode | Mechanism |
+|---|---|---|
+| FILE available + `filespace` given | `"managed"` | `create_file` — MANAGED FILE column |
+| FILE available, no `filespace` | `"external"` | `try_to_file` — EXTERNAL FILE column |
+| No FILE (fuse tier) | `"fuse"` | Plain Delta write, path STRING / raster BINARY |
+
+Explicit modes (`"managed"`, `"external"`, `"fuse"`) override auto-selection. Requesting
+`"managed"` or `"external"` on a fuse-only runtime raises a clear error.
+
+### Layout options
+
+The `layout` parameter controls row ordering in the output Delta table:
+
+| Value | Behaviour |
+|---|---|
+| `"order"` | `ORDER BY path` at write time (default — scan-friendly) |
+| `"cluster"` | `CLUSTER BY path` in the DDL (FILE-mode tables only); run `OPTIMIZE <table>` afterward for durable clustering |
+| `"plain"` | No ordering — fastest write, scan order determined by the cluster |
+
+`partitionBy` is not supported; use `layout="order"` unless you have a specific clustering need.
+
+### File enumeration
+
+`enumerate_files(path, *, recursive=True, include_hidden=False, extensions=None, path_glob_filter=None)`
+lists files in a directory and returns a Spark DataFrame (FILE-capable tiers) or a Python list (FUSE tier),
+with columns `path`, `size`, and `file` (a FILE reference when available, `None` on FUSE).
+
+By default, files whose names start with `_` or `.` (Spark/Hadoop metadata files such as
+`_SUCCESS`, `_committed_*`, `.crc`) are **skipped**. Pass `include_hidden=True` to include them.
+
+A positive selection filter — either `extensions` (a tuple of suffixes, e.g. `(".tif", ".nc")`)
+or `path_glob_filter` (an fnmatch-style glob, e.g. `"*.tif"`) — narrows which files are returned.
+The two filters are **mutually exclusive** and are ANDed with `include_hidden`: for example,
+`include_hidden=True` + `path_glob_filter="[!.]*"` returns underscore-named files such as
+`_data.tif` but still excludes dot-named files such as `.crc`.
+
+### Light-tier FILE flow
+
+```mermaid
+flowchart LR
+    subgraph R["Read"]
+        A([source path]) --> B(open_for_read)
+        B -->|read_files tier| C["FILE stream\n(LRU-amortised)"]
+        B -->|fuse tier| D["FUSE path\n+ staging probe"]
+        C --> E([rasterio / pyogrio])
+        D --> E
+    end
+
+    subgraph W["Write"]
+        F([writer output]) --> G(open_for_write)
+        G -->|managed| H["create_file\nFILE MANAGED"]
+        G -->|external| I["try_to_file\nFILE EXTERNAL"]
+        G -->|fuse| J["plain Delta\n(path STRING)"]
+        H --> K([Delta table])
+        I --> K
+        J --> K
+    end
+```
+
+See [`file_gbx` Reader](./readers/file) for enumeration and read-mode details, and
+[`file_gbx` Writer](./writers/file) for write-mode and ingest options.
+
 ## Next Steps
 
 - [Readers Overview](./readers/overview) — every reader, tier differences, output schemas, options.

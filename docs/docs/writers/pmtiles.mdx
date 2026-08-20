@@ -10,6 +10,10 @@ import pmtilesEx from '!!raw-loader!../../tests/python/writers/pmtiles_gbx_examp
 
 # PMTiles Writer
 
+:::note Lightweight file access
+The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
+:::
+
 Package a tile pyramid (`(z, x, y, bytes)`) into [PMTiles](https://docs.protomaps.com/pmtiles/)
 archives. The **lightweight** `pmtiles_gbx` writer (pure-Python, Serverless-safe,
 distributed spatial sharding) and the **heavyweight** `pmtiles` writer take the

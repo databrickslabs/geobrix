@@ -27,7 +27,10 @@ const config = {
   onBrokenLinks: 'warn',
 
   // Markdown configuration
+  themes: ['@docusaurus/theme-mermaid'],
+
   markdown: {
+    mermaid: true,
     hooks: {
       onBrokenMarkdownLinks: 'warn',
     },

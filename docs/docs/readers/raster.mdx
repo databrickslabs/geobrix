@@ -13,6 +13,10 @@ import gdalScala from '!!raw-loader!../../tests/scala/readers/GDALExamples.scala
 
 # Raster Reader
 
+:::note Lightweight file access
+The lightweight `*_gbx` reader uses the [shared `file_gbx` base](../readers-writers#file-gbx) for FILE / FUSE routing and directory enumeration.
+:::
+
 Read rasters into the shared `(source, tile)` schema. GeoBrix offers two
 interchangeable tiers: a **lightweight** pure-Python/PySpark reader (`raster_gbx`,
 `rasterio`-backed, JAR-free, Serverless-safe) and a **heavyweight** GDAL-backed

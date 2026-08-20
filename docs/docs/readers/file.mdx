@@ -6,49 +6,38 @@ sidebar_label: File Lister (file_gbx)
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_examples.py';
 
-# File Lister — `file_gbx`
+# File Access — `file_gbx`
 
-`file_gbx` lists files in a directory as **path-reference rows**. It reads no
-raster or vector content — it emits one row per file with path, name,
-extension, size, and modification time. Use it as the first step in a
-preparation pipeline: list the files you want to process, then pipe those
-references into a writer (e.g. `cog_gbx`) that opens and converts each one.
+`file_gbx` has two roles:
 
-This is in contrast to `binaryFile` (which loads raw bytes) and the raster
-readers (`raster_gbx`, `gtiff_gbx`) which decode rasters into the shared
-`(source, tile)` schema. `file_gbx` is format-agnostic — it lists any file
-type and never touches the file content.
+1. **File lister DataSource** — emits one row per file (path, name, extension, size,
+   modification time). Use it as the first step in a preparation pipeline: list the
+   files you want to process, then pipe those references into a writer such as `cog_gbx`.
+2. **Shared file-access base** — the Python module that every lightweight reader and
+   writer uses internally for FILE / FUSE routing, directory enumeration, and write-mode
+   selection. See the [Readers & Writers — Shared file-access base](../readers-writers#file-gbx)
+   section for the capability tier diagram and the no-gating rule.
+
+`file_gbx` is format-agnostic: it lists any file type and never decodes file content.
 
 :::note Lightweight only
-`file_gbx` is a pure-Python lightweight DataSource. Register it with
-`register(spark)` before use. There is no heavyweight GDAL counterpart.
+`file_gbx` is a pure-Python lightweight DataSource. Register it with `register(spark)`
+before use. There is no heavyweight GDAL counterpart.
 :::
 
-## Output schema
+## Output schema (DataSource)
 
 ```
 root
- |-- path:             string   — full absolute path to the file
- |-- name:             string   — filename including extension
- |-- extension:        string   — lowercase, no leading dot; NULL for files with no extension
- |-- size:             long     — file size in bytes
+ |-- path:             string    — full absolute path to the file
+ |-- name:             string    — filename including extension
+ |-- extension:        string    — lowercase, no leading dot; NULL for files with no extension
+ |-- size:             long      — file size in bytes
  |-- modificationTime: timestamp — last-modified time
 ```
 
-No raster or vector content is loaded. The `path` values are the references
-you pass to a subsequent writer.
-
-## Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `filterRegex` | `".*"` | Keep only files whose full path matches this regex. |
-
-:::note Always recursive
-`file_gbx` always walks subdirectories. There is no opt-out — it uses
-`os.walk` unconditionally. Use `filterRegex` to scope which files are
-included.
-:::
+No raster or vector content is loaded. The `path` values are the references you pass to a
+subsequent writer.
 
 ## Register
 
@@ -56,6 +45,17 @@ included.
 from databricks.labs.gbx.ds.register import register
 register(spark)
 ```
+
+## DataSource options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `filterRegex` | `".*"` | Keep only files whose full path matches this regex. |
+
+:::note Always recursive
+The `file_gbx` DataSource always walks subdirectories. Use `filterRegex` to scope which
+files are included.
+:::
 
 ## List files
 
@@ -71,9 +71,8 @@ register(spark)
 
 ## Typical use: COG preparation
 
-The primary use of `file_gbx` is to feed the `cog_gbx` writer: list the
-source files, then write master COGs — one per source file — for efficient
-windowed reading later.
+The primary use of `file_gbx` is to feed the `cog_gbx` writer: list the source files,
+then write master COGs — one per source file — for efficient windowed reading later.
 
 <CodeFromTest code={cogExamples} language="python" functionName="COG_PREPARE"
   source="docs/tests/python/readers/cog_gbx_examples.py"
@@ -82,8 +81,127 @@ windowed reading later.
 After preparation, read clipped windows with the `cog_gbx` reader. See
 [COG Reader](./cog) for the read path.
 
+---
+
+## Python API
+
+The `file_gbx` module also exposes a Python API for direct use in UDFs, scripts, and
+pipeline code.
+
+### `enumerate_files` — directory listing
+
+```python
+from databricks.labs.gbx.ds.file_gbx import enumerate_files
+
+# Basic: list all non-hidden files recursively (default)
+files = enumerate_files("/Volumes/main/geo/rasters", spark=spark)
+
+# Filter to GeoTIFFs only
+tifs = enumerate_files(
+    "/Volumes/main/geo/rasters",
+    extensions=(".tif", ".tiff"),
+    spark=spark,
+)
+
+# Include Hadoop metadata files (_SUCCESS, _committed_*, .crc, …)
+all_files = enumerate_files(
+    "/Volumes/main/geo/rasters",
+    include_hidden=True,
+    spark=spark,
+)
+```
+
+On FILE-capable runtimes (DBR 13.3+), `enumerate_files` returns a Spark DataFrame with
+columns `path`, `size`, and `file` (a FILE reference). On FUSE-only runtimes it returns a
+Python list of `{path, size, file}` dicts where `file` is `None`.
+
+#### Hidden-file filtering
+
+By default, files whose names start with `_` or `.` are **skipped** — this matches
+Spark/Hadoop conventions where `_SUCCESS`, `_committed_*`, `_delta_log`, and `.crc` are
+metadata artefacts, not data files. Pass `include_hidden=True` to re-admit them.
+
+#### Positive selection filters
+
+Use `extensions` or `path_glob_filter` to narrow which files are returned. The two
+parameters are **mutually exclusive** — providing both raises `ValueError`.
+
+- **`extensions`**: a tuple of case-insensitive suffixes, e.g. `(".tif", ".nc")`. Sugar
+  for `path_glob_filter` — compiled internally to `["*.tif", "*.nc"]`.
+- **`path_glob_filter`**: an fnmatch-style glob applied to each file's basename, e.g.
+  `"*.tif"` or `"[!.]*"`.
+
+The filter is **ANDed with `include_hidden`**: setting `include_hidden=True` +
+`path_glob_filter="[!.]*"` includes underscore-named files (`_data.tif`) but still
+excludes dot-named files (`.crc`, `.DS_Store`).
+
+```python
+# Include _data.tif but exclude .crc / .DS_Store
+filtered = enumerate_files(
+    "/Volumes/main/geo/rasters",
+    include_hidden=True,
+    path_glob_filter="[!.]*",   # starts with any char that is NOT '.'
+    spark=spark,
+)
+```
+
+### Capability tiers and the no-gating rule
+
+`file_access_tier(spark)` returns the best tier available at runtime:
+
+```python
+from databricks.labs.gbx.ds.file_gbx import file_access_tier
+
+tier = file_access_tier(spark)
+# Returns: "read_files" (DBR 13.3+), "list_files" (DBR 18+), or "fuse" (always)
+```
+
+`open_for_read(source, access="auto")` is the read resolver used by every lightweight
+reader. With `access="auto"` it silently uses the best available tier. Passing
+`access="managed"` or `access="external"` on a FUSE-only runtime raises a clear error:
+
+```python
+from databricks.labs.gbx.ds.file_gbx import open_for_read
+
+# Auto — never errors regardless of runtime:
+path = open_for_read("/Volumes/main/geo/scene.tif", spark=spark)
+
+# Explicit FILE — raises ValueError on FUSE-only runtimes:
+path = open_for_read(
+    "/Volumes/main/geo/scene.tif",
+    access="managed",
+    spark=spark,
+)
+```
+
+### Ingest existing files into a managed FILE-column table
+
+`ingest_files` reads files from an external Volume path via `read_files(format=>'file')`
+and inserts them as FILE MANAGED references into a Delta table, without copying the bytes:
+
+```python
+from databricks.labs.gbx.ds.file_gbx import ingest_files
+
+ingest_files(
+    spark,
+    src="/Volumes/main/geo/archive/rasters",
+    target="main.geo.raster_registry",
+    filespace="/Volumes/main/geo/managed_store",
+    file_col="tile_file",        # name of the FILE-typed column
+    layout="order",              # ORDER BY path (default)
+    recursive=True,
+    overwrite=False,             # CREATE TABLE IF NOT EXISTS (idempotent)
+)
+```
+
+`ingest_files` requires a FILE-capable runtime (DBR 13.3+). On FUSE-only runtimes it
+raises `ValueError` with an upgrade message — use
+[`open_for_write(file_mode="fuse")`](../writers/file) for a plain Delta write instead.
+
 ## Next steps
 
 - [COG Reader](./cog) — windowed read from prepared COGs
 - [COG Writer](../writers/cog) — convert source files to master COGs
 - [Raster Reader](./raster) — decode rasters into the `(source, tile)` schema
+- [`file_gbx` Writer](../writers/file) — write-mode and ingest options
+- [Shared file-access base](../readers-writers#file-gbx) — capability tiers and the no-gating rule

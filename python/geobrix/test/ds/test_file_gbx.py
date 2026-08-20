@@ -1097,6 +1097,86 @@ def test_open_for_write_fuse_overwrite_drops_before_create():
     assert captured.index(drop_sqls[0]) < captured.index(create_sqls[0])
 
 
+def test_open_for_write_explicit_managed_no_filespace_raises_early():
+    """Explicit file_mode='managed' with no filespace raises before tier detection."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    # Patch file_access_tier so we can confirm it was NOT reached.
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_tier.return_value = "read_files"
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.open_for_write(
+                mock_spark,
+                mock_df,
+                "cat.sch.t",
+                file_mode="managed",
+                filespace=None,
+            )
+
+    err = str(exc_info.value)
+    assert "managed" in err
+    assert "filespace" in err
+    # Neither tier detection nor write_file_table should have been reached.
+    mock_tier.assert_not_called()
+    mock_wft.assert_not_called()
+
+
+def test_open_for_write_fuse_cluster_layout_warns_and_no_cluster_by_sql():
+    """fuse + layout='cluster': emits a warning about ORDER BY fallback; no CLUSTER BY SQL."""
+    captured = []
+    mock_spark = MagicMock()
+    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        _warnings_mod.catch_warnings(record=True) as caught,
+    ):
+        _warnings_mod.simplefilter("always")
+        mock_tier.return_value = "fuse"
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="fuse",
+            layout="cluster",
+        )
+
+    # A warning must mention fuse / CLUSTER BY / ORDER BY
+    cluster_warns = [w for w in caught if "cluster" in str(w.message).lower()]
+    assert (
+        cluster_warns
+    ), f"Expected cluster-layout fuse warning; got: {[str(w.message) for w in caught]}"
+    assert any("ORDER BY" in str(w.message) for w in cluster_warns)
+
+    # The emitted CTAS SQL must contain ORDER BY (fallback) but NOT CLUSTER BY
+    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
+    assert create_sqls
+    create = create_sqls[0]
+    assert "ORDER BY path" in create
+    assert "CLUSTER BY" not in create.upper()
+
+
+def test_open_for_write_fuse_select_expr_backticks():
+    """_fuse_select_expr backtick-quotes field names to guard against reserved words."""
+    from databricks.labs.gbx.ds.file_gbx import _fuse_select_expr
+
+    expr = _fuse_select_expr(_DF_SCHEMA)
+    # All tile field references must use backtick form
+    assert "`tile`." in expr
+    # The alias side must also be backtick-quoted
+    assert "AS `" in expr
+    # path and window are SQL reserved words — verify they appear safely
+    assert "`tile`.`path` AS `path`" in expr
+    assert "`tile`.`window` AS `window`" in expr
+    # path_mode must be excluded
+    assert "path_mode" not in expr
+
+
 # ---------------------------------------------------------------------------
 # ingest_files tests
 # ---------------------------------------------------------------------------

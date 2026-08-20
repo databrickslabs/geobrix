@@ -1133,9 +1133,13 @@ def _validate_layout(layout: str) -> None:
 def _fuse_select_expr(df_schema) -> str:
     """Build a SQL SELECT expression for flattening a tile-struct schema.
 
-    If the schema has a top-level 'tile' struct, returns 'tile.f1 AS f1, tile.f2 AS f2, …'
-    (excluding 'path_mode') plus any other non-tile top-level columns.
+    If the schema has a top-level 'tile' struct, returns
+    '`tile`.`f1` AS `f1`, `tile`.`f2` AS `f2`, …' (excluding 'path_mode')
+    plus any other non-tile top-level columns (backtick-quoted).
     If the schema is already flat, returns '*'.
+
+    Column names are backtick-escaped so that tile fields whose names collide
+    with SQL reserved words (e.g. 'window', 'path') produce valid CTAS SQL.
 
     This is a pure string operation — no SparkContext required.
     """
@@ -1147,7 +1151,8 @@ def _fuse_select_expr(df_schema) -> str:
         f.name for f in df_schema["tile"].dataType.fields if f.name != "path_mode"
     ]
     other_fields = [name for name in field_names if name != "tile"]
-    parts = [f"tile.{name} AS {name}" for name in tile_fields] + other_fields
+    parts = [f"`tile`.`{name}` AS `{name}`" for name in tile_fields]
+    parts += [f"`{name}`" for name in other_fields]
     return ", ".join(parts)
 
 
@@ -1173,13 +1178,18 @@ def open_for_write(
         (FILE EXTERNAL via ``try_to_file``).
       - No-FILE runtime (fuse tier) → ``"fuse"`` (plain Delta write, no FILE column).
     - **"managed"** or **"external"**: explicit FILE mode.  Raises ``ValueError`` if
-      FILE is not available on this runtime (tier='fuse').
+      FILE is not available on this runtime (tier='fuse'), or if ``"managed"`` is
+      requested without a ``filespace``.
     - **"fuse"**: plain Delta write regardless of FILE capability.
 
     Fuse mode writes the DataFrame as a plain Delta table with tile columns as
     ordinary columns (``path`` → STRING, ``raster`` → BINARY).  No FILE column,
     no ``create_file`` / ``try_to_file``.  The path column is used to order writes
     according to the ``layout`` strategy.
+
+    Fuse + ``layout="cluster"``: CLUSTER BY is only available on FILE-column tables,
+    so the fuse path cannot honour it.  Instead, ORDER BY path is applied (same as
+    ``layout="order"``) and a ``warnings.warn`` is emitted explaining the downgrade.
 
     Args:
         spark: SparkSession.
@@ -1188,14 +1198,15 @@ def open_for_write(
         file_mode: ``"auto"`` (default), ``"managed"``, ``"external"``, or ``"fuse"``.
         filespace: Required for managed mode — the filespace path (``/Volumes/…``).
         layout: Write strategy: ``"order"`` (ORDER BY path, default), ``"cluster"``
-                (CLUSTER BY path + ORDER BY; emits an OPTIMIZE reminder), or
-                ``"plain"`` (no ordering).  Any other value raises ``ValueError``.
+                (CLUSTER BY path + ORDER BY on FILE tables; ORDER BY + warning on fuse),
+                or ``"plain"`` (no ordering).  Any other value raises ``ValueError``.
         overwrite: If ``True``, drop and recreate the target table before writing.
         file_col: Name of the FILE-typed column (managed/external modes only).
 
     Raises:
-        ValueError: If ``layout`` is invalid, or if an explicit ``"managed"`` /
-                    ``"external"`` mode is requested on a fuse-only runtime.
+        ValueError: If ``layout`` is invalid, if explicit ``"managed"`` is requested
+                    without a ``filespace``, or if ``"managed"`` / ``"external"`` is
+                    requested on a fuse-only runtime.
     """
     import warnings
 
@@ -1204,7 +1215,18 @@ def open_for_write(
     # 1. Validate layout before any side effects.
     _validate_layout(layout)
 
-    # 2. Resolve effective write mode.
+    # 2. Early guard: explicit managed without filespace fails here, before any
+    #    tier detection or side effect.  write_file_table enforces this too, but
+    #    the wrapper should fail fast with its own actionable message.
+    if file_mode == "managed" and not filespace:
+        raise ValueError(
+            "file_mode='managed' requires filespace=/Volumes/… to be provided. "
+            "Pass filespace='/Volumes/<catalog>/<schema>/<volume>' or use "
+            "file_mode='external' (no filespace needed) or file_mode='auto' "
+            "(auto-selects based on whether filespace is given)."
+        )
+
+    # 3. Resolve effective write mode.
     tier = file_access_tier(spark)
     if file_mode == "auto":
         if tier != "fuse":
@@ -1222,15 +1244,26 @@ def open_for_write(
             f"file_mode must be 'auto', 'managed', 'external', or 'fuse'; got {file_mode!r}"
         )
 
-    # 3. Emit OPTIMIZE reminder for cluster layout on FILE paths.
-    if layout == "cluster" and effective_mode != "fuse":
-        warnings.warn(
-            f"layout='cluster' writes CLUSTER BY (path) at table-creation time, but "
-            f"durable clustering is only applied when you run: OPTIMIZE {target}",
-            stacklevel=2,
-        )
+    # 4. Emit layout notes.
+    if layout == "cluster":
+        if effective_mode != "fuse":
+            # FILE path: CLUSTER BY is written to the DDL; durable clustering needs OPTIMIZE.
+            warnings.warn(
+                f"layout='cluster' writes CLUSTER BY (path) at table-creation time, but "
+                f"durable clustering is only applied when you run: OPTIMIZE {target}",
+                stacklevel=2,
+            )
+        else:
+            # Fuse path: CLUSTER BY requires a FILE-column table, so it cannot be applied.
+            # Fall back to ORDER BY path (same effect as layout='order') and warn.
+            warnings.warn(
+                "layout='cluster' is not supported in fuse mode (CLUSTER BY requires a "
+                "FILE-column table). Writing with ORDER BY path instead. "
+                "Use a FILE-capable runtime (DBR 13.3+) for durable clustering.",
+                stacklevel=2,
+            )
 
-    # 4. Route to the appropriate writer.
+    # 5. Route to the appropriate writer.
     if effective_mode == "fuse":
         # Fuse path: plain Delta write via CTAS, no FILE column.
         # Uses SQL (via spark.sql) for the same mockability as write_file_table.

@@ -161,15 +161,15 @@ def test_read_size_key_parses_valid_string_int():
     metadata = {"path_file_size": "1048576"}
     assert ot._read_size_key(metadata, "path_file_size") == 1048576
 
-    metadata = {"tile_size": "2097152"}
-    assert ot._read_size_key(metadata, "tile_size") == 2097152
+    metadata = {"tile_byte_size": "2097152"}
+    assert ot._read_size_key(metadata, "tile_byte_size") == 2097152
 
 
 def test_read_size_key_returns_none_for_absent_key():
     """_read_size_key returns None when the key is absent."""
     metadata = {"other_key": "value"}
     assert ot._read_size_key(metadata, "path_file_size") is None
-    assert ot._read_size_key({}, "tile_size") is None
+    assert ot._read_size_key({}, "tile_byte_size") is None
 
 
 def test_read_size_key_returns_none_for_unparseable_value():
@@ -177,8 +177,8 @@ def test_read_size_key_returns_none_for_unparseable_value():
     metadata = {"path_file_size": "not_a_number"}
     assert ot._read_size_key(metadata, "path_file_size") is None
 
-    metadata = {"tile_size": ""}
-    assert ot._read_size_key(metadata, "tile_size") is None
+    metadata = {"tile_byte_size": ""}
+    assert ot._read_size_key(metadata, "tile_byte_size") is None
 
 
 def test_read_size_key_none_metadata():
@@ -192,7 +192,7 @@ def test_parse_pending_ignores_size_keys():
         ot.PENDING_BANDS: "1,2",
         ot.PENDING_NODATA: "0",
         "path_file_size": "1048576",
-        "tile_size": "2097152",
+        "tile_byte_size": "2097152",
     }
     bands, nodata, srid, crs_str = ot._parse_pending(metadata)
     # Size keys are informational; _parse_pending ignores them.
@@ -208,7 +208,7 @@ def test_without_pending_preserves_size_keys():
         ot.PENDING_BANDS: "1,2",
         ot.PENDING_NODATA: "0",
         "path_file_size": "1048576",
-        "tile_size": "2097152",
+        "tile_byte_size": "2097152",
         "other_key": "value",
     }
     result = ot._without_pending(metadata)
@@ -216,5 +216,5 @@ def test_without_pending_preserves_size_keys():
     assert ot.PENDING_BANDS not in result
     assert ot.PENDING_NODATA not in result
     assert result.get("path_file_size") == "1048576"
-    assert result.get("tile_size") == "2097152"
+    assert result.get("tile_byte_size") == "2097152"
     assert result.get("other_key") == "value"

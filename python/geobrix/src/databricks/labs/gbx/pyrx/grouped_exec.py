@@ -276,7 +276,7 @@ class _OpenerContext:
         # so the LRU budget isn't inflated by large-file FUSE references.
         if id(src) in self._fuse_sources:
             return STREAM_NOMINAL_BYTES
-        # Prefer metadata-derived size (tile.metadata["path_file_size"] or ["tile_size"])
+        # Prefer metadata-derived size (tile.metadata["path_file_size"] or ["tile_byte_size"])
         # when available; this avoids a per-tile stat on serverless.
         metadata_size = self.size_holder[0]
         if metadata_size is not None:
@@ -326,7 +326,7 @@ def _run_file_fast_path(
     # Extract metadata-derived size (path_file_size or tile_size) before lru.get()
     # so the weigher can use it instead of calling fr.size.
     metadata_size = _read_size_key(vt.metadata, "path_file_size") or _read_size_key(
-        vt.metadata, "tile_size"
+        vt.metadata, "tile_byte_size"
     )
     size_holder[0] = metadata_size
     src = lru.get(uri)

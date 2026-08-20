@@ -1028,7 +1028,7 @@ class RasterGbxReader(DataSourceReader):
             if clipped is None:
                 return  # all-nodata / non-overlap -> skip (no tile)
             # Add tile_size metadata (materialized raster byte length).
-            meta["tile_size"] = str(len(clipped))
+            meta["tile_byte_size"] = str(len(clipped))
             yield (
                 source,
                 _v2_tile_row(
@@ -1063,7 +1063,7 @@ class RasterGbxReader(DataSourceReader):
                 compression=compression,
             )
             # Add tile_size metadata (materialized raster byte length).
-            meta["tile_size"] = str(len(raster_bytes))
+            meta["tile_byte_size"] = str(len(raster_bytes))
             yield (
                 source,
                 _v2_tile_row(
@@ -1097,7 +1097,7 @@ class RasterGbxReader(DataSourceReader):
                     cog_overview_resampling=partition.cog_overview_resampling,
                 )
         # Add tile_size metadata (materialized raster byte length).
-        meta["tile_size"] = str(len(raster_bytes))
+        meta["tile_byte_size"] = str(len(raster_bytes))
         yield (
             source,
             _v2_tile_row(
@@ -1149,7 +1149,7 @@ class RasterGbxReader(DataSourceReader):
                     compression=compression,
                 )
                 # Add tile_size metadata (materialized raster byte length).
-                meta["tile_size"] = str(len(raster_bytes))
+                meta["tile_byte_size"] = str(len(raster_bytes))
                 yield (
                     source,
                     _v2_tile_row(
@@ -1206,7 +1206,7 @@ class RasterGbxReader(DataSourceReader):
                         tile_format="gtiff",
                     )
                     # Add tile_size metadata (materialized raster byte length).
-                    meta["tile_size"] = str(len(raster_bytes))
+                    meta["tile_byte_size"] = str(len(raster_bytes))
                     yield (
                         source,
                         _v2_tile_row(

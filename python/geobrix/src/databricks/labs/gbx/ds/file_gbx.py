@@ -70,6 +70,8 @@ __all__ = [
     # Generic session-ful read
     "_classify_source",
     "gbx_file_read",
+    # Generic session-ful write
+    "gbx_file_write",
 ]
 
 # ===========================================================================
@@ -1870,3 +1872,46 @@ def gbx_file_read(
                         recursiveFileLookup => {recursive_lookup})
         {hidden_clause}
         """)
+
+
+# =============================================================================
+# Generic format-agnostic write: gbx_file_write
+# =============================================================================
+
+
+def gbx_file_write(
+    df: "DataFrame",
+    target: str,
+    *,
+    file_mode: str = "auto",
+    filespace: Optional[str] = None,
+    layout: str = "order",
+    overwrite: bool = False,
+    file_col: str = "tile_file",
+    spark: Optional["SparkSession"] = None,
+) -> None:
+    """Generic, format-agnostic, session-ful write → table or FILE.
+
+    Composes :func:`open_for_write` (MANAGED ``create_file`` / EXTERNAL
+    ``try_to_file`` / FUSE plain Delta).  Resolves the session from
+    ``df.sparkSession`` when *spark* is not given, so callers hold no session.
+
+    Validates ``layout`` up front (fail before any side effect) and delegates
+    everything else — including the ``managed``-without-``filespace`` guard and
+    the no-gating actionable error — to ``open_for_write``.
+
+    Connect-safe: ``df.sparkSession`` is a driver-only attribute.
+    """
+    _validate_layout(layout)
+    if spark is None:
+        spark = df.sparkSession
+    open_for_write(
+        spark,
+        df,
+        target,
+        file_mode=file_mode,
+        filespace=filespace,
+        layout=layout,
+        overwrite=overwrite,
+        file_col=file_col,
+    )

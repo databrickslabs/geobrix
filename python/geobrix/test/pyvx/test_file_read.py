@@ -72,3 +72,17 @@ def test_vector_file_read_managed_raises_on_fuse(spark, tmp_path):
     ):
         with pytest.raises(ValueError, match="FILE is not available"):
             vector_file_read(spark, str(tmp_path), driver="GeoJSON", access="managed")
+
+
+def test_vector_file_read_as_wkb_false_returns_wkt(spark, tmp_path):
+    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+    _write_geojson(tmp_path / "c.geojson", 2)
+    with patch("databricks.labs.gbx.pyvx.file_read.file_supported", return_value=False):
+        df = vector_file_read(spark, str(tmp_path), driver="GeoJSON", as_wkb=False)
+        rows = df.collect()
+    assert len(rows) == 2
+    assert all(
+        isinstance(r["geometry"], str) and r["geometry"].startswith("POINT")
+        for r in rows
+    )

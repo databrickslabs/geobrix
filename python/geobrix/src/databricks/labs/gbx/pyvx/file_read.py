@@ -12,6 +12,7 @@ Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 
 from __future__ import annotations
 
+import logging
 from typing import Union
 
 from pyspark.sql import DataFrame, SparkSession
@@ -26,6 +27,8 @@ from databricks.labs.gbx.ds.file_gbx import (
     resolve_access,
     to_local_path,
 )
+
+_LOG = logging.getLogger(__name__)
 
 _EXT_FOR_DRIVER = {
     "GeoJSON": (".geojson", ".json"),
@@ -94,6 +97,11 @@ def vector_file_read(
                     try:
                         local = row["_file_ref"].as_local_file()
                     except Exception:
+                        _LOG.debug(
+                            "FILE fast-path unavailable for %s; falling back to FUSE",
+                            src,
+                            exc_info=True,
+                        )
                         local = None
                 if local is None:
                     local = to_local_path(src)

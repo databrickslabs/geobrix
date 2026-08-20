@@ -23,6 +23,8 @@ from databricks.labs.gbx.ds.file_gbx import (  # noqa: F401
     _connect_aware_lru_sizing,
     _open_via_file_ref,
     _OpenerContext,
+    file_ref_arg,
+    file_supported,
 )
 
 # Sentinel for "core_fn has not been called yet for this tile".
@@ -232,8 +234,6 @@ def grouped_tile_map(
     Output schema is ``df.schema`` with ``return_field`` appended (or replacing
     an existing field of the same name); ``_file_ref`` never leaks.
     """
-    from . import _file_ref as _fr_mod
-
     # Capture original fields BEFORE adding _file_ref so the output schema
     # matches the caller's expectation exactly.
     original_fields = list(df.schema.fields)
@@ -259,11 +259,11 @@ def grouped_tile_map(
         _driver_spark = df.sparkSession
     except Exception:
         _driver_spark = None
-    file_ok_driver = _fr_mod.file_supported(_driver_spark)
+    file_ok_driver = file_supported(_driver_spark)
     if file_ok_driver:
         # file_ref_arg expects the TILE column and extracts ["path"] internally.
         df = df.withColumn(
-            "_file_ref", _fr_mod.file_ref_arg(F.col(tile_col), spark=_driver_spark)
+            "_file_ref", file_ref_arg(F.col(tile_col), spark=_driver_spark)
         )
 
     # Compute Connect-aware sizing on the driver; capture in the closure.

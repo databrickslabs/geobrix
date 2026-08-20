@@ -108,3 +108,7 @@ stores — PNG/JPEG/WebP/MVT).
 - [PMTiles Writer](../writers/pmtiles) — package `(z, x, y, bytes)` rows into archives.
 - [VizX — PMTiles viewer](../api/vizx-pmtiles) — inspect a `.pmtiles` archive in a notebook.
 - [Helios notebooks](../notebooks/helios) — end-to-end tiling to PMTiles over a San Francisco AOI.
+
+:::note Shared file-access layer
+Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+:::

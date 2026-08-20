@@ -139,3 +139,7 @@ df.write \
 The resulting archive is readable by `shapefile_gbx` (and any tool that handles
 `.shp.zip` / `/vsizip/`), and can be uploaded directly to GIS portals that expect
 a single compressed Shapefile.
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::

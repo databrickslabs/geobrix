@@ -169,3 +169,7 @@ files on disk that need preparation before distributed reading, use `cog_gbx`.
 - [File Lister](../readers/file) — list source files before preparation
 - [COG Reader](../readers/cog) — windowed read from prepared COGs
 - [Raster Reader](../readers/raster) — decode rasters into the `(source, tile)` schema
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::

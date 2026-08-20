@@ -90,3 +90,7 @@ GDAL-writer options (`path` / `nameCol` / `ext`, format & compression from
 
 </TabItem>
 </Tabs>
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::

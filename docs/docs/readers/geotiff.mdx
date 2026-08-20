@@ -255,3 +255,7 @@ GeoBrix reads compressed GeoTIFFs transparently. The compression format is autom
 - [GDAL Reader](./raster) - Generic raster reader for all GDAL formats
 - [Raster Functions](../api/raster-functions) - Raster processing operations
 - [Quick Start](../quick-start) - Get started with GeoBrix
+
+:::note Shared file-access layer
+Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+:::

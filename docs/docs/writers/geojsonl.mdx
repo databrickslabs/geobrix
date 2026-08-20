@@ -188,3 +188,7 @@ df.write.format("geojsonl_gbx").mode("overwrite").option(
 - [Vector Writer](./vector) — the generic OGR writer (any driver).
 - [Writers Overview](./overview) — all writers, register-first, and benchmarks.
 - [Readers Overview](../readers/overview) — the corresponding read paths.
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::

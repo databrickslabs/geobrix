@@ -286,3 +286,7 @@ Written rasters are standard GDAL-compatible files:
 
 - [GDAL Reader](../readers/raster) — The corresponding read path.
 - [Raster Functions](../api/raster-functions) — Transforms to run before the write.
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::

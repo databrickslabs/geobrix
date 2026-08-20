@@ -102,11 +102,17 @@ def test_detect_tier_read_files_probe_success():
 
 
 def test_detect_tier_read_files_fails_list_files_succeeds():
-    """_detect_tier falls through to list_files when read_files fails."""
+    """_detect_tier falls through to list_files when read_files is unavailable (UNRESOLVED_ROUTINE)."""
     mock_spark = MagicMock()
-    # First call (read_files) raises, second call (list_files) succeeds
+    # First call (read_files) raises UNRESOLVED_ROUTINE, second call (list_files) succeeds
     mock_spark.sql.side_effect = [
-        MagicMock(collect=MagicMock(side_effect=Exception("read_files not supported"))),
+        MagicMock(
+            collect=MagicMock(
+                side_effect=Exception(
+                    "UNRESOLVED_ROUTINE: function read_files not found"
+                )
+            )
+        ),
         MagicMock(collect=MagicMock(return_value=[])),
     ]
 
@@ -116,13 +122,135 @@ def test_detect_tier_read_files_fails_list_files_succeeds():
 
 
 def test_detect_tier_both_file_probes_fail_falls_back_to_fuse():
-    """_detect_tier falls through to FUSE when both FILE probes fail."""
+    """_detect_tier falls through to FUSE when both FILE probes are unavailable (UNRESOLVED_ROUTINE)."""
     mock_spark = MagicMock()
-    mock_spark.sql.side_effect = Exception("FILE not supported")
+    # Both calls raise UNRESOLVED_ROUTINE (routine unavailable)
+    unresolved = Exception("UNRESOLVED_ROUTINE: function read_files not found")
+    mock_spark.sql.side_effect = [
+        MagicMock(collect=MagicMock(side_effect=unresolved)),
+        MagicMock(collect=MagicMock(side_effect=unresolved)),
+    ]
 
     tier = file_gbx._detect_tier(mock_spark)
 
     assert tier == "fuse"
+
+
+# Regression tests for the capability-detection bug (Task 10)
+# https://github.com/databrickslabs/geobrix/issues/XXX
+# Bug: PATH_NOT_FOUND proves the function EXISTS, but was treated as "unavailable"
+
+
+def test_detect_tier_path_not_found_proves_read_files_available():
+    """REGRESSION: PATH_NOT_FOUND on read_files probe proves function exists → return 'read_files'.
+
+    Bug: Previously, a bare except Exception would swallow PATH_NOT_FOUND and fall through to list_files.
+    Fix: PATH_NOT_FOUND (or any error proving the function RAN) → function IS available.
+    """
+    mock_spark = MagicMock()
+    # Simulate: read_files raises PATH_NOT_FOUND (path doesn't exist, but function exists)
+    path_not_found_exc = Exception(
+        "PATH_NOT_FOUND: path /Volumes/__gbx_probe__/__none__ does not exist"
+    )
+    mock_spark.sql.side_effect = path_not_found_exc
+
+    tier = file_gbx._detect_tier(mock_spark)
+
+    # The fix: PATH_NOT_FOUND proves read_files EXISTS → return "read_files", not "fuse"
+    assert tier == "read_files"
+
+
+def test_detect_tier_unresolved_routine_falls_through_to_list_files():
+    """When read_files is truly unavailable (UNRESOLVED_ROUTINE), fall through to list_files."""
+    mock_spark = MagicMock()
+    unresolved_exc = Exception("UNRESOLVED_ROUTINE: function read_files not found")
+    list_files_success = MagicMock(collect=MagicMock(return_value=[]))
+
+    # First call (read_files) raises UNRESOLVED_ROUTINE, second (list_files) succeeds
+    mock_spark.sql.side_effect = [
+        MagicMock(collect=MagicMock(side_effect=unresolved_exc)),
+        list_files_success,
+    ]
+
+    tier = file_gbx._detect_tier(mock_spark)
+
+    assert tier == "list_files"
+
+
+def test_detect_tier_list_files_path_not_found_proves_available():
+    """When read_files is unavailable but list_files raises PATH_NOT_FOUND → list_files IS available."""
+    mock_spark = MagicMock()
+    unresolved_read = Exception("UNRESOLVED_ROUTINE: read_files not found")
+    path_not_found_list = Exception(
+        "PATH_NOT_FOUND: /Volumes/__gbx_probe__/__none__ not found"
+    )
+
+    mock_spark.sql.side_effect = [
+        MagicMock(collect=MagicMock(side_effect=unresolved_read)),
+        MagicMock(collect=MagicMock(side_effect=path_not_found_list)),
+    ]
+
+    tier = file_gbx._detect_tier(mock_spark)
+
+    # PATH_NOT_FOUND on list_files proves it EXISTS → return "list_files", not "fuse"
+    assert tier == "list_files"
+
+
+def test_detect_tier_both_unresolved_falls_back_to_fuse():
+    """When both read_files and list_files are UNRESOLVED_ROUTINE → fall back to FUSE."""
+    mock_spark = MagicMock()
+    unresolved = Exception("UNRESOLVED_ROUTINE: function not found")
+
+    mock_spark.sql.side_effect = [
+        MagicMock(collect=MagicMock(side_effect=unresolved)),
+        MagicMock(collect=MagicMock(side_effect=unresolved)),
+    ]
+
+    tier = file_gbx._detect_tier(mock_spark)
+
+    assert tier == "fuse"
+
+
+def test_is_routine_unavailable_detects_unresolved_routine():
+    """_is_routine_unavailable returns True for UNRESOLVED_ROUTINE-style errors."""
+    exc_unresolved = Exception("UNRESOLVED_ROUTINE: function read_files not found")
+    assert file_gbx._is_routine_unavailable(exc_unresolved)
+
+    exc_unresolvable = Exception("UNRESOLVABLE_ROUTINE: routine not found")
+    assert file_gbx._is_routine_unavailable(exc_unresolvable)
+
+    exc_parse = Exception("PARSE_SYNTAX_ERROR: unexpected token 'read_files'")
+    assert file_gbx._is_routine_unavailable(exc_parse)
+
+    exc_unsupported = Exception("UNSUPPORTED: function not available")
+    assert file_gbx._is_routine_unavailable(exc_unsupported)
+
+    exc_cannot_resolve = Exception("cannot resolve function read_files")
+    assert file_gbx._is_routine_unavailable(exc_cannot_resolve)
+
+    exc_undefined_func = Exception("Undefined function: read_files")
+    assert file_gbx._is_routine_unavailable(exc_undefined_func)
+
+    exc_not_found = Exception("function read_files does not exist")
+    assert file_gbx._is_routine_unavailable(exc_not_found)
+
+
+def test_is_routine_unavailable_returns_false_for_path_errors():
+    """_is_routine_unavailable returns False for PATH_NOT_FOUND and other data/IO errors."""
+    exc_path_not_found = Exception("PATH_NOT_FOUND: path does not exist")
+    assert not file_gbx._is_routine_unavailable(exc_path_not_found)
+
+    exc_file_not_found = FileNotFoundError("file not found")
+    assert not file_gbx._is_routine_unavailable(exc_file_not_found)
+
+    exc_io_error = IOError("I/O error reading file")
+    assert not file_gbx._is_routine_unavailable(exc_io_error)
+
+    exc_permission = PermissionError("access denied")
+    assert not file_gbx._is_routine_unavailable(exc_permission)
+
+    exc_generic = Exception("some other runtime error")
+    assert not file_gbx._is_routine_unavailable(exc_generic)
 
 
 # ---------------------------------------------------------------------------

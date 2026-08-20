@@ -74,6 +74,59 @@ __all__ = [
 _TIER_CACHE: dict = {}
 
 
+def _is_routine_unavailable(exc: Exception) -> bool:
+    """Return True if the exception indicates the SQL routine/function does not exist.
+
+    Checks for error families that prove the SQL function itself is unavailable
+    (cannot be resolved, not registered, syntax error in the function name, etc).
+
+    Returns True for:
+    - UNRESOLVED_ROUTINE, UNRESOLVABLE_ROUTINE
+    - PARSE_SYNTAX_ERROR
+    - UNSUPPORTED
+    - Message patterns: "cannot resolve", "Undefined function", "does not exist" (when
+      referring to the routine, not a path), "function ... not found"
+
+    Returns False for all other errors, including PATH_NOT_FOUND, FileNotFoundError,
+    IOError, etc. — these prove the function RAN (and the error is a data/runtime issue,
+    not a function-unavailability issue).
+
+    Args:
+        exc: Exception to inspect.
+
+    Returns:
+        True if the exception indicates routine/function unavailability; False otherwise.
+    """
+    msg = str(exc).upper()
+
+    # Check for error classes/codes that indicate routine unavailability
+    routine_unavailable_keywords = (
+        "UNRESOLVED_ROUTINE",
+        "UNRESOLVABLE_ROUTINE",
+        "PARSE_SYNTAX_ERROR",
+        "UNSUPPORTED",
+        "CANNOT RESOLVE",
+        "UNDEFINED FUNCTION",
+        "FUNCTION",  # generic catch, combined with other patterns below
+    )
+
+    for keyword in routine_unavailable_keywords:
+        if keyword in msg:
+            # Additional checks to avoid false positives:
+            # - "FUNCTION" alone is too broad, but combined with "NOT FOUND" or "DOES NOT EXIST" is specific
+            if keyword == "FUNCTION":
+                if "NOT FOUND" in msg or "DOES NOT EXIST" in msg:
+                    return True
+            else:
+                return True
+
+    # Final pattern check: "cannot resolve function X" or similar
+    if "CANNOT RESOLVE" in msg or "UNDEFINED" in msg:
+        return True
+
+    return False
+
+
 def file_access_tier(
     spark: Optional[SparkSession] = None,
 ) -> Literal["read_files", "list_files", "fuse"]:
@@ -124,36 +177,54 @@ def file_access_tier(
 def _detect_tier(spark: SparkSession) -> Literal["read_files", "list_files", "fuse"]:
     """Probe for file-access tier by attempting SQL queries.
 
-    Probes in order of preference, stopping at the first successful one.
+    Probes in order of preference:
+    1. read_files(format=>'file') — returns FILE refs + metadata (DBR 13.3+)
+    2. list_files(...) — metadata-only lister (DBR 18 LTS+)
+    3. FUSE fallback (os.walk + stat) — always available
+
+    Key insight: when probing a nonexistent path (like /Volumes/__gbx_probe__/__none__),
+    an available function will raise PATH_NOT_FOUND (proving it EXISTS and RAN).
+    Only if the function itself is unavailable (UNRESOLVED_ROUTINE, PARSE_SYNTAX_ERROR,
+    etc.) do we fall through to the next probe. Any other error (including PATH_NOT_FOUND)
+    means that tier IS available.
     """
     # Probe 1: read_files(format=>'file') — returns FILE refs + metadata
     # This is the preferred path for both read and listing (DBR 13.3+).
     try:
-        spark.sql("""
+        spark.sql(
+            """
             SELECT COUNT(*) FROM (
                 SELECT * FROM read_files(
                     '/Volumes/__gbx_probe__/__none__',
                     format => 'file'
                 ) LIMIT 1
             ) LIMIT 1
-            """).collect()
+            """
+        ).collect()
         return "read_files"
-    except Exception:
-        pass
+    except Exception as exc:
+        # If the error proves the function ran (e.g., PATH_NOT_FOUND), return "read_files".
+        # Only continue to next probe if the function itself is unavailable.
+        if not _is_routine_unavailable(exc):
+            return "read_files"
 
     # Probe 2: list_files(...) — metadata-only lister (DBR 18 LTS+)
     # Returns path, size, modification_time, file (FILE ref).
     try:
-        spark.sql("""
+        spark.sql(
+            """
             SELECT COUNT(*) FROM (
                 SELECT * FROM list_files(
                     '/Volumes/__gbx_probe__/__none__'
                 ) LIMIT 1
             ) LIMIT 1
-            """).collect()
+            """
+        ).collect()
         return "list_files"
-    except Exception:
-        pass
+    except Exception as exc:
+        # Same logic: if the error proves the function ran, return "list_files".
+        if not _is_routine_unavailable(exc):
+            return "list_files"
 
     # Fallback: FUSE-only (os.walk + stat)
     # This is always available but does not offer native FILE refs.
@@ -738,6 +809,13 @@ def _check_file_support(spark: "SparkSession") -> bool:
     usable → return True; on ANY exception → return False.  Using IS NULL returns
     a boolean (never collects a FILE-typed value), which avoids the
     "display of a FILE column fails" issue on older Serverless clients.
+
+    Note: Unlike _detect_tier's read_files/list_files probes, try_to_file
+    returns NULL for a missing path rather than raising PATH_NOT_FOUND, so the
+    probe strategy differs intentionally: bare except Exception catches all errors
+    (because any exception means FILE is not available), whereas _detect_tier must
+    distinguish between PATH_NOT_FOUND (function works) and UNRESOLVED_ROUTINE
+    (function missing).
     """
     try:
         probe_path = "/Volumes/__gbx_file_probe__/__none__/__probe__.bin"

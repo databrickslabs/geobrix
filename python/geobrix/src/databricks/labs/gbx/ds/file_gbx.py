@@ -17,7 +17,9 @@ Exports:
 
 from __future__ import annotations
 
+import fnmatch
 import os
+import re as _re
 import shutil
 import tempfile
 import uuid
@@ -243,6 +245,8 @@ def enumerate_files(
     *,
     recursive: bool = True,
     include_hidden: bool = False,
+    extensions: Optional[tuple[str, ...]] = None,
+    path_glob_filter: Optional[str] = None,
     spark: Optional[SparkSession] = None,
 ) -> Any:
     """Enumerate files in a directory, returning path + size + FILE reference (when available).
@@ -261,6 +265,19 @@ def enumerate_files(
     - INCLUDE them on `include_hidden=True`.
     - RECURSIVE listing by default; set `recursive=False` for top-level files only.
 
+    Positive selection filter (independent of ``include_hidden``):
+    - ``extensions``: case-insensitive suffix tuple, e.g. ``(".tif", ".nc")``.
+      Sugar for ``path_glob_filter`` — compiled internally to ``["*.tif", "*.nc"]``.
+    - ``path_glob_filter``: fnmatch-style glob applied to each file's basename, e.g.
+      ``"*.tif"`` or ``"[!.]*"``.  Useful for patterns that LIKE cannot express.
+    - Only one of ``extensions`` / ``path_glob_filter`` may be given; passing both raises
+      ``ValueError``.
+    - The positive filter is AND-ed with ``include_hidden``: setting
+      ``include_hidden=True`` plus ``path_glob_filter="[!.]*"`` includes underscore-named
+      files (``_data.tif``) but still excludes dot-named files (``.crc``, ``.DS_Store``).
+    - Applied uniformly across all three tiers via :func:`_glob_to_sql_basename_predicate`
+      (SQL tiers) and :func:`_fuse_matches_filter` (FUSE tier).
+
     Note:
     - read_files/list_files tiers already skip `_*`/`.*` files natively.
     - FUSE tier replicates this skip exactly via filename filtering, so all tiers behave identically.
@@ -273,6 +290,10 @@ def enumerate_files(
               URI (dbfs:/Volumes/..., s3://..., etc.).
         recursive: If True (default), recursively list subdirectories. If False, list top-level files only.
         include_hidden: If False (default), skip files starting with `_` or `.`. If True, include them.
+        extensions: Optional tuple of case-insensitive file extensions to include, e.g. ``(".tif", ".nc")``.
+                    Mutually exclusive with ``path_glob_filter``.
+        path_glob_filter: Optional fnmatch-style glob pattern applied to each file's basename, e.g.
+                          ``"*.tif"`` or ``"[!.]*"``.  Mutually exclusive with ``extensions``.
         spark: Optional SparkSession. If None, uses SparkSession.getActiveSession() or
                SparkSession.builder.getOrCreate(). Explicit passing is preferred on Spark Connect.
 
@@ -282,20 +303,37 @@ def enumerate_files(
 
     Raises:
         FileNotFoundError: If path does not exist or contains no files.
-        ValueError: If spark cannot be obtained and the tier requires it.
+        ValueError: If both ``extensions`` and ``path_glob_filter`` are given, or if spark
+                    cannot be obtained and the tier requires it.
     """
+    # Validate and compile the positive filter (raises ValueError if both given).
+    glob_patterns = _build_glob_filter(extensions, path_glob_filter)
+
     tier = file_access_tier(spark)
 
     if tier == "read_files":
         return _enumerate_read_files(
-            path, recursive=recursive, include_hidden=include_hidden, spark=spark
+            path,
+            recursive=recursive,
+            include_hidden=include_hidden,
+            glob_patterns=glob_patterns,
+            spark=spark,
         )
     elif tier == "list_files":
         return _enumerate_list_files(
-            path, recursive=recursive, include_hidden=include_hidden, spark=spark
+            path,
+            recursive=recursive,
+            include_hidden=include_hidden,
+            glob_patterns=glob_patterns,
+            spark=spark,
         )
     else:  # tier == "fuse"
-        return _enumerate_fuse(path, recursive=recursive, include_hidden=include_hidden)
+        return _enumerate_fuse(
+            path,
+            recursive=recursive,
+            include_hidden=include_hidden,
+            glob_patterns=glob_patterns,
+        )
 
 
 def _enumerate_read_files(
@@ -303,6 +341,7 @@ def _enumerate_read_files(
     *,
     recursive: bool,
     include_hidden: bool,
+    glob_patterns: Optional[list[str]],
     spark: Optional[SparkSession],
 ) -> Any:
     """Enumerate via read_files(format=>'file') SQL call.
@@ -323,6 +362,11 @@ def _enumerate_read_files(
     include_hidden_clause = (
         "" if include_hidden else "AND NOT (file_name LIKE '_%' OR file_name LIKE '.%')"
     )
+    filter_clause = (
+        _glob_to_sql_basename_predicate(glob_patterns, "file_name")
+        if glob_patterns
+        else ""
+    )
 
     sql_query = f"""
         SELECT
@@ -336,6 +380,7 @@ def _enumerate_read_files(
         )
         WHERE 1=1
         {include_hidden_clause}
+        {filter_clause}
     """
 
     return spark.sql(sql_query)
@@ -346,6 +391,7 @@ def _enumerate_list_files(
     *,
     recursive: bool,
     include_hidden: bool,
+    glob_patterns: Optional[list[str]],
     spark: Optional[SparkSession],
 ) -> Any:
     """Enumerate via list_files(...) SQL call.
@@ -368,15 +414,21 @@ def _enumerate_list_files(
     recursive_param = "true" if recursive else "false"
     # Extract basename using substring_index and check if it starts with _ or .
     # This ensures root-level files like /_success are also skipped (parity with read_files/FUSE).
+    _basename_expr = "substring_index(path, '/', -1)"
     include_hidden_clause = (
         ""
         if include_hidden
         else (
             "AND NOT ("
-            "  substring_index(path, '/', -1) LIKE '_%' "
-            "  OR substring_index(path, '/', -1) LIKE '.%' "
+            f"  {_basename_expr} LIKE '_%' "
+            f"  OR {_basename_expr} LIKE '.%' "
             ")"
         )
+    )
+    filter_clause = (
+        _glob_to_sql_basename_predicate(glob_patterns, _basename_expr)
+        if glob_patterns
+        else ""
     )
 
     sql_query = f"""
@@ -390,6 +442,7 @@ def _enumerate_list_files(
         )
         WHERE 1=1
         {include_hidden_clause}
+        {filter_clause}
     """
 
     return spark.sql(sql_query)
@@ -406,25 +459,153 @@ def _should_skip_file(filename: str, include_hidden: bool) -> bool:
     return filename.startswith("_") or filename.startswith(".")
 
 
+# ---------------------------------------------------------------------------
+# Positive path filter helpers (Task 8b)
+# ---------------------------------------------------------------------------
+
+
+def _build_glob_filter(
+    extensions: Optional[tuple[str, ...]],
+    path_glob_filter: Optional[str],
+) -> Optional[list[str]]:
+    """Compile extensions or path_glob_filter into a list of lowercase glob patterns.
+
+    Returns None when no filter is requested.  Raises ValueError if both params
+    are given (they are mutually exclusive).
+
+    - ``extensions`` sugar: ``(".tif", ".nc")`` → ``["*.tif", "*.nc"]``
+    - ``path_glob_filter``: used as-is in a single-element list.
+    """
+    if extensions is not None and path_glob_filter is not None:
+        raise ValueError(
+            "extensions and path_glob_filter are mutually exclusive; "
+            "provide at most one."
+        )
+    if extensions is not None:
+        return [f"*{ext.lower()}" for ext in extensions]
+    if path_glob_filter is not None:
+        return [path_glob_filter]
+    return None
+
+
+def _fuse_matches_filter(basename: str, patterns: list[str]) -> bool:
+    """Return True if *basename* matches any glob pattern (case-insensitive)."""
+    lb = basename.lower()
+    return any(fnmatch.fnmatch(lb, p.lower()) for p in patterns)
+
+
+def _glob_to_sql_regex(pat: str) -> str:
+    """Convert a glob pattern containing ``[...]`` / ``?`` to an anchored SQL RLIKE regex.
+
+    Handles:
+    - ``[!...]``  → ``[^...]``  (negated character class)
+    - ``[...]``   → ``[...]``   (character class, kept as-is)
+    - ``*``       → ``.*``
+    - ``?``       → ``.``
+    - Other chars → ``re.escape``d for literal match
+
+    Returns a case-insensitive, anchored regex: ``(?i)^...$``.
+
+    Note: the caller must escape the result for embedding in a SQL single-quoted
+    literal (double backslashes via ``replace("\\", "\\\\")``).
+    """
+    parts = ["(?i)^"]
+    i = 0
+    n = len(pat)
+    while i < n:
+        c = pat[i]
+        if c == "*":
+            parts.append(".*")
+            i += 1
+        elif c == "?":
+            parts.append(".")
+            i += 1
+        elif c == "[":
+            end = pat.find("]", i + 1)
+            if end == -1:
+                # Malformed character class — treat [ as literal
+                parts.append(_re.escape("["))
+                i += 1
+            else:
+                inner = pat[i + 1 : end]
+                if inner.startswith("!"):
+                    parts.append("[^" + inner[1:] + "]")
+                else:
+                    parts.append("[" + inner + "]")
+                i = end + 1
+        else:
+            parts.append(_re.escape(c))
+            i += 1
+    parts.append("$")
+    return "".join(parts)
+
+
+def _glob_to_sql_basename_predicate(patterns: list[str], basename_expr: str) -> str:
+    """Convert a list of glob patterns to a SQL ``AND (...)`` clause for *basename_expr*.
+
+    Strategy:
+    - Patterns without ``[`` or ``?`` use ``LOWER(basename_expr) LIKE '...'`` (SQL-safe,
+      no backslash escaping needed for the common ``*.ext`` form).
+    - Patterns with ``[`` or ``?`` use *basename_expr* ``RLIKE '...'`` via
+      :func:`_glob_to_sql_regex`.  Backslashes in the generated regex are doubled for
+      correct SQL string-literal embedding.
+
+    Multiple patterns are OR-ed.  Returns an empty string when *patterns* is empty.
+
+    The single-quote escape (``replace("'", "''")``) is applied to all embedded literals
+    consistent with the project-wide SQL escaping convention.
+    """
+    if not patterns:
+        return ""
+    parts: list[str] = []
+    for pat in patterns:
+        if "[" in pat or "?" in pat:
+            sql_regex = _glob_to_sql_regex(pat)
+            # Escape single quotes first, then double backslashes for SQL string literal.
+            escaped = sql_regex.replace("'", "''").replace("\\", "\\\\")
+            parts.append(f"{basename_expr} RLIKE '{escaped}'")
+        else:
+            # Simple glob: convert * → %, no backslash issues in LIKE for .ext patterns.
+            sql_pat = pat.replace("'", "''").replace("*", "%")
+            parts.append(f"LOWER({basename_expr}) LIKE '{sql_pat.lower()}'")
+    clause = " OR ".join(parts)
+    return f"AND ({clause})"
+
+
 def _enumerate_fuse(
     path: str,
     *,
     recursive: bool,
     include_hidden: bool,
+    glob_patterns: Optional[list[str]] = None,
 ) -> list[dict[str, Any]]:
     """Enumerate via os.walk (FUSE-only fallback).
 
     Returns a list of dicts with keys {path, size, file} where file is None.
+
+    *glob_patterns* (from :func:`_build_glob_filter`) is an optional positive
+    selection filter applied after the ``include_hidden`` skip logic.  When
+    present, only filenames that match at least one pattern are included
+    (case-insensitive via :func:`_fuse_matches_filter`).
     """
     local_path = to_local_path(path)
     abspath = os.path.abspath(local_path)
+
+    def _accept(filename: str) -> bool:
+        if _should_skip_file(filename, include_hidden):
+            return False
+        if glob_patterns is not None and not _fuse_matches_filter(
+            filename, glob_patterns
+        ):
+            return False
+        return True
 
     results = []
 
     if os.path.isfile(abspath):
         # Single file case
         filename = os.path.basename(abspath)
-        if not _should_skip_file(filename, include_hidden):
+        if _accept(filename):
             size = _retry_transient(lambda: os.stat(abspath).st_size)
             results.append({"path": abspath, "size": size, "file": None})
     else:
@@ -432,7 +613,7 @@ def _enumerate_fuse(
         if recursive:
             for root, _dirs, names in os.walk(abspath):
                 for name in names:
-                    if not _should_skip_file(name, include_hidden):
+                    if _accept(name):
                         full_path = os.path.join(root, name)
                         size = _retry_transient(
                             lambda fp=full_path: os.stat(fp).st_size
@@ -446,7 +627,7 @@ def _enumerate_fuse(
                 raise FileNotFoundError(f"Path does not exist: {path!r}") from exc
 
             for name in names:
-                if not _should_skip_file(name, include_hidden):
+                if _accept(name):
                     full_path = os.path.join(abspath, name)
                     if os.path.isfile(full_path):
                         size = _retry_transient(
@@ -456,7 +637,9 @@ def _enumerate_fuse(
 
     if not results:
         raise FileNotFoundError(
-            f"No files found under {path!r} (recursive={recursive}, include_hidden={include_hidden})"
+            f"No files found under {path!r} "
+            f"(recursive={recursive}, include_hidden={include_hidden}, "
+            f"glob_patterns={glob_patterns!r})"
         )
 
     return sorted(results, key=lambda r: r["path"])

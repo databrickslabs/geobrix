@@ -1379,3 +1379,228 @@ def test_ingest_files_custom_file_col():
     assert "file AS my_file" in insert
     create = next(s for s in captured if "CREATE TABLE" in s.upper())
     assert "my_file FILE MANAGED" in create
+
+
+# ---------------------------------------------------------------------------
+# Task 8b: enumerate_files positive filter (extensions / path_glob_filter)
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_files_extensions_filter_fuse():
+    """extensions=('.tif',) returns only .tif files on the FUSE tier."""
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tif1 = os_module.path.join(tmpdir, "a.tif")
+        tif2 = os_module.path.join(tmpdir, "b.TIF")  # uppercase — case-insensitive
+        nc = os_module.path.join(tmpdir, "data.nc")
+        txt = os_module.path.join(tmpdir, "readme.txt")
+
+        for p in (tif1, tif2, nc, txt):
+            with open(p, "w") as f:
+                f.write("x")
+
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(
+                tmpdir, extensions=(".tif",), spark=mock_spark
+            )
+
+    basenames = {os_module.path.basename(r["path"]) for r in result}
+    # Both .tif and .TIF must be returned (case-insensitive)
+    assert "a.tif" in basenames
+    assert "b.TIF" in basenames
+    # Other extensions must be excluded
+    assert "data.nc" not in basenames
+    assert "readme.txt" not in basenames
+    assert len(result) == 2
+
+
+def test_enumerate_files_path_glob_filter_niche_case():
+    """path_glob_filter='[!.]*' + include_hidden=True: includes _data.tif, excludes .crc."""
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        underscore = os_module.path.join(tmpdir, "_data.tif")
+        dot_crc = os_module.path.join(tmpdir, ".crc")
+        dot_ds = os_module.path.join(tmpdir, ".DS_Store")
+        normal = os_module.path.join(tmpdir, "normal.txt")
+
+        for p in (underscore, dot_crc, dot_ds, normal):
+            with open(p, "w") as f:
+                f.write("x")
+
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            result = file_gbx.enumerate_files(
+                tmpdir,
+                include_hidden=True,
+                path_glob_filter="[!.]*",
+                spark=mock_spark,
+            )
+
+    basenames = {os_module.path.basename(r["path"]) for r in result}
+    # Underscore file starts with _, not . → included
+    assert "_data.tif" in basenames
+    # Normal file → included
+    assert "normal.txt" in basenames
+    # Dot-named files → excluded by [!.]* filter
+    assert ".crc" not in basenames
+    assert ".DS_Store" not in basenames
+    assert len(result) == 2
+
+
+def test_enumerate_files_both_extensions_and_path_glob_filter_raises():
+    """Passing both extensions and path_glob_filter raises ValueError."""
+    mock_spark = MagicMock()
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        file_gbx.enumerate_files(
+            "/tmp/test",
+            extensions=(".tif",),
+            path_glob_filter="*.tif",
+            spark=mock_spark,
+        )
+
+
+def test_enumerate_files_cross_tier_parity_with_filter():
+    """All three tiers produce byte-identical filtering when extensions is set.
+
+    Structural checks:
+    - read_files tier: SQL contains a LIKE predicate on file_name.
+    - list_files tier: SQL contains a LIKE predicate on the substring_index basename expr.
+    - FUSE tier: end-to-end result contains only the matching files.
+    """
+    import os as os_module
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tif = os_module.path.join(tmpdir, "scene.tif")
+        nc = os_module.path.join(tmpdir, "data.nc")
+        txt = os_module.path.join(tmpdir, "readme.txt")
+
+        for p in (tif, nc, txt):
+            with open(p, "w") as f:
+                f.write("x")
+
+        # --- FUSE end-to-end ---
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            fuse_result = file_gbx.enumerate_files(
+                tmpdir, extensions=(".tif",), spark=mock_spark
+            )
+
+        fuse_basenames = {os_module.path.basename(r["path"]) for r in fuse_result}
+        assert fuse_basenames == {"scene.tif"}
+
+        # --- read_files tier: SQL predicate check ---
+        mock_spark2 = MagicMock()
+        mock_spark2.sql.return_value = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "read_files"
+            file_gbx.enumerate_files(tmpdir, extensions=(".tif",), spark=mock_spark2)
+
+        sql_rf = mock_spark2.sql.call_args[0][0]
+        # The predicate targets file_name (read_files basename column)
+        assert "file_name" in sql_rf
+        # A LIKE predicate with %.tif must be present (extensions path)
+        assert "%.tif" in sql_rf
+
+        # --- list_files tier: SQL predicate check ---
+        mock_spark3 = MagicMock()
+        mock_spark3.sql.return_value = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "list_files"
+            file_gbx.enumerate_files(tmpdir, extensions=(".tif",), spark=mock_spark3)
+
+        sql_lf = mock_spark3.sql.call_args[0][0]
+        # The predicate targets the basename via substring_index
+        assert "substring_index(path, '/', -1)" in sql_lf
+        # Same LIKE predicate
+        assert "%.tif" in sql_lf
+
+
+def test_enumerate_files_path_glob_filter_rlike_in_sql():
+    """path_glob_filter with a character class emits an RLIKE predicate in SQL tiers."""
+    mock_spark = MagicMock()
+    mock_spark.sql.return_value = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.enumerate_files(
+            "/Volumes/test/path",
+            path_glob_filter="[!.]*",
+            include_hidden=True,
+            spark=mock_spark,
+        )
+
+    sql = mock_spark.sql.call_args[0][0]
+    assert "RLIKE" in sql
+    # The regex must exclude leading-dot files — [^.] in the generated regex
+    assert "[^.]" in sql
+
+
+def test_build_glob_filter_extensions():
+    """_build_glob_filter compiles extensions to glob patterns."""
+    patterns = file_gbx._build_glob_filter((".tif", ".NC"), None)
+    assert patterns == ["*.tif", "*.nc"]
+
+
+def test_build_glob_filter_path_glob_filter():
+    """_build_glob_filter passes path_glob_filter through as a single-element list."""
+    patterns = file_gbx._build_glob_filter(None, "[!.]*")
+    assert patterns == ["[!.]*"]
+
+
+def test_build_glob_filter_none():
+    """_build_glob_filter returns None when both params are None."""
+    assert file_gbx._build_glob_filter(None, None) is None
+
+
+def test_build_glob_filter_both_raises():
+    """_build_glob_filter raises ValueError if both params are given."""
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        file_gbx._build_glob_filter((".tif",), "*.tif")
+
+
+def test_fuse_matches_filter_case_insensitive():
+    """_fuse_matches_filter is case-insensitive."""
+    assert file_gbx._fuse_matches_filter("scene.TIF", ["*.tif"])
+    assert file_gbx._fuse_matches_filter("scene.tif", ["*.TIF"])
+    assert not file_gbx._fuse_matches_filter("scene.nc", ["*.tif"])
+
+
+def test_fuse_matches_filter_glob_character_class():
+    """_fuse_matches_filter handles [!.] character class correctly."""
+    assert file_gbx._fuse_matches_filter("_data.tif", ["[!.]*"])
+    assert file_gbx._fuse_matches_filter("normal.txt", ["[!.]*"])
+    assert not file_gbx._fuse_matches_filter(".crc", ["[!.]*"])
+    assert not file_gbx._fuse_matches_filter(".DS_Store", ["[!.]*"])
+
+
+def test_glob_to_sql_basename_predicate_simple():
+    """Simple *.ext glob compiles to a LIKE predicate (no backslash issues)."""
+    pred = file_gbx._glob_to_sql_basename_predicate(["*.tif"], "file_name")
+    assert "LIKE" in pred
+    assert "%.tif" in pred
+    assert "file_name" in pred
+
+
+def test_glob_to_sql_basename_predicate_char_class():
+    """Character-class glob compiles to an RLIKE predicate with [^.]."""
+    pred = file_gbx._glob_to_sql_basename_predicate(["[!.]*"], "basename")
+    assert "RLIKE" in pred
+    assert "[^.]" in pred
+
+
+def test_glob_to_sql_basename_predicate_multiple():
+    """Multiple patterns are OR-ed in the predicate."""
+    pred = file_gbx._glob_to_sql_basename_predicate(["*.tif", "*.nc"], "file_name")
+    assert "OR" in pred
+    assert "%.tif" in pred
+    assert "%.nc" in pred

@@ -308,6 +308,30 @@ def test_write_file_table_plain_layout_no_order_by():
 # ---------------------------------------------------------------------------
 
 
+def test_write_file_table_rejects_zorder_layout_before_drop():
+    """layout='zorder' raises ValueError BEFORE any DROP/CREATE/view side effect.
+
+    Mirrors test_write_file_table_validates_before_drop: the mock spark captures
+    all SQL calls; we assert ValueError fires and spark.sql was never called.
+    overwrite=True ensures that if the layout check were removed, the DROP would
+    fire first — making this test catch any regression that moves the check later.
+    """
+    issued = []
+    spark = MagicMock()
+    spark.sql.side_effect = lambda sql: issued.append(sql)
+
+    with pytest.raises(ValueError, match="layout must be one of"):
+        ft.write_file_table(
+            spark,
+            _make_mock_df(),
+            "cat.sch.t",
+            file_mode="external",
+            layout="zorder",
+            overwrite=True,
+        )
+    assert not issued, f"SQL was issued before layout validation: {issued}"
+
+
 def test_build_create_sql_rejects_zorder_layout_via_shared_validator():
     from databricks.labs.gbx.pyrx import file_table
 

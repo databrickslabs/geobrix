@@ -36,7 +36,6 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx.ds import _scratch
-from databricks.labs.gbx.ds.file_gbx import open_for_write
 
 # ---------------------------------------------------------------------------
 # Worker-local staging cache (module-level, process-global)
@@ -995,22 +994,21 @@ class VectorGbxWriter(DataSourceWriter):
         self._filespace = opts.get("filespace") or None
         self._layout = opts.get("layout", "order").lower()
 
-        # Validate managed-without-filespace early (before any side effects).
-        if self._file_mode == "managed" and not self._filespace:
-            raise ValueError(
-                "file_mode='managed' requires a 'filespace' option (/Volumes/…). "
-                "Pass .option('filespace', '/Volumes/<catalog>/<schema>/<volume>') "
-                "or use file_mode='external' with a filespace for the staging Volume."
-            )
-
+        # FILE-tier writes are a FUNCTION-LAYER concern (a DataSource writer's
+        # commit() session availability on Spark Connect is unverified). The
+        # df.write.format writer is FUSE-only; route FILE writes through
+        # pyvx.file_write.vector_file_write instead.
         if self._file_mode in ("managed", "external"):
-            # FILE mode: path is a Delta TABLE name (e.g. "catalog.schema.table").
-            # Do NOT apply to_local_path (it is a no-op here but _resolve_single_file_output
-            # would wrongly append a geo extension like ".gpkg" to the table name).
-            self.path = path
-        else:
-            # FUSE mode (default): normalize path (strip dbfs:/file: scheme).
-            self.path = to_local_path(path)
+            raise ValueError(
+                f"file_mode='{self._file_mode}' is not supported on the "
+                f"df.write.format('vector_gbx') writer (FUSE-only). Use the "
+                f"function-layer API instead: "
+                f"from databricks.labs.gbx.pyvx.file_write import vector_file_write. "
+                f"It assembles your vector output into a FILE-column Delta table "
+                f"(MANAGED create_file / EXTERNAL try_to_file)."
+            )
+        # FUSE mode (default): normalize path (strip dbfs:/file: scheme).
+        self.path = to_local_path(path)
 
         self.driver = opts.get("drivername", "") or driver
         if not self.driver:
@@ -1027,30 +1025,15 @@ class VectorGbxWriter(DataSourceWriter):
             "filename"
         )  # .option("fileName", ...) (opts are lower-cased)
 
-        if self._file_mode == "fuse":
-            # FUSE mode: apply single-file output path resolution (extension appending).
-            # Non-zip shapefile remains a directory bundle (existing behavior).
-            if (
-                self.driver in ("GPKG", "GeoJSON")
-                or self.zip
-                or self.driver == "OpenFileGDB"
-            ):
-                ext = _canonical_ext(self.driver, self.zip)
-                self.path = _resolve_single_file_output(self.path, self._file_name, ext)
-        else:
-            # FILE mode: validate that the driver produces a single-file output.
-            # Multi-file Shapefile (zip=false) is not supported — the single-file
-            # constraint is required for try_to_file / create_file to receive one URI.
-            _is_single = (
-                self.driver in ("GPKG", "GeoJSON")
-                or self.zip  # Shapefile+zip=true → .shp.zip; FileGDB+zip=true → .gdb.zip
-            )
-            if not _is_single:
-                raise ValueError(
-                    f"file_mode='{self._file_mode}' requires a single-file output. "
-                    "Use a single-file driver (GPKG, GeoJSON) or set zip=true for "
-                    "ESRI Shapefile (produces .shp.zip) or OpenFileGDB (produces .gdb.zip)."
-                )
+        # FUSE mode: apply single-file output path resolution (extension appending).
+        # Non-zip shapefile remains a directory bundle (existing behavior).
+        if (
+            self.driver in ("GPKG", "GeoJSON")
+            or self.zip
+            or self.driver == "OpenFileGDB"
+        ):
+            ext = _canonical_ext(self.driver, self.zip)
+            self.path = _resolve_single_file_output(self.path, self._file_name, ext)
 
         self.overwrite = overwrite
         self.geometry_type_override = opts.get("geometrytype")
@@ -1067,9 +1050,9 @@ class VectorGbxWriter(DataSourceWriter):
             f.name == self.geom_col and isinstance(f.dataType, BinaryType)
             for f in schema.fields
         )
-        # Scratch dir for executor-written fragments. For FILE mode the "path" is a
-        # table name, not a filesystem path; use "." so scratch lands in the working dir.
-        parent = os.path.dirname(self.path) or "." if self._file_mode == "fuse" else "."
+        # Scratch dir for executor-written fragments. The writer is FUSE-only so
+        # self.path is always a filesystem path — use its parent for the scratch dir.
+        parent = os.path.dirname(self.path) or "."
         # Per-write unique scratch dir under a hidden, self-GC'ing container: the
         # writer instance is created once on the driver and serialized to the
         # executors, so every task of THIS write shares one uuid while a
@@ -1081,8 +1064,7 @@ class VectorGbxWriter(DataSourceWriter):
         self.scratch_dir = _scratch.new_scratch_dir(parent)
         _scratch.gc_stale_scratch(parent)
         _scratch.gc_stale_local_temp("gbx_vecout_")
-        # Append-rejection: only applicable to FUSE mode (FILE mode delegates to open_for_write).
-        if self._file_mode == "fuse" and not self.overwrite and self._target_exists():
+        if not self.overwrite and self._target_exists():
             raise ValueError(
                 "vector_gbx does not support append; use .mode('overwrite')."
             )
@@ -1132,16 +1114,8 @@ class VectorGbxWriter(DataSourceWriter):
             # FileGDB/Shapefile sidecars), then copy to the Volume target with
             # sequential byte copies (FUSE-safe). Mirrors the PMTiles writer.
             local_dir = tempfile.mkdtemp(prefix="gbx_vecout_")
-            if self._file_mode == "fuse":
-                # FUSE mode: base local_out on the resolved FUSE path (existing behavior).
-                local_out = os.path.join(
-                    local_dir, os.path.basename(self.path.rstrip("/"))
-                )
-            else:
-                # FILE mode: path is a table name; use a format-appropriate temp filename.
-                local_out = os.path.join(
-                    local_dir, "output" + _canonical_ext(self.driver, self.zip)
-                )
+            # Writer is FUSE-only: base local_out on the resolved FUSE path.
+            local_out = os.path.join(local_dir, os.path.basename(self.path.rstrip("/")))
             if self.zip:
                 # zip=true: write the normal output to <stem>.shp / <stem>.gdb,
                 # then pack it into <stem>.shp.zip / <stem>.gdb.zip; only the
@@ -1201,122 +1175,24 @@ class VectorGbxWriter(DataSourceWriter):
                 del first_tbl
                 tables_gen = (feather.read_table(f) for f in frags)
                 self._write_local(tables_gen, local_out, geom_type, crs)
-            if self._file_mode == "fuse":
-                # FUSE mode: clear any Spark-created stub at self.path, then copy
-                # everything pyogrio produced in local_dir (file, sidecar set, or
-                # .gdb dir) to the Volume target. Byte-only copies (FUSE-safe).
-                self._prepare_target()
-                parent = os.path.dirname(self.path) or "."
-                os.makedirs(parent, exist_ok=True)
-                for name in os.listdir(local_dir):
-                    if name.endswith(("-wal", "-shm", "-journal")):
-                        continue  # transient SQLite sidecars -- never publish
-                    src = os.path.join(local_dir, name)
-                    dst = os.path.join(parent, name)
-                    if os.path.isdir(src):
-                        _copy_tree_to_fuse(src, dst)
-                    else:
-                        _copy_file_to_fuse(src, dst)  # byte-only -> Volume-safe
-            else:
-                # FILE mode: route the assembled single-file output through open_for_write
-                # (MANAGED create_file / EXTERNAL try_to_file) rather than a plain FUSE copy.
-                # self.path is the target Delta TABLE name.
-                self._commit_as_file(spark=None, local_out=local_out)
+            # Writer is FUSE-only: clear any Spark stub, copy everything pyogrio
+            # produced in local_dir to the Volume target (byte-only, FUSE-safe).
+            self._prepare_target()
+            parent = os.path.dirname(self.path) or "."
+            os.makedirs(parent, exist_ok=True)
+            for name in os.listdir(local_dir):
+                if name.endswith(("-wal", "-shm", "-journal")):
+                    continue  # transient SQLite sidecars -- never publish
+                src = os.path.join(local_dir, name)
+                dst = os.path.join(parent, name)
+                if os.path.isdir(src):
+                    _copy_tree_to_fuse(src, dst)
+                else:
+                    _copy_file_to_fuse(src, dst)  # byte-only -> Volume-safe
         finally:
             if local_dir is not None:
                 shutil.rmtree(local_dir, ignore_errors=True)
             _scratch.remove_scratch_dir(self.scratch_dir)
-
-    def _commit_as_file(self, spark, local_out: str) -> None:
-        """Route the assembled local_out through open_for_write (MANAGED or EXTERNAL).
-
-        Called from commit() when self._file_mode is 'managed' or 'external'.
-        self.path is the target Delta TABLE name.
-
-        managed path: reads the assembled file's bytes from local_out, builds a
-        1-row DataFrame {tile: {raster: <bytes>, path: None}}, calls
-        open_for_write(file_mode="managed", filespace=self._filespace).
-        The create_file SQL expression mints the bytes into managed FILE storage.
-
-        external path: copies local_out to {filespace}/{uuid4}/{basename} on the
-        Volume (FUSE-safe sequential copy), then builds a 1-row DataFrame
-        {tile: {raster: None, path: <volume_path>}}, calls
-        open_for_write(file_mode="external").
-        The try_to_file SQL expression registers the Volume path as a FILE reference.
-
-        No-gating: if FILE is unavailable on this runtime (fuse tier), open_for_write
-        delegates to resolve_access which raises a clear, actionable error. This method
-        does NOT hand-roll a second error message.
-
-        Connect-safety: no sparkContext / _sc / _jvm / _jsc; no spark.conf.set/get.
-        spark.createDataFrame is driver-only and Connect-safe.
-        """
-        from pyspark.sql import SparkSession
-
-        if spark is None:
-            spark = SparkSession.getActiveSession()
-        if spark is None:
-            spark = SparkSession.builder.getOrCreate()
-
-        # 1-row DataFrame schema: tile struct with path (STRING) and raster (BINARY).
-        # write_file_table derives plain_cols from all tile fields except raster/path_mode,
-        # so the table will have a `path` column plus tile_file FILE MANAGED/EXTERNAL.
-        _tile_struct_schema = StructType(
-            [
-                StructField(
-                    "tile",
-                    StructType(
-                        [
-                            StructField("path", StringType()),
-                            StructField("raster", BinaryType()),
-                        ]
-                    ),
-                )
-            ]
-        )
-
-        if self._file_mode == "managed":
-            # Read assembled file bytes (single file at local_out).
-            with open(local_out, "rb") as fh:
-                file_bytes = fh.read()
-            rows = [{"tile": {"path": None, "raster": bytearray(file_bytes)}}]
-            df = spark.createDataFrame(rows, _tile_struct_schema)
-            open_for_write(
-                spark,
-                df,
-                self.path,
-                file_mode="managed",
-                filespace=self._filespace,
-                layout=self._layout,
-                overwrite=self.overwrite,
-            )
-        else:
-            # external: copy file to Volume, then register via try_to_file.
-            from databricks.labs.gbx.ds._listing import to_local_path
-
-            if not self._filespace:
-                raise ValueError(
-                    "file_mode='external' requires a 'filespace' option (/Volumes/…) "
-                    "specifying the Volume directory where the assembled file is placed "
-                    "before registering it as a FILE reference via try_to_file. "
-                    "Pass .option('filespace', '/Volumes/<catalog>/<schema>/<volume>')."
-                )
-            volume_base = to_local_path(self._filespace)
-            staging_dir = os.path.join(volume_base, uuid.uuid4().hex)
-            os.makedirs(staging_dir, exist_ok=True)
-            volume_path = os.path.join(staging_dir, os.path.basename(local_out))
-            _copy_file_to_fuse(local_out, volume_path)
-            rows = [{"tile": {"path": volume_path, "raster": None}}]
-            df = spark.createDataFrame(rows, _tile_struct_schema)
-            open_for_write(
-                spark,
-                df,
-                self.path,
-                file_mode="external",
-                filespace=None,
-                layout=self._layout,
-                overwrite=self.overwrite,
-            )
 
     def _drop_meta_cols(self, tbl):
         return tbl.drop_columns(

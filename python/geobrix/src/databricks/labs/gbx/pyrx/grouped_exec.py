@@ -298,7 +298,9 @@ class _OpenerContext:
         return STREAM_NOMINAL_BYTES
 
 
-def _run_file_fast_path(fr_holder, size_holder, lru, uri, fr, tile, cellid, view_mode, core_fn):
+def _run_file_fast_path(
+    fr_holder, size_holder, lru, uri, fr, tile, cellid, view_mode, core_fn
+):
     """Execute the FILE fast-path for one tile. Returns result; raises on failure.
 
     Sets ``fr_holder[0] = fr`` and ``size_holder[0] = <metadata_size>`` before
@@ -312,16 +314,24 @@ def _run_file_fast_path(fr_holder, size_holder, lru, uri, fr, tile, cellid, view
     fallback path can take over on any open / stream / view-construction failure.
     """
     fr_holder[0] = fr
-    from .core.open_tile import _parse_pending, _to_virtual_tile, _WindowHeaderView, _read_size_key
+    from .core.open_tile import (
+        _parse_pending,
+        _read_size_key,
+        _to_virtual_tile,
+        _WindowHeaderView,
+    )
 
     vt = _to_virtual_tile(tile)
     bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
     # Extract metadata-derived size (path_file_size or tile_size) before lru.get()
     # so the weigher can use it instead of calling fr.size.
-    metadata_size = _read_size_key(vt.metadata, "path_file_size") or _read_size_key(vt.metadata, "tile_size")
+    metadata_size = _read_size_key(vt.metadata, "path_file_size") or _read_size_key(
+        vt.metadata, "tile_size"
+    )
     size_holder[0] = metadata_size
     src = lru.get(uri)
     from rasterio.windows import Window
+
     pending_count = len(bands) if bands else None
     pending_crs = None
     if crs_str is not None or srid is not None:

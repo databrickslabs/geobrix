@@ -67,6 +67,9 @@ __all__ = [
     "StageTooLargeError",
     "_accept_basename",
     "list_local_files",
+    # Generic session-ful read
+    "_classify_source",
+    "gbx_file_read",
 ]
 
 # ===========================================================================
@@ -1780,3 +1783,88 @@ def ingest_files(
         f"{order_clause}"
     )
     spark.sql(insert_sql)
+
+
+# =============================================================================
+# Generic format-agnostic read: gbx_file_read
+# =============================================================================
+
+
+def _classify_source(source: str) -> str:
+    """Return "location" for a path/URI, "table" for a qualified table name."""
+    if source.startswith("/") or _re.match(r"^[A-Za-z][A-Za-z0-9+.\-]*://?", source):
+        return "location"
+    return "table"
+
+
+def gbx_file_read(
+    spark: "SparkSession",
+    source: str,
+    *,
+    source_type: str = "auto",
+    recursive: bool = True,
+    include_hidden: bool = False,
+) -> "DataFrame":
+    """Generic, format-agnostic, session-ful read → DataFrame of raw FILE/bytes.
+
+    Session-ful (driver/function-layer): resolves the runtime FILE tier and
+    delegates natively.  Two source kinds:
+
+    - **location** (Path/Volume): FILE-capable runtimes read
+      ``read_files(source, format=>'file')`` → ``[path, content, size]`` (native
+      bytes + metadata); FUSE-only runtimes fall back to
+      ``spark.read.format("binaryFile")`` → the same three columns.
+    - **table** (FILE-column Delta table): delegates to
+      ``file_table.read_file_table`` (resolves the FILE ``.uri`` → path,
+      Serverless-GC-safe) and projects the ``tile.path`` column as ``path``.
+
+    ``source_type="auto"`` classifies via :func:`_classify_source`.
+    Compose with a decoder, e.g. ``gbx_file_read(spark, path) →
+    rst_fromcontent(content, driver)``.
+
+    Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
+    """
+    st = _classify_source(source) if source_type == "auto" else source_type
+    if st == "table":
+        from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+        tile_df = read_file_table(spark, source)
+        return tile_df.selectExpr("tile.path AS path")
+
+    if st != "location":
+        raise ValueError(
+            f"source_type must be 'auto', 'location', or 'table'; got {source_type!r}"
+        )
+
+    tier = file_access_tier(spark)
+    if tier == "fuse":
+        # binaryFile is a native reader available on every runtime; returns
+        # [path, modificationTime, length, content].  Project to the common shape.
+        # Pass options directly to load() so the fluent chain stays as
+        # spark.read.format(...).load(path, **opts) — avoids .option().option()
+        # chaining that complicates mock-based unit tests.
+        load_opts: dict[str, str] = {}
+        if recursive:
+            load_opts["recursiveFileLookup"] = "true"
+        if not include_hidden:
+            load_opts["pathGlobFilter"] = "[!._]*"
+        return (
+            spark.read.format("binaryFile")
+            .load(to_local_path(source), **load_opts)
+            .selectExpr("path AS path", "content AS content", "length AS size")
+        )
+
+    # FILE tier: read_files(format=>'file') exposes content bytes + _metadata.
+    escaped = to_local_path(source).replace("'", "''")
+    recursive_lookup = "true" if recursive else "false"
+    hidden_clause = (
+        ""
+        if include_hidden
+        else "WHERE NOT (_metadata.file_name LIKE '_%' OR _metadata.file_name LIKE '.%')"
+    )
+    return spark.sql(f"""
+        SELECT _metadata.file_path AS path, content, _metadata.file_size AS size
+        FROM read_files('{escaped}', format => 'file',
+                        recursiveFileLookup => {recursive_lookup})
+        {hidden_clause}
+        """)

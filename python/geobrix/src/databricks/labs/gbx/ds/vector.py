@@ -633,8 +633,11 @@ class VectorGbxReader(DataSourceReader):
         self.where = options.get("where") or None
         # FILE access mode: "auto" (default, gracefully downgrades to FUSE if FILE
         # unavailable), "managed" (FILE MANAGED), or "external" (FILE EXTERNAL).
-        # The NO-GATING rule is enforced at read() time via resolve_access: explicit
-        # FILE requests on FUSE-only runtimes raise a clear, actionable error.
+        # The NO-GATING rule is enforced here (__init__ = driver-side), NOT in read()
+        # (which runs on executors). On Spark Connect workers (Serverless DBR 19+),
+        # SparkSession.getActiveSession() returns None, so file_access_tier() called
+        # from read() always resolves to "fuse" — causing a false ValueError for
+        # explicit managed/external on FILE-capable runtimes.
         access = options.get("access", "auto")
         if access not in ("auto", "managed", "external"):
             raise ValueError(
@@ -642,6 +645,16 @@ class VectorGbxReader(DataSourceReader):
                 f"got {access!r}"
             )
         self.access = access
+
+        # Driver-side capability probe: get the active driver SparkSession explicitly
+        # to avoid the getOrCreate() path on workers. Raises ValueError here (at plan
+        # time) for explicit FILE on a fuse-only runtime — once, on the driver, not
+        # per-partition on executor workers.
+        from pyspark.sql import SparkSession as _SpSess
+
+        _driver_spark = _SpSess.getActiveSession()
+        self._resolved_tier = file_access_tier(spark=_driver_spark)
+        resolve_access(self.access, tier=self._resolved_tier)
 
     def _layer(self):
         return self.layer_name if self.layer_name else self.layer_number
@@ -785,13 +798,14 @@ class VectorGbxReader(DataSourceReader):
 
         FILE access mode (``self.access``):
         - ``"auto"``: silently uses FUSE when FILE is unavailable; no error.
-        - ``"managed"`` / ``"external"``: explicit FILE. Raises ``ValueError`` with a
-          clear, actionable message if FILE is not available on this runtime (NO-GATING rule).
+        - ``"managed"`` / ``"external"``: explicit FILE. The NO-GATING rule is enforced
+          in ``__init__`` (driver-side) — not here. On Spark Connect workers (Serverless
+          DBR 19+), ``SparkSession.getActiveSession()`` returns None so probing the tier
+          here would always resolve to "fuse", giving a false ValueError for valid
+          FILE-capable runtimes.
         """
-        # NO-GATING rule: explicit FILE on FUSE-only tier raises a clear error.
-        # "auto" downgrades silently, so this raises only for managed/external on fuse.
-        _tier = file_access_tier()
-        resolve_access(self.access, tier=_tier)
+        # NO-GATING validation was moved to __init__ (driver-side). read() runs on
+        # executors and must not re-probe the capability tier.
 
         import numpy as np
         import pyarrow as pa

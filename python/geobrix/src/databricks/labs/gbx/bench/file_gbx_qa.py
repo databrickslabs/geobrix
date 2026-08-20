@@ -51,14 +51,14 @@ def _fail(name: str, exc: Exception, note: str = "", **extras) -> Dict[str, Any]
 
 def _make_tiny_cog(out_path: str, px: int = 64) -> None:
     """Write a tiny synthetic 1-band float32 COG to *out_path* via rasterio."""
+    import shutil
+    import tempfile
+
     import numpy as np
     import rasterio
     from rasterio.crs import CRS
     from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
-
-    import shutil
-    import tempfile
 
     data = np.random.default_rng(42).random((1, px, px)).astype("float32")
     transform = from_bounds(-1.0, -1.0, 1.0, 1.0, px, px)
@@ -150,9 +150,7 @@ def _check_enumerate_files(spark, raster_dir: str, raster_name: str) -> Dict[str
         paths = [r["path"] if isinstance(r, dict) else r.path for r in rows]
         found = any(raster_name in p for p in paths)
         # Extension filter: *.tif should still find it
-        result2 = enumerate_files(
-            raster_dir, extensions=(".tif",), spark=spark
-        )
+        result2 = enumerate_files(raster_dir, extensions=(".tif",), spark=spark)
         if isinstance(result2, list):
             rows2 = result2
         else:
@@ -200,7 +198,9 @@ def _check_open_for_read_explicit_modes(
                 open_for_read(raster_path, access="managed", spark=spark)
             except ValueError:
                 raised = True
-            return _pass(name, f"tier=fuse; managed raises={raised}", raises_on_fuse=raised)
+            return _pass(
+                name, f"tier=fuse; managed raises={raised}", raises_on_fuse=raised
+            )
         else:
             # On FILE-capable tier, both should succeed
             r1 = open_for_read(raster_path, access="managed", spark=spark)
@@ -226,9 +226,7 @@ def _check_no_gating_error(spark) -> Dict[str, Any]:
             error_msg = str(ve)[:200]
         note = f"raises_on_managed_fuse={raised}"
         if not raised:
-            return _fail(
-                name, AssertionError("Expected ValueError not raised"), note
-            )
+            return _fail(name, AssertionError("Expected ValueError not raised"), note)
         return _pass(name, note, error_msg_preview=error_msg)
     except Exception as exc:
         return _fail(name, exc)
@@ -243,7 +241,11 @@ def _check_raster_reader(
         from databricks.labs.gbx.ds.register import register
 
         register(spark)
-        df = spark.read.format("raster_gbx").option("driverName", "GTiff").load(raster_dir)
+        df = (
+            spark.read.format("raster_gbx")
+            .option("driverName", "GTiff")
+            .load(raster_dir)
+        )
         rows = df.collect()
         row_count = len(rows)
         # Each row has a 'tile' struct with 'raster' (BINARY) or virtual path
@@ -256,7 +258,9 @@ def _check_raster_reader(
         return _fail(name, exc)
 
 
-def _check_vector_reader(spark, geojson_path: str, expected_count: int) -> Dict[str, Any]:
+def _check_vector_reader(
+    spark, geojson_path: str, expected_count: int
+) -> Dict[str, Any]:
     """Vector read via shapefile_gbx/geojson_gbx datasource: row count."""
     name = "vector_reader_gbx"
     try:
@@ -279,6 +283,7 @@ def _check_vector_reader(spark, geojson_path: str, expected_count: int) -> Dict[
 
 def _build_raster_tile_df(spark, raster_path: str):
     """Build a one-row tile DataFrame from *raster_path* for write tests."""
+    import rasterio
     from pyspark.sql.types import (
         BinaryType,
         IntegerType,
@@ -288,8 +293,6 @@ def _build_raster_tile_df(spark, raster_path: str):
         StructField,
         StructType,
     )
-
-    import rasterio
 
     with rasterio.open(raster_path) as ds:
         w, h = ds.width, ds.height
@@ -317,9 +320,7 @@ def _build_raster_tile_df(spark, raster_path: str):
             StructField("clip_polygon", BinaryType(), True),
             StructField("clip_crs", StringType(), True),
             StructField("crs", StringType(), True),
-            StructField(
-                "metadata", MapType(StringType(), StringType()), True
-            ),
+            StructField("metadata", MapType(StringType(), StringType()), True),
         ]
     )
     outer_schema = StructType([StructField("tile", tile_schema, True)])
@@ -375,7 +376,12 @@ def _check_write_managed(
 
 
 def _check_write_external(
-    spark, raster_path: str, catalog: str, schema: str, ts: int, filespace: Optional[str] = None
+    spark,
+    raster_path: str,
+    catalog: str,
+    schema: str,
+    ts: int,
+    filespace: Optional[str] = None,
 ) -> Dict[str, Any]:
     """open_for_write file_mode='external' → try_to_file → round-trip read."""
     name = "write_external"
@@ -463,7 +469,9 @@ def _check_write_auto(
         count = spark.sql(f"SELECT count(*) FROM {target}").collect()[0][0]
         note = f"tier={tier!r}  wrote in {write_s:.2f}s  row_count={count}"
         if count >= 1:
-            return _pass(name, note, write_s=write_s, row_count=count, tier=tier, target=target)
+            return _pass(
+                name, note, write_s=write_s, row_count=count, tier=tier, target=target
+            )
         return _fail(name, AssertionError(f"Expected >=1 row, got {count}"), note)
     except Exception as exc:
         return _fail(name, exc, target=target)
@@ -514,7 +522,12 @@ def _check_ingest_files(
 
 
 def _check_vector_write_modes(
-    spark, geojson_path: str, catalog: str, schema: str, filespace: str, ts: int,
+    spark,
+    geojson_path: str,
+    catalog: str,
+    schema: str,
+    filespace: str,
+    ts: int,
     work_dir: str = "/tmp/gbx_qa_work",
 ) -> List[Dict[str, Any]]:
     """Vector write via VectorGbxWriter across fuse/managed/external modes.
@@ -569,12 +582,20 @@ def _check_vector_write_modes(
                     "filespace", filespace
                 ).mode("overwrite").save(target_table)
                 write_s = time.perf_counter() - t0
-                count_out = spark.sql(f"SELECT count(*) FROM {target_table}").collect()[0][0]
+                count_out = spark.sql(f"SELECT count(*) FROM {target_table}").collect()[
+                    0
+                ][0]
 
             note = f"write in {write_s:.2f}s  in={count_in}  out={count_out}"
             if count_out > 0:
                 results.append(
-                    _pass(name, note, write_s=write_s, count_in=count_in, count_out=count_out)
+                    _pass(
+                        name,
+                        note,
+                        write_s=write_s,
+                        count_in=count_in,
+                        count_out=count_out,
+                    )
                 )
             else:
                 results.append(
@@ -621,7 +642,9 @@ def _check_amortization(spark, work_dir: str) -> List[Dict[str, Any]]:
             compress="DEFLATE",
         )
         results.append(
-            _pass("amort_corpus_gen", f"manifest={manifest_path}  corpus_dir={corpus_dir}")
+            _pass(
+                "amort_corpus_gen", f"manifest={manifest_path}  corpus_dir={corpus_dir}"
+            )
         )
     except Exception as exc:
         results.append(_fail("amort_corpus_gen", exc))
@@ -643,12 +666,22 @@ def _check_amortization(spark, work_dir: str) -> List[Dict[str, Any]]:
         )
         # Report per-mode timing
         for r in rows:
-            mode = r.split_strategy if hasattr(r, "split_strategy") else getattr(r, "note", "?")
+            mode = (
+                r.split_strategy
+                if hasattr(r, "split_strategy")
+                else getattr(r, "note", "?")
+            )
             per_tile_ms = getattr(r, "per_tile_avg_ms", None) or 0.0
             status = getattr(r, "status", "?")
-            name = f"amort_{getattr(r, 'fn', 'fn')}_{getattr(r, 'split_strategy', mode)}"
+            name = (
+                f"amort_{getattr(r, 'fn', 'fn')}_{getattr(r, 'split_strategy', mode)}"
+            )
             results.append(
-                _pass(name, f"status={status}  per_tile_ms={per_tile_ms:.3f}", per_tile_ms=per_tile_ms)
+                _pass(
+                    name,
+                    f"status={status}  per_tile_ms={per_tile_ms:.3f}",
+                    per_tile_ms=per_tile_ms,
+                )
                 if status == "ok"
                 else _fail(
                     name,
@@ -734,7 +767,9 @@ def run_qa(
 
     try:
         expected_count = _make_tiny_geojson(geojson_path)
-        results.append(_pass("synth_vector", f"path={geojson_path}  count={expected_count}"))
+        results.append(
+            _pass("synth_vector", f"path={geojson_path}  count={expected_count}")
+        )
     except Exception as exc:
         results.append(_fail("synth_vector", exc))
         expected_count = 0
@@ -789,13 +824,17 @@ def run_qa(
         spark, geojson_path, catalog, schema, filespace, ts, work_dir=work_dir
     ):
         results.append(r)
-        print(f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note','')}", flush=True)
+        print(
+            f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note','')}", flush=True
+        )
 
     # --- 10. Amortization (grouped FILE) ----------------------------------------
     print("[file_gbx_qa] Running amortization bench...", flush=True)
     for r in _check_amortization(spark, work_dir):
         results.append(r)
-        print(f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note','')}", flush=True)
+        print(
+            f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note','')}", flush=True
+        )
 
     # --- Final summary ----------------------------------------------------------
     n_pass = sum(1 for r in results if r["status"] == "PASS")

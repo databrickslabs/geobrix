@@ -243,31 +243,33 @@ def test_vector_fuse_fallback_access_auto_unchanged(tmp_path):
 
 
 def test_vector_explicit_file_on_fuse_raises(tmp_path):
-    """access='managed' on a FUSE-only runtime raises ValueError (NO-GATING rule)."""
+    """access='managed' on a FUSE-only runtime raises ValueError at construction (driver-side).
+
+    The NO-GATING error must be raised in __init__ (driver-side), not per-partition
+    in read() (executor-side). On Spark Connect workers getActiveSession() returns None
+    so probing the tier in read() would silently resolve to "fuse" on FILE-capable
+    runtimes, giving a false positive for valid managed/external requests.
+    """
     from databricks.labs.gbx.ds.vector import VectorGbxReader
 
     p = _gj_file_path(str(tmp_path))
 
     with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec:
         mock_tier_vec.return_value = "fuse"
-        rdr = VectorGbxReader({"path": p, "access": "managed"})
-        parts = rdr.partitions()
         with pytest.raises(ValueError, match="Requested managed FILE access mode"):
-            list(rdr.read(parts[0]))
+            VectorGbxReader({"path": p, "access": "managed"})
 
 
 def test_vector_explicit_external_on_fuse_raises(tmp_path):
-    """access='external' on a FUSE-only runtime raises ValueError (NO-GATING rule)."""
+    """access='external' on a FUSE-only runtime raises ValueError at construction (driver-side)."""
     from databricks.labs.gbx.ds.vector import VectorGbxReader
 
     p = _gj_file_path(str(tmp_path))
 
     with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec:
         mock_tier_vec.return_value = "fuse"
-        rdr = VectorGbxReader({"path": p, "access": "external"})
-        parts = rdr.partitions()
         with pytest.raises(ValueError, match="Requested external FILE access mode"):
-            list(rdr.read(parts[0]))
+            VectorGbxReader({"path": p, "access": "external"})
 
 
 def test_vector_staging_amortized_once_per_source(tmp_path):
@@ -337,3 +339,58 @@ def test_vector_access_invalid_option_raises():
             VectorGbxReader({"path": tmppath, "access": "bogus"})
     finally:
         os.unlink(tmppath)
+
+
+# ---------------------------------------------------------------------------
+# IMPORTANT-1: driver-side capability probe — read() must NOT re-probe tier
+# ---------------------------------------------------------------------------
+
+
+def test_vector_read_does_not_reprobe_file_access_tier(tmp_path):
+    """read() must NOT call file_access_tier — validation was moved to __init__.
+
+    On Spark Connect workers SparkSession.getActiveSession() returns None so
+    file_access_tier() called from read() always resolves to 'fuse', giving a
+    false ValueError for valid FILE-capable runtimes.  After the fix, read()
+    does not probe at all — the resolved tier is established once in __init__.
+    """
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    # Construct with FILE-capable tier (so __init__ doesn't raise)
+    with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_init_tier:
+        mock_init_tier.return_value = "read_files"
+        rdr = VectorGbxReader({"path": p, "access": "managed"})
+
+    # read() must not call file_access_tier at all
+    mock_init_tier.reset_mock()
+    parts = rdr.partitions()
+    batches = [b for part in parts for b in rdr.read(part)]
+    assert (
+        not mock_init_tier.called
+    ), "read() called file_access_tier — it should not; the tier was resolved in __init__"
+    # Verify rows were actually read (regression guard)
+    tbl = pa.Table.from_batches(batches)
+    assert tbl.num_rows == 2
+
+
+def test_vector_auto_access_fuse_runtime_reads_correctly(tmp_path):
+    """access='auto' on a fuse-only runtime reads data correctly (no error).
+
+    With the driver-side probe, auto mode on a fuse-only runtime must not raise
+    even when the init-time probe runs without a full Spark session.
+    """
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        # Must not raise — auto downgrades silently
+        rdr = VectorGbxReader({"path": p, "access": "auto"})
+        rows = _read_all(rdr)
+
+    assert sorted(rows["id"]) == [1, 2]

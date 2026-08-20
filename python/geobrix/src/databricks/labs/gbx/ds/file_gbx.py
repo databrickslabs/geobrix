@@ -191,16 +191,14 @@ def _detect_tier(spark: SparkSession) -> Literal["read_files", "list_files", "fu
     # Probe 1: read_files(format=>'file') — returns FILE refs + metadata
     # This is the preferred path for both read and listing (DBR 13.3+).
     try:
-        spark.sql(
-            """
+        spark.sql("""
             SELECT COUNT(*) FROM (
                 SELECT * FROM read_files(
                     '/Volumes/__gbx_probe__/__none__',
                     format => 'file'
                 ) LIMIT 1
             ) LIMIT 1
-            """
-        ).collect()
+            """).collect()
         return "read_files"
     except Exception as exc:
         # If the error proves the function ran (e.g., PATH_NOT_FOUND), return "read_files".
@@ -211,15 +209,13 @@ def _detect_tier(spark: SparkSession) -> Literal["read_files", "list_files", "fu
     # Probe 2: list_files(...) — metadata-only lister (DBR 18 LTS+)
     # Returns path, size, modification_time, file (FILE ref).
     try:
-        spark.sql(
-            """
+        spark.sql("""
             SELECT COUNT(*) FROM (
                 SELECT * FROM list_files(
                     '/Volumes/__gbx_probe__/__none__'
                 ) LIMIT 1
             ) LIMIT 1
-            """
-        ).collect()
+            """).collect()
         return "list_files"
     except Exception as exc:
         # Same logic: if the error proves the function ran, return "list_files".
@@ -431,10 +427,12 @@ def _enumerate_read_files(
 
     recursiveFileLookup = "true" if recursive else "false"
     include_hidden_clause = (
-        "" if include_hidden else "AND NOT (file_name LIKE '_%' OR file_name LIKE '.%')"
+        ""
+        if include_hidden
+        else "AND NOT (_metadata.file_name LIKE '_%' OR _metadata.file_name LIKE '.%')"
     )
     filter_clause = (
-        _glob_to_sql_basename_predicate(glob_patterns, "file_name")
+        _glob_to_sql_basename_predicate(glob_patterns, "_metadata.file_name")
         if glob_patterns
         else ""
     )
@@ -1528,15 +1526,34 @@ def open_for_write(
         )
 
     # 3. Resolve effective write mode.
-    tier = file_access_tier(spark)
+    # Gate on the WRITE-primitive probe (file_supported / create_file / try_to_file)
+    # rather than the read-tier probe (file_access_tier / read_files).  If the two
+    # probes diverge — read_files present but write primitives absent — an explicit
+    # managed/external request would otherwise pass the read-tier gate, route to
+    # write_file_table, and surface a raw downstream error instead of the promised
+    # actionable ValueError.
     if file_mode == "auto":
-        if tier != "fuse":
+        if file_supported(spark):
             effective_mode = "managed" if filespace else "external"
         else:
             effective_mode = "fuse"
     elif file_mode in ("managed", "external"):
-        # Delegate to resolve_access; raises clear, actionable error if FILE is unavailable.
-        resolve_access(file_mode, tier=tier, spark=spark)
+        if not file_supported(spark):
+            raise ValueError(
+                f"Requested {file_mode} FILE access mode, but the FILE write-primitive "
+                f"(create_file/try_to_file) is not available on this runtime. "
+                f"\n"
+                f"FILE MANAGED/EXTERNAL writes require Databricks Runtime 19+ with "
+                f"FILE write-primitive support enabled. "
+                f"\n"
+                f"Option 1: Upgrade your cluster to DBR 19+ with FILE support, then try again. "
+                f"\n"
+                f"Option 2: Set file_mode='auto' (default) to transparently use FUSE "
+                f"(fallback, no FILE column). "
+                f"\n"
+                f"Option 3: Use file_mode='fuse' explicitly to bypass FILE (FUSE only, "
+                f"no FILE-column registration). "
+            )
         effective_mode = file_mode
     elif file_mode == "fuse":
         effective_mode = "fuse"
@@ -1642,14 +1659,16 @@ def ingest_files(
     # 1. Validate layout before any side effects.
     _validate_layout(layout)
 
-    # 2. Require FILE-capable tier; raise the actionable error on fuse-only runtimes.
-    tier = file_access_tier(spark)
-    if tier == "fuse":
+    # 2. Require write-primitive capability; raise the actionable error if unavailable.
+    # Gate on file_supported (create_file/try_to_file) rather than file_access_tier
+    # (read_files/list_files) so the actionable-error contract holds when read_files
+    # is present but the write primitives are not.
+    if not file_supported(spark):
         raise ValueError(
-            "ingest_files requires FILE support (read_files with format=>'file'), "
-            "which is not available on this runtime (tier='fuse'). "
-            "FILE requires Databricks Runtime 13.3 LTS or later. "
-            "Upgrade your cluster to DBR 13.3+ to use ingest_files, or use "
+            "ingest_files requires FILE write-primitive support (create_file/try_to_file), "
+            "which is not available on this runtime. "
+            "FILE writes require Databricks Runtime 19+ with FILE support enabled. "
+            "Upgrade your cluster to DBR 19+ to use ingest_files, or use "
             "open_for_write(file_mode='fuse') for a plain Delta write without a FILE column."
         )
 

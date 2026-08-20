@@ -872,15 +872,15 @@ def _make_tile_df():
 
 
 def test_open_for_write_auto_managed_routes_to_write_file_table():
-    """auto + filespace + FILE tier → write_file_table(file_mode='managed')."""
+    """auto + filespace + write-primitive available → write_file_table(file_mode='managed')."""
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
     with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
         patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
     ):
-        mock_tier.return_value = "read_files"
+        mock_fs.return_value = True
         file_gbx.open_for_write(
             mock_spark,
             mock_df,
@@ -903,15 +903,15 @@ def test_open_for_write_auto_managed_routes_to_write_file_table():
 
 
 def test_open_for_write_auto_external_no_filespace():
-    """auto + no filespace + FILE tier → write_file_table(file_mode='external')."""
+    """auto + no filespace + write-primitive available → write_file_table(file_mode='external')."""
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
     with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
         patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
     ):
-        mock_tier.return_value = "list_files"
+        mock_fs.return_value = True
         file_gbx.open_for_write(
             mock_spark,
             mock_df,
@@ -934,17 +934,17 @@ def test_open_for_write_auto_external_no_filespace():
 
 
 def test_open_for_write_auto_fuse_tier_writes_plain_delta():
-    """auto + fuse tier → CTAS plain Delta write via spark.sql, no create_file / try_to_file."""
+    """auto + write-primitive unavailable → CTAS plain Delta write via spark.sql, no create_file / try_to_file."""
     captured = []
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
     mock_df = _make_tile_df()
 
     with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
         patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
     ):
-        mock_tier.return_value = "fuse"
+        mock_fs.return_value = False
         file_gbx.open_for_write(
             mock_spark,
             mock_df,
@@ -965,15 +965,15 @@ def test_open_for_write_auto_fuse_tier_writes_plain_delta():
 
 
 def test_open_for_write_explicit_managed_routes_to_write_file_table():
-    """Explicit file_mode='managed' on FILE-capable tier → write_file_table(managed)."""
+    """Explicit file_mode='managed' with write-primitive available → write_file_table(managed)."""
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
     with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
         patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
     ):
-        mock_tier.return_value = "read_files"
+        mock_fs.return_value = True
         file_gbx.open_for_write(
             mock_spark,
             mock_df,
@@ -988,15 +988,15 @@ def test_open_for_write_explicit_managed_routes_to_write_file_table():
 
 
 def test_open_for_write_explicit_external_routes_to_write_file_table():
-    """Explicit file_mode='external' on FILE-capable tier → write_file_table(external)."""
+    """Explicit file_mode='external' with write-primitive available → write_file_table(external)."""
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
     with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
         patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
     ):
-        mock_tier.return_value = "read_files"
+        mock_fs.return_value = True
         file_gbx.open_for_write(
             mock_spark,
             mock_df,
@@ -1009,13 +1009,13 @@ def test_open_for_write_explicit_external_routes_to_write_file_table():
     assert kwargs["file_mode"] == "external"
 
 
-def test_open_for_write_explicit_managed_on_fuse_tier_raises():
-    """Explicit file_mode='managed' on fuse tier raises actionable ValueError."""
+def test_open_for_write_explicit_managed_write_primitive_unavailable_raises():
+    """Explicit file_mode='managed' with write-primitive unavailable raises actionable ValueError."""
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "fuse"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = False
         with pytest.raises(ValueError) as exc_info:
             file_gbx.open_for_write(
                 mock_spark,
@@ -1028,16 +1028,17 @@ def test_open_for_write_explicit_managed_on_fuse_tier_raises():
     err = str(exc_info.value)
     assert "managed FILE" in err
     assert "not available" in err
-    assert "tier='fuse'" in err
+    assert "write-primitive" in err
+    assert "DBR 19+" in err
 
 
-def test_open_for_write_explicit_external_on_fuse_tier_raises():
-    """Explicit file_mode='external' on fuse tier raises actionable ValueError."""
+def test_open_for_write_explicit_external_write_primitive_unavailable_raises():
+    """Explicit file_mode='external' with write-primitive unavailable raises actionable ValueError."""
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "fuse"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = False
         with pytest.raises(ValueError) as exc_info:
             file_gbx.open_for_write(
                 mock_spark,
@@ -1049,6 +1050,7 @@ def test_open_for_write_explicit_external_on_fuse_tier_raises():
     err = str(exc_info.value)
     assert "external FILE" in err
     assert "not available" in err
+    assert "write-primitive" in err
 
 
 def test_open_for_write_invalid_layout_raises():
@@ -1095,12 +1097,12 @@ def test_open_for_write_cluster_layout_emits_optimize_warning():
     mock_df = _make_tile_df()
 
     with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
         patch("databricks.labs.gbx.pyrx.file_table.write_file_table"),
         _warnings_mod.catch_warnings(record=True) as caught,
     ):
         _warnings_mod.simplefilter("always")
-        mock_tier.return_value = "read_files"
+        mock_fs.return_value = True
         file_gbx.open_for_write(
             mock_spark,
             mock_df,
@@ -1226,16 +1228,16 @@ def test_open_for_write_fuse_overwrite_drops_before_create():
 
 
 def test_open_for_write_explicit_managed_no_filespace_raises_early():
-    """Explicit file_mode='managed' with no filespace raises before tier detection."""
+    """Explicit file_mode='managed' with no filespace raises before write-primitive detection."""
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
-    # Patch file_access_tier so we can confirm it was NOT reached.
+    # Patch file_supported so we can confirm it was NOT reached (early guard fires first).
     with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
         patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
     ):
-        mock_tier.return_value = "read_files"
+        mock_fs.return_value = True
         with pytest.raises(ValueError) as exc_info:
             file_gbx.open_for_write(
                 mock_spark,
@@ -1248,8 +1250,8 @@ def test_open_for_write_explicit_managed_no_filespace_raises_early():
     err = str(exc_info.value)
     assert "managed" in err
     assert "filespace" in err
-    # Neither tier detection nor write_file_table should have been reached.
-    mock_tier.assert_not_called()
+    # Neither write-primitive detection nor write_file_table should have been reached.
+    mock_fs.assert_not_called()
     mock_wft.assert_not_called()
 
 
@@ -1310,12 +1312,12 @@ def test_open_for_write_fuse_select_expr_backticks():
 # ---------------------------------------------------------------------------
 
 
-def test_ingest_files_raises_on_fuse_tier():
-    """ingest_files raises a clear ValueError on a fuse-only runtime."""
+def test_ingest_files_raises_when_write_primitive_unavailable():
+    """ingest_files raises a clear ValueError when the write-primitive is unavailable."""
     mock_spark = MagicMock()
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "fuse"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = False
         with pytest.raises(ValueError) as exc_info:
             file_gbx.ingest_files(
                 mock_spark,
@@ -1325,9 +1327,9 @@ def test_ingest_files_raises_on_fuse_tier():
             )
 
     err = str(exc_info.value)
-    assert "ingest_files requires FILE support" in err
-    assert "tier='fuse'" in err
-    assert "13.3 LTS" in err
+    assert "ingest_files requires FILE write-primitive support" in err
+    assert "DBR 19+" in err
+    assert "open_for_write" in err
 
 
 def test_ingest_files_builds_read_files_insert_sql():
@@ -1336,8 +1338,8 @@ def test_ingest_files_builds_read_files_insert_sql():
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = True
         file_gbx.ingest_files(
             mock_spark,
             "/Volumes/cat/s/v/src",
@@ -1370,8 +1372,8 @@ def test_ingest_files_order_by_in_insert():
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = True
         file_gbx.ingest_files(
             mock_spark,
             "/Volumes/cat/s/v/src",
@@ -1390,8 +1392,8 @@ def test_ingest_files_no_order_by_for_plain_layout():
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = True
         file_gbx.ingest_files(
             mock_spark,
             "/Volumes/cat/s/v/src",
@@ -1410,8 +1412,8 @@ def test_ingest_files_escapes_single_quotes_in_src():
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = True
         file_gbx.ingest_files(
             mock_spark,
             "/Volumes/cat/s/o'reilly/src",
@@ -1430,8 +1432,8 @@ def test_ingest_files_overwrite_drops_and_recreates():
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = True
         file_gbx.ingest_files(
             mock_spark,
             "/Volumes/cat/s/v/src",
@@ -1455,8 +1457,8 @@ def test_ingest_files_non_recursive():
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = True
         file_gbx.ingest_files(
             mock_spark,
             "/Volumes/cat/s/v/src",
@@ -1473,16 +1475,15 @@ def test_ingest_files_invalid_layout_raises():
     """ingest_files raises ValueError for invalid layout before emitting any SQL."""
     mock_spark = MagicMock()
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "read_files"
-        with pytest.raises(ValueError, match="layout must be"):
-            file_gbx.ingest_files(
-                mock_spark,
-                "/Volumes/cat/s/v/src",
-                "cat.sch.dst",
-                filespace="/Volumes/cat/s/v",
-                layout="PARTITIONED BY path",
-            )
+    # layout validation fires before the write-primitive check, so no mocking needed.
+    with pytest.raises(ValueError, match="layout must be"):
+        file_gbx.ingest_files(
+            mock_spark,
+            "/Volumes/cat/s/v/src",
+            "cat.sch.dst",
+            filespace="/Volumes/cat/s/v",
+            layout="PARTITIONED BY path",
+        )
 
     mock_spark.sql.assert_not_called()
 
@@ -1493,8 +1494,8 @@ def test_ingest_files_custom_file_col():
     mock_spark = MagicMock()
     mock_spark.sql.side_effect = lambda sql: captured.append(sql)
 
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-        mock_tier.return_value = "list_files"
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = True
         file_gbx.ingest_files(
             mock_spark,
             "/Volumes/cat/s/v/src",
@@ -1809,3 +1810,146 @@ def test_glob_to_sql_basename_predicate_question_mark_routes_to_rlike():
     assert "RLIKE" in pred
     # The ? in tile? becomes . in the regex — verify a dot is present in the regex fragment
     assert "tile." in pred
+
+
+# ---------------------------------------------------------------------------
+# IMPORTANT-2: _enumerate_read_files must use _metadata.file_name in WHERE
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_files_read_files_where_uses_metadata_file_name():
+    """read_files tier: skip clause references _metadata.file_name, not bare file_name.
+
+    read_files(format=>'file') exposes file metadata under the _metadata struct.
+    A bare 'file_name' column is not a top-level column and would raise
+    UNRESOLVED_COLUMN at runtime.  Both the hidden-skip clause and the glob
+    predicate must reference _metadata.file_name consistently with the SELECT.
+    """
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        # Default: include_hidden=False → skip clause should reference _metadata.file_name
+        file_gbx.enumerate_files("/Volumes/test/path", spark=mock_spark)
+
+    sql = mock_spark.sql.call_args[0][0]
+    # The WHERE clause must use _metadata.file_name, not bare file_name
+    assert (
+        "_metadata.file_name" in sql
+    ), f"Expected _metadata.file_name in SQL; got:\n{sql}"
+    # Bare file_name must NOT appear outside of _metadata.file_name
+    # (strip the _metadata.file_name occurrences to check no bare reference remains)
+    stripped = sql.replace("_metadata.file_name", "")
+    assert (
+        "file_name" not in stripped
+    ), f"Bare 'file_name' (without _metadata. prefix) found in SQL; got:\n{sql}"
+
+
+def test_enumerate_files_read_files_glob_predicate_uses_metadata_file_name():
+    """read_files tier: glob predicate column expression is _metadata.file_name."""
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.enumerate_files(
+            "/Volumes/test/path",
+            extensions=(".tif",),
+            spark=mock_spark,
+        )
+
+    sql = mock_spark.sql.call_args[0][0]
+    assert (
+        "_metadata.file_name" in sql
+    ), f"Expected _metadata.file_name in SQL; got:\n{sql}"
+    # No bare file_name outside _metadata.file_name
+    stripped = sql.replace("_metadata.file_name", "")
+    assert (
+        "file_name" not in stripped
+    ), f"Bare 'file_name' found in glob predicate; got:\n{sql}"
+
+
+# ---------------------------------------------------------------------------
+# IMPORTANT-3: open_for_write / ingest_files gated on write-primitive probe
+# ---------------------------------------------------------------------------
+
+
+def test_open_for_write_write_primitive_absent_read_tier_present_raises():
+    """Write-primitive absent but read tier present → explicit managed still raises actionable error.
+
+    This is the divergence scenario: read_files is available (file_access_tier would
+    pass) but create_file/try_to_file are not (file_supported returns False).
+    Before the fix, open_for_write(file_mode='managed') would pass the read-tier gate,
+    route to write_file_table, and surface a raw downstream error.
+    After the fix, it raises ValueError with the actionable message.
+    """
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_fs.return_value = False  # write primitive absent
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.open_for_write(
+                mock_spark,
+                mock_df,
+                "cat.sch.t",
+                file_mode="managed",
+                filespace="/Volumes/c/s/v",
+            )
+
+    err = str(exc_info.value)
+    assert "write-primitive" in err
+    assert "DBR 19+" in err
+    # write_file_table must NOT be called (no raw downstream error)
+    mock_wft.assert_not_called()
+
+
+def test_open_for_write_write_primitive_present_routes_to_file_table():
+    """write-primitive present → explicit managed routes to write_file_table (not fuse path)."""
+    mock_spark = MagicMock()
+    mock_df = _make_tile_df()
+
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs,
+        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
+    ):
+        mock_fs.return_value = True
+        file_gbx.open_for_write(
+            mock_spark,
+            mock_df,
+            "cat.sch.t",
+            file_mode="managed",
+            filespace="/Volumes/c/s/v",
+        )
+
+    mock_wft.assert_called_once()
+    _, kwargs = mock_wft.call_args
+    assert kwargs["file_mode"] == "managed"
+
+
+def test_ingest_files_write_primitive_absent_raises_actionable_error():
+    """ingest_files: write-primitive absent → actionable ValueError, not raw downstream error."""
+    mock_spark = MagicMock()
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
+        mock_fs.return_value = False
+        with pytest.raises(ValueError) as exc_info:
+            file_gbx.ingest_files(
+                mock_spark,
+                "/Volumes/cat/s/v/src",
+                "cat.sch.dst",
+                filespace="/Volumes/cat/s/v",
+            )
+
+    err = str(exc_info.value)
+    assert "write-primitive" in err
+    assert "DBR 19+" in err
+    assert "open_for_write" in err
+    # No SQL should have been emitted
+    mock_spark.sql.assert_not_called()

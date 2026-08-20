@@ -684,6 +684,11 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
             with mf.open(**profile) as dst:
                 dst.write(data)
             raster = mf.read()
+    # Pending keys are baked into the produced bytes; strip them so the
+    # materialized tile's metadata stays honest (no double-application).
+    meta = _without_pending(tile.metadata)
+    # Stamp tile_byte_size (materialized raster byte length) into metadata.
+    meta["tile_byte_size"] = str(len(raster))
     return VirtualTile(
         cellid=tile.cellid,
         raster=raster,
@@ -692,9 +697,7 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
         clip_polygon=tile.clip_polygon,
         clip_crs=tile.clip_crs,
         crs=tile.crs,
-        # Pending keys are baked into the produced bytes; strip them so the
-        # materialized tile's metadata stays honest (no double-application).
-        metadata=_without_pending(tile.metadata),
+        metadata=meta,
     )
 
 
@@ -856,6 +859,9 @@ def shape_output(
         # into the written file, no longer pending).
         meta = _without_pending(vt.metadata)
         meta["shape_output"] = "virtualized"
+        # Stamp path_file_size (underlying source file size in bytes) into metadata.
+        file_size = os.path.getsize(out_path)
+        meta["path_file_size"] = str(file_size)
         return VirtualTile(
             cellid=vt.cellid,
             raster=None,

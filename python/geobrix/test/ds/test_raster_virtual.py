@@ -288,7 +288,9 @@ def test_materialized_tile_has_tile_size_metadata(spark, tmp_path):
     assert t["raster"] is not None, "materialized tile must have raster bytes"
     raster_bytes = t["raster"]
     metadata = t["metadata"]
-    assert "tile_byte_size" in metadata, "materialized tile must have tile_size metadata"
+    assert (
+        "tile_byte_size" in metadata
+    ), "materialized tile must have tile_size metadata"
     assert int(metadata["tile_byte_size"]) == len(
         raster_bytes
     ), f"tile_size={metadata['tile_byte_size']} must match len(raster)={len(raster_bytes)}"

@@ -703,7 +703,7 @@ def _fromfile_impl(path, driver, materialize):
     or None on a bad/missing path."""
     if path is None:
         return None
-    from databricks.labs.gbx.ds._listing import to_local_path
+    from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed, to_local_path
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
@@ -715,11 +715,21 @@ def _fromfile_impl(path, driver, materialize):
         # via an in-memory MemoryFile — a tiled/COG GTiff over a UC Volume seeks to
         # block offsets on read, which Volume FUSE can't serve, so we read the whole
         # file then open from memory rather than rasterio.open() on the path.
+        # _stage_local_if_needed handles the probe→stage for eventual-consistency
+        # on /Volumes paths (returns a temp local copy when staging is needed).
         from rasterio.io import MemoryFile
 
         try:
-            with open(local, "rb") as _fh:
-                _src_bytes = _fh.read()
+            staged, is_temp = _stage_local_if_needed(local)
+            try:
+                with open(staged, "rb") as _fh:
+                    _src_bytes = _fh.read()
+            finally:
+                if is_temp:
+                    import os as _os
+
+                    if _os.path.exists(staged):
+                        _os.remove(staged)
             with MemoryFile(_src_bytes) as _src_mf, _src_mf.open() as src:
                 data = src.read()
                 profile = src.profile.copy()

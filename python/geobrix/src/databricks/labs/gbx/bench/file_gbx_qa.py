@@ -21,8 +21,6 @@ import json
 import os
 import time
 import traceback
-import uuid
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
@@ -57,7 +55,6 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
     import numpy as np
     import rasterio
     from rasterio.crs import CRS
-    from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
 
     data = np.random.default_rng(42).random((1, px, px)).astype("float32")
@@ -298,8 +295,6 @@ def _build_raster_tile_df(spark, raster_path: str):
         w, h = ds.width, ds.height
         crs = ds.crs
         crs_str = f"EPSG:{crs.to_epsg()}" if (crs and crs.to_epsg()) else None
-
-    from pyspark.sql import functions as F
 
     # Build a 1-row virtual tile struct pointing at the raster
     window_struct_type = StructType(
@@ -601,7 +596,7 @@ def _check_vector_write_modes(
                 results.append(
                     _fail(
                         name,
-                        AssertionError(f"Got 0 rows back"),
+                        AssertionError("Got 0 rows back"),
                         note,
                     )
                 )
@@ -825,7 +820,8 @@ def run_qa(
     ):
         results.append(r)
         print(
-            f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note','')}", flush=True
+            f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note', '')}",
+            flush=True,
         )
 
     # --- 10. Amortization (grouped FILE) ----------------------------------------
@@ -833,7 +829,8 @@ def run_qa(
     for r in _check_amortization(spark, work_dir):
         results.append(r)
         print(
-            f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note','')}", flush=True
+            f"[file_gbx_qa] {r['check']}: {r['status']}  {r.get('note', '')}",
+            flush=True,
         )
 
     # --- Final summary ----------------------------------------------------------

@@ -1058,11 +1058,7 @@ def test_open_for_write_invalid_layout_raises():
     mock_spark = MagicMock()
     mock_df = _make_tile_df()
 
-    with (
-        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
-        patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft,
-    ):
-        mock_tier.return_value = "read_files"
+    with patch("databricks.labs.gbx.pyrx.file_table.write_file_table") as mock_wft:
         with pytest.raises(ValueError, match="layout must be"):
             file_gbx.open_for_write(
                 mock_spark,

@@ -17,6 +17,8 @@ import tempfile
 import time
 from typing import Dict, List, Optional, Tuple
 
+from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
+
 
 class StageTooLargeError(Exception):
     """Raised when a source file exceeds ``GBX_STAGE_MAX_BYTES`` and cannot be staged.
@@ -251,99 +253,10 @@ def _resolve_sources(
     return out
 
 
+# Keep the internal helpers available for any local monkeypatching in tests
 def _is_fuse_path(path: str) -> bool:
-    """Return True if *path* lives under a Databricks FUSE mount.
-
-    Checks the /Volumes (UC Volume) and /dbfs (legacy DBFS) prefixes.
-    Extracted so tests can monkeypatch the detection without resorting to
-    real /Volumes paths on the developer's machine.
-    """
+    """Return True if *path* lives under a Databricks FUSE mount."""
     return path.startswith("/Volumes") or path.startswith("/dbfs")
-
-
-def _probe_direct_open(path: str) -> None:
-    """Confirm that rasterio can open *path* for direct windowed reads.
-
-    Opens the file and reads a 1×1 pixel window from band 1 — enough to
-    verify real random-access, not just header parsing.  The attempt is
-    wrapped in ``_retry_transient`` so transient UC Volume eventual-
-    consistency misses (``FileNotFoundError`` / ``OSError``) do not
-    immediately trigger a full-file copy.
-
-    Raises on failure after retries; returns ``None`` on success.
-    """
-    import rasterio
-    from rasterio.windows import Window
-
-    from databricks.labs.gbx.ds._listing import _retry_transient
-
-    def _do() -> None:
-        with rasterio.open(path) as ds:
-            ds.read(1, window=Window(0, 0, 1, 1))
-
-    _retry_transient(_do)
-
-
-def _stage_local_if_needed(path: str) -> Tuple[str, bool]:
-    """Return ``(local_path, is_temp)``.
-
-    Probe-then-stage strategy:
-
-    1. **Plain local file** (not under ``/Volumes`` or ``/dbfs``) →
-       passthrough ``(path, False)``, unchanged.
-    2. **``/Volumes`` or ``/dbfs`` path** → **probe**: try to open the file
-       directly with rasterio (open + tiny 1×1 window read) to confirm real
-       windowed access works over the FUSE mount.  The probe is wrapped in
-       ``_retry_transient`` so a transient ``FileNotFoundError`` / ``OSError``
-       from UC Volume eventual-consistency does not trigger an unnecessary
-       copy.
-
-       - Probe **succeeds** → ``(path, False)`` — read directly, no copy.
-       - Probe **fails** after retries → fall back to the sequential
-         ``copyfileobj`` path → ``(temp, True)``.
-
-    3. **Escape hatch**: ``GBX_FORCE_STAGE=1`` env var → always copy even
-       when direct access would work.  Use this in environments where direct
-       FUSE random-access is unreliable under executor concurrency.
-
-    The return contract ``(local_path, is_temp)`` is unchanged; callers
-    (``open_tile`` / ``_uf_*`` tile-read paths) are unaffected.
-    """
-    if not _is_fuse_path(path):
-        return path, False
-
-    if not os.environ.get("GBX_FORCE_STAGE"):
-        try:
-            _probe_direct_open(path)
-            return path, False
-        except Exception:
-            pass  # probe failed — fall through to copy
-
-    # Size guard: refuse to stage files that exceed the configured cap.
-    # This prevents silent OOM from staging a multi-GiB file to local disk.
-    # Does NOT apply to the direct-FUSE-access success path above.
-    stage_max = int(os.environ.get("GBX_STAGE_MAX_BYTES", 4 * 1024**3))
-    try:
-        file_size = os.path.getsize(path)
-    except OSError:
-        file_size = 0  # size unknown; proceed and let the copy fail naturally
-    if file_size > stage_max:
-        raise StageTooLargeError(
-            f"File {path!r} is {file_size:,} bytes, exceeds "
-            f"GBX_STAGE_MAX_BYTES={stage_max:,}; use FUSE (as_local_file) instead"
-        )
-
-    # Copy fallback: stage to a local temp (original behavior).
-    fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".tif")
-    os.close(fd)
-    try:
-        with open(path, "rb") as _src, open(tmp, "wb") as _dst:
-            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-    except Exception:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
-    return tmp, True
 
 
 def prepare_cogs(

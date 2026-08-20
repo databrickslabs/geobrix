@@ -650,3 +650,49 @@ def test_enumerate_files_sql_path_escaping():
     call_args = mock_spark.sql.call_args[0][0]
     # Verify the single quote was escaped (doubled)
     assert "path''s" in call_args
+
+
+# ---------------------------------------------------------------------------
+# open_for_read tests
+# ---------------------------------------------------------------------------
+
+
+def test_open_for_read_auto_mode_returns_source_path():
+    """open_for_read with access='auto' returns the source path."""
+    source = "/Volumes/test/data.tif"
+    result = file_gbx.open_for_read(source, access="auto")
+    assert result == source
+
+
+def test_open_for_read_explicit_managed_with_file_available():
+    """open_for_read with access='managed' succeeds when FILE is available."""
+    mock_spark = MagicMock()
+    source = "/Volumes/test/data.tif"
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        result = file_gbx.open_for_read(source, access="managed", spark=mock_spark)
+
+    assert result == source
+
+
+def test_open_for_read_explicit_managed_without_file_raises_error():
+    """open_for_read with access='managed' raises when FILE is unavailable."""
+    mock_spark = MagicMock()
+    source = "/Volumes/test/data.tif"
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        with pytest.raises(ValueError, match="Requested managed FILE access mode"):
+            file_gbx.open_for_read(source, access="managed", spark=mock_spark)
+
+
+def test_open_for_read_explicit_external_without_file_raises_error():
+    """open_for_read with access='external' raises when FILE is unavailable."""
+    mock_spark = MagicMock()
+    source = "/Volumes/test/data.tif"
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        with pytest.raises(ValueError, match="Requested external FILE access mode"):
+            file_gbx.open_for_read(source, access="external", spark=mock_spark)

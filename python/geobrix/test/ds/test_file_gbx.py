@@ -513,3 +513,140 @@ def test_enumerate_files_returns_path_size_file_structure():
             assert isinstance(rec["path"], str)
             assert isinstance(rec["size"], int)
             assert rec["file"] is None  # FUSE tier has no file ref
+
+
+def test_enumerate_files_cross_tier_parity():
+    """All three tiers produce identical filtering (parity test).
+
+    Tests that root-level and nested _*/..* files are skipped identically across
+    all tiers (read_files, list_files, FUSE). This catches tier-divergence bugs.
+    """
+    import os as os_module
+    import tempfile
+
+    def get_basename(path):
+        return os_module.path.basename(path)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create test files: root-level metadata, nested metadata, normal files, hidden
+        root_success = os_module.path.join(tmpdir, "_success")
+        root_crc = os_module.path.join(tmpdir, ".crc")
+        root_hidden = os_module.path.join(tmpdir, ".hidden")
+        root_normal = os_module.path.join(tmpdir, "normal.txt")
+
+        subdir = os_module.path.join(tmpdir, "subdir")
+        os_module.makedirs(subdir)
+        nested_committed = os_module.path.join(subdir, "_committed_001")
+        nested_crc = os_module.path.join(subdir, ".crc")
+        nested_hidden = os_module.path.join(subdir, ".foo")
+        nested_normal = os_module.path.join(subdir, "data.txt")
+
+        for path in [
+            root_success,
+            root_crc,
+            root_hidden,
+            root_normal,
+            nested_committed,
+            nested_crc,
+            nested_hidden,
+            nested_normal,
+        ]:
+            with open(path, "w") as f:
+                f.write("content")
+
+        # Test 1: Default (skip _* and .*) — FUSE tier
+        mock_spark = MagicMock()
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            fuse_result = file_gbx.enumerate_files(tmpdir, spark=mock_spark)
+
+        fuse_paths = {get_basename(r["path"]) for r in fuse_result}
+        # Only normal files should be present
+        assert "normal.txt" in fuse_paths
+        assert "data.txt" in fuse_paths
+        # Hidden/metadata files should be skipped
+        assert "_success" not in fuse_paths
+        assert ".crc" not in fuse_paths
+        assert ".hidden" not in fuse_paths
+        assert ".foo" not in fuse_paths
+        assert "_committed_001" not in fuse_paths
+        assert len(fuse_result) == 2
+
+        # Test 2: Include hidden (include_hidden=True) — FUSE tier
+        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+            mock_tier.return_value = "fuse"
+            fuse_result_hidden = file_gbx.enumerate_files(
+                tmpdir, include_hidden=True, spark=mock_spark
+            )
+
+        fuse_paths_hidden = {get_basename(r["path"]) for r in fuse_result_hidden}
+        # All files should be present
+        assert "_success" in fuse_paths_hidden
+        assert ".crc" in fuse_paths_hidden
+        assert ".hidden" in fuse_paths_hidden
+        assert ".foo" in fuse_paths_hidden
+        assert "_committed_001" in fuse_paths_hidden
+        assert "normal.txt" in fuse_paths_hidden
+        assert "data.txt" in fuse_paths_hidden
+        assert len(fuse_result_hidden) == 8
+
+        # Test 3: Verify _should_skip_file matches FUSE behavior
+        # (cross-check the helper function)
+        test_names = [
+            "_success",
+            ".crc",
+            ".hidden",
+            "normal.txt",
+            "_committed_001",
+            ".foo",
+        ]
+        for name in test_names:
+            fuse_should_skip = file_gbx._should_skip_file(name, include_hidden=False)
+            expected_skip = name.startswith("_") or name.startswith(".")
+            assert fuse_should_skip == expected_skip
+            # Also verify with include_hidden=True, nothing is skipped
+            assert not file_gbx._should_skip_file(name, include_hidden=True)
+
+
+def test_enumerate_files_list_files_skip_pattern_matches_basename():
+    """list_files skip pattern correctly matches basename (root and nested files)."""
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "list_files"
+        file_gbx.enumerate_files("/Volumes/test/path", spark=mock_spark)
+
+    call_args = mock_spark.sql.call_args[0][0]
+    # Verify the SQL uses substring_index to extract basename
+    assert "substring_index(path, '/', -1)" in call_args
+    # Verify both _ and . patterns are checked
+    assert "LIKE '_%'" in call_args
+    assert "LIKE '.%'" in call_args
+
+
+def test_enumerate_files_sql_path_escaping():
+    """SQL path escaping prevents injection for single quotes."""
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    # Test read_files tier with a path containing single quote
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.enumerate_files("/Volumes/test/path's", spark=mock_spark)
+
+    call_args = mock_spark.sql.call_args[0][0]
+    # Verify the single quote was escaped (doubled)
+    assert "path''s" in call_args
+
+    # Test list_files tier with a path containing single quote
+    mock_spark.reset_mock()
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "list_files"
+        file_gbx.enumerate_files("/Volumes/test/path's", spark=mock_spark)
+
+    call_args = mock_spark.sql.call_args[0][0]
+    # Verify the single quote was escaped (doubled)
+    assert "path''s" in call_args

@@ -291,6 +291,8 @@ def _enumerate_read_files(
 
     # Normalize path to FUSE form for the SQL string (read_files accepts bare paths).
     local_path = to_local_path(path)
+    # Escape single quotes in the path to prevent SQL injection
+    escaped_path = local_path.replace("'", "''")
 
     recursiveFileLookup = "true" if recursive else "false"
     include_hidden_clause = (
@@ -303,7 +305,7 @@ def _enumerate_read_files(
             _metadata.file_size AS size,
             file
         FROM read_files(
-            '{local_path}',
+            '{escaped_path}',
             format => 'file',
             recursiveFileLookup => {recursiveFileLookup}
         )
@@ -324,6 +326,9 @@ def _enumerate_list_files(
     """Enumerate via list_files(...) SQL call.
 
     Returns a Spark DataFrame with columns [path, size, file].
+
+    Note: Skipping logic matches read_files and FUSE by checking basename (not path-level).
+    This ensures root-level files like /_success and /.crc are also skipped (spec-critical parity).
     """
     if spark is None:
         spark = SparkSession.getActiveSession()
@@ -332,12 +337,21 @@ def _enumerate_list_files(
 
     # Normalize path to FUSE form for the SQL string (list_files accepts bare paths).
     local_path = to_local_path(path)
+    # Escape single quotes in the path to prevent SQL injection
+    escaped_path = local_path.replace("'", "''")
 
     recursive_param = "true" if recursive else "false"
+    # Extract basename using substring_index and check if it starts with _ or .
+    # This ensures root-level files like /_success are also skipped (parity with read_files/FUSE).
     include_hidden_clause = (
         ""
         if include_hidden
-        else "AND NOT (path LIKE '%/_%' AND NOT path LIKE '%/._' OR path LIKE '%/._%')"
+        else (
+            "AND NOT ("
+            "  substring_index(path, '/', -1) LIKE '_%' "
+            "  OR substring_index(path, '/', -1) LIKE '.%' "
+            ")"
+        )
     )
 
     sql_query = f"""
@@ -346,7 +360,7 @@ def _enumerate_list_files(
             size,
             file
         FROM list_files(
-            '{local_path}',
+            '{escaped_path}',
             recursive => {recursive_param}
         )
         WHERE 1=1

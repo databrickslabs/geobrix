@@ -10,10 +10,6 @@ import netcdfWrite from '!!raw-loader!../../tests/python/writers/netcdf_gbx_writ
 
 # NetCDF Writer
 
-:::note Lightweight file access
-The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
-:::
-
 Write CF-convention NetCDF (`.nc`) — the inverse of the
 [`netcdf_gbx` reader](../readers/netcdf). `df.write.format("netcdf_gbx")` writes
 raster tile DataFrames as CF grids (the default raster mode) or point DataFrames

@@ -8,10 +8,6 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # GeoDatabase Writer
 
-:::note Lightweight file access
-The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
-:::
-
 `file_gdb_gbx` — a **hybrid** writer. It uses the pure-Python DataSource V2 framework
 like the other `*_gbx` writers, but because pyogrio's bundled GDAL ships a **read-only**
 OpenFileGDB driver, it encodes the `.gdb` via the **native** GDAL (`osgeo.ogr`) supplied

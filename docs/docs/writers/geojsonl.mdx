@@ -8,10 +8,6 @@ import TabItem from '@theme/TabItem';
 
 # GeoJSONL Writer (multi-file)
 
-:::note Lightweight file access
-The lightweight `*_gbx` writer routes output via the [shared `file_gbx` base](../readers-writers#file-gbx) (FILE MANAGED / EXTERNAL / FUSE Delta).
-:::
-
 Emit a **directory of newline-delimited GeoJSONL shards** (OGR driver `GeoJSONSeq`, one
 `Feature` per line) — **one shard per partition, no driver merge**. Unlike the single-file
 GeoJSON writer — which merges every partition into one `FeatureCollection` file on the driver —

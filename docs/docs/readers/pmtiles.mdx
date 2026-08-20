@@ -8,10 +8,6 @@ import pmtilesRead from '!!raw-loader!../../tests/python/readers/pmtiles_gbx_rea
 
 # PMTiles Reader
 
-:::note Lightweight file access
-The lightweight `*_gbx` reader uses the [shared `file_gbx` base](../readers-writers#file-gbx) for FILE / FUSE routing and directory enumeration.
-:::
-
 The **lightweight** `pmtiles_gbx` reader produces a tile pyramid as
 `(z, x, y, bytes)` rows. It has two sources, chosen by the `source` option:
 

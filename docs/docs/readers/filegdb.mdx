@@ -12,10 +12,6 @@ import filegdbGbx from '!!raw-loader!../../tests/python/readers/filegdb_gbx_exam
 
 # File GeoDatabase Reader
 
-:::note Lightweight file access
-The lightweight `*_gbx` reader uses the [shared `file_gbx` base](../readers-writers#file-gbx) for FILE / FUSE routing and directory enumeration.
-:::
-
 Both tiers produce the same `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema — see [Choosing an Execution Tier](../api/execution-tiers#the-one-line-swap).
 
 :::tip Benchmark & tradeoff

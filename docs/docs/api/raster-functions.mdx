@@ -3292,6 +3292,13 @@ Powered by **rasterio**. Point geometries only; the point is assumed to be in th
 
 **Signature:** `rst_sample(tile: Column, geom: Column, [crs: Column = null]): Column` — Sample the raster at the geometry's location(s). For a `POINT`, returns `ARRAY<DOUBLE>` of one value per band at the nearest pixel. The point is reprojected from its source CRS to the raster CRS: an EWKB/EWKT embedded SRID wins, else the optional `crs` (string, source role), else assumed already aligned. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
+:::tip Esri RS_VALUE / raster sampling
+`rst_sample` is GeoBrix's equivalent of the ArcGIS **Sample** tool's `RS_VALUE` — reading a raster's cell value at a point. It returns `ARRAY<DOUBLE>` (one value per band, in band order), or `null` where the point falls outside the raster (the NoData/out-of-extent case). Sampling is nearest-pixel; for bilinear or cubic, run [`rst_resample`](#rst_resample) first, then sample.
+
+- **Multiple rasters** (Esri's `RS_VALUE1`, `RS_VALUE2`, …): call `rst_sample` once per raster and alias each result column.
+- **A points table against a raster tile set** (the Sample-tool workflow at scale): join the points to the tiles that contain them — with `st_intersects`, or a raster grid tessellation such as `rst_h3_tessellate` for an index join — then call `rst_sample(tile, point)` per row.
+:::
+
 <FunctionExamples
   name="rst_sample"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"

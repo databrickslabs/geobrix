@@ -203,6 +203,10 @@ class _OpenerContext:
     ``fr_holder[0] = <current FileRef>`` before each ``lru.get(uri)`` call so the
     opener can stream-open the source on a cache miss.
 
+    ``size_holder`` is a one-element list ``[None]``. The partition loop sets
+    ``size_holder[0] = <metadata_size>`` (int or None) before each ``lru.get()``
+    call so the weigher can prefer the pre-known size over a per-tile stat.
+
     FILE capability is signaled by the presence of the ``_file_ref`` column, NOT
     by a worker-side ``file_supported()`` call (which uses ``getActiveSession()``
     and returns ``None`` on Spark-Connect worker threads, e.g. Serverless DBR 19.5).
@@ -218,6 +222,8 @@ class _OpenerContext:
     def __init__(self, stream_max_bytes: int = GBX_STREAM_MAX_BYTES):
         # Mutable FileRef slot; a list so the partition loop can rebind it.
         self.fr_holder: "list[Any]" = [None]
+        # Mutable size slot for metadata-derived tile size; a list to mirror fr_holder.
+        self.size_holder: "list[int | None]" = [None]
         self._staged_temps: "dict[int, str]" = {}
         self._streams: "dict[int, Any]" = {}
         self._fuse_sources: "set[int]" = set()
@@ -270,7 +276,12 @@ class _OpenerContext:
         # so the LRU budget isn't inflated by large-file FUSE references.
         if id(src) in self._fuse_sources:
             return STREAM_NOMINAL_BYTES
-        # Stream/COG path: use the FileRef's declared byte size (actual RAM use).
+        # Prefer metadata-derived size (tile.metadata["path_file_size"] or ["tile_size"])
+        # when available; this avoids a per-tile stat on serverless.
+        metadata_size = self.size_holder[0]
+        if metadata_size is not None:
+            return int(metadata_size)
+        # Stream/COG path: fall back to FileRef's declared byte size (actual RAM use).
         fr = self.fr_holder[0]
         if fr is not None:
             try:
@@ -287,26 +298,30 @@ class _OpenerContext:
         return STREAM_NOMINAL_BYTES
 
 
-def _run_file_fast_path(fr_holder, lru, uri, fr, tile, cellid, view_mode, core_fn):
+def _run_file_fast_path(fr_holder, size_holder, lru, uri, fr, tile, cellid, view_mode, core_fn):
     """Execute the FILE fast-path for one tile. Returns result; raises on failure.
 
-    Sets ``fr_holder[0] = fr`` before calling ``lru.get(uri)`` so the opener can
-    stream-open the source on a cache miss, then dispatches to ``core_fn`` via
-    either a read-free ``_WindowHeaderView`` (``view_mode="header"``) or a real
-    windowed ``DatasetReader`` materialised from the cached source
+    Sets ``fr_holder[0] = fr`` and ``size_holder[0] = <metadata_size>`` before
+    calling ``lru.get(uri)`` so the opener can stream-open the source on a cache
+    miss and the weigher can prefer the pre-known size. Dispatches to ``core_fn``
+    via either a read-free ``_WindowHeaderView`` (``view_mode="header"``) or a
+    real windowed ``DatasetReader`` materialised from the cached source
     (``view_mode="pixels"``).
 
     Caller wraps in ``try/except Exception`` and sets ``result = _MISS`` so the
     fallback path can take over on any open / stream / view-construction failure.
     """
     fr_holder[0] = fr
-    src = lru.get(uri)
-    from rasterio.windows import Window
-
-    from .core.open_tile import _parse_pending, _to_virtual_tile, _WindowHeaderView
+    from .core.open_tile import _parse_pending, _to_virtual_tile, _WindowHeaderView, _read_size_key
 
     vt = _to_virtual_tile(tile)
     bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
+    # Extract metadata-derived size (path_file_size or tile_size) before lru.get()
+    # so the weigher can use it instead of calling fr.size.
+    metadata_size = _read_size_key(vt.metadata, "path_file_size") or _read_size_key(vt.metadata, "tile_size")
+    size_holder[0] = metadata_size
+    src = lru.get(uri)
+    from rasterio.windows import Window
     pending_count = len(bands) if bands else None
     pending_crs = None
     if crs_str is not None or srid is not None:
@@ -529,6 +544,7 @@ def grouped_tile_map(
                             try:
                                 result = _run_file_fast_path(
                                     _ctx.fr_holder,
+                                    _ctx.size_holder,
                                     lru,
                                     uri,
                                     fr,

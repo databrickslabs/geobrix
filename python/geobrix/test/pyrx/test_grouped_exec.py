@@ -243,6 +243,99 @@ def test_grouped_tile_map_pixel_view_allows_read(spark, gtiff_bytes):
     assert out.select("s").head()[0] is not None
 
 
+# ---------------------------------------------------------------------------
+# Tile size metadata: path_file_size / tile_size preference
+# ---------------------------------------------------------------------------
+
+
+def test_opener_context_has_size_holder():
+    """_OpenerContext initializes a size_holder like fr_holder."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+    assert (
+        isinstance(ctx.size_holder, list) and len(ctx.size_holder) == 1
+    ), "size_holder must be a one-element list (mirrors fr_holder)"
+    assert ctx.size_holder[0] is None, "size_holder initial value must be None"
+
+
+def test_weigh_prefers_metadata_size_over_fr_size():
+    """When size_holder contains a metadata size, weigh() uses it (no fr.size call)."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+
+    # Create a mock FileRef whose .size raises if called (proof it's not called)
+    class CountingFileRef:
+        def __init__(self):
+            self.size_access_count = 0
+
+        @property
+        def size(self):
+            self.size_access_count += 1
+            raise RuntimeError("fr.size should not be called when metadata size is set")
+
+    fr_mock = CountingFileRef()
+    ctx.fr_holder[0] = fr_mock
+
+    # Set metadata size (simulating what happens in _run_file_fast_path)
+    ctx.size_holder[0] = 5_242_880  # 5 MiB
+
+    # Mock src (only needed for id tracking)
+    class MockDataset:
+        pass
+    src = MockDataset()
+
+    # weigh() should use metadata size, not call fr.size
+    weight = ctx.weigh(src, "dummy_uri")
+    assert weight == 5_242_880, f"weigh() should use metadata size, got {weight}"
+    assert fr_mock.size_access_count == 0, "fr.size should not have been called"
+
+
+def test_weigh_falls_back_to_fr_size_when_metadata_absent():
+    """When size_holder is None, weigh() falls back to fr.size."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+
+    # Create a FileRef with a known size
+    class FileRefWithSize:
+        @property
+        def size(self):
+            return 10_485_760  # 10 MiB
+
+    fr_mock = FileRefWithSize()
+    ctx.fr_holder[0] = fr_mock
+    ctx.size_holder[0] = None  # No metadata size
+
+    # Mock src
+    class MockDataset:
+        pass
+    src = MockDataset()
+
+    # weigh() should fall back to fr.size
+    weight = ctx.weigh(src, "dummy_uri")
+    assert weight == 10_485_760, f"weigh() should fall back to fr.size, got {weight}"
+
+
+def test_weigh_falls_back_to_nominal_when_all_absent():
+    """When both metadata size and fr.size are absent, weigh() uses nominal."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext, STREAM_NOMINAL_BYTES
+
+    ctx = _OpenerContext()
+    ctx.size_holder[0] = None  # No metadata size
+    ctx.fr_holder[0] = None  # No FileRef
+
+    # Mock src (not in _fuse_sources so it's not FUSE-weighted)
+    class MockDataset:
+        pass
+    src = MockDataset()
+
+    # weigh() should use nominal
+    weight = ctx.weigh(src, "dummy_uri")
+    assert weight == STREAM_NOMINAL_BYTES, f"weigh() should use nominal, got {weight}"
+
+
 def test_grouped_tile_map_header_view_forbids_read(spark, gtiff_bytes):
     """view="header" (default) hands core_fn a _WindowHeaderView whose .read() raises.
 

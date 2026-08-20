@@ -1837,9 +1837,11 @@ def gbx_file_read(
         )
 
     tier = file_access_tier(spark)
-    if tier == "fuse":
-        # binaryFile is a native reader available on every runtime; returns
-        # [path, modificationTime, length, content].  Project to the common shape.
+    if tier != "read_files":
+        # binaryFile fallback for both "fuse" and "list_files" tiers.
+        # "list_files" (DBR-18) exposes metadata-only listing; read_files(format=>'file')
+        # is NOT available there, so content reads fall back to binaryFile like fuse.
+        # "read_files" (DBR-19+) is the only tier where the FILE-native SQL path works.
         # Pass options directly to load() so the fluent chain stays as
         # spark.read.format(...).load(path, **opts) — avoids .option().option()
         # chaining that complicates mock-based unit tests.

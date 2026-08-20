@@ -21,7 +21,27 @@ def test_location_fuse_tier_reads_via_binaryfile(tmp_path):
     with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"):
         out = file_gbx.gbx_file_read(mock_spark, str(tmp_path), source_type="location")
     mock_spark.read.format.assert_called_with("binaryFile")
+    # Verify option kwargs are forwarded to load() — exercises the recursive/hidden logic.
+    mock_spark.read.format.return_value.load.assert_called_once_with(
+        str(tmp_path),
+        recursiveFileLookup="true",
+        pathGlobFilter="[!._]*",
+    )
     assert out == "BINARYFILE_DF"
+
+
+def test_location_list_files_tier_falls_back_to_binaryfile(tmp_path):
+    """list_files tier (DBR-18 metadata-only) must not use read_files SQL; use binaryFile."""
+    mock_spark = MagicMock()
+    reader = mock_spark.read.format.return_value.load.return_value
+    reader.selectExpr.return_value = "LISTFILES_BF_DF"
+    with patch(
+        "databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="list_files"
+    ):
+        out = file_gbx.gbx_file_read(mock_spark, str(tmp_path), source_type="location")
+    mock_spark.read.format.assert_called_with("binaryFile")
+    mock_spark.sql.assert_not_called()
+    assert out == "LISTFILES_BF_DF"
 
 
 def test_location_file_tier_uses_read_files_content():

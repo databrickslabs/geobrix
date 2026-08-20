@@ -53,6 +53,12 @@ def vector_file_write(
 
     Connect-safe: driver / session-ful only — no ``sparkContext``/``_sc``/
     ``_jvm``/``_jsc``/``df.rdd``; ``spark.createDataFrame`` is driver-only.
+
+    Args:
+        driver: accepted for API symmetry with ``vector_file_read`` and
+            forward-compatibility; the write is format-agnostic (it stores the
+            already-assembled bytes or Volume path) so ``driver`` is not used
+            for dispatch in this function.
     """
     if file_mode not in ("managed", "external"):
         raise ValueError(

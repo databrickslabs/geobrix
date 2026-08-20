@@ -28,10 +28,13 @@ def test_vector_file_write_managed_builds_bytes_row_and_delegates(tmp_path):
 
 
 def test_vector_file_write_external_copies_and_references(tmp_path):
+    import os
+
     from databricks.labs.gbx.pyvx.file_write import vector_file_write
 
+    source_bytes = b'{"type":"FeatureCollection","features":[]}'
     out = tmp_path / "out.geojson"
-    out.write_bytes(b"{}")
+    out.write_bytes(source_bytes)
     vol = tmp_path / "vol"
     vol.mkdir()
     spark = MagicMock()
@@ -46,8 +49,13 @@ def test_vector_file_write_external_copies_and_references(tmp_path):
         )
     rows = spark.createDataFrame.call_args[0][0]
     assert rows[0]["tile"]["raster"] is None
-    assert rows[0]["tile"]["path"].startswith(str(vol))
+    volume_path = rows[0]["tile"]["path"]
+    assert volume_path.startswith(str(vol))
+    assert os.path.isfile(volume_path), f"expected copied file at {volume_path}"
+    assert open(volume_path, "rb").read() == source_bytes, "copied bytes must match source"
+    gfw.assert_called_once()
     assert gfw.call_args.kwargs["file_mode"] == "external"
+    assert gfw.call_args.kwargs["filespace"] is None
 
 
 def test_vector_file_write_layout_forwarded(tmp_path):

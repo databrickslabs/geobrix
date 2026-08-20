@@ -444,21 +444,30 @@ def _enumerate_read_files(
     escaped_path = local_path.replace("'", "''")
 
     recursiveFileLookup = "true" if recursive else "false"
+    # Derive basename from the top-level path column for hidden-file and glob predicates.
+    # Note: path comes back as dbfs:/Volumes/... form; substring_index extracts the correct
+    # basename regardless of the scheme prefix.
+    _basename_expr = "substring_index(path, '/', -1)"
     include_hidden_clause = (
         ""
         if include_hidden
-        else "AND NOT (_metadata.file_name LIKE '_%' OR _metadata.file_name LIKE '.%')"
+        else (
+            "AND NOT ("
+            f"  startswith({_basename_expr}, '_') "
+            f"  OR startswith({_basename_expr}, '.') "
+            ")"
+        )
     )
     filter_clause = (
-        _glob_to_sql_basename_predicate(glob_patterns, "_metadata.file_name")
+        _glob_to_sql_basename_predicate(glob_patterns, _basename_expr)
         if glob_patterns
         else ""
     )
 
     sql_query = f"""
         SELECT
-            _metadata.file_path AS path,
-            _metadata.file_size AS size,
+            regexp_replace(path, '^dbfs:', '') AS path,
+            size,
             file
         FROM read_files(
             '{escaped_path}',
@@ -499,16 +508,17 @@ def _enumerate_list_files(
     escaped_path = local_path.replace("'", "''")
 
     recursive_param = "true" if recursive else "false"
-    # Extract basename using substring_index and check if it starts with _ or .
-    # This ensures root-level files like /_success are also skipped (parity with read_files/FUSE).
+    # Extract basename using substring_index for hidden-file and glob predicates.
+    # Use startswith() instead of LIKE '_%' — SQL LIKE treats _ as a single-char wildcard,
+    # so LIKE '_%' matches EVERY non-empty filename and NOT(...) would exclude all rows.
     _basename_expr = "substring_index(path, '/', -1)"
     include_hidden_clause = (
         ""
         if include_hidden
         else (
             "AND NOT ("
-            f"  {_basename_expr} LIKE '_%' "
-            f"  OR {_basename_expr} LIKE '.%' "
+            f"  startswith({_basename_expr}, '_') "
+            f"  OR startswith({_basename_expr}, '.') "
             ")"
         )
     )

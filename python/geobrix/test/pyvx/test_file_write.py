@@ -52,7 +52,9 @@ def test_vector_file_write_external_copies_and_references(tmp_path):
     volume_path = rows[0]["tile"]["path"]
     assert volume_path.startswith(str(vol))
     assert os.path.isfile(volume_path), f"expected copied file at {volume_path}"
-    assert open(volume_path, "rb").read() == source_bytes, "copied bytes must match source"
+    assert (
+        open(volume_path, "rb").read() == source_bytes
+    ), "copied bytes must match source"
     gfw.assert_called_once()
     assert gfw.call_args.kwargs["file_mode"] == "external"
     assert gfw.call_args.kwargs["filespace"] is None

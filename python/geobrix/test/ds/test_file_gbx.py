@@ -577,8 +577,10 @@ def test_enumerate_files_read_files_tier():
     call_args = mock_spark.sql.call_args[0][0]
     assert "read_files" in call_args
     assert "format => 'file'" in call_args
-    assert "_metadata.file_path" in call_args
-    assert "_metadata.file_size" in call_args
+    # Must use top-level columns (not _metadata.*) — _metadata.file_path encoded the bug
+    assert "_metadata.file_path" not in call_args
+    assert "_metadata.file_size" not in call_args
+    assert "regexp_replace(path, '^dbfs:', '')" in call_args
 
     # Result should be the DataFrame
     assert result is mock_df or isinstance(result, (list, MagicMock))
@@ -758,9 +760,12 @@ def test_enumerate_files_list_files_skip_pattern_matches_basename():
     call_args = mock_spark.sql.call_args[0][0]
     # Verify the SQL uses substring_index to extract basename
     assert "substring_index(path, '/', -1)" in call_args
-    # Verify both _ and . patterns are checked
-    assert "LIKE '_%'" in call_args
-    assert "LIKE '.%'" in call_args
+    # Must NOT use bare LIKE '_%' — underscore is a single-char wildcard in SQL LIKE
+    assert (
+        "LIKE '_%'" not in call_args
+    ), "LIKE '_%' matches ALL non-empty filenames; use startswith() instead"
+    # Must use startswith for literal underscore/dot prefix matching
+    assert "startswith(" in call_args
 
 
 def test_enumerate_files_sql_path_escaping():
@@ -787,6 +792,78 @@ def test_enumerate_files_sql_path_escaping():
     call_args = mock_spark.sql.call_args[0][0]
     # Verify the single quote was escaped (doubled)
     assert "path''s" in call_args
+
+
+# ---------------------------------------------------------------------------
+# SQL predicate correctness — hidden-file filter must not use LIKE '_%' wildcard
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_read_files_sql_no_like_wildcard():
+    """_enumerate_read_files must not use bare LIKE '_%' for hidden-file filter.
+
+    SQL LIKE treats _ as a single-char wildcard, so LIKE '_%' matches EVERY
+    non-empty filename, causing NOT(...) to exclude all rows (confirmed on-cluster:
+    raw read_files returns 1000 rows; enumerate_files returned 0).
+    The correct form uses startswith(basename, '_') / startswith(basename, '.').
+    Also verifies top-level path/size columns are used with dbfs: scheme stripped.
+    """
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "read_files"
+        file_gbx.enumerate_files("/Volumes/test/path", spark=mock_spark)
+
+    sql = mock_spark.sql.call_args[0][0]
+    # Must NOT contain bare LIKE '_%' (underscore wildcard bug)
+    assert "LIKE '_%'" not in sql, (
+        "Hidden-file filter uses bare LIKE '_%' which matches ALL non-empty filenames "
+        "and causes NOT(...) to return 0 rows"
+    )
+    # Must use startswith for literal prefix matching
+    assert "startswith(" in sql, "Expected startswith() for hidden-file filter"
+    # Must use top-level path/size columns (not _metadata.*)
+    assert (
+        "_metadata.file_path" not in sql
+    ), "Must use top-level 'path', not '_metadata.file_path'"
+    assert (
+        "_metadata.file_size" not in sql
+    ), "Must use top-level 'size', not '_metadata.file_size'"
+    # Must strip dbfs: scheme so output paths match FUSE tier's bare /Volumes/... form
+    assert (
+        "regexp_replace(path, '^dbfs:', '')" in sql
+    ), "Expected regexp_replace(path, '^dbfs:', '') to strip dbfs: scheme prefix"
+    # Must derive basename via substring_index for the hidden predicate
+    assert "substring_index(path, '/', -1)" in sql
+
+
+def test_enumerate_list_files_sql_no_like_wildcard():
+    """_enumerate_list_files must not use bare LIKE '_%' for hidden-file filter.
+
+    SQL LIKE treats _ as a single-char wildcard, so LIKE '_%' matches EVERY
+    non-empty filename, causing NOT(...) to exclude all rows.
+    The correct form uses startswith(basename, '_') / startswith(basename, '.').
+    """
+    mock_spark = MagicMock()
+    mock_df = MagicMock()
+    mock_spark.sql.return_value = mock_df
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "list_files"
+        file_gbx.enumerate_files("/Volumes/test/path", spark=mock_spark)
+
+    sql = mock_spark.sql.call_args[0][0]
+    # Must NOT contain bare LIKE '_%' (underscore wildcard bug)
+    assert "LIKE '_%'" not in sql, (
+        "Hidden-file filter uses bare LIKE '_%' which matches ALL non-empty filenames "
+        "and causes NOT(...) to return 0 rows"
+    )
+    # Must use startswith for literal prefix matching
+    assert "startswith(" in sql, "Expected startswith() for hidden-file filter"
+    # Must use substring_index for basename
+    assert "substring_index(path, '/', -1)" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -1631,8 +1708,8 @@ def test_enumerate_files_cross_tier_parity_with_filter():
             file_gbx.enumerate_files(tmpdir, extensions=(".tif",), spark=mock_spark2)
 
         sql_rf = mock_spark2.sql.call_args[0][0]
-        # The predicate targets file_name (read_files basename column)
-        assert "file_name" in sql_rf
+        # The predicate targets basename via substring_index (same as list_files)
+        assert "substring_index(path, '/', -1)" in sql_rf
         # A LIKE predicate with %.tif must be present (extensions path)
         assert "%.tif" in sql_rf
 
@@ -1809,17 +1886,18 @@ def test_glob_to_sql_basename_predicate_question_mark_routes_to_rlike():
 
 
 # ---------------------------------------------------------------------------
-# IMPORTANT-2: _enumerate_read_files must use _metadata.file_name in WHERE
+# IMPORTANT-2: _enumerate_read_files WHERE clause uses startswith + substring_index
 # ---------------------------------------------------------------------------
 
 
-def test_enumerate_files_read_files_where_uses_metadata_file_name():
-    """read_files tier: skip clause references _metadata.file_name, not bare file_name.
+def test_enumerate_files_read_files_where_uses_startswith_basename():
+    """read_files tier: hidden-file skip clause uses startswith(substring_index(...)).
 
-    read_files(format=>'file') exposes file metadata under the _metadata struct.
-    A bare 'file_name' column is not a top-level column and would raise
-    UNRESOLVED_COLUMN at runtime.  Both the hidden-skip clause and the glob
-    predicate must reference _metadata.file_name consistently with the SELECT.
+    The on-cluster schema for read_files(format=>'file') is [path, size, file] at the
+    top level.  The hidden-file exclusion must derive basename via
+    substring_index(path,'/',-1) and use startswith() for literal prefix matching.
+    Using LIKE '_%' is wrong — _ is a single-char wildcard and would match every name.
+    Using _metadata.file_name is wrong — it may be null under format=>'file'.
     """
     mock_spark = MagicMock()
     mock_df = MagicMock()
@@ -1827,24 +1905,29 @@ def test_enumerate_files_read_files_where_uses_metadata_file_name():
 
     with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
         mock_tier.return_value = "read_files"
-        # Default: include_hidden=False → skip clause should reference _metadata.file_name
         file_gbx.enumerate_files("/Volumes/test/path", spark=mock_spark)
 
     sql = mock_spark.sql.call_args[0][0]
-    # The WHERE clause must use _metadata.file_name, not bare file_name
+    # WHERE clause must derive basename from top-level path column
     assert (
-        "_metadata.file_name" in sql
-    ), f"Expected _metadata.file_name in SQL; got:\n{sql}"
-    # Bare file_name must NOT appear outside of _metadata.file_name
-    # (strip the _metadata.file_name occurrences to check no bare reference remains)
-    stripped = sql.replace("_metadata.file_name", "")
+        "substring_index(path, '/', -1)" in sql
+    ), f"Expected substring_index(path, '/', -1) in SQL; got:\n{sql}"
+    # Must use startswith() not LIKE for literal prefix matching
     assert (
-        "file_name" not in stripped
-    ), f"Bare 'file_name' (without _metadata. prefix) found in SQL; got:\n{sql}"
+        "startswith(" in sql
+    ), f"Expected startswith() for hidden-file filter; got:\n{sql}"
+    # _metadata.file_name must NOT appear (it can be null under format=>'file')
+    assert (
+        "_metadata.file_name" not in sql
+    ), f"_metadata.file_name found in SQL; should use substring_index; got:\n{sql}"
 
 
-def test_enumerate_files_read_files_glob_predicate_uses_metadata_file_name():
-    """read_files tier: glob predicate column expression is _metadata.file_name."""
+def test_enumerate_files_read_files_glob_predicate_uses_substring_index():
+    """read_files tier: glob predicate column expression is substring_index(path,'/',-1).
+
+    After the fix, both the hidden-file clause and the glob predicate use the same
+    basename expression derived from the top-level path column.
+    """
     mock_spark = MagicMock()
     mock_df = MagicMock()
     mock_spark.sql.return_value = mock_df
@@ -1858,14 +1941,16 @@ def test_enumerate_files_read_files_glob_predicate_uses_metadata_file_name():
         )
 
     sql = mock_spark.sql.call_args[0][0]
+    # Glob predicate must use substring_index for basename
     assert (
-        "_metadata.file_name" in sql
-    ), f"Expected _metadata.file_name in SQL; got:\n{sql}"
-    # No bare file_name outside _metadata.file_name
-    stripped = sql.replace("_metadata.file_name", "")
+        "substring_index(path, '/', -1)" in sql
+    ), f"Expected substring_index basename in glob predicate; got:\n{sql}"
+    # Must NOT use _metadata.file_name
     assert (
-        "file_name" not in stripped
-    ), f"Bare 'file_name' found in glob predicate; got:\n{sql}"
+        "_metadata.file_name" not in sql
+    ), f"_metadata.file_name found in glob predicate; should use substring_index; got:\n{sql}"
+    # The LIKE pattern for .tif must still be present
+    assert "%.tif" in sql
 
 
 # ---------------------------------------------------------------------------

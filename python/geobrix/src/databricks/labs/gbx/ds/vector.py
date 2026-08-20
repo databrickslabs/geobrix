@@ -643,6 +643,28 @@ class VectorGbxReader(DataSourceReader):
             )
         self.access = access
 
+        # Layout convention (T8): numPartitions / repartition — parallelism signal.
+        # Validated and stored; used as a hint by callers (classic ≈ 3–5× cores;
+        # serverless = worker-pull). NOT applied to per-file partition regrouping
+        # here: merging multiple member files into a single InputPartition would
+        # cause one read() call to hold all their feature sets in memory at once,
+        # defeating the per-file memory containment. Future bin-packing should
+        # wire it here when the read path can safely buffer N files' worth of data.
+        _np_raw = options.get("numPartitions") or options.get("repartition")
+        if _np_raw is not None:
+            try:
+                _np = int(_np_raw)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    f"vector_gbx: 'numPartitions' must be a positive integer; "
+                    f"got {_np_raw!r}"
+                )
+            if _np < 1:
+                raise ValueError(f"vector_gbx: 'numPartitions' must be >= 1; got {_np}")
+            self.num_partitions: Optional[int] = _np
+        else:
+            self.num_partitions = None
+
     def _layer(self):
         return self.layer_name if self.layer_name else self.layer_number
 
@@ -753,6 +775,11 @@ class VectorGbxReader(DataSourceReader):
         # cost). Parallelism comes from reading many files concurrently (one task per file);
         # within a single read, chunk_size only bounds the Arrow batch size on the yield, not
         # the parse. Random-access formats (GPKG/FileGDB) are staged to local temp + read whole.
+        #
+        # Layout convention (T8): _members() returns paths sorted alphabetically so
+        # partitions are emitted in source-path order. When a worker pulls consecutive
+        # tasks from the same source file the per-worker staged-file cache (_VEC_STAGED_FILES)
+        # is reused, paying the copy cost only once per source.
         return [
             _ChunkPartition(
                 member,

@@ -842,6 +842,17 @@ class RasterGbxReader(DataSourceReader):
             raise ValueError("raster_gbx requires a 'path' (e.g. .load(path)).")
         self.size_mib = int(options.get("sizeInMB", "-1"))
         self.filter_regex = options.get("filterRegex", ".*")
+        # Unified enumeration options (Task 4: session-free file_gbx core).
+        # These are parsed once in __init__ and consumed by _list_source_files().
+        self.recursive = str(options.get("recursive", "true")).lower() == "true"
+        self.include_hidden = (
+            str(options.get("includeHidden", "false")).lower() == "true"
+        )
+        _exts = options.get("extensions")
+        self.extensions = (
+            tuple(e.strip() for e in _exts.split(",") if e.strip()) if _exts else None
+        )
+        self.path_glob_filter = options.get("pathGlobFilter") or None
         # Split strategy: default is "none" (halo mode — prepare a COG via the
         # cog_gbx writer, then read windows). Opt-in split: splitStrategy=serverless
         # or splitStrategy=classic, or sizeInMB>0. COG creation is a writer concern;
@@ -887,6 +898,30 @@ class RasterGbxReader(DataSourceReader):
                 "supply at most one."
             )
 
+    def _list_source_files(self) -> list:
+        """Enumerate source files via the session-free file_gbx core.
+
+        Unified options (recursive / includeHidden / extensions / pathGlobFilter)
+        drive the shared enumerator; ``filterRegex`` (if set to something other
+        than the default ".*") is applied as an ADDITIONAL full-path regex filter
+        on top, preserving the historical power-tool surface used by samples/bench.
+        """
+        from databricks.labs.gbx.ds.file_gbx import list_local_files
+
+        files = list_local_files(
+            self.path,
+            recursive=self.recursive,
+            include_hidden=self.include_hidden,
+            extensions=self.extensions,
+            path_glob_filter=self.path_glob_filter,
+        )
+        if self.filter_regex and self.filter_regex != ".*":
+            import re as _re
+
+            pat = _re.compile(self.filter_regex)
+            files = [f for f in files if pat.match(f)]
+        return files
+
     def partitions(self) -> Sequence[InputPartition]:
         resolved_budget = _resolved_budget(self.size_mib, self.strategy)
 
@@ -927,7 +962,7 @@ class RasterGbxReader(DataSourceReader):
         #   df.repartition(n, 'source').sortWithinPartitions('source')
         # on the read result; n is a parallelism signal (classic ≈ 3–5× cores),
         # never n = file_count.
-        files = _listing.list_files(self.path, self.filter_regex)
+        files = self._list_source_files()
         result: list = []
         for f in files:
             result.extend(

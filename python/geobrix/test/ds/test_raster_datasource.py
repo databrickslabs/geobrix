@@ -430,3 +430,35 @@ def test_file_and_cog_registered():
 
     names = {s.name() for s in _SOURCES}
     assert "file_gbx" in names and "cog_gbx" in names
+
+
+# ---------------------------------------------------------------------------
+# Task 4: session-free enumeration via file_gbx core
+# ---------------------------------------------------------------------------
+
+
+def test_raster_reader_extensions_option_filters_members(tmp_path):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    (tmp_path / "a.tif").write_bytes(b"x")
+    (tmp_path / "b.nc").write_bytes(b"x")
+    r = RasterGbxReader({"path": str(tmp_path), "extensions": ".tif"})
+    assert r._list_source_files() == [str(tmp_path / "a.tif")]
+
+
+def test_raster_reader_skips_hidden_by_default(tmp_path):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    (tmp_path / "a.tif").write_bytes(b"x")
+    (tmp_path / "_SUCCESS").write_bytes(b"")
+    r = RasterGbxReader({"path": str(tmp_path)})
+    assert r._list_source_files() == [str(tmp_path / "a.tif")]
+
+
+def test_raster_reader_filter_regex_still_composes(tmp_path):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    (tmp_path / "keep_2024.tif").write_bytes(b"x")
+    (tmp_path / "drop_2023.tif").write_bytes(b"x")
+    r = RasterGbxReader({"path": str(tmp_path), "filterRegex": r".*_2024\.tif$"})
+    assert r._list_source_files() == [str(tmp_path / "keep_2024.tif")]

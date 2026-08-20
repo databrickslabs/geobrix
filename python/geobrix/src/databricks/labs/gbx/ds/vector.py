@@ -36,11 +36,7 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx.ds import _scratch
-from databricks.labs.gbx.ds.file_gbx import (
-    file_access_tier,
-    open_for_write,
-    resolve_access,
-)
+from databricks.labs.gbx.ds.file_gbx import open_for_write
 
 # ---------------------------------------------------------------------------
 # Worker-local staging cache (module-level, process-global)
@@ -655,11 +651,12 @@ class VectorGbxReader(DataSourceReader):
             self.bbox = None
         self.where = options.get("where") or None
 
-        # Driver-side capability probe via resolve_access: validates access mode against
-        # detected tier. Raises ValueError here (at plan time) for explicit FILE on a
-        # fuse-only runtime — once, on the driver, not per-partition on executor workers.
-        self._resolved_tier = file_access_tier(spark=_driver_spark)
-        resolve_access(self.access, tier=self._resolved_tier)
+        # No in-DataSource FILE-tier probe: a DataSource reader is session-less on
+        # Spark Connect (getActiveSession() -> None), so probing here falsely
+        # resolves to "fuse" and raises for explicit managed/external on
+        # FILE-capable runtimes. FILE-tier reads go through the function layer
+        # (pyvx.file_read.vector_file_read), where a session is available.
+        self._resolved_tier = None
 
     def _layer(self):
         return self.layer_name if self.layer_name else self.layer_number
@@ -673,26 +670,24 @@ class VectorGbxReader(DataSourceReader):
         pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
 
     def _members(self) -> List[str]:
-        """Member paths to read. For a plain directory, enumerate matching vector
-        files (by driver extension) RECURSIVELY into sub-directories. A .gdb
-        directory is a single FileGDB dataset and is returned as-is. A regular
-        file path returns [self.path]."""
+        """Member paths to read.  A ``.gdb`` directory is a single FileGDB
+        dataset (returned as-is); a regular file returns ``[self.path]``; a plain
+        directory is enumerated via the session-free file_gbx core using this
+        driver's recognised extensions."""
         if not os.path.isdir(self.path) or self.path.lower().rstrip("/").endswith(
             ".gdb"
         ):
             return [self.path]
+        from databricks.labs.gbx.ds.file_gbx import list_local_files
+
         exts: Tuple[str, ...] = self._EXT_FOR_DRIVER.get(self.driver) or ()
-        members = []
-        for root, dirs, files in os.walk(self.path):
-            # Skip hidden/marker dirs (Spark convention): a writer's in-flight or
-            # orphaned .gbx_scratch container, _SUCCESS-style markers, etc. are
-            # never input data. Pruning `dirs` in place stops os.walk descending.
-            dirs[:] = [d for d in dirs if not d.startswith((".", "_"))]
-            for n in sorted(files):
-                low = n.lower()
-                if (exts and low.endswith(exts)) or low.rstrip("/").endswith(".gdb"):
-                    members.append(os.path.join(root, n))
-        return sorted(members) or [self.path]
+        try:
+            members = list_local_files(
+                self.path, recursive=True, extensions=exts or None
+            )
+        except FileNotFoundError:
+            return [self.path]
+        return members or [self.path]
 
     def _needs_stage(self) -> bool:
         """Random-access formats (GeoPackage = SQLite; FileGDB = seeked multi-file).

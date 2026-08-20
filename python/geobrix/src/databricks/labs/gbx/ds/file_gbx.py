@@ -1919,8 +1919,10 @@ def gbx_file_read(
     # enumerate_files returns a DataFrame on FILE tiers, a list of dicts on FUSE.
     if isinstance(result, list):
         # FUSE tier: normalize list of dicts {path, size, file: None} to a DataFrame.
-        # Use a nullable StringType for 'file' — it holds None on FUSE and is
-        # type-compatible with file-tier DataFrames for downstream union/concat.
+        # 'file' is a nullable StringType holding None on FUSE. Note: FILE-tier
+        # DataFrames carry the native FILE type in this column, so a cross-tier
+        # union requires explicit schema coercion (the two are not union-compatible
+        # as-is) — callers pick one tier's output, they do not concat across tiers.
         fuse_schema = StructType(
             [
                 StructField("path", StringType(), nullable=True),

@@ -149,3 +149,72 @@ def test_tile_to_bytes_windowless_virtual_raises_valueerror(tmp_path):
     vt = VirtualTile(cellid=0, path=p)  # no window
     with pytest.raises(ValueError, match="windowed read"):
         ot._tile_to_bytes(vt)
+
+
+# ---------------------------------------------------------------------------
+# Tests for metadata-key helpers (path_file_size / tile_size)
+# ---------------------------------------------------------------------------
+
+
+def test_read_size_key_parses_valid_string_int():
+    """_read_size_key parses a valid string-encoded int to int."""
+    metadata = {"path_file_size": "1048576"}
+    assert ot._read_size_key(metadata, "path_file_size") == 1048576
+
+    metadata = {"tile_size": "2097152"}
+    assert ot._read_size_key(metadata, "tile_size") == 2097152
+
+
+def test_read_size_key_returns_none_for_absent_key():
+    """_read_size_key returns None when the key is absent."""
+    metadata = {"other_key": "value"}
+    assert ot._read_size_key(metadata, "path_file_size") is None
+    assert ot._read_size_key({}, "tile_size") is None
+
+
+def test_read_size_key_returns_none_for_unparseable_value():
+    """_read_size_key returns None when the value is not a valid int."""
+    metadata = {"path_file_size": "not_a_number"}
+    assert ot._read_size_key(metadata, "path_file_size") is None
+
+    metadata = {"tile_size": ""}
+    assert ot._read_size_key(metadata, "tile_size") is None
+
+
+def test_read_size_key_none_metadata():
+    """_read_size_key handles None metadata gracefully."""
+    assert ot._read_size_key(None, "path_file_size") is None
+
+
+def test_parse_pending_ignores_size_keys():
+    """_parse_pending does NOT treat path_file_size/tile_size as pending edits."""
+    metadata = {
+        ot.PENDING_BANDS: "1,2",
+        ot.PENDING_NODATA: "0",
+        "path_file_size": "1048576",
+        "tile_size": "2097152",
+    }
+    bands, nodata, srid, crs_str = ot._parse_pending(metadata)
+    # Size keys are informational; _parse_pending ignores them.
+    assert bands == [1, 2]
+    assert nodata == 0.0
+    assert srid is None
+    assert crs_str is None
+
+
+def test_without_pending_preserves_size_keys():
+    """_without_pending does NOT strip path_file_size/tile_size (they survive)."""
+    metadata = {
+        ot.PENDING_BANDS: "1,2",
+        ot.PENDING_NODATA: "0",
+        "path_file_size": "1048576",
+        "tile_size": "2097152",
+        "other_key": "value",
+    }
+    result = ot._without_pending(metadata)
+    # Pending keys are removed; size keys persist.
+    assert ot.PENDING_BANDS not in result
+    assert ot.PENDING_NODATA not in result
+    assert result.get("path_file_size") == "1048576"
+    assert result.get("tile_size") == "2097152"
+    assert result.get("other_key") == "value"

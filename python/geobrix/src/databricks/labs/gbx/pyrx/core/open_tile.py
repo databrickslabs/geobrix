@@ -53,6 +53,30 @@ PENDING_CRS = "pending_crs"
 
 _PENDING_KEYS = (PENDING_NODATA, PENDING_SRID, PENDING_BANDS, PENDING_CRS)
 
+# ---------------------------------------------------------------------------
+# Metadata-key helpers for tile size information (informational, not pending)
+# These keys are NOT pending instructions: they persist through operations
+# that don't change size, and are refreshed when a tile is re-minted.
+# ---------------------------------------------------------------------------
+
+
+def _read_size_key(metadata, key) -> Optional[int]:
+    """Parse a size key from tile metadata.
+
+    Returns the int value if present and parseable, None otherwise.
+    Useful for reading ``path_file_size`` (underlying source file size in bytes)
+    or ``tile_size`` (materialized raster bytes) from the metadata map.
+    """
+    if not metadata:
+        return None
+    value = metadata.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
 
 def _parse_pending(metadata):
     """Return (bands|None, nodata|None, srid|None, crs_str|None) from tile metadata.

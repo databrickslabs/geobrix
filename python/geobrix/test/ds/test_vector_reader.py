@@ -1,6 +1,8 @@
 import json
 import os
+from unittest.mock import patch
 
+import pytest
 from shapely import from_wkb
 
 from databricks.labs.gbx.ds.register import register
@@ -147,3 +149,195 @@ def test_shapefile_gbx_reads_directory_of_shp_zip(spark, tmp_path):
 
     df = spark.read.format("shapefile_gbx").load(copies_dir)
     assert df.count() == n_features * 2  # 2 copies × n_features features each
+
+
+# ---------------------------------------------------------------------------
+# FILE access mode tests (Task 6: vector reader gains file_gbx FILE read)
+# ---------------------------------------------------------------------------
+
+# Helpers shared by FILE tests
+_GJ_FILE = {
+    "type": "FeatureCollection",
+    "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::4326"}},
+    "features": [
+        {
+            "type": "Feature",
+            "properties": {"id": 1},
+            "geometry": {"type": "Point", "coordinates": [1.0, 2.0]},
+        },
+        {
+            "type": "Feature",
+            "properties": {"id": 2},
+            "geometry": {"type": "Point", "coordinates": [3.0, 4.0]},
+        },
+    ],
+}
+
+
+def _gj_file_path(tmp):
+    p = os.path.join(tmp, "file_test.geojson")
+    with open(p, "w") as f:
+        json.dump(_GJ_FILE, f)
+    return p
+
+
+def _read_all(rdr):
+    """Collect all pyarrow rows from a VectorGbxReader into a plain list of dicts."""
+    import pyarrow as pa
+
+    batches = [b for part in rdr.partitions() for b in rdr.read(part)]
+    tbl = pa.Table.from_batches(batches)
+    return tbl.to_pydict()
+
+
+def test_vector_file_read_managed_tier_returns_same_rows(tmp_path):
+    """With access='managed' and FILE-capable tier, rows match the FUSE baseline."""
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    # Baseline: FUSE read (no access option)
+    rdr_fuse = VectorGbxReader({"path": p})
+    fuse_rows = _read_all(rdr_fuse)
+
+    # FILE read: mock the tier as FILE-capable so managed access is allowed
+    with (
+        patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier,
+        patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec,
+    ):
+        mock_tier.return_value = "read_files"
+        mock_tier_vec.return_value = "read_files"
+        rdr_file = VectorGbxReader({"path": p, "access": "managed"})
+        file_rows = _read_all(rdr_file)
+
+    assert file_rows["id"] == fuse_rows["id"]
+    assert len(file_rows["id"]) == 2
+
+
+def test_vector_file_read_external_tier_returns_same_rows(tmp_path):
+    """With access='external' and FILE-capable tier, rows match the FUSE baseline."""
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    rdr_fuse = VectorGbxReader({"path": p})
+    fuse_rows = _read_all(rdr_fuse)
+
+    with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec:
+        mock_tier_vec.return_value = "list_files"
+        rdr_file = VectorGbxReader({"path": p, "access": "external"})
+        file_rows = _read_all(rdr_file)
+
+    assert sorted(file_rows["id"]) == sorted(fuse_rows["id"])
+    assert len(file_rows["id"]) == 2
+
+
+def test_vector_fuse_fallback_access_auto_unchanged(tmp_path):
+    """access='auto' on a FUSE-only runtime reads correctly (unchanged FUSE behavior)."""
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec:
+        mock_tier_vec.return_value = "fuse"
+        rdr = VectorGbxReader({"path": p, "access": "auto"})
+        rows = _read_all(rdr)
+
+    assert sorted(rows["id"]) == [1, 2]
+
+
+def test_vector_explicit_file_on_fuse_raises(tmp_path):
+    """access='managed' on a FUSE-only runtime raises ValueError (NO-GATING rule)."""
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec:
+        mock_tier_vec.return_value = "fuse"
+        rdr = VectorGbxReader({"path": p, "access": "managed"})
+        parts = rdr.partitions()
+        with pytest.raises(ValueError, match="Requested managed FILE access mode"):
+            list(rdr.read(parts[0]))
+
+
+def test_vector_explicit_external_on_fuse_raises(tmp_path):
+    """access='external' on a FUSE-only runtime raises ValueError (NO-GATING rule)."""
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    with patch("databricks.labs.gbx.ds.vector.file_access_tier") as mock_tier_vec:
+        mock_tier_vec.return_value = "fuse"
+        rdr = VectorGbxReader({"path": p, "access": "external"})
+        parts = rdr.partitions()
+        with pytest.raises(ValueError, match="Requested external FILE access mode"):
+            list(rdr.read(parts[0]))
+
+
+def test_vector_staging_amortized_once_per_source(tmp_path):
+    """Multiple partitions targeting the same source file stage it only once.
+
+    Verifies the module-level _VEC_STAGED_FILES cache: calling _staged() repeatedly
+    with the same path triggers shutil.copy only on the first call.
+    """
+    import shutil
+
+    from databricks.labs.gbx.ds import vector as vec_mod
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+
+    # Use a plain GeoJSON reader but force _needs_stage=True to test the caching path
+    # without requiring a real GPKG binary.
+    copy_count = {"n": 0}
+    original_copy = shutil.copy
+
+    def counting_copy(src, dst):
+        copy_count["n"] += 1
+        return original_copy(src, dst)
+
+    # Clear the module-level cache before the test.
+    saved = dict(vec_mod._VEC_STAGED_FILES)
+    vec_mod._VEC_STAGED_FILES.clear()
+    try:
+        rdr = VectorGbxReader({"path": p})
+
+        with (
+            patch.object(rdr, "_needs_stage", return_value=True),
+            patch(
+                "databricks.labs.gbx.ds.vector.shutil.copy", side_effect=counting_copy
+            ),
+        ):
+            # First staged call: should copy.
+            with rdr._staged(p) as local_a:
+                pass
+            # Second staged call with same path: should HIT the cache, no copy.
+            with rdr._staged(p) as local_b:
+                pass
+
+        assert (
+            copy_count["n"] == 1
+        ), f"Expected shutil.copy called once (amortization), got {copy_count['n']}"
+        # Both calls yielded the same local path from the cache.
+        assert local_a == local_b
+    finally:
+        # Restore the module-level cache to its prior state.
+        vec_mod._VEC_STAGED_FILES.clear()
+        vec_mod._VEC_STAGED_FILES.update(saved)
+
+
+def test_vector_access_invalid_option_raises():
+    """An unrecognized 'access' option raises ValueError at __init__ time."""
+    import tempfile
+
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    with tempfile.NamedTemporaryFile(suffix=".geojson", delete=False) as f:
+        f.write(b'{"type":"FeatureCollection","features":[]}')
+        tmppath = f.name
+
+    try:
+        with pytest.raises(ValueError, match="access.*option must be"):
+            VectorGbxReader({"path": tmppath, "access": "bogus"})
+    finally:
+        os.unlink(tmppath)

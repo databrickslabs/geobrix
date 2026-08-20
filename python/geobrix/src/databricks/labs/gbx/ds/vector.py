@@ -4,10 +4,12 @@ typed attributes). Pure-Python / Serverless-safe (no JVM)."""
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -34,6 +36,69 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx.ds import _scratch
+from databricks.labs.gbx.ds.file_gbx import file_access_tier, resolve_access
+
+# ---------------------------------------------------------------------------
+# Worker-local staging cache (module-level, process-global)
+# ---------------------------------------------------------------------------
+# Mirrors raster._STAGED_FILES: key = original source path, value = locally-staged path.
+# Guarded by _VEC_STAGE_LOCK for thread safety (multiple Spark tasks in one worker).
+# Staged copies are held for the process lifetime and removed at exit via atexit.
+# This amortizes the staging cost: N partitions of the same source file share one copy.
+_VEC_STAGED_FILES: Dict[str, str] = {}
+_VEC_STAGE_LOCK = threading.Lock()
+_VEC_STAGE_DIR: Optional[str] = None
+
+
+def _ensure_vec_stage_dir() -> str:
+    global _VEC_STAGE_DIR
+    if _VEC_STAGE_DIR is None:
+        _VEC_STAGE_DIR = tempfile.mkdtemp(prefix="gbx_vecstage_")
+        atexit.register(_cleanup_vec_stage_dir)
+    return _VEC_STAGE_DIR
+
+
+def _cleanup_vec_stage_dir() -> None:
+    global _VEC_STAGE_DIR
+    if _VEC_STAGE_DIR and os.path.isdir(_VEC_STAGE_DIR):
+        shutil.rmtree(_VEC_STAGE_DIR, ignore_errors=True)
+        _VEC_STAGE_DIR = None
+
+
+def _get_or_stage_vec(source_path: str) -> str:
+    """Return a worker-local path for *source_path*, staging it if not yet cached.
+
+    For directories (e.g. ``.gdb``), copies the entire directory tree.
+    For regular files, copies the single file.
+
+    The result is cached by source path: multiple partitions targeting the same
+    source file on the same worker process share one staged copy, paying the
+    sequential-copy cost only once.
+
+    Args:
+        source_path: FUSE path to the source file or directory.
+
+    Returns:
+        Absolute local path to the staged copy (file or directory).
+    """
+    with _VEC_STAGE_LOCK:
+        if source_path in _VEC_STAGED_FILES:
+            return _VEC_STAGED_FILES[source_path]
+
+        stage_dir = _ensure_vec_stage_dir()
+        # Disambiguate in case two different paths share the same basename.
+        basename = os.path.basename(source_path.rstrip("/")) or "vector_src"
+        safe_name = f"{abs(hash(source_path)):x}_{basename}"
+        local = os.path.join(stage_dir, safe_name)
+
+        if os.path.isdir(source_path):
+            shutil.copytree(source_path, local)
+        else:
+            shutil.copy(source_path, local)  # sequential read — FUSE-safe
+
+        _VEC_STAGED_FILES[source_path] = local
+        return local
+
 
 # OGR field type (+ subtype) -> Spark type, matching heavy OGR_SchemaInference.getType.
 _OGR_TO_SPARK = {
@@ -558,6 +623,17 @@ class VectorGbxReader(DataSourceReader):
         else:
             self.bbox = None
         self.where = options.get("where") or None
+        # FILE access mode: "auto" (default, gracefully downgrades to FUSE if FILE
+        # unavailable), "managed" (FILE MANAGED), or "external" (FILE EXTERNAL).
+        # The NO-GATING rule is enforced at read() time via resolve_access: explicit
+        # FILE requests on FUSE-only runtimes raise a clear, actionable error.
+        access = options.get("access", "auto")
+        if access not in ("auto", "managed", "external"):
+            raise ValueError(
+                f"vector_gbx 'access' option must be 'auto', 'managed', or 'external'; "
+                f"got {access!r}"
+            )
+        self.access = access
 
     def _layer(self):
         return self.layer_name if self.layer_name else self.layer_number
@@ -601,26 +677,22 @@ class VectorGbxReader(DataSourceReader):
 
     @contextlib.contextmanager
     def _staged(self, path: str):
-        """Yield a locally-readable path. For random-access drivers, copy the source
-        (a file, or a `.gdb` directory) to worker-local temp with a sequential copy
-        (FUSE-safe), so GDAL does its seeked I/O on local disk, then clean up -- all
-        transparent to the caller. Sequential drivers (GeoJSON/Shapefile) read in place.
+        """Yield a locally-readable path.
+
+        For random-access drivers (GPKG, FileGDB), the source is copied to worker-local
+        temp via a sequential read (FUSE-safe) so GDAL can do seeked I/O on local disk.
+        The copy is **cached per (process, source path)** via the module-level
+        ``_VEC_STAGED_FILES`` dict: N partitions of the same file share one staged copy,
+        paying the copy cost only once (open amortization).
+
+        For sequential drivers (GeoJSON/Shapefile/GeoJSONSeq), the source is yielded
+        in-place — no copy is made or cached.
         """
         if not self._needs_stage():
             yield path
             return
-        tmpd = tempfile.mkdtemp(prefix="gbx_vecstage_")
-        try:
-            local = os.path.join(tmpd, os.path.basename(path.rstrip("/")))
-            if os.path.isdir(path):
-                shutil.copytree(path, local)
-            else:
-                shutil.copy(
-                    path, local
-                )  # sequential read of object storage -> FUSE-safe
-            yield local
-        finally:
-            shutil.rmtree(tmpd, ignore_errors=True)
+        local = _get_or_stage_vec(path)
+        yield local
 
     def _info_for(self, path: str):
         """Read pyogrio metadata for the given path. Random-access formats are staged
@@ -692,7 +764,18 @@ class VectorGbxReader(DataSourceReader):
         geometry column, vectorized WKB/WKT, constant srid/proj columns, cast to the
         declared StructType) and yield pyarrow.RecordBatch objects. No per-row Python
         tuple construction -- that per-row loop made large reads ~10x slower than the
-        JVM reader."""
+        JVM reader.
+
+        FILE access mode (``self.access``):
+        - ``"auto"``: silently uses FUSE when FILE is unavailable; no error.
+        - ``"managed"`` / ``"external"``: explicit FILE. Raises ``ValueError`` with a
+          clear, actionable message if FILE is not available on this runtime (NO-GATING rule).
+        """
+        # NO-GATING rule: explicit FILE on FUSE-only tier raises a clear error.
+        # "auto" downgrades silently, so this raises only for managed/external on fuse.
+        _tier = file_access_tier()
+        resolve_access(self.access, tier=_tier)
+
         import numpy as np
         import pyarrow as pa
         import shapely

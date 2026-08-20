@@ -45,6 +45,7 @@ __all__ = [
     "resolve_access",
     "enumerate_files",
     "open_for_read",
+    "resolve_local_path",
     "open_for_write",
     "ingest_files",
     # FILE read engine (for pyrx shims + direct use)
@@ -1106,6 +1107,41 @@ def open_for_read(
     # Simple passthrough: return the source path (caller adapts based on tier).
     # In future, this can be extended to return structured metadata (FILE ref, size, etc.).
     return source
+
+
+def resolve_local_path(
+    source: str, *, access: str = "auto", spark: Optional["SparkSession"] = None
+) -> str:
+    """Resolve *source* to a local filesystem path for sequential readers (e.g. pyogrio).
+
+    Unlike ``open_for_read`` (which returns the source unchanged), this returns the
+    actual local path suitable for passing to GDAL / pyogrio / ``shutil.copy``.
+    Both FUSE and FILE-capable tiers return a FUSE-backed ``/Volumes/...`` path;
+    on FILE-capable runtimes (DBR 18+) that path is served via the FILE API for
+    efficient sequential I/O.
+
+    Access validation follows the NO-GATING rule (same as ``open_for_read``):
+
+    - ``"auto"``: silently uses the best available tier; never raises.
+    - ``"managed"`` / ``"external"``: explicit FILE request; raises ``ValueError``
+      if FILE is unavailable on this runtime (tier='fuse').
+
+    Args:
+        source: Source path (bare FUSE ``/Volumes/...`` or scheme-qualified).
+        access: ``"auto"`` (default), ``"managed"``, or ``"external"``.
+        spark: Optional SparkSession; used for tier detection.
+
+    Returns:
+        A local FUSE filesystem path suitable for sequential I/O.
+
+    Raises:
+        ValueError: If explicit FILE access is requested on a FUSE-only runtime.
+    """
+    tier = file_access_tier(spark)
+    resolve_access(
+        access, tier=tier, spark=spark
+    )  # raises on explicit FILE + FUSE tier
+    return to_local_path(source)
 
 
 # =============================================================================

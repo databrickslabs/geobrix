@@ -719,7 +719,12 @@ def _enumerate_fuse(
     else:
         # Directory case
         if recursive:
-            for root, _dirs, names in os.walk(abspath):
+            for root, dirs, names in os.walk(abspath):
+                if not include_hidden:
+                    # Prune hidden dirs in-place so os.walk never descends into them.
+                    # Mirrors the _accept_basename hidden-skip for files: names that start
+                    # with "." or "_" are writer in-flight containers, Spark markers, etc.
+                    dirs[:] = [d for d in dirs if not d.startswith((".", "_"))]
                 for name in names:
                     if _accept(name):
                         full_path = os.path.join(root, name)

@@ -398,20 +398,37 @@ def test_vector_auto_access_fuse_runtime_reads_correctly(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_vector_reader_no_false_break_on_connect(monkeypatch):
-    """access='managed' must NOT raise in __init__ when getActiveSession() is None
-    (session-less Connect driver context). The false-break is removed."""
-    # Simulate Connect: no active session in the DataSource __init__.
-    import pyspark.sql as _sql
+def test_vector_reader_no_false_break_on_connect(tmp_path):
+    """access='managed'/'external' must NOT raise even when the tier is 'fuse'.
+
+    On Spark Connect, getActiveSession()=None -> file_access_tier resolves to
+    "fuse".  The old code called resolve_local_path which called resolve_access,
+    which raises for explicit-FILE + fuse-tier.  After Fix B, to_local_path is
+    used instead, which is session-free and never tier-gates.
+
+    Simulated by patching file_access_tier in file_gbx to return "fuse", which
+    is what a real Connect session-less reader would encounter.
+    """
+    from unittest.mock import patch
 
     from databricks.labs.gbx.ds import vector as vec
 
-    monkeypatch.setattr(
-        _sql.SparkSession, "getActiveSession", staticmethod(lambda: None)
+    p = str(tmp_path / "pts.geojson")
+    (tmp_path / "pts.geojson").write_bytes(
+        b'{"type":"FeatureCollection","features":[]}'
     )
-    # Must construct without raising (previously raised a false ValueError).
-    r = vec._GeoJSONReader({"path": "/Volumes/c/s/v/data", "access": "managed"})
-    assert r.access == "managed"
+
+    # Patch file_access_tier at its source to simulate a FUSE-only runtime.
+    # Before Fix B, resolve_local_path would call this and raise for managed/external.
+    # After Fix B, to_local_path is called instead — no tier check, never raises.
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"):
+        rdr_managed = vec._GeoJSONReader({"path": p, "access": "managed"})
+        rdr_external = vec._GeoJSONReader({"path": p, "access": "external"})
+
+    assert rdr_managed.access == "managed"
+    assert rdr_external.access == "external"
+    assert rdr_managed.path == p
+    assert rdr_external.path == p
 
 
 def test_vector_members_via_shared_core(tmp_path):

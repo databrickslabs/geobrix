@@ -594,13 +594,10 @@ class VectorGbxReader(DataSourceReader):
         raw_path = options.get("path")
         if not raw_path:
             raise ValueError("vector_gbx requires a 'path' (e.g. .load(path)).")
-        # FILE access mode: "auto" (default, gracefully downgrades to FUSE if FILE
-        # unavailable), "managed" (FILE MANAGED), or "external" (FILE EXTERNAL).
-        # The NO-GATING rule is enforced here (__init__ = driver-side), NOT in read()
-        # (which runs on executors). On Spark Connect workers (Serverless DBR 19+),
-        # SparkSession.getActiveSession() returns None, so file_access_tier() called
-        # from read() always resolves to "fuse" — causing a false ValueError for
-        # explicit managed/external on FILE-capable runtimes.
+        # FILE access mode: "auto" (default), "managed" (FILE MANAGED), or "external"
+        # (FILE EXTERNAL). Validated here for forward-compat; the DataSource reader
+        # itself always reads via FUSE (to_local_path) — tier-gating is the function
+        # layer's job (Task 6/7), where a real SparkSession is available.
         access = options.get("access", "auto")
         if access not in ("auto", "managed", "external"):
             raise ValueError(
@@ -609,19 +606,16 @@ class VectorGbxReader(DataSourceReader):
             )
         self.access = access
 
-        # Driver-side capability probe: get the active driver SparkSession explicitly
-        # to avoid the getOrCreate() path on workers.
-        from pyspark.sql import SparkSession as _SpSess
+        # Session-free path resolution: a DataSource reader is session-less on
+        # Spark Connect (getActiveSession() -> None). resolve_local_path calls
+        # file_access_tier + resolve_access, which raises for explicit managed/external
+        # on a fuse-tier runtime — the same false-break that was at the second probe.
+        # Use to_local_path, the session-free FUSE primitive (strips scheme, returns
+        # /Volumes/... as-is). FILE-tier reads are the function layer's responsibility
+        # (Task 6/7), where a real session is available.
+        from databricks.labs.gbx.ds._listing import to_local_path
 
-        from databricks.labs.gbx.ds.file_gbx import resolve_local_path
-
-        _driver_spark = _SpSess.getActiveSession()
-        # Resolve through resolve_local_path (not inline to_local_path) so vector
-        # reader's local-path resolution goes through the base API and is not
-        # decorative. This validates access mode and returns the local FUSE path.
-        self.path = resolve_local_path(
-            raw_path, access=self.access, spark=_driver_spark
-        )
+        self.path = to_local_path(raw_path)
         self.driver = options.get("driverName", "") or self._DRIVER
         # `multi=true` reads a DIRECTORY of newline-delimited GeoJSONL shards (the
         # output of geojsonl_gbx): switch a GeoJSON reader to the GeoJSONSeq driver so

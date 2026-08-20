@@ -2086,3 +2086,64 @@ def test_resolve_local_path_raises_on_explicit_file_fuse_tier():
                 "/Volumes/cat/sch/vol/path/file.shp",
                 access="external",
             )
+
+
+# ---------------------------------------------------------------------------
+# Task 4 Fix A: _enumerate_fuse prunes hidden directories
+# ---------------------------------------------------------------------------
+
+
+def test_enumerate_fuse_excludes_hidden_subdirectory_files_by_default(tmp_path):
+    """include_hidden=False (default) must NOT descend into dirs starting with '.' or '_'.
+
+    The old vector _members() pruned 'dirs[:] = ...' to prevent descending into
+    _gbx_scratch/ and .staging/; the same pruning must happen in _enumerate_fuse
+    so that valid-named partial files inside those dirs are not returned.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+
+    # Normal subdir with a matching file
+    normal = tmp_path / "sub"
+    normal.mkdir()
+    (normal / "data.geojsonl").write_bytes(b"{}")
+
+    # Hidden (underscore) subdir — must NOT be descended into
+    scratch = tmp_path / "_scratch"
+    scratch.mkdir()
+    (scratch / "data.geojsonl").write_bytes(b"{}")
+
+    # Hidden (dot) subdir — must NOT be descended into
+    staging = tmp_path / ".staging"
+    staging.mkdir()
+    (staging / "part-0.geojsonl").write_bytes(b"{}")
+
+    result = [
+        r["path"]
+        for r in file_gbx._enumerate_fuse(
+            str(tmp_path), recursive=True, include_hidden=False
+        )
+    ]
+    assert result == [str(normal / "data.geojsonl")]
+
+
+def test_enumerate_fuse_includes_hidden_subdirectory_files_when_enabled(tmp_path):
+    """include_hidden=True must descend into hidden dirs and return their files too."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    normal = tmp_path / "sub"
+    normal.mkdir()
+    (normal / "data.geojsonl").write_bytes(b"{}")
+
+    scratch = tmp_path / "_scratch"
+    scratch.mkdir()
+    (scratch / "data.geojsonl").write_bytes(b"{}")
+
+    result = sorted(
+        r["path"]
+        for r in file_gbx._enumerate_fuse(
+            str(tmp_path), recursive=True, include_hidden=True
+        )
+    )
+    assert result == sorted(
+        [str(normal / "data.geojsonl"), str(scratch / "data.geojsonl")]
+    )

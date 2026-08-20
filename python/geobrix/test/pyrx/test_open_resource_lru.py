@@ -200,3 +200,186 @@ def test_make_opener_lru_eviction_deletes_staged_temp(tmp_path, monkeypatch):
     assert (
         staged_b.exists()
     ), "current (non-evicted) entry's staged temp must still exist"
+
+
+# ---------------------------------------------------------------------------
+# Connect-aware LRU sizing tests
+# ---------------------------------------------------------------------------
+
+
+def test_connect_aware_lru_sizing_classic_spark(monkeypatch):
+    """Classic Spark (non-Connect) returns classic defaults."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _connect_aware_lru_sizing
+
+    # Clear any env overrides
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.delenv("GBX_LRU_MAX_BYTES", raising=False)
+
+    # Fake a classic Spark session
+    class FakeClassicSpark:
+        pass
+
+    fake_spark = FakeClassicSpark()
+    fake_spark.__class__.__module__ = "pyspark.sql.session"
+
+    stream_max, lru_max, max_count = _connect_aware_lru_sizing(fake_spark)
+    assert stream_max == 256 * 1024**2, f"classic stream_max={stream_max}"
+    assert lru_max == 4 * 1024**3, f"classic lru_max={lru_max}"
+    assert max_count == 4
+
+
+def test_connect_aware_lru_sizing_connect_spark(monkeypatch):
+    """Spark Connect returns reduced sizing."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _connect_aware_lru_sizing
+
+    # Clear any env overrides
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.delenv("GBX_LRU_MAX_BYTES", raising=False)
+
+    # Fake a Spark Connect session
+    class FakeConnectSpark:
+        pass
+
+    fake_spark = FakeConnectSpark()
+    fake_spark.__class__.__module__ = "pyspark.sql.connect.session"
+
+    stream_max, lru_max, max_count = _connect_aware_lru_sizing(fake_spark)
+    assert stream_max == 64 * 1024**2, f"connect stream_max={stream_max}"
+    assert lru_max == 512 * 1024**2, f"connect lru_max={lru_max}"
+    assert max_count == 4
+
+
+def test_connect_aware_lru_sizing_none_spark(monkeypatch):
+    """None spark returns classic defaults (safe fallback)."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _connect_aware_lru_sizing
+
+    # Clear any env overrides
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.delenv("GBX_LRU_MAX_BYTES", raising=False)
+
+    stream_max, lru_max, max_count = _connect_aware_lru_sizing(None)
+    assert stream_max == 256 * 1024**2
+    assert lru_max == 4 * 1024**3
+    assert max_count == 4
+
+
+def test_connect_aware_lru_sizing_env_override_classic(monkeypatch):
+    """Env GBX_STREAM_MAX_BYTES override works on classic Spark."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _connect_aware_lru_sizing
+
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", str(100 * 1024**2))
+    monkeypatch.delenv("GBX_LRU_MAX_BYTES", raising=False)
+
+    class FakeClassicSpark:
+        pass
+
+    fake_spark = FakeClassicSpark()
+    fake_spark.__class__.__module__ = "pyspark.sql.session"
+
+    stream_max, lru_max, max_count = _connect_aware_lru_sizing(fake_spark)
+    assert stream_max == 100 * 1024**2, "env override should win"
+    assert lru_max == 4 * 1024**3, "classic default when no env"
+    assert max_count == 4
+
+
+def test_connect_aware_lru_sizing_env_override_connect(monkeypatch):
+    """Env GBX_LRU_MAX_BYTES override works on Connect."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _connect_aware_lru_sizing
+
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.setenv("GBX_LRU_MAX_BYTES", str(1024 * 1024 * 1024))
+
+    class FakeConnectSpark:
+        pass
+
+    fake_spark = FakeConnectSpark()
+    fake_spark.__class__.__module__ = "pyspark.sql.connect.session"
+
+    stream_max, lru_max, max_count = _connect_aware_lru_sizing(fake_spark)
+    assert stream_max == 64 * 1024**2, "connect default when no env"
+    assert lru_max == 1024 * 1024 * 1024, "env override should win"
+    assert max_count == 4
+
+
+def test_connect_aware_lru_sizing_both_env_overrides(monkeypatch):
+    """Both env vars override defaults."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _connect_aware_lru_sizing
+
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", str(50 * 1024**2))
+    monkeypatch.setenv("GBX_LRU_MAX_BYTES", str(512 * 1024**2))
+
+    class FakeConnectSpark:
+        pass
+
+    fake_spark = FakeConnectSpark()
+    fake_spark.__class__.__module__ = "pyspark.sql.connect.session"
+
+    stream_max, lru_max, max_count = _connect_aware_lru_sizing(fake_spark)
+    assert stream_max == 50 * 1024**2
+    assert lru_max == 512 * 1024**2
+    assert max_count == 4
+
+
+# ---------------------------------------------------------------------------
+# _open_via_file_ref stream_max_bytes parameter tests
+# ---------------------------------------------------------------------------
+
+
+def test_open_via_file_ref_respects_stream_max_bytes(monkeypatch):
+    """_open_via_file_ref uses passed stream_max_bytes threshold."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _open_via_file_ref
+
+    # Fake FileRef with size just under threshold
+    class FakeFileRef:
+        def __init__(self, size):
+            self.size = size
+            self.stream_opened = False
+            self.fuse_opened = False
+
+        def open(self):
+            self.stream_opened = True
+
+            class FakeStream:
+                pass
+
+            return FakeStream()
+
+        def as_local_file(self):
+            self.fuse_opened = True
+            return "/local/path"
+
+    # Fake rasterio with open and profile tracking
+    class FakeRasterio:
+        def __init__(self):
+            self.opened_with_stream = False
+
+        def open(self, target):
+            if isinstance(target, str):
+                # FUSE path
+                self.opened_with_stream = False
+            else:
+                # Stream path
+                self.opened_with_stream = True
+
+            class FakeDataset:
+                profile = {"tiled": True}
+
+                def close(self):
+                    pass
+
+            return FakeDataset()
+
+    # Test 1: File UNDER threshold with tiled=True → uses stream
+    fr = FakeFileRef(50 * 1024**2)
+    rstio = FakeRasterio()
+    ds, stream = _open_via_file_ref(fr, rstio, stream_max_bytes=100 * 1024**2)
+    assert fr.stream_opened, "should open stream for file < threshold"
+    assert stream is not None, "stream path should return stream"
+    assert rstio.opened_with_stream, "rasterio should have been passed the stream"
+
+    # Test 2: File OVER threshold → uses FUSE
+    fr2 = FakeFileRef(150 * 1024**2)
+    rstio2 = FakeRasterio()
+    ds2, stream2 = _open_via_file_ref(fr2, rstio2, stream_max_bytes=100 * 1024**2)
+    assert fr2.fuse_opened, "should use FUSE for file > threshold"
+    assert stream2 is None, "FUSE path should return None stream"

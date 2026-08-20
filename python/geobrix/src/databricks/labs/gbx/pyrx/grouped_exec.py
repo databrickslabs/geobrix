@@ -25,6 +25,49 @@ STREAM_NOMINAL_BYTES = 16 * 1024**2  # fallback nominal when size is unknown
 _MISS = object()
 
 
+def _connect_aware_lru_sizing(spark) -> tuple[int, int, int]:
+    """Return Connect-aware LRU sizing (stream_max_bytes, lru_max_bytes, max_count).
+
+    On Spark Connect (Serverless), tasks have ~1 GB RAM; class instance buffers
+    (stream opens) become a major constraint. This function returns reduced sizing
+    to fit serverless RAM budgets while favoring FUSE (which doesn't buffer) over
+    stream opens.
+
+    Benchmarks show that on serverless, FUSE (74 ms/tile) is FASTER than stream
+    (110 ms/tile) per FILE-for-raster benchmarks; lower stream_max_bytes favors
+    the FUSE path automatically.
+
+    Args:
+        spark: Spark session (SparkSession or PySpark Connect session), or None.
+
+    Returns:
+        (stream_max_bytes, lru_max_bytes, max_count):
+        - Classic Spark: (256 MiB, 4 GiB, 4) — existing behavior.
+        - Spark Connect: (64 MiB, 512 MiB, 4) — serverless-safe.
+        - Env overrides win in both: GBX_STREAM_MAX_BYTES, GBX_LRU_MAX_BYTES.
+        - Serverless worst case: 4 × 64 MiB = 256 MiB, well under ~1 GB task.
+    """
+    is_connect = spark is not None and "connect" in type(spark).__module__
+
+    # Read raw os.environ to distinguish "explicitly set" from "default".
+    # Module-level constants already baked the env-or-default at import.
+    stream_max_bytes_env = os.environ.get("GBX_STREAM_MAX_BYTES")
+    if stream_max_bytes_env is not None:
+        stream_max_bytes = int(stream_max_bytes_env)
+    else:
+        stream_max_bytes = 64 * 1024**2 if is_connect else 256 * 1024**2
+
+    lru_max_bytes_env = os.environ.get("GBX_LRU_MAX_BYTES")
+    if lru_max_bytes_env is not None:
+        lru_max_bytes = int(lru_max_bytes_env)
+    else:
+        lru_max_bytes = 512 * 1024**2 if is_connect else 4 * 1024**3
+
+    max_count = 4
+
+    return stream_max_bytes, lru_max_bytes, max_count
+
+
 def _tile_is_windowless_virtual(tile) -> bool:
     """True if *tile* is a virtual tile (path set, raster None) with no window.
 
@@ -118,13 +161,13 @@ class OpenResourceLRU:
             self._closer(res)
 
 
-def _open_via_file_ref(fr, rasterio):
+def _open_via_file_ref(fr, rasterio, stream_max_bytes=GBX_STREAM_MAX_BYTES):
     """Open a rasterio DatasetReader from *fr* using the size-adaptive strategy.
 
     Returns ``(ds, stream)`` when opened via byte-range stream (tiled/COG path),
     or ``(ds, None)`` when opened via FUSE (``as_local_file``).
 
-    - Small file (≤ GBX_STREAM_MAX_BYTES) AND tiled layout: stream into /vsimem via
+    - Small file (≤ stream_max_bytes) AND tiled layout: stream into /vsimem via
       ``fr.open()`` — efficient for tiled/COG sources that support random window reads.
     - Large file OR striped layout: lazy FUSE open via ``fr.as_local_file()`` — blocks
       are fetched on demand without loading the whole file into RAM.
@@ -133,8 +176,13 @@ def _open_via_file_ref(fr, rasterio):
     closed before falling back to FUSE; the returned ``(ds, None)`` pair is FUSE-only.
 
     Raises on any failure; caller must handle and fall back to staging.
+
+    Args:
+        fr: FileRef object with size, open(), as_local_file() methods.
+        rasterio: rasterio module (imported on worker).
+        stream_max_bytes: threshold in bytes for stream vs FUSE (default: GBX_STREAM_MAX_BYTES).
     """
-    if fr.size <= GBX_STREAM_MAX_BYTES:
+    if fr.size <= stream_max_bytes:
         stream = fr.open()
         ds = rasterio.open(stream)
         if ds.profile.get("tiled", False):
@@ -167,12 +215,13 @@ class _OpenerContext:
       buffer into executor RAM, so ``weigh`` returns a small nominal for them.
     """
 
-    def __init__(self):
+    def __init__(self, stream_max_bytes: int = GBX_STREAM_MAX_BYTES):
         # Mutable FileRef slot; a list so the partition loop can rebind it.
         self.fr_holder: "list[Any]" = [None]
         self._staged_temps: "dict[int, str]" = {}
         self._streams: "dict[int, Any]" = {}
         self._fuse_sources: "set[int]" = set()
+        self._stream_max_bytes = stream_max_bytes
 
     def open(self, uri: str):
         import rasterio
@@ -180,7 +229,7 @@ class _OpenerContext:
         fr = self.fr_holder[0]
         if fr is not None:
             try:
-                ds, stream = _open_via_file_ref(fr, rasterio)
+                ds, stream = _open_via_file_ref(fr, rasterio, self._stream_max_bytes)
                 if stream is not None:
                     self._streams[id(ds)] = stream
                 else:
@@ -429,12 +478,21 @@ def grouped_tile_map(
             "_file_ref", _fr_mod.file_ref_arg(F.col(tile_col), spark=_driver_spark)
         )
 
+    # Compute Connect-aware sizing on the driver; capture in the closure.
+    _stream_max, _lru_max, _lru_count = _connect_aware_lru_sizing(_driver_spark)
+
     def _map(pdf_iter):
         from . import _env
 
         _env.configure_gdal_env()
-        _ctx = _OpenerContext()
-        lru = OpenResourceLRU(opener=_ctx.open, closer=_ctx.close, weigher=_ctx.weigh)
+        _ctx = _OpenerContext(stream_max_bytes=_stream_max)
+        lru = OpenResourceLRU(
+            opener=_ctx.open,
+            closer=_ctx.close,
+            weigher=_ctx.weigh,
+            max_bytes=_lru_max,
+            max_count=_lru_count,
+        )
         # Capture the view kwarg in the closure so the inner loop can use it
         # without shadowing the local variable 'view' with a _WindowHeaderView
         # instance.

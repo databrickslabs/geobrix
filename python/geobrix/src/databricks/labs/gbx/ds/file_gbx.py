@@ -24,11 +24,8 @@ from collections import OrderedDict
 from contextlib import contextmanager
 from typing import Any, Callable, Literal, Optional
 
-import rasterio
 from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as F
-from rasterio.io import MemoryFile
-from rasterio.windows import Window
 
 # Re-export listing helpers for backward compatibility
 from databricks.labs.gbx.ds._listing import (
@@ -646,6 +643,10 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
     # The broad except converts any failure here to FileRefReadError so the
     # caller can degrade to the local-file path.  The yield is OUTSIDE this
     # handler so that caller-body exceptions propagate unchanged (not wrapped).
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.windows import Window
+
     try:
         stream = file_ref.open()
         if not stream.seekable():
@@ -1081,8 +1082,9 @@ def open_for_read(
                SparkSession.builder.getOrCreate(). Explicit passing is preferred on Spark Connect.
 
     Returns:
-        A handle suitable for the caller's I/O contract. For raster: a path string or FILE ref
-        (caller wraps with rasterio.open). For vector: a path string (caller wraps with pyogrio/OGR).
+        The source path unchanged. FILE routing is the caller's responsibility
+        (see Task 4 for reader/writer layer integration). Caller adapts based on
+        the resolved tier and access mode.
 
     Raises:
         ValueError: If access is "managed" or "external" but FILE is unavailable on this runtime.

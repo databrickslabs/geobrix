@@ -387,14 +387,15 @@ def _probe_raiser(p):
 
 def test_stage_local_volumes_probe_fails_falls_back_to_copy(tmp_path, monkeypatch):
     """/Volumes path where probe fails → falls back to sequential copy → (temp, True)."""
+    from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.pyrx.core import preparer as m
 
     f = tmp_path / "src.tif"
     _write_src(str(f))  # real, readable file for the copy fallback
 
-    monkeypatch.setattr(m, "_is_fuse_path", lambda p: True)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda p: True)
     # Make the probe fail immediately (no retry sleep).
-    monkeypatch.setattr(m, "_probe_direct_open", _probe_raiser)
+    monkeypatch.setattr(file_gbx, "_probe_direct_open", _probe_raiser)
 
     path, is_temp = m._stage_local_if_needed(str(f))
     assert is_temp is True, "expected temp copy after probe failure"
@@ -405,12 +406,13 @@ def test_stage_local_volumes_probe_fails_falls_back_to_copy(tmp_path, monkeypatc
 
 def test_stage_local_force_stage_env_always_copies(tmp_path, monkeypatch):
     """GBX_FORCE_STAGE=1 bypasses probe and always copies even when direct access works."""
+    from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.pyrx.core import preparer as m
 
     f = tmp_path / "src.tif"
     _write_src(str(f))
 
-    monkeypatch.setattr(m, "_is_fuse_path", lambda p: True)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda p: True)
     monkeypatch.setenv("GBX_FORCE_STAGE", "1")
 
     path, is_temp = m._stage_local_if_needed(str(f))
@@ -427,6 +429,7 @@ def test_stage_local_force_stage_env_always_copies(tmp_path, monkeypatch):
 
 def test_stage_local_respects_max_bytes(monkeypatch, tmp_path):
     """Files over GBX_STAGE_MAX_BYTES raise StageTooLargeError instead of copying."""
+    from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.pyrx.core import preparer as m
 
     big = tmp_path / "big.tif"
@@ -434,7 +437,7 @@ def test_stage_local_respects_max_bytes(monkeypatch, tmp_path):
 
     monkeypatch.setenv("GBX_STAGE_MAX_BYTES", "512")  # cap below 1024 bytes
     monkeypatch.setenv("GBX_FORCE_STAGE", "1")  # skip probe, go straight to copy branch
-    monkeypatch.setattr(m, "_is_fuse_path", lambda p: True)  # force FUSE path
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda p: True)  # force FUSE path
 
     import pytest
 

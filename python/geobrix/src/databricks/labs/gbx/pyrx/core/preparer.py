@@ -17,16 +17,10 @@ import tempfile
 import time
 from typing import Dict, List, Optional, Tuple
 
+from databricks.labs.gbx.ds.file_gbx import StageTooLargeError  # noqa: F401
+from databricks.labs.gbx.ds.file_gbx import _is_fuse_path  # noqa: F401
+from databricks.labs.gbx.ds.file_gbx import _probe_direct_open  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
-
-
-class StageTooLargeError(Exception):
-    """Raised when a source file exceeds ``GBX_STAGE_MAX_BYTES`` and cannot be staged.
-
-    Callers (grouped-exec, scalar UDF paths) catch ``Exception`` and degrade
-    gracefully (return None / fall back to header), so this is intentionally a
-    plain ``Exception`` subclass.
-    """
 
 
 def cog_output_name(source_basename: str) -> str:
@@ -251,12 +245,6 @@ def _resolve_sources(
             _add(local, "not-found")
 
     return out
-
-
-# Keep the internal helpers available for any local monkeypatching in tests
-def _is_fuse_path(path: str) -> bool:
-    """Return True if *path* lives under a Databricks FUSE mount."""
-    return path.startswith("/Volumes") or path.startswith("/dbfs")
 
 
 def prepare_cogs(

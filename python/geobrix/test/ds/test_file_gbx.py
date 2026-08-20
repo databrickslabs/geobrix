@@ -660,7 +660,11 @@ def test_enumerate_files_sql_path_escaping():
 def test_open_for_read_auto_mode_returns_source_path():
     """open_for_read with access='auto' returns the source path."""
     source = "/Volumes/test/data.tif"
-    result = file_gbx.open_for_read(source, access="auto")
+
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
+        mock_tier.return_value = "fuse"
+        result = file_gbx.open_for_read(source, access="auto")
+
     assert result == source
 
 

@@ -2572,6 +2572,8 @@ The `rst_resample*` family is GeoBrix's equivalent of the ArcGIS **Resample** to
 - **[`rst_resample_to_size`](#rst_resample_to_size)** — by target **pixel dimensions** (width × height).
 
 Unlike [`rst_sample`](#rst_sample) — which reads a value at a point and is nearest-pixel only — resampling rewrites the whole grid. So to *sample* with **bilinear or cubic interpolation**, resample first with the desired `algorithm`, then call `rst_sample`.
+
+See [Raster Sampling](./raster-sampling) for the full workflow guide.
 :::
 
 **SQL:**
@@ -3311,6 +3313,8 @@ Powered by **rasterio**. Point geometries only; the point is assumed to be in th
 
 - **Multiple rasters** (Esri's `RS_VALUE1`, `RS_VALUE2`, …): call `rst_sample` once per raster and alias each result column.
 - **A points table against a raster tile set** (the Sample-tool workflow at scale): join the points to the tiles that contain them — with `st_intersects`, or a raster grid tessellation such as `rst_h3_tessellate` for an index join — then call `rst_sample(tile, point)` per row.
+
+See [Raster Sampling](./raster-sampling) for the full workflow guide.
 :::
 
 <FunctionExamples

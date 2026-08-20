@@ -119,6 +119,7 @@ const sidebars = {
             'api/virtual-tiles',
             'api/materialized-compression',
             'api/h3-raster-tessellation',
+            'api/raster-sampling',
           ],
         },
         { type: 'doc', id: 'api/vectorx-functions', label: 'VectorX' },

@@ -2564,6 +2564,16 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 **Parameters:** `factor` — multiplicative scale factor applied to both width and height (e.g. `2.0` doubles the pixel grid); `algorithm` — gdalwarp resampling method name (e.g. `bilinear`, `near`, `cubic`, `cubicspline`, `lanczos`, `average`)
 
+:::tip Esri Resample / changing cell size
+The `rst_resample*` family is GeoBrix's equivalent of the ArcGIS **Resample** tool — producing a *new* raster at a different cell size with a chosen resampling method (`algorithm`: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`). Pick the variant by how you specify the target:
+
+- **`rst_resample`** — by a multiplicative **factor** (e.g. `2.0` doubles the grid).
+- **[`rst_resample_to_res`](#rst_resample_to_res)** — by target **ground resolution** in CRS units (e.g. metres per pixel).
+- **[`rst_resample_to_size`](#rst_resample_to_size)** — by target **pixel dimensions** (width × height).
+
+Unlike [`rst_sample`](#rst_sample) — which reads a value at a point and is nearest-pixel only — resampling rewrites the whole grid. So to *sample* with **bilinear or cubic interpolation**, resample first with the desired `algorithm`, then call `rst_sample`.
+:::
+
 **SQL:**
 
 <FunctionExamples
@@ -2593,6 +2603,8 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 **Parameters:** `xRes` — target pixel width in CRS units (e.g. metres for a metric projection); `yRes` — target pixel height in CRS units; `algorithm` — gdalwarp resampling method name (e.g. `average`, `bilinear`, `near`)
 
+Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resample) for how it relates to the ArcGIS Resample tool and `rst_sample`.
+
 **SQL:**
 
 <FunctionExamples
@@ -2621,6 +2633,8 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 **Signature:** `rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column, algorithm: Column): Column`
 
 **Parameters:** `widthPx` — target output width in pixels; `heightPx` — target output height in pixels; `algorithm` — gdalwarp resampling method name (e.g. `near` for categorical rasters, `bilinear` for continuous)
+
+Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resample) for how it relates to the ArcGIS Resample tool and `rst_sample`.
 
 **SQL:**
 

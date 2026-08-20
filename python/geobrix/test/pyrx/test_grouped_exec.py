@@ -284,6 +284,7 @@ def test_weigh_prefers_metadata_size_over_fr_size():
     # Mock src (only needed for id tracking)
     class MockDataset:
         pass
+
     src = MockDataset()
 
     # weigh() should use metadata size, not call fr.size
@@ -311,6 +312,7 @@ def test_weigh_falls_back_to_fr_size_when_metadata_absent():
     # Mock src
     class MockDataset:
         pass
+
     src = MockDataset()
 
     # weigh() should fall back to fr.size
@@ -320,7 +322,10 @@ def test_weigh_falls_back_to_fr_size_when_metadata_absent():
 
 def test_weigh_falls_back_to_nominal_when_all_absent():
     """When both metadata size and fr.size are absent, weigh() uses nominal."""
-    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext, STREAM_NOMINAL_BYTES
+    from databricks.labs.gbx.pyrx.grouped_exec import (
+        STREAM_NOMINAL_BYTES,
+        _OpenerContext,
+    )
 
     ctx = _OpenerContext()
     ctx.size_holder[0] = None  # No metadata size
@@ -329,6 +334,7 @@ def test_weigh_falls_back_to_nominal_when_all_absent():
     # Mock src (not in _fuse_sources so it's not FUSE-weighted)
     class MockDataset:
         pass
+
     src = MockDataset()
 
     # weigh() should use nominal

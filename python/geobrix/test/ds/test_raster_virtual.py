@@ -263,10 +263,12 @@ def test_virtual_tile_has_path_file_size_metadata(spark, tmp_path):
     t = rows[0]["tile"]
     assert t["raster"] is None, "virtual tile must have no raster bytes"
     metadata = t["metadata"]
-    assert "path_file_size" in metadata, "virtual tile must have path_file_size metadata"
-    assert int(metadata["path_file_size"]) == file_size, (
-        f"path_file_size={metadata['path_file_size']} must match file_size={file_size}"
-    )
+    assert (
+        "path_file_size" in metadata
+    ), "virtual tile must have path_file_size metadata"
+    assert (
+        int(metadata["path_file_size"]) == file_size
+    ), f"path_file_size={metadata['path_file_size']} must match file_size={file_size}"
 
 
 def test_materialized_tile_has_tile_size_metadata(spark, tmp_path):
@@ -287,6 +289,6 @@ def test_materialized_tile_has_tile_size_metadata(spark, tmp_path):
     raster_bytes = t["raster"]
     metadata = t["metadata"]
     assert "tile_size" in metadata, "materialized tile must have tile_size metadata"
-    assert int(metadata["tile_size"]) == len(raster_bytes), (
-        f"tile_size={metadata['tile_size']} must match len(raster)={len(raster_bytes)}"
-    )
+    assert int(metadata["tile_size"]) == len(
+        raster_bytes
+    ), f"tile_size={metadata['tile_size']} must match len(raster)={len(raster_bytes)}"

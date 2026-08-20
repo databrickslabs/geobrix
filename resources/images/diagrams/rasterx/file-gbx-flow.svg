@@ -1,0 +1,189 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1720 1186" width="1720" height="1186" style="font-family: Inter, -apple-system, system-ui, sans-serif;">
+<defs>
+  <filter id="card-shadow" x="-5%" y="-5%" width="110%" height="115%">
+    <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0F1B2A" flood-opacity="0.08"/>
+  </filter>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#FAFBFC"/><stop offset="1" stop-color="#F1F4F8"/>
+  </linearGradient>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="7" refY="3"
+          orient="auto" markerUnits="userSpaceOnUse">
+    <path d="M0,0 L7,3 L0,6 Z" fill="#5A6878"/>
+  </marker>
+  <marker id="arrow-read" markerWidth="10" markerHeight="10" refX="7" refY="3"
+          orient="auto" markerUnits="userSpaceOnUse">
+    <path d="M0,0 L7,3 L0,6 Z" fill="#1F6FB5"/>
+  </marker>
+  <marker id="arrow-write" markerWidth="10" markerHeight="10" refX="7" refY="3"
+          orient="auto" markerUnits="userSpaceOnUse">
+    <path d="M0,0 L7,3 L0,6 Z" fill="#7A5AA6"/>
+  </marker>
+  <marker id="arrow-file" markerWidth="10" markerHeight="10" refX="7" refY="3"
+          orient="auto" markerUnits="userSpaceOnUse">
+    <path d="M0,0 L7,3 L0,6 Z" fill="#5060A8"/>
+  </marker>
+  <marker id="arrow-fuse" markerWidth="10" markerHeight="10" refX="7" refY="3"
+          orient="auto" markerUnits="userSpaceOnUse">
+    <path d="M0,0 L7,3 L0,6 Z" fill="#41546A"/>
+  </marker>
+</defs>
+
+<rect x="0" y="0" width="1720" height="1186" fill="url(#bg)"/>
+<text x="40" y="70" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="30" font-weight="800" fill="#0F1B2A" text-anchor="start">GeoBrix · file_gbx Access Flow</text>
+<text x="40" y="98" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="14.5" font-weight="400" fill="#3F4D5E" text-anchor="start">One file-access base under every lightweight reader &amp; writer — capability-tiered FILE / FUSE routing on read, governed MANAGED / EXTERNAL / FUSE modes on write, chosen per runtime</text>
+<rect x="1308" y="52" width="16" height="16" rx="3" fill="#E7E9F6" stroke="#5060A8" stroke-width="2"/>
+<text x="1332" y="65" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="600" fill="#3F4D5E" text-anchor="start">FILE — managed / external (governed)</text>
+<rect x="1308" y="76" width="16" height="16" rx="3" fill="#EAEEF3" stroke="#41546A" stroke-width="2" stroke-dasharray="4 3"/>
+<text x="1332" y="89" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="600" fill="#3F4D5E" text-anchor="start">FUSE — always-available floor (no FILE column)</text>
+<rect x="40" y="170" rx="18" ry="18" width="1640" height="372" fill="#E3EEF8" fill-opacity="0.35" stroke="#1F6FB5" stroke-width="1.5"/><rect x="40" y="170" rx="18" ry="18" width="10" height="372" fill="#1F6FB5"/><rect x="45" y="170" width="5" height="372" fill="#1F6FB5"/><rect x="62" y="146" rx="15" ry="15" width="65" height="30" fill="#1F6FB5"/><text x="94.5" y="165.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">READ</text><text x="139" y="166" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#5A6878" text-anchor="start">open_for_read(source, access="auto")</text>
+<rect x="68" y="192" rx="14" ry="14" width="270" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 68 206 A 14 14 0 0 1 82 192 H 324 A 14 14 0 0 1 338 206 V 197 H 68 Z" fill="#1F6FB5"/>
+<circle cx="94" cy="226" r="13" fill="#1F6FB5"/>
+<text x="94" y="231" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="116" y="223" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Source</text>
+<text x="116" y="241" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">path · directory · FILE ref</text>
+<path d="M 98.2 272.0 H 125.0 L 141.8 288.8 V 328.0 H 98.2 Z" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="2" stroke-linejoin="round"/><path d="M 125.0 272.0 V 288.8 H 141.8 Z" fill="#1F6FB5" fill-opacity="0.28" stroke="#1F6FB5" stroke-width="1.4" stroke-linejoin="round"/><line x1="106.0" y1="301.1" x2="133.1" y2="301.1" stroke="#1F6FB5" stroke-width="1.6" stroke-opacity="0.5"/><line x1="106.0" y1="310.6" x2="133.1" y2="310.6" stroke="#1F6FB5" stroke-width="1.6" stroke-opacity="0.5"/><line x1="106.0" y1="320.2" x2="133.1" y2="320.2" stroke="#1F6FB5" stroke-width="1.6" stroke-opacity="0.5"/>
+<text x="168" y="290" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">a raster or vector file</text>
+<text x="168" y="308" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">on a UC Volume</text>
+<text x="86" y="342" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#1F6FB5" text-anchor="start">path</text>
+<text x="322" y="342" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#3F4D5E" text-anchor="end">/Volumes/…/scene.tif</text>
+<text x="86" y="364" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#1F6FB5" text-anchor="start">directory</text>
+<text x="322" y="364" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#3F4D5E" text-anchor="end">recursive enumerate</text>
+<text x="86" y="386" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#1F6FB5" text-anchor="start">FILE ref</text>
+<text x="322" y="386" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#3F4D5E" text-anchor="end">read_files / list_files</text>
+<rect x="86" y="480" rx="12" ry="12" width="154" height="24" fill="#5060A8"/><text x="163.0" y="496.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="700" fill="#FFFFFF">MANAGED | EXTERNAL FILE</text>
+<rect x="398" y="192" rx="14" ry="14" width="268" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 398 206 A 14 14 0 0 1 412 192 H 652 A 14 14 0 0 1 666 206 V 197 H 398 Z" fill="#1F6FB5"/>
+<circle cx="424" cy="226" r="13" fill="#1F6FB5"/>
+<text x="424" y="231" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="446" y="223" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Resolve access</text>
+<text x="446" y="241" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">capability tier · no gating</text>
+<rect x="416" y="258" rx="11" ry="11" width="113" height="22" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="1"/><text x="472.5" y="273.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#1F6FB5">open_for_read</text>
+<text x="416" y="300" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="700" fill="#7A8794" text-anchor="start" letter-spacing="1.2">CAPABILITY TIER</text>
+<text x="650" y="300" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="600" fill="#5A6878" text-anchor="end">probed 1×/session</text>
+<rect x="414" y="314" rx="8" ry="8" width="236" height="32" fill="#E7E9F6" stroke="#5060A8" stroke-width="1"/>
+<text x="426" y="335" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#5060A8" text-anchor="start">read_files</text>
+<text x="638" y="334" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="600" fill="#3F4D5E" text-anchor="end">DBR 13.3+</text>
+<rect x="414" y="354" rx="8" ry="8" width="236" height="32" fill="#E7E9F6" stroke="#5060A8" stroke-width="1"/>
+<text x="426" y="375" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#5060A8" text-anchor="start">list_files</text>
+<text x="638" y="374" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="600" fill="#3F4D5E" text-anchor="end">DBR 18+</text>
+<rect x="414" y="394" rx="8" ry="8" width="236" height="32" fill="#EAEEF3" stroke="#41546A" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="426" y="415" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#41546A" text-anchor="start">FUSE</text>
+<text x="638" y="414" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="600" fill="#3F4D5E" text-anchor="end">floor · always</text>
+<rect x="726" y="192" rx="14" ry="14" width="420" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 726 206 A 14 14 0 0 1 740 192 H 1132 A 14 14 0 0 1 1146 206 V 197 H 726 Z" fill="#1F6FB5"/>
+<circle cx="752" cy="226" r="13" fill="#1F6FB5"/>
+<text x="752" y="231" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">3</text>
+<text x="774" y="223" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Size-adaptive routing</text>
+<text x="774" y="241" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">the resolver picks per source &amp; size</text>
+<rect x="744" y="256" rx="14" ry="14" width="384" height="74" fill="#FFFFFF" stroke="#5060A8" stroke-width="1" filter="url(#card-shadow)"/><path d="M 744 270 A 14 14 0 0 1 758 256 H 1114 A 14 14 0 0 1 1128 270 V 261 H 744 Z" fill="#5060A8"/><rect x="756" y="269" rx="10" ry="10" width="88" height="20" fill="#5060A8"/><text x="800.0" y="283.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="700" fill="#FFFFFF">FILE-STREAM</text><text x="853" y="283" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">byte-range</text><text x="759" y="304" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">tiled / COG ≤ GBX_STREAM_MAX_BYTES</text><text x="759" y="319" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#5060A8" text-anchor="start">fr.open() → /vsimem seekable stream</text>
+<rect x="744" y="344" rx="14" ry="14" width="384" height="74" fill="#FFFFFF" stroke="#5060A8" stroke-width="1" stroke-dasharray="5 4"/><path d="M 744 358 A 14 14 0 0 1 758 344 H 1114 A 14 14 0 0 1 1128 358 V 349 H 744 Z" fill="#5060A8"/><rect x="756" y="357" rx="10" ry="10" width="94" height="20" fill="#FFFFFF" stroke="#5060A8" stroke-width="1"/><text x="803.0" y="371.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="700" fill="#5060A8">FUSE-of-FILE</text><text x="859" y="371" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">large / striped</text><text x="759" y="392" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">blocks fetched on demand, no full load</text><text x="759" y="407" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#5060A8" text-anchor="start">fr.as_local_file() (FILE-backed FUSE)</text>
+<rect x="744" y="432" rx="14" ry="14" width="384" height="74" fill="#FFFFFF" stroke="#41546A" stroke-width="1" stroke-dasharray="5 4"/><path d="M 744 446 A 14 14 0 0 1 758 432 H 1114 A 14 14 0 0 1 1128 446 V 437 H 744 Z" fill="#41546A"/><rect x="756" y="445" rx="10" ry="10" width="65" height="20" fill="#41546A"/><text x="788.5" y="459.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="700" fill="#FFFFFF">STAGING</text><text x="830" y="459" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">probe → stage</text><text x="759" y="480" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">FUSE tier or direct-open probe fails</text><text x="759" y="495" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">sequential copy ≤ GBX_STAGE_MAX_BYTES</text>
+<rect x="1206" y="192" rx="14" ry="14" width="450" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 1206 206 A 14 14 0 0 1 1220 192 H 1642 A 14 14 0 0 1 1656 206 V 197 H 1206 Z" fill="#1F6FB5"/>
+<circle cx="1232" cy="226" r="13" fill="#1F6FB5"/>
+<text x="1232" y="231" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">4</text>
+<text x="1254" y="223" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Reader</text>
+<text x="1254" y="241" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">the light-tier engine reads the window</text>
+<path d="M 1232.0 266.0 L 1276.0 266.0 L 1259.7 288.0 L 1259.7 303.8 L 1248.3 303.8 L 1248.3 288.0 Z" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="2" stroke-linejoin="round"/>
+<rect x="1298" y="270" rx="11" ry="11" width="81" height="22" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="1"/><text x="1338.5" y="285.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1F6FB5">rasterio</text>
+<text x="1387" y="285" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="600" fill="#5A6878" text-anchor="start">raster</text>
+<rect x="1298" y="296" rx="11" ry="11" width="74" height="22" fill="#E3EEF8" stroke="#1F6FB5" stroke-width="1"/><text x="1335.0" y="311.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1F6FB5">pyogrio</text>
+<text x="1380" y="311" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="600" fill="#5A6878" text-anchor="start">vector</text>
+<rect x="1222" y="342" width="418" height="98" rx="10" fill="#E7E9F6" fill-opacity="0.45" stroke="#5060A8" stroke-width="1.3"/>
+<text x="1236" y="364" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="700" fill="#5060A8" text-anchor="start" letter-spacing="1.1">OPEN-COST AMORTIZATION</text>
+<path d="M 1234.7 377.0 H 1251.1 L 1261.3 387.2 V 411.0 H 1234.7 Z" fill="#E7E9F6" stroke="#5060A8" stroke-width="2" stroke-linejoin="round"/><path d="M 1251.1 377.0 V 387.2 H 1261.3 Z" fill="#5060A8" fill-opacity="0.28" stroke="#5060A8" stroke-width="1.4" stroke-linejoin="round"/><line x1="1239.5" y1="394.7" x2="1256.0" y2="394.7" stroke="#5060A8" stroke-width="1.6" stroke-opacity="0.5"/><line x1="1239.5" y1="400.5" x2="1256.0" y2="400.5" stroke="#5060A8" stroke-width="1.6" stroke-opacity="0.5"/><line x1="1239.5" y1="406.2" x2="1256.0" y2="406.2" stroke="#5060A8" stroke-width="1.6" stroke-opacity="0.5"/><line x1="1266" y1="394" x2="1316" y2="394" stroke="#5060A8" stroke-width="2.4" marker-end="url(#arrow-file)"/><rect x="1272" y="374" rx="8" ry="8" width="55" height="17" fill="#FFFFFF" stroke="#5060A8" stroke-width="1"/><text x="1299.5" y="386.5" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9" font-weight="700" fill="#5060A8">open()×1</text><rect x="1328.0" y="371.5" width="13" height="13" rx="2" fill="#E7E9F6" stroke="#5060A8" stroke-width="1.4"/><line x1="1316" y1="394" x2="1328.0" y2="378.0" stroke="#5060A8" stroke-width="1.2" stroke-opacity="0.5"/><rect x="1328.0" y="386.5" width="13" height="13" rx="2" fill="#E7E9F6" stroke="#5060A8" stroke-width="1.4"/><line x1="1316" y1="394" x2="1328.0" y2="393.0" stroke="#5060A8" stroke-width="1.2" stroke-opacity="0.5"/><rect x="1328.0" y="401.5" width="13" height="13" rx="2" fill="#E7E9F6" stroke="#5060A8" stroke-width="1.4"/><line x1="1316" y1="394" x2="1328.0" y2="408.0" stroke="#5060A8" stroke-width="1.2" stroke-opacity="0.5"/><rect x="1328.0" y="416.5" width="13" height="13" rx="2" fill="#E7E9F6" stroke="#5060A8" stroke-width="1.4"/><line x1="1316" y1="394" x2="1328.0" y2="423.0" stroke="#5060A8" stroke-width="1.2" stroke-opacity="0.5"/><text x="1350" y="384" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="700" fill="#5060A8" text-anchor="start">windows share</text><text x="1350" y="397" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="700" fill="#5060A8" text-anchor="start">one open</text><text x="1350" y="412" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="500" fill="#5A6878" text-anchor="start">per-partition LRU</text>
+<line x1="338" y1="356.0" x2="398" y2="356.0" stroke="#1F6FB5" stroke-width="2.6" marker-end="url(#arrow-read)"/>
+<path d="M 666.0 356.0 C 696.0 356.0 696.0 293.0 726.0 293.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
+<path d="M 666.0 356.0 C 696.0 356.0 696.0 381.0 726.0 381.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
+<path d="M 666.0 356.0 C 696.0 356.0 696.0 469.0 726.0 469.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
+<path d="M 1146.0 293.0 C 1176.0 293.0 1176.0 288.0 1206.0 288.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
+<path d="M 1146.0 381.0 C 1176.0 381.0 1176.0 288.0 1206.0 288.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
+<path d="M 1146.0 469.0 C 1176.0 469.0 1176.0 288.0 1206.0 288.0" fill="none" stroke="#1F6FB5" stroke-width="2.2" marker-end="url(#arrow-read)"/>
+<rect x="40" y="600" rx="18" ry="18" width="1640" height="372" fill="#ECE5F5" fill-opacity="0.35" stroke="#7A5AA6" stroke-width="1.5"/><rect x="40" y="600" rx="18" ry="18" width="10" height="372" fill="#7A5AA6"/><rect x="45" y="600" width="5" height="372" fill="#7A5AA6"/><rect x="62" y="576" rx="15" ry="15" width="74" height="30" fill="#7A5AA6"/><text x="99.0" y="595.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="700" fill="#FFFFFF">WRITE</text><text x="148" y="596" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="600" fill="#5A6878" text-anchor="start">open_for_write(spark, df, target, file_mode="auto", layout=…)</text>
+<rect x="68" y="622" rx="14" ry="14" width="270" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 68 636 A 14 14 0 0 1 82 622 H 324 A 14 14 0 0 1 338 636 V 627 H 68 Z" fill="#7A5AA6"/>
+<circle cx="94" cy="656" r="13" fill="#7A5AA6"/>
+<text x="94" y="661" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">1</text>
+<text x="116" y="653" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Writer output</text>
+<text x="116" y="671" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">a tile DataFrame</text>
+<rect x="91.0" y="711.0" width="58" height="58" rx="3" fill="#FFFFFF" stroke="#7A5AA6" stroke-width="2"/><rect x="91.0" y="711.0" width="58" height="14.5" fill="#7A5AA6" fill-opacity="0.85"/><rect x="129.7" y="725.5" width="19.3" height="43.5" fill="#ECE5F5"/><line x1="110.3" y1="711.0" x2="110.3" y2="769.0" stroke="#7A5AA6" stroke-width="1" stroke-opacity="0.4"/><line x1="129.7" y1="711.0" x2="129.7" y2="769.0" stroke="#7A5AA6" stroke-width="1" stroke-opacity="0.4"/><line x1="91.0" y1="725.5" x2="149.0" y2="725.5" stroke="#7A5AA6" stroke-width="1" stroke-opacity="0.4"/><line x1="91.0" y1="740.0" x2="149.0" y2="740.0" stroke="#7A5AA6" stroke-width="1" stroke-opacity="0.4"/><line x1="91.0" y1="754.5" x2="149.0" y2="754.5" stroke="#7A5AA6" stroke-width="1" stroke-opacity="0.4"/>
+<text x="168" y="718" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">rst_* / st_* result</text>
+<text x="168" y="736" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">one row per tile</text>
+<text x="86" y="780" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#7A5AA6" text-anchor="start">path</text>
+<text x="322" y="780" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#3F4D5E" text-anchor="end">source path (STRING)</text>
+<text x="86" y="802" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="700" fill="#7A5AA6" text-anchor="start">raster</text>
+<text x="322" y="802" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#3F4D5E" text-anchor="end">encoded bytes (BINARY)</text>
+<rect x="398" y="622" rx="14" ry="14" width="268" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 398 636 A 14 14 0 0 1 412 622 H 652 A 14 14 0 0 1 666 636 V 627 H 398 Z" fill="#7A5AA6"/>
+<circle cx="424" cy="656" r="13" fill="#7A5AA6"/>
+<text x="424" y="661" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">2</text>
+<text x="446" y="653" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Resolve mode</text>
+<text x="446" y="671" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">file_mode="auto" · no gating</text>
+<rect x="416" y="688" rx="11" ry="11" width="120" height="22" fill="#ECE5F5" stroke="#7A5AA6" stroke-width="1"/><text x="476.0" y="703.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11.5" font-weight="700" fill="#7A5AA6">open_for_write</text>
+<text x="416" y="730" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="700" fill="#7A8794" text-anchor="start" letter-spacing="1.2">AUTO-SELECT</text>
+<rect x="414" y="744" rx="8" ry="8" width="236" height="32" fill="#FFFFFF" stroke="#5060A8" stroke-width="1"/>
+<text x="426" y="764" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="600" fill="#3F4D5E" text-anchor="start">filespace given</text>
+<text x="638" y="764" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700" fill="#5060A8" text-anchor="end">→ MANAGED</text>
+<rect x="414" y="784" rx="8" ry="8" width="236" height="32" fill="#FFFFFF" stroke="#5060A8" stroke-width="1"/>
+<text x="426" y="804" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="600" fill="#3F4D5E" text-anchor="start">no filespace</text>
+<text x="638" y="804" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700" fill="#5060A8" text-anchor="end">→ EXTERNAL</text>
+<rect x="414" y="824" rx="8" ry="8" width="236" height="32" fill="#FFFFFF" stroke="#41546A" stroke-width="1"/>
+<text x="426" y="844" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="600" fill="#3F4D5E" text-anchor="start">no FILE (fuse)</text>
+<text x="638" y="844" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10.5" font-weight="700" fill="#41546A" text-anchor="end">→ FUSE</text>
+<rect x="726" y="622" rx="14" ry="14" width="420" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 726 636 A 14 14 0 0 1 740 622 H 1132 A 14 14 0 0 1 1146 636 V 627 H 726 Z" fill="#7A5AA6"/>
+<circle cx="752" cy="656" r="13" fill="#7A5AA6"/>
+<text x="752" y="661" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">3</text>
+<text x="774" y="653" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Write mode</text>
+<text x="774" y="671" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">MANAGED owns bytes · EXTERNAL references · FUSE plain</text>
+<rect x="744" y="686" rx="14" ry="14" width="384" height="74" fill="#FFFFFF" stroke="#5060A8" stroke-width="1" filter="url(#card-shadow)"/><path d="M 744 700 A 14 14 0 0 1 758 686 H 1114 A 14 14 0 0 1 1128 700 V 691 H 744 Z" fill="#5060A8"/><rect x="756" y="699" rx="10" ry="10" width="65" height="20" fill="#5060A8"/><text x="788.5" y="713.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="700" fill="#FFFFFF">MANAGED</text><text x="830" y="713" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">create_file</text><text x="759" y="734" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">bytes copied into UC-managed storage</text><text x="759" y="749" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#5060A8" text-anchor="start">FILE MANAGED column · filespace=/Volumes/…</text>
+<rect x="744" y="774" rx="14" ry="14" width="384" height="74" fill="#FFFFFF" stroke="#5060A8" stroke-width="1" stroke-dasharray="5 4"/><path d="M 744 788 A 14 14 0 0 1 758 774 H 1114 A 14 14 0 0 1 1128 788 V 779 H 744 Z" fill="#5060A8"/><rect x="756" y="787" rx="10" ry="10" width="71" height="20" fill="#FFFFFF" stroke="#5060A8" stroke-width="1"/><text x="791.5" y="801.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="700" fill="#5060A8">EXTERNAL</text><text x="836" y="801" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">try_to_file</text><text x="759" y="822" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">references an existing Volume path</text><text x="759" y="837" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="10" font-weight="600" fill="#5060A8" text-anchor="start">FILE EXTERNAL column · no copy</text>
+<rect x="744" y="862" rx="14" ry="14" width="384" height="74" fill="#FFFFFF" stroke="#41546A" stroke-width="1" stroke-dasharray="5 4"/><path d="M 744 876 A 14 14 0 0 1 758 862 H 1114 A 14 14 0 0 1 1128 876 V 867 H 744 Z" fill="#41546A"/><rect x="756" y="875" rx="10" ry="10" width="47" height="20" fill="#41546A"/><text x="779.5" y="889.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10.5" font-weight="700" fill="#FFFFFF">FUSE</text><text x="812" y="889" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11.5" font-weight="700" fill="#0F1B2A" text-anchor="start">plain Delta write</text><text x="759" y="910" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">no FILE column — path STRING / raster BINARY</text><text x="759" y="925" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#3F4D5E" text-anchor="start">direct /Volumes write</text>
+<rect x="1206" y="622" rx="14" ry="14" width="450" height="328" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 1206 636 A 14 14 0 0 1 1220 622 H 1642 A 14 14 0 0 1 1656 636 V 627 H 1206 Z" fill="#7A5AA6"/>
+<circle cx="1232" cy="656" r="13" fill="#7A5AA6"/>
+<text x="1232" y="661" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#FFFFFF" text-anchor="middle">4</text>
+<text x="1254" y="653" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="start">Target</text>
+<text x="1254" y="671" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">where the rows land</text>
+<rect x="1222" y="684" width="418" height="78" rx="10" fill="#FFFFFF" stroke="#5060A8" stroke-width="1.4" filter="url(#card-shadow)"/>
+<path d="M 1222 694 A 10 10 0 0 1 1232 684 H 1630 A 10 10 0 0 1 1640 694 V 689 H 1222 Z" fill="#5060A8"/>
+<rect x="1238.0" y="706.0" width="40" height="40" rx="3" fill="#FFFFFF" stroke="#5060A8" stroke-width="2"/><rect x="1238.0" y="706.0" width="40" height="10.0" fill="#5060A8" fill-opacity="0.85"/><rect x="1264.7" y="716.0" width="13.3" height="30.0" fill="#E7E9F6"/><line x1="1251.3" y1="706.0" x2="1251.3" y2="746.0" stroke="#5060A8" stroke-width="1" stroke-opacity="0.4"/><line x1="1264.7" y1="706.0" x2="1264.7" y2="746.0" stroke="#5060A8" stroke-width="1" stroke-opacity="0.4"/><line x1="1238.0" y1="716.0" x2="1278.0" y2="716.0" stroke="#5060A8" stroke-width="1" stroke-opacity="0.4"/><line x1="1238.0" y1="726.0" x2="1278.0" y2="726.0" stroke="#5060A8" stroke-width="1" stroke-opacity="0.4"/><line x1="1238.0" y1="736.0" x2="1278.0" y2="736.0" stroke="#5060A8" stroke-width="1" stroke-opacity="0.4"/>
+<text x="1294" y="712" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12.5" font-weight="800" fill="#0F1B2A" text-anchor="start">FILE-column Delta table</text>
+<text x="1294" y="730" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#5A6878" text-anchor="start">MANAGED / EXTERNAL — governed, lifecycle-tracked</text>
+<rect x="1294" y="738" rx="9" ry="9" width="167" height="18" fill="#E7E9F6" stroke="#5060A8" stroke-width="1"/><text x="1377.5" y="751.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9" font-weight="700" fill="#5060A8">path STRING · tile_file FILE</text>
+<rect x="1222" y="774" width="418" height="60" rx="10" fill="#FFFFFF" stroke="#41546A" stroke-width="1.4" filter="url(#card-shadow)"/>
+<path d="M 1222 784 A 10 10 0 0 1 1232 774 H 1630 A 10 10 0 0 1 1640 784 V 779 H 1222 Z" fill="#41546A"/>
+<path d="M 1240.5 794.1 V 817.9 A 17.5 5.6 0 0 0 1275.5 817.9 V 794.1 Z" fill="#EAEEF3" stroke="#41546A" stroke-width="2"/><ellipse cx="1258.0" cy="794.1" rx="17.5" ry="5.6" fill="#EAEEF3" stroke="#41546A" stroke-width="2"/><path d="M 1240.5 804.1 A 17.5 5.6 0 0 0 1275.5 804.1" fill="none" stroke="#41546A" stroke-width="1.3" stroke-opacity="0.5"/><path d="M 1240.5 811.2 A 17.5 5.6 0 0 0 1275.5 811.2" fill="none" stroke="#41546A" stroke-width="1.3" stroke-opacity="0.5"/>
+<text x="1294" y="802" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12.5" font-weight="800" fill="#0F1B2A" text-anchor="start">Volume path</text>
+<text x="1294" y="819" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#5A6878" text-anchor="start">FUSE — plain Delta, no FILE column</text>
+<rect x="1222" y="844" width="418" height="42" rx="8" fill="#ECE5F5" fill-opacity="0.5" stroke="#7A5AA6" stroke-width="1.2"/>
+<text x="1236" y="862" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="700" fill="#7A5AA6" text-anchor="start" letter-spacing="1.1">LAYOUT</text>
+<rect x="1294" y="850" rx="9" ry="9" width="84" height="18" fill="#FFFFFF" stroke="#7A5AA6" stroke-width="1"/><text x="1336.0" y="863.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9" font-weight="700" fill="#7A5AA6">ORDER BY path</text>
+<text x="1384" y="863" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9" font-weight="600" fill="#5A6878" text-anchor="start">default</text>
+<text x="1236" y="878" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="9.5" font-weight="500" fill="#3F4D5E" text-anchor="start">opt-in CLUSTER BY path — then run OPTIMIZE &lt;table&gt;</text>
+<line x1="338" y1="786.0" x2="398" y2="786.0" stroke="#7A5AA6" stroke-width="2.6" marker-end="url(#arrow-write)"/>
+<path d="M 666.0 786.0 C 696.0 786.0 696.0 723.0 726.0 723.0" fill="none" stroke="#7A5AA6" stroke-width="2.2" marker-end="url(#arrow-write)"/>
+<path d="M 666.0 786.0 C 696.0 786.0 696.0 811.0 726.0 811.0" fill="none" stroke="#7A5AA6" stroke-width="2.2" marker-end="url(#arrow-write)"/>
+<path d="M 666.0 786.0 C 696.0 786.0 696.0 899.0 726.0 899.0" fill="none" stroke="#7A5AA6" stroke-width="2.2" marker-end="url(#arrow-write)"/>
+<path d="M 1146.0 723.0 C 1176.0 723.0 1176.0 719.0 1206.0 719.0" fill="none" stroke="#5060A8" stroke-width="2.2" marker-end="url(#arrow-file)"/>
+<path d="M 1146.0 811.0 C 1176.0 811.0 1176.0 719.0 1206.0 719.0" fill="none" stroke="#5060A8" stroke-width="2.2" marker-end="url(#arrow-file)"/>
+<path d="M 1146.0 899.0 C 1176.0 899.0 1176.0 804.0 1206.0 804.0" fill="none" stroke="#41546A" stroke-width="2.2" marker-end="url(#arrow-fuse)"/>
+<rect x="40" y="1010" rx="14" ry="14" width="1640" height="92" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 40 1024 A 14 14 0 0 1 54 1010 H 1666 A 14 14 0 0 1 1680 1024 V 1015 H 40 Z" fill="#1B3139"/>
+<text x="66" y="1044" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="17" font-weight="800" fill="#0F1B2A" text-anchor="start">No gating</text>
+<text x="66" y="1066" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">the same pipeline runs on any runtime</text>
+<text x="66" y="1084" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#5A6878" text-anchor="start">opt in to FILE only for its governance</text>
+<rect x="380" y="1030" width="26" height="26" rx="13" fill="#E0F2E9" stroke="#1E7D4B" stroke-width="2"/>
+<text x="393" y="1049" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#1E7D4B" text-anchor="middle">✓</text>
+<text x="420" y="1042" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#1E7D4B" text-anchor="start">access="auto"</text>
+<text x="420" y="1060" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#3F4D5E" text-anchor="start">graceful FUSE fallback — never errors</text>
+<text x="420" y="1076" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">the default on every lightweight reader &amp; writer</text>
+<rect x="840" y="1030" width="26" height="26" rx="13" fill="#FBE7E4" stroke="#C0392B" stroke-width="2"/>
+<text x="853" y="1049" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="800" fill="#C0392B" text-anchor="middle">!</text>
+<text x="880" y="1042" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#C0392B" text-anchor="start">access="managed" / "external"</text>
+<text x="880" y="1060" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="500" fill="#3F4D5E" text-anchor="start">explicit FILE on a FUSE-only runtime → clear ValueError</text>
+<text x="880" y="1076" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="500" fill="#5A6878" text-anchor="start">the message names the DBR upgrade path &amp; the auto fallback</text>
+<text x="40" y="1174" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="start">databrickslabs/geobrix  ·  lightweight tier (pyrx)</text>
+<text x="1680" y="1174" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="end">docs/readers-writers</text>
+</svg>

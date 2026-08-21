@@ -41,6 +41,23 @@ Options:
   --grouped-file-only   Run ONLY the grouped FILE-amortization benchmark (no fn benchmarks)
   --multiwindow-corpus <path>  Multiwindow COG corpus dir (holds cog_multiwindow_manifest.json).
                         Default: <corpus>/bench-corpus-cog-multiwindow.
+  --file-matrix         Also run the FILE-access matrix: GeoTIFF + GeoPackage reads across
+                        file_mode in (fuse, external, managed). Light-only (pure Python).
+  --file-matrix-only    Run ONLY the FILE matrix benchmark (no fn benchmarks)
+  --gpkg-chunksize      Also run the GeoPackage chunkSize sweep (1k/10k/100k; fuse mode,
+                        fanout-invariance check). Light-only. Stages GPKG corpus automatically.
+  --gpkg-chunksize-only Run ONLY the chunkSize sweep (no fn benchmarks)
+  --layout-sweep        Also run the FILE write layout sweep (order/cluster/plain) for GeoTIFF
+                        + GeoPackage. Requires --file-filespace for FILE-table targets.
+  --layout-sweep-only   Run ONLY the layout sweep (no fn benchmarks)
+  --layout-scan         Also run the layout-scan comparison (sequential-scan + shuffle-input
+                        cost) over the FILE tables written by the layout sweep.
+  --layout-scan-only    Run ONLY the layout scan (no fn benchmarks)
+  --file-filespace <id> Filespace identifier for FILE EXTERNAL/MANAGED table creation (e.g.
+                        a TBLPROPERTIES filespace path under a Volume). Default: empty string
+                        (managed/external legs yield na_by_design on FUSE-only tiers).
+  --gpkg-corpus <path>  GeoPackage bench corpus base dir (staged by stage_gpkg_bench_corpus).
+                        Default: <corpus>/bench-corpus-gpkg.
   --serverless          Submit to Serverless compute (light-only, no JAR). Skips --cluster-id.
                         Profile must point to a workspace that supports Serverless jobs (e.g. dogfood).
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).

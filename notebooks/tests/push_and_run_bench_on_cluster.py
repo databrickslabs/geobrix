@@ -443,6 +443,23 @@ def main() -> int:
     # --multiwindow-corpus PATH: the multiwindow COG corpus dir (holding
     #   cog_multiwindow_manifest.json). Default (empty) -> CORPUS/bench-corpus-cog-multiwindow.
     multiwindow_corpus = _arg("--multiwindow-corpus", "")
+    # Phase-2 FILE legs (light-only, serialized, each *-only-capable):
+    # --file-matrix: sweep file_mode in (fuse, external, managed) for GeoTIFF + GeoPackage.
+    file_matrix = "--file-matrix" in sys.argv
+    file_matrix_only = "--file-matrix-only" in sys.argv
+    # --gpkg-chunksize: sweep chunkSize (1k/10k/100k) for GeoPackage fuse reads.
+    gpkg_chunksize = "--gpkg-chunksize" in sys.argv
+    gpkg_chunksize_only = "--gpkg-chunksize-only" in sys.argv
+    # --layout-sweep: sweep GeoTIFF + GeoPackage write layouts (order/cluster/plain).
+    layout_sweep = "--layout-sweep" in sys.argv
+    layout_sweep_only = "--layout-sweep-only" in sys.argv
+    # --layout-scan: compare sequential-scan cost across write layouts (FILE tables).
+    layout_scan = "--layout-scan" in sys.argv
+    layout_scan_only = "--layout-scan-only" in sys.argv
+    # --file-filespace <id>: filespace identifier for FILE EXTERNAL/MANAGED table creation.
+    file_filespace = _arg("--file-filespace", "")
+    # --gpkg-corpus <path>: GeoPackage bench corpus base dir (staged by stage_gpkg_bench_corpus).
+    gpkg_corpus = _arg("--gpkg-corpus", "")
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
@@ -597,6 +614,23 @@ def main() -> int:
         benchmark_grouped_file=benchmark_grouped_file,
         grouped_file_only=grouped_file_only,
         multiwindow_corpus=multiwindow_corpus,
+        #  Phase-2 FILE legs (light-only, serialized):
+        #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.
+        file_matrix=file_matrix,
+        file_matrix_only=file_matrix_only,
+        #  --gpkg-chunksize: GeoPackage chunkSize sweep (1k/10k/100k; fanout-invariance check).
+        gpkg_chunksize=gpkg_chunksize,
+        gpkg_chunksize_only=gpkg_chunksize_only,
+        #  --layout-sweep: GeoTIFF + GeoPackage write layout sweep (order/cluster/plain).
+        layout_sweep=layout_sweep,
+        layout_sweep_only=layout_sweep_only,
+        #  --layout-scan: sequential-scan + shuffle-input cost across write layouts (FILE tables).
+        layout_scan=layout_scan,
+        layout_scan_only=layout_scan_only,
+        #  --file-filespace: filespace identifier for FILE EXTERNAL/MANAGED tables.
+        file_filespace=file_filespace,
+        #  --gpkg-corpus: GeoPackage bench corpus base dir.
+        gpkg_corpus=gpkg_corpus,
         #  --serverless: use Serverless compute (light-only, no JAR). --env-version N selects
         #  the environment version to pin (default 6 = protobuf-6 / [light-dbr19] regime).
         serverless=serverless,
@@ -640,6 +674,18 @@ def main() -> int:
         cfg["modes"] = "spark-path"
     if grouped_file_only:
         # Grouped FILE-amortization benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if file_matrix_only:
+        # FILE matrix benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if gpkg_chunksize_only:
+        # GeoPackage chunkSize sweep is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if layout_sweep_only:
+        # Layout sweep benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if layout_scan_only:
+        # Layout scan benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).
@@ -721,6 +767,10 @@ def main() -> int:
         or cfg.get("fanout_only")
         or cfg.get("netcdf_only")
         or cfg.get("grouped_file_only")
+        or cfg.get("file_matrix_only")
+        or cfg.get("gpkg_chunksize_only")
+        or cfg.get("layout_sweep_only")
+        or cfg.get("layout_scan_only")
     )
     if (
         cfg["modes"] in ("spark-path", "both")

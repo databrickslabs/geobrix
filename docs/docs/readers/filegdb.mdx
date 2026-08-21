@@ -172,6 +172,17 @@ The OpenFileGDB driver provides read-only access. You cannot create, modify, or 
 - [Other Readers](./overview)
 - [Learn about VectorX](../api/vectorx-functions)
 
+## Common functions: used vs excluded
+
+See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
+primitives. The table below shows which are active in this reader and which are not, and why.
+
+| Common capability | Used here? | How / why |
+|---|---|---|
+| `list_local_files` (session-free enumeration) | Used | Directory reads — `recursive`, `include_hidden`, `extensions`, and `path_glob_filter` are routed through this shared predicate for all format-specific readers. |
+| `gbx_file_read` / FILE-tier read | Not in the DataSource | The DataSource is session-less on Connect; FILE-tier reads go through `vector_file_read` (function layer) which injects `_file_ref` on the driver before `mapInPandas`. |
+| `gbx_file_write` / FILE-tier write | Not in the DataSource | FILE-tier writes go through `vector_file_write` (function layer). The DataSource writer commits via FUSE. |
+
 :::note Shared file-access layer
 Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

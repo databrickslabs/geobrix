@@ -73,6 +73,22 @@ class ResultRow:
     # Planning time in seconds from a split plan/read measurement.
     # 0.0 when not measured (the default; all pre-existing rows stay valid).
     plan_s: float = 0.0
+    # FILE-access matrix dimensions (Phase 2 named-format bench).
+    # file_mode: "managed" | "external" | "fuse" | "na" (na = pre-existing rows /
+    # legs with no FILE dimension). layout: "order" | "cluster" | "plain" | "na"
+    # (write strategy of the table the leg read/wrote; na for plain reads).
+    file_mode: str = "na"
+    layout: str = "na"
+    # Parallelism / fanout (spec 2e-bis). input_partitions: partitions carrying data
+    # on the timed input (Connect-safe spark_partition_id distinct-count).
+    # launched_tasks: tasks launched for the timed stage (== input_partitions for the
+    # single-stage read/write legs here; a precise multi-stage tally needs the Spark
+    # REST API and is out of scope). slots_available: cluster task slots.
+    input_partitions: int = 0
+    launched_tasks: int = 0
+    slots_available: int = 0
+    # Vector reader chunkSize option for the leg (0 = not applicable / not a vector leg).
+    chunk_size: int = 0
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

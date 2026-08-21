@@ -60,6 +60,13 @@ ORDER = [
     # Spark-path plan build time (seconds): time to call col_fn + build the DataFrame plan.
     # Isolates the plan-build cost from the actual execution time.
     "plan_s",
+    # FILE-access matrix (Phase 2): mode, layout, parallelism, chunk size.
+    "file_mode",
+    "layout",
+    "input_partitions",
+    "launched_tasks",
+    "slots_available",
+    "chunk_size",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.

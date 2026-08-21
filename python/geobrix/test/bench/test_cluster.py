@@ -57,7 +57,7 @@ def spark():
 def test_rows_to_dataframe_schema_and_where(spark):
     df = cl.rows_to_dataframe([_row(), _row(fn="rst_avg")], spark, where="cluster")
     cols = df.columns
-    assert len(cols) == 39
+    assert len(cols) == 45
     assert "output_fingerprint" in cols
     assert "iter_total_wall_clock_s" in cols
     assert "avg_wall_clock_s" in cols
@@ -67,13 +67,13 @@ def test_rows_to_dataframe_schema_and_where(spark):
     assert cols[0] == "run_event_num"
     # Column ORDER: the headline timing metrics sit right after `mode` (per_tile_avg_s
     # immediately left of per_tile_avg_ms), the per-iter distribution (iter_*) trails,
-    # then the virtual-tile fields, and `plan_s` is the final column.
+    # then the virtual-tile fields, plan_s, and then the FILE-matrix dimensions last.
     assert cols == cl.ORDER
     mo = cols.index("mode")
     assert cols[mo + 1] == "avg_wall_clock_s"
     assert cols[mo + 2] == "per_tile_avg_s"
     assert cols[mo + 3] == "per_tile_avg_ms"
-    assert cols[-7:] == [
+    assert cols[-13:] == [
         "iter_min_s",
         "iter_p90_s",
         "iter_total_wall_clock_s",
@@ -81,6 +81,12 @@ def test_rows_to_dataframe_schema_and_where(spark):
         "input_tile",
         "output_disposition",
         "plan_s",
+        "file_mode",
+        "layout",
+        "input_partitions",
+        "launched_tasks",
+        "slots_available",
+        "chunk_size",
     ]
     vals = {r["fn"]: r["env_where"] for r in df.collect()}
     assert vals == {"rst_width": "cluster", "rst_avg": "cluster"}

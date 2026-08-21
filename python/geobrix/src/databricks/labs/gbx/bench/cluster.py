@@ -2846,17 +2846,20 @@ if _cs_rows:
 
 _CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across write modes × layouts.
 # Mode and layout scope (bounded — enough to understand write behaviour):
-#   fuse (always)           : layouts ("order","cluster","plain") -- the layout-dimension leg.
-#                             Target: filesystem PATH under OUT (Volume dir per layout).
-#   external (if FILESPACE) : layout  ("order",) only            -- mode-comparison at order.
-#                             Target: TABLE NAME schema.bench_layout_<fmt>_external_order.
-#   managed  (if FILESPACE) : layout  ("order",) only            -- mode-comparison at order.
+#   fuse (always)           : layout  ("order",) only              -- mode-comparison baseline.
+#                             Target: filesystem PATH under OUT.
+#                             NOTE: the fuse DataSource writer IGNORES the layout arg, so
+#                             sweeping all three layouts on fuse is redundant.
+#   external (if FILESPACE) : layouts ("order","cluster","plain") -- the FILE-table layout dim.
+#                             Target: TABLE NAME schema.bench_layout_<fmt>_external_<layout>.
+#                             These are the tables the layout SCAN reads (read_file_table).
+#   managed  (if FILESPACE) : layout  ("order",) only              -- mode-comparison at order.
 #                             Target: TABLE NAME schema.bench_layout_<fmt>_managed_order.
-# Net: fuse×3 + external×1 + managed×1 = 5 write legs per format, 10 total.
+# Net: fuse×1 + external×3 + managed×1 = 5 write legs per format, 10 total.
 # Per-leg isolation: each (mode, layout, format) writes its OWN distinct target so no
 # layout can benefit from a prior write's on-disk grouping. fuse targets are Volume paths;
 # external/managed targets are catalog table names (schema.table). "cluster" layout runs
-# OPTIMIZE after write. na_by_design is returned for external/managed on FUSE-only tiers.
+# OPTIMIZE on the FILE table. na_by_design is returned for external/managed on FUSE-only tiers.
 # Each ResultRow is _sink'd immediately (serialized).
 import glob as _glob
 import os as _os
@@ -2897,9 +2900,9 @@ if _ls_gpkg_dir:
 # Mode sweep: fuse always runs; external/managed require a provisioned FILE_FILESPACE.
 _ls_modes = ("fuse", "external", "managed") if FILE_FILESPACE else ("fuse",)
 for _ls_mode in _ls_modes:
-    # fuse: full layout sweep (all three layouts -- the layout-dimension comparison).
-    # external/managed: only "order" layout (mode-comparison at one layout).
-    _ls_layouts = ("order", "cluster", "plain") if _ls_mode == "fuse" else ("order",)
+    # external: full layout sweep (all three layouts -- the FILE-table layout dimension).
+    # fuse/managed: only "order" layout (mode-comparison baseline; fuse ignores layout anyway).
+    _ls_layouts = ("order", "cluster", "plain") if _ls_mode == "external" else ("order",)
     # managed needs the filespace to create a MANAGED FILE table; external does not.
     _ls_filespace = FILE_FILESPACE if _ls_mode == "managed" else None
     # Target prefix: filesystem PATH for fuse (run_file_write_layout_sweep appends
@@ -2954,11 +2957,12 @@ if _ls_rows:
 """
 
 _CELL_LAYOUT_SCAN = """# Layout scan comparison: sequential-scan cost across write layouts (order/cluster/plain).
-# Reads the FILE tables written by the layout sweep via read_file_table and times df.count().
-# Covers both formats written by the sweep: GeoTIFF (bench_layout_gtiff_*) and
-# GeoPackage (bench_layout_gpkg_*) -- symmetric with _CELL_LAYOUT_SWEEP.
-# Skip cleanly when FILE_FILESPACE is not set (no FILE tables to scan -- fuse-mode sweep
-# produces Volume dirs, not FILE tables, so scan has no applicable tables).
+# Reads the FILE EXTERNAL tables written by the layout sweep via read_file_table and times
+# df.count() and df.repartition(n, "path").count().
+# Covers both formats: GeoTIFF (bench_layout_gtiff_external_*) and
+# GeoPackage (bench_layout_gpkg_external_*) -- symmetric with _CELL_LAYOUT_SWEEP external leg.
+# Skip cleanly when FILE_FILESPACE is not set (external tables only exist when the layout
+# sweep ran with a provisioned filespace).
 # Each ResultRow is _sink'd immediately (serialized).
 from databricks.labs.gbx.bench import readers as _rd
 print("=== layout scan comparison starting ===", flush=True)
@@ -2966,19 +2970,19 @@ _scan_rows = []
 if not FILE_FILESPACE:
     print(
         "LAYOUT SCAN SKIPPED: FILE_FILESPACE not set. "
-        "Run the layout sweep with a provisioned filespace to create FILE tables, "
-        "then re-run with --layout-scan / --layout-scan-only.",
+        "Run the layout sweep with --file-filespace provisioned to create FILE external "
+        "tables, then re-run with --layout-scan / --layout-scan-only.",
         flush=True,
     )
 else:
-    # Tables written by the layout sweep: one per (format x layout).
-    # The scan compares sequential-scan cost; the sweep must have run first (same run
-    # or a prior run with the same FILE_FILESPACE) so the tables exist.
-    # GeoTIFF layouts
+    # Derive catalog+schema prefix matching the layout sweep (same TABLE derivation).
+    _scan_schema = ".".join(TABLE.split(".")[:2])
+    # GeoTIFF external tables written by the layout sweep: one per layout.
+    # The scan compares sequential-scan cost; the sweep must have run first so the tables exist.
     _tables_by_layout_gtiff = {
-        "order": FILE_FILESPACE + "/bench_layout_gtiff_order",
-        "cluster": FILE_FILESPACE + "/bench_layout_gtiff_cluster",
-        "plain": FILE_FILESPACE + "/bench_layout_gtiff_plain",
+        "order":   f"{_scan_schema}.bench_layout_gtiff_external_order",
+        "cluster": f"{_scan_schema}.bench_layout_gtiff_external_cluster",
+        "plain":   f"{_scan_schema}.bench_layout_gtiff_external_plain",
     }
     _scan_rows_gtiff = _rd.run_layout_scan_comparison(
         spark,
@@ -2986,18 +2990,18 @@ else:
         run_id=RUN_ID,
         warmup=SPARK_WARMUP,
         measured=SPARK_MEASURED,
-        file_mode="managed",
+        file_mode="external",
         where="cluster",
         include_shuffle_input=True,
     )
     for _r in _scan_rows_gtiff:
         _sink([_r]); lw.append(_r)
     _scan_rows.extend(_scan_rows_gtiff)
-    # GeoPackage layouts (symmetric with the gtiff sweep above)
+    # GeoPackage external tables (symmetric with the gtiff scan above).
     _tables_by_layout_gpkg = {
-        "order": FILE_FILESPACE + "/bench_layout_gpkg_order",
-        "cluster": FILE_FILESPACE + "/bench_layout_gpkg_cluster",
-        "plain": FILE_FILESPACE + "/bench_layout_gpkg_plain",
+        "order":   f"{_scan_schema}.bench_layout_gpkg_external_order",
+        "cluster": f"{_scan_schema}.bench_layout_gpkg_external_cluster",
+        "plain":   f"{_scan_schema}.bench_layout_gpkg_external_plain",
     }
     _scan_rows_gpkg = _rd.run_layout_scan_comparison(
         spark,
@@ -3005,7 +3009,7 @@ else:
         run_id=RUN_ID,
         warmup=SPARK_WARMUP,
         measured=SPARK_MEASURED,
-        file_mode="managed",
+        file_mode="external",
         where="cluster",
         include_shuffle_input=True,
     )

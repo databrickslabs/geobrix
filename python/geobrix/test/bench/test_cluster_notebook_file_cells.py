@@ -226,19 +226,26 @@ def test_notebook_layout_scan_passes_tables_by_layout():
 
 
 def test_notebook_layout_scan_covers_both_formats():
-    """Scan cell references both gtiff and gpkg layout tables (symmetric with sweep).
+    """Scan cell references both gtiff and gpkg external layout tables (symmetric with sweep).
 
-    The layout sweep writes bench_layout_gtiff_* AND bench_layout_gpkg_* tables;
-    the scan must cover both formats so the comparison is not one-sided.
+    The layout sweep writes FILE EXTERNAL tables for all three layouts; the scan reads them via
+    read_file_table to compare sequential-scan and shuffle-input cost across layouts.
     """
     nb = cl.build_bench_notebook(_base_cfg(layout_scan=True))
     src = _src(nb)
-    assert "bench_layout_gtiff_order" in src, "gtiff layout tables must be scanned"
-    assert "bench_layout_gtiff_cluster" in src
-    assert "bench_layout_gtiff_plain" in src
-    assert "bench_layout_gpkg_order" in src, "gpkg layout tables must be scanned"
-    assert "bench_layout_gpkg_cluster" in src
-    assert "bench_layout_gpkg_plain" in src
+    # External table names contain both the format and layout in their identifier.
+    assert (
+        "bench_layout_gtiff_external_order" in src
+    ), "gtiff external order table must be scanned"
+    assert "bench_layout_gtiff_external_cluster" in src
+    assert "bench_layout_gtiff_external_plain" in src
+    assert (
+        "bench_layout_gpkg_external_order" in src
+    ), "gpkg external order table must be scanned"
+    assert "bench_layout_gpkg_external_cluster" in src
+    assert "bench_layout_gpkg_external_plain" in src
+    # scan must use external file_mode (not managed)
+    assert 'file_mode="external"' in src
 
 
 def test_notebook_layout_scan_preamble_variables():
@@ -369,15 +376,11 @@ def test_layout_sweep_without_filespace_uses_only_fuse():
     assert '("fuse",)' in src  # the else-branch of the mode conditional
 
 
-def test_layout_sweep_fuse_uses_three_layouts():
-    """Fuse mode must sweep all three layouts (order, cluster, plain)."""
-    nb = cl.build_bench_notebook(_base_cfg(layout_sweep=True))
-    src = _src(nb)
-    assert '"order", "cluster", "plain"' in src
-
-
-def test_layout_sweep_external_and_managed_use_order_only():
-    """External and managed modes sweep only the 'order' layout."""
+def test_layout_sweep_external_uses_three_layouts():
+    """External mode must sweep all three layouts (order, cluster, plain) -- this is the
+    meaningful FILE-table layout dimension that the scan reads via read_file_table.
+    The fuse DataSource writer ignores the layout arg, so sweeping all three layouts on
+    fuse would be redundant; external is the correct host for the 3-layout dimension."""
     nb = cl.build_bench_notebook(
         _base_cfg(
             layout_sweep=True,
@@ -385,7 +388,14 @@ def test_layout_sweep_external_and_managed_use_order_only():
         )
     )
     src = _src(nb)
-    # The else-branch for non-fuse modes must set layouts to ("order",) only.
+    assert '"order", "cluster", "plain"' in src
+
+
+def test_layout_sweep_fuse_and_managed_use_order_only():
+    """Fuse and managed modes sweep only the 'order' layout (mode-comparison baseline)."""
+    nb = cl.build_bench_notebook(_base_cfg(layout_sweep=True))
+    src = _src(nb)
+    # The else-branch for non-external modes must set layouts to ("order",) only.
     assert '("order",)' in src
 
 

@@ -14,21 +14,13 @@ GeoBrix provides Spark readers for geospatial file formats.
 
 The lightweight tier ships native Python DataSource V2 readers — no JAR, no init script.
 
-:::tip Loading into virtual tiles — the default
-The lightweight raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) load data as **virtual tiles**
-by default — bytes-free `(path, window)` references that read pixels lazily, so a multi-gigabyte
-raster fans into tiles without out-of-memory. This is the front door to the virtual-tile model; see
-**[Virtual Tiles](../api/virtual-tiles)**. Pass `.option("virtualTiles", "false")` for materialized
-(bytes-in-row) reads.
-:::
-
-:::tip Why this scales beyond a single node
-These are Spark DataSource V2 readers, not single-node `rasterio`/`pyogrio` wrappers. The
-work is **partitioned and read in parallel across the cluster** — vector readers slice
-features by `chunkSize`, raster readers can split large files by `sizeInMB` — and the result is
-a distributed DataFrame ready for joins and aggregations with no driver-side `collect`. A
-single-node `pyogrio.read_*` or `rasterio.open` reads one file sequentially on one machine;
-these readers fan the same work across executors and scale past a single machine's memory.
+:::tip Distributed readers, virtual tiles by default
+These are **Spark DataSource V2** readers (not single-node `rasterio`/`pyogrio` wrappers): work is
+partitioned and read in parallel across the cluster — vector readers slice features by `chunkSize`,
+raster readers split large files by `sizeInMB` — returning a distributed DataFrame with no driver-side
+`collect`. Raster readers load **virtual tiles** by default — bytes-free `(path, window)` refs that read
+pixels lazily, so a multi-gigabyte raster fans into tiles without OOM (`.option("virtualTiles", "false")`
+for materialized reads). See **[Virtual Tiles](../api/virtual-tiles)**.
 :::
 
 :::note Register first

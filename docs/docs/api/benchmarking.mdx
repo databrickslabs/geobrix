@@ -20,7 +20,7 @@ GeoBrix is [supported on DBR 17.3 LTS, 18 LTS, and — for the lightweight tier 
 **Key performance stories — link through for full data and methodology:**
 
 - **[Virtual tiles defer pixel I/O](#virtual-vs-materialized)** — metadata-only operations (set-CRS, set-SRID, nodata, band-select) run **1.5–12× faster** on virtual tiles and complete without reading pixels. Chain deferred edits before a terminal step to pay pixel I/O cost **once at the end**.
-- **[Grouping amortizes open cost](#virtual-tile-read-performance)** — windowed COG reads from the same source open once per partition (grouped executor). With `ORDER BY path` or repartitioning, byte-range stream reads are **10–290× faster** than FUSE per window; without amortization, per-tile opens grow prohibitive with file size.
+- **[Grouping amortizes open cost](../api/performance#virtual-tile-read-performance)** — windowed COG reads from the same source open once per partition (grouped executor). With `ORDER BY path` or repartitioning, byte-range stream reads are **10–290× faster** than FUSE per window; without amortization, per-tile opens grow prohibitive with file size.
 - **[FILE-on ≈ FILE-off on dedicated clusters](#file-capability-cog-multiwindow)** — FILE is governed file access, not a per-tile read optimization. Grouping (open amortization) is the performance lever. Serverless FILE support coming soon.
 - **[Band math: 60–130× lightweight win](#pure-core)** — spectral indices run 60–130× faster on the lightweight tier (NumPy in-process vs. heavyweight subprocess `gdal_calc` per call). This is the single largest advantage and sustains at scale.
 - **[Lightweight at parity for aggregators and geometry](#results)** — `st_asmvt` MVT encoding (~6% gap), `pmtiles_agg` archive folding (~7% gap), and quadbin/BNG grid math (±20% variance) all run within or very near parity on a cluster, with decoded output matching exactly.
@@ -571,7 +571,7 @@ Not every function appears in both timing models — the gaps are deliberate mea
 - **Spark-path: 83 / 107.** The 24 absent are pure-core-only because their call shape doesn't fit the spark-path tile-DataFrame model: geometry-input constructors (`rst_rasterize`, `rst_gridfrompoints`, `rst_dtmfromgeoms` — the tile DataFrame carries no geometry column), the path reader (`rst_fromfile`), functions needing an in-extent coordinate/geometry literal valid across the multi-CRS corpus (`rst_clip`, `rst_sample`, `rst_viewshed`, `rst_worldtorastercoord*`, `rst_resample_to_res`), render-engine-divergent tiles (`rst_tilexyz`, `rst_xyzpyramid`, `rst_color_relief`), and metadata/scalar accessors (`rst_metadata`, `rst_type`, `rst_summary`, …) whose spark-path cell would be an uncomparable timing-only result.
 :::
 
-### Pure-core (local, 1024²)
+### Pure-core (local, 1024²) {#pure-core}
 
 The pure-core table is the **algorithm in isolation**: open one tile, call the function, measure — no Spark, no serialization. It is the fairest view of the raw implementation. It is one snapshot — absolute timings are environment-dependent — but the **relative** picture and the consistency outcome are stable. Per-tile timing is shown in **milliseconds**; cells whose output cannot be fingerprinted for a direct comparison (readers, metadata accessors) are timed and labelled `timing-only`.
 

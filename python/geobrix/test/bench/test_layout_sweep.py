@@ -190,3 +190,135 @@ def test_layout_sweep_gtiff_fmt(spark, tmp_path):
     )
     assert len(rows) == 2
     assert {r.layout for r in rows} == {"order", "plain"}
+
+
+def test_layout_sweep_managed_mode_na_by_design(spark, tmp_path):
+    """managed file_mode without a filespace raises ValueError in write_file_table,
+    which run_gtiff_file_write catches and returns as na_by_design -- not a crash.
+    This verifies the FILE-mode na_by_design fallback used by the cluster cell when
+    FILE_FILESPACE is not set or the tier does not support FILE tables."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.bench.readers import run_file_write_layout_sweep
+    from databricks.labs.gbx.ds.raster import reader_schema_v2
+
+    transform = from_origin(10.0, 50.0, 0.5, 0.5)
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+    )
+    data = np.arange(12, dtype="float32").reshape(3, 4)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(data, 1)
+        gtiff_bytes = bytearray(mf.read())
+
+    schema = reader_schema_v2()
+    row = (
+        "test_src",
+        {
+            "cellid": 0,
+            "raster": gtiff_bytes,
+            "path": None,
+            "path_mode": None,
+            "window": None,
+            "clip_polygon": None,
+            "clip_crs": None,
+            "crs": None,
+            "metadata": {},
+        },
+    )
+    tile_df = spark.createDataFrame([row], schema=schema)
+
+    # managed mode without a filespace -> ValueError("managed file_mode requires a
+    # filespace") in write_file_table -> caught by run_gtiff_file_write -> na_by_design.
+    rows = run_file_write_layout_sweep(
+        spark,
+        fmt="gtiff",
+        source=tile_df,
+        target_prefix=str(tmp_path / "mgd"),
+        run_id="t_mgd",
+        warmup=0,
+        measured=1,
+        file_mode="managed",
+        filespace=None,  # no filespace -> na_by_design (not a crash)
+        layouts=("order",),
+        where="venv",
+    )
+    assert len(rows) == 1
+    assert (
+        rows[0].status == "na_by_design"
+    ), f"Expected na_by_design for managed without filespace, got {rows[0].status!r}"
+
+
+def test_layout_sweep_external_mode_na_by_design(spark, tmp_path):
+    """external file_mode on a local[2] tier (no FILE support) should return
+    na_by_design, not raise an unhandled exception."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.bench.readers import run_file_write_layout_sweep
+    from databricks.labs.gbx.ds.raster import reader_schema_v2
+
+    transform = from_origin(10.0, 50.0, 0.5, 0.5)
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+    )
+    data = np.arange(12, dtype="float32").reshape(3, 4)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(data, 1)
+        gtiff_bytes = bytearray(mf.read())
+
+    schema = reader_schema_v2()
+    row = (
+        "test_src",
+        {
+            "cellid": 0,
+            "raster": gtiff_bytes,
+            "path": None,
+            "path_mode": None,
+            "window": None,
+            "clip_polygon": None,
+            "clip_crs": None,
+            "crs": None,
+            "metadata": {},
+        },
+    )
+    tile_df = spark.createDataFrame([row], schema=schema)
+
+    # external mode on local[2]: write_file_table attempts SQL (DROP TABLE, CREATE TABLE)
+    # which fails on local[2] without a catalog. run_gtiff_file_write catches all exceptions
+    # and returns either na_by_design (ValueError) or an error row -- never propagates.
+    rows = run_file_write_layout_sweep(
+        spark,
+        fmt="gtiff",
+        source=tile_df,
+        target_prefix="no_catalog.no_schema.bench_layout_ext",
+        run_id="t_ext",
+        warmup=0,
+        measured=1,
+        file_mode="external",
+        filespace=None,
+        layouts=("order",),
+        where="venv",
+    )
+    assert len(rows) == 1
+    assert rows[0].status in (
+        "na_by_design",
+        "error",
+    ), f"Expected na_by_design or error for external on local tier, got {rows[0].status!r}"

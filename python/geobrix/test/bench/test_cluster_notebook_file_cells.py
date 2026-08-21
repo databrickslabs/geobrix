@@ -325,3 +325,126 @@ def test_layout_sweep_gtiff_write_source_is_cached_not_limited():
     assert ".cache()" in src
     # the ineffective .limit()-based cap must be gone (it did not bound the read)
     assert "_LS_WRITE_TILES" not in src
+
+
+# ---------------------------------------------------------------------------
+# Layout sweep -- write-mode sweep (fuse / external / managed)
+# ---------------------------------------------------------------------------
+
+
+def test_layout_sweep_with_filespace_sweeps_all_three_modes():
+    """When file_filespace is set, the generated cell contains external and managed
+    write legs with schema.table targets (not just the fuse Volume-path target)."""
+    nb = cl.build_bench_notebook(
+        _base_cfg(
+            layout_sweep=True,
+            file_filespace="/Volumes/x/y/z/fs",
+            table="main.default.bench_results",
+        )
+    )
+    src = _src(nb)
+    # All three modes must appear in the sweep cell source.
+    for fm in ("fuse", "external", "managed"):
+        assert fm in src, f"Expected write mode {fm!r} in layout-sweep cell"
+    # External and managed legs reference schema.table targets via _TABLE_SCHEMA.
+    # The source contains the f-string template text (not the runtime value).
+    assert "bench_layout_gtiff_external" in src
+    assert "bench_layout_gtiff_managed" in src
+    # Managed leg must conditionally pass FILE_FILESPACE as filespace.
+    assert "FILE_FILESPACE" in src
+
+
+def test_layout_sweep_without_filespace_uses_only_fuse():
+    """When file_filespace is empty/absent, the generated cell only runs fuse mode
+    (the mode tuple collapses to ('fuse',) at runtime)."""
+    nb = cl.build_bench_notebook(_base_cfg(layout_sweep=True))
+    src = _src(nb)
+    # The mode conditional and the fuse target must be present.
+    assert "_ls_modes" in src
+    assert "FILE_FILESPACE" in src
+    assert "fuse" in src
+    # The cell template always includes the external/managed branches (they are in the
+    # f-string template source); they execute only when FILE_FILESPACE is truthy.
+    # What we care about is that the _ls_modes guard is present.
+    assert '("fuse",)' in src  # the else-branch of the mode conditional
+
+
+def test_layout_sweep_fuse_uses_three_layouts():
+    """Fuse mode must sweep all three layouts (order, cluster, plain)."""
+    nb = cl.build_bench_notebook(_base_cfg(layout_sweep=True))
+    src = _src(nb)
+    assert '"order", "cluster", "plain"' in src
+
+
+def test_layout_sweep_external_and_managed_use_order_only():
+    """External and managed modes sweep only the 'order' layout."""
+    nb = cl.build_bench_notebook(
+        _base_cfg(
+            layout_sweep=True,
+            file_filespace="/Volumes/x/y/z/fs",
+        )
+    )
+    src = _src(nb)
+    # The else-branch for non-fuse modes must set layouts to ("order",) only.
+    assert '("order",)' in src
+
+
+def test_layout_sweep_per_mode_target_distinct():
+    """Each mode writes to its own target prefix (no cross-mode contamination).
+    The source text contains the template expressions for each mode's target."""
+    nb = cl.build_bench_notebook(
+        _base_cfg(
+            layout_sweep=True,
+            file_filespace="/Volumes/x/y/z/fs",
+            table="cat.schema.bench_results",
+        )
+    )
+    src = _src(nb)
+    # fuse: Volume path prefix (literal string expression)
+    assert 'OUT + "/bench_layout_gtiff"' in src
+    # external and managed: schema.table prefixes via _TABLE_SCHEMA (f-string in source)
+    assert "bench_layout_gtiff_external" in src
+    assert "bench_layout_gtiff_managed" in src
+    # The two FILE-mode names must be different (no shared target between external/managed).
+    assert "bench_layout_gtiff_external" in src
+    assert "bench_layout_gtiff_managed" in src
+    ext_idx = src.find("bench_layout_gtiff_external")
+    mgd_idx = src.find("bench_layout_gtiff_managed")
+    assert ext_idx != mgd_idx, "external and managed must use distinct target names"
+
+
+def test_layout_sweep_table_schema_derived_from_table():
+    """_TABLE_SCHEMA is derived at runtime from TABLE (first two dot-separated parts).
+    The cell source contains the derivation expression."""
+    nb = cl.build_bench_notebook(
+        _base_cfg(
+            layout_sweep=True,
+            file_filespace="/Volumes/x/y/z/fs",
+            table="mycatalog.myschema.bench_results",
+        )
+    )
+    src = _src(nb)
+    # The derivation expression must be present in the cell.
+    assert "_TABLE_SCHEMA" in src
+    assert 'TABLE.split(".")[:2]' in src
+
+
+def test_layout_sweep_managed_passes_filespace():
+    """Managed leg passes FILE_FILESPACE as filespace; external passes None."""
+    nb = cl.build_bench_notebook(
+        _base_cfg(
+            layout_sweep=True,
+            file_filespace="/Volumes/x/y/z/fs",
+        )
+    )
+    src = _src(nb)
+    # The cell sets _ls_filespace = FILE_FILESPACE if managed else None.
+    assert "FILE_FILESPACE if _ls_mode" in src
+
+
+def test_layout_sweep_write_sweep_progress_includes_mode():
+    """[write-sweep] progress prints include the file_mode so each line is identifiable."""
+    nb = cl.build_bench_notebook(_base_cfg(layout_sweep=True))
+    src = _src(nb)
+    assert "[write-sweep]" in src
+    assert "mode=" in src

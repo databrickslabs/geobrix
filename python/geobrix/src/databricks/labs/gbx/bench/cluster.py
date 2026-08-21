@@ -2844,13 +2844,19 @@ if _cs_rows:
     _show_md(f"GeoPackage chunkSize sweep -- {RUN_ID}", _md)
 """
 
-_CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across layout in ("order","cluster","plain").
-# Each layout writes to its OWN isolated target (target_prefix + "_" + layout) so no layout
-# benefits from a prior write's on-disk grouping. "cluster" layout runs OPTIMIZE after write.
-# GeoTIFF: tile_df built from {CORPUS}/rows (raster_gbx, 10k tiles -- saturation).
-# GeoPackage: stages {GPKG_CORPUS}/copies_80/ (idempotent), picks a single .gpkg as source.
-# file_mode: "external" when FILE_FILESPACE is set (FILE EXTERNAL tables); "fuse" otherwise.
-# na_by_design is returned for external/managed on FUSE-only tiers (clean skip).
+_CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across write modes × layouts.
+# Mode and layout scope (bounded — enough to understand write behaviour):
+#   fuse (always)           : layouts ("order","cluster","plain") -- the layout-dimension leg.
+#                             Target: filesystem PATH under OUT (Volume dir per layout).
+#   external (if FILESPACE) : layout  ("order",) only            -- mode-comparison at order.
+#                             Target: TABLE NAME schema.bench_layout_<fmt>_external_order.
+#   managed  (if FILESPACE) : layout  ("order",) only            -- mode-comparison at order.
+#                             Target: TABLE NAME schema.bench_layout_<fmt>_managed_order.
+# Net: fuse×3 + external×1 + managed×1 = 5 write legs per format, 10 total.
+# Per-leg isolation: each (mode, layout, format) writes its OWN distinct target so no
+# layout can benefit from a prior write's on-disk grouping. fuse targets are Volume paths;
+# external/managed targets are catalog table names (schema.table). "cluster" layout runs
+# OPTIMIZE after write. na_by_design is returned for external/managed on FUSE-only tiers.
 # Each ResultRow is _sink'd immediately (serialized).
 import glob as _glob
 import os as _os
@@ -2859,6 +2865,9 @@ from databricks.labs.gbx.bench import corpus_vector as _cv
 from databricks.labs.gbx.ds.register import register as _ds_reg
 print("=== FILE write layout sweep starting ===", flush=True)
 _ls_rows = []
+# Derive the catalog+schema prefix for FILE table targets from the results TABLE name.
+# TABLE = "catalog.schema.bench_results" -> _TABLE_SCHEMA = "catalog.schema"
+_TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
 # Build GeoTIFF tile_df for the WRITE sweep. IMPORTANT: `.limit(N)` does NOT bound a raster_gbx
 # read -- Spark 4's Python DataSource API has no limit pushdown, so `.load(dir).limit(N)` still
 # opens EVERY tile in `dir` on each action (read() opens each virtual tile for metadata). The
@@ -2876,42 +2885,61 @@ _ls_tile_df = (
     .load(_ls_gtiff_src)
     .cache()
 )
-# file_mode for FILE tables: use "external" when filespace is provisioned; fuse otherwise.
-_ls_file_mode = "external" if FILE_FILESPACE else "fuse"
-_ls_filespace = FILE_FILESPACE or None
-_ls_gtiff_target = (
-    FILE_FILESPACE + "/bench_layout_gtiff" if FILE_FILESPACE else OUT + "/bench_layout_gtiff"
-)
-_gtiff_sweep = _rd.run_file_write_layout_sweep(
-    spark,
-    fmt="gtiff", source=_ls_tile_df, target_prefix=_ls_gtiff_target,
-    run_id=RUN_ID, warmup=SPARK_WARMUP, measured=SPARK_MEASURED,
-    file_mode=_ls_file_mode, filespace=_ls_filespace,
-    where="cluster",
-)
-for _r in _gtiff_sweep:
-    _sink([_r]); lw.append(_r); _ls_rows.append(_r)
-# GeoPackage layout sweep: stage corpus, pick a single .gpkg as write source.
+# Stage GeoPackage write corpus once (idempotent) and pick a single .gpkg as write source.
 _ls_gpkg_dirs = _cv.stage_gpkg_bench_corpus(
     spark, GPKG_CORPUS, rows=100000, copies_ladder=(10, 80, 160)
 )
 _ls_gpkg_dir = _ls_gpkg_dirs.get(80) or next(iter(_ls_gpkg_dirs.values()), None)
+_ls_gpkg_src = None
 if _ls_gpkg_dir:
     _ls_gpkg_files = sorted(_glob.glob(_os.path.join(_ls_gpkg_dir, "*.gpkg")))
     _ls_gpkg_src = _ls_gpkg_files[0] if _ls_gpkg_files else None
+# Mode sweep: fuse always runs; external/managed require a provisioned FILE_FILESPACE.
+_ls_modes = ("fuse", "external", "managed") if FILE_FILESPACE else ("fuse",)
+for _ls_mode in _ls_modes:
+    # fuse: full layout sweep (all three layouts -- the layout-dimension comparison).
+    # external/managed: only "order" layout (mode-comparison at one layout).
+    _ls_layouts = ("order", "cluster", "plain") if _ls_mode == "fuse" else ("order",)
+    # managed needs the filespace to create a MANAGED FILE table; external does not.
+    _ls_filespace = FILE_FILESPACE if _ls_mode == "managed" else None
+    # Target prefix: filesystem PATH for fuse (run_file_write_layout_sweep appends
+    # "_{layout}" to form the per-layout path); TABLE NAME for external/managed (appending
+    # "_{layout}" gives a valid three-part table name: schema.table_layout).
+    if _ls_mode == "fuse":
+        _ls_gtiff_prefix = OUT + "/bench_layout_gtiff"
+        _ls_gpkg_prefix  = OUT + "/bench_layout_gpkg"
+    elif _ls_mode == "external":
+        _ls_gtiff_prefix = f"{_TABLE_SCHEMA}.bench_layout_gtiff_external"
+        _ls_gpkg_prefix  = f"{_TABLE_SCHEMA}.bench_layout_gpkg_external"
+    else:  # managed
+        _ls_gtiff_prefix = f"{_TABLE_SCHEMA}.bench_layout_gtiff_managed"
+        _ls_gpkg_prefix  = f"{_TABLE_SCHEMA}.bench_layout_gpkg_managed"
+    print(
+        f"[write-sweep] mode={_ls_mode} layouts={_ls_layouts} starting…",
+        flush=True,
+    )
+    _gtiff_sweep = _rd.run_file_write_layout_sweep(
+        spark,
+        fmt="gtiff", source=_ls_tile_df, target_prefix=_ls_gtiff_prefix,
+        run_id=RUN_ID, warmup=SPARK_WARMUP, measured=SPARK_MEASURED,
+        file_mode=_ls_mode, filespace=_ls_filespace,
+        layouts=_ls_layouts,
+        where="cluster",
+    )
+    for _r in _gtiff_sweep:
+        _sink([_r]); lw.append(_r); _ls_rows.append(_r)
     if _ls_gpkg_src:
-        _ls_gpkg_target = (
-            FILE_FILESPACE + "/bench_layout_gpkg" if FILE_FILESPACE else OUT + "/bench_layout_gpkg"
-        )
         _gpkg_sweep = _rd.run_file_write_layout_sweep(
             spark,
-            fmt="gpkg", source=_ls_gpkg_src, target_prefix=_ls_gpkg_target,
+            fmt="gpkg", source=_ls_gpkg_src, target_prefix=_ls_gpkg_prefix,
             run_id=RUN_ID, warmup=SPARK_WARMUP, measured=SPARK_MEASURED,
-            file_mode=_ls_file_mode, filespace=_ls_filespace,
+            file_mode=_ls_mode, filespace=_ls_filespace,
+            layouts=_ls_layouts,
             where="cluster",
         )
         for _r in _gpkg_sweep:
             _sink([_r]); lw.append(_r); _ls_rows.append(_r)
+    print(f"[write-sweep] mode={_ls_mode}: done", flush=True)
 if _ls_rows:
     _df_ls = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' "

@@ -739,3 +739,34 @@ def build_vector_corpus(
             "copies": replicate_vector_seed(seed_path, copies, copies_dir),
         }
     return result
+
+
+def stage_gpkg_bench_corpus(
+    spark,
+    out_base: str,
+    *,
+    rows: int = 100000,
+    copies_ladder=(10, 80, 160),
+    srid: str = "4326",
+) -> dict:
+    """Stage GeoPackage bench corpora sized on the ROW-per-file axis: one copies-dir
+    per ``copies`` value, each holding ``copies`` .gpkg files of ``rows`` features.
+
+    ``rows`` must exceed the largest chunkSize in the sweep (>=100k) so a 100k chunk
+    still yields multiple chunks/file (chunkSize x LRU visible). ``copies_ladder``
+    brackets the cluster slot count (below/at/above ~80) so the fanout axis
+    (files-vs-slots) separates from the amortization axis (rows/file). Reuses
+    ``build_vector_corpus`` (formats=['gpkg_gbx']) once per copies value, into a
+    distinct sub-base so the copies-dirs don't collide.
+
+    Returns ``{copies: copies_dir}`` where each ``copies_dir`` holds ``copies``
+    ``.gpkg`` files of ``rows`` features."""
+    out: dict = {}
+    for c in copies_ladder:
+        sub = f"{out_base}/copies_{c}"
+        built = build_vector_corpus(
+            spark, rows=rows, copies=c, formats=["gpkg_gbx"], out_base=sub, srid=srid
+        )
+        assert built["gpkg_gbx"]["copies"]  # non-empty
+        out[c] = f"{sub}/gpkg_gbx/copies"
+    return out

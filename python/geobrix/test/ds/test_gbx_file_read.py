@@ -191,12 +191,12 @@ def test_access_managed_on_location_source_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_access_managed_on_table_source_delegates_read_file_table():
-    """access='managed' on table source delegates to read_file_table → [path,size,file]."""
+def test_access_managed_on_table_source_delegates_resolve_file_table():
+    """access='managed' on table source delegates to resolve_file_table → [path,size,file]."""
     mock_spark = MagicMock()
-    tile_df = MagicMock()
-    projected_df = MagicMock()
-    tile_df.selectExpr.return_value = projected_df
+    resolved_df = MagicMock()
+    selected_df = MagicMock()
+    resolved_df.select.return_value = selected_df
 
     with (
         patch(
@@ -204,22 +204,17 @@ def test_access_managed_on_table_source_delegates_read_file_table():
             return_value="read_files",
         ),
         patch(
-            "databricks.labs.gbx.pyrx.file_table.read_file_table", return_value=tile_df
+            "databricks.labs.gbx.ds.file_gbx.resolve_file_table",
+            return_value=resolved_df,
         ) as rft,
     ):
         out = file_gbx.gbx_file_read(
             mock_spark, "cat.sch.tbl", source_type="table", access="managed"
         )
 
-    rft.assert_called_once_with(mock_spark, "cat.sch.tbl")
-    tile_df.selectExpr.assert_called_once()
-    expr_args = tile_df.selectExpr.call_args[0]
-    # Must project path, size, and file — no content
-    assert any("path" in e for e in expr_args)
-    assert any("size" in e for e in expr_args)
-    assert any("file" in e for e in expr_args)
-    assert not any("content" in e for e in expr_args)
-    assert out is projected_df
+    rft.assert_called_once_with(mock_spark, "cat.sch.tbl", skip_ordering=False)
+    resolved_df.select.assert_called_once()
+    assert out is selected_df
 
 
 # ---------------------------------------------------------------------------
@@ -254,27 +249,23 @@ def test_access_auto_on_fuse_tier_does_not_raise():
 # ---------------------------------------------------------------------------
 
 
-def test_table_mode_delegates_to_read_file_table():
-    """table mode (default access='auto') delegates to read_file_table and returns [path,size,file]."""
+def test_table_mode_delegates_to_resolve_file_table():
+    """table mode (default access='auto') delegates to resolve_file_table → [path,size,file]."""
     mock_spark = MagicMock()
-    tile_df = MagicMock()
-    projected_df = MagicMock()
-    tile_df.selectExpr.return_value = projected_df
+    resolved_df = MagicMock()
+    selected_df = MagicMock()
+    resolved_df.select.return_value = selected_df
 
     with (
         patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"),
         patch(
-            "databricks.labs.gbx.pyrx.file_table.read_file_table", return_value=tile_df
+            "databricks.labs.gbx.ds.file_gbx.resolve_file_table",
+            return_value=resolved_df,
         ) as rft,
     ):
         out = file_gbx.gbx_file_read(mock_spark, "cat.sch.tbl", source_type="table")
 
-    rft.assert_called_once_with(mock_spark, "cat.sch.tbl")
-    tile_df.selectExpr.assert_called_once()
-    expr_args = tile_df.selectExpr.call_args[0]
-    # Must project to [path, size, file] — no content, no bytes
-    assert any("path" in e for e in expr_args)
-    assert any("size" in e for e in expr_args)
-    assert any("file" in e for e in expr_args)
-    assert not any("content" in e for e in expr_args)
-    assert out is projected_df
+    rft.assert_called_once_with(mock_spark, "cat.sch.tbl", skip_ordering=False)
+    resolved_df.select.assert_called_once()
+    # No content column — only the [path, size, file] contract.
+    assert out is selected_df

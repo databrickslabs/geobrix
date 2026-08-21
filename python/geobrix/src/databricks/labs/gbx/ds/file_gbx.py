@@ -2025,6 +2025,7 @@ def gbx_file_read(
     access: str = "auto",
     extensions: Optional[tuple[str, ...]] = None,
     path_glob_filter: Optional[str] = None,
+    skip_ordering: bool = False,
 ) -> "DataFrame":
     """Generic, format-agnostic, session-ful read → DataFrame of FILE/FUSE references.
 
@@ -2042,9 +2043,10 @@ def gbx_file_read(
       returns ``[path, size, file]`` on FILE-capable tiers and a list of dicts
       ``{path, size, file: None}`` on the FUSE tier.  The FUSE list is normalized
       to a DataFrame via ``spark.createDataFrame``.
-    - **table** (FILE-column Delta table): delegates to
-      ``file_table.read_file_table`` and projects ``tile.path AS path`` (``size``
-      and ``file`` are null — the tile read-back does not surface a raw FILE ref).
+    - **table** (FILE-column Delta table): delegates to :func:`resolve_file_table`
+      and projects ``source AS path`` (real resolved path), real ``size`` where the
+      table has it, and ``file=null`` (no raw FILE ref is surfaced from a table
+      read-back).  Rows are auto-ordered by path unless ``skip_ordering=True``.
 
     ``access`` gating (owner-confirmed, see task brief):
 
@@ -2102,18 +2104,19 @@ def gbx_file_read(
             f"FILE/FUSE fallback."
         )
 
-    # --- table source: delegate to read_file_table ---
+    # --- table source: delegate to resolve_file_table ---
     if st == "table":
-        from databricks.labs.gbx.pyrx.file_table import read_file_table
-
-        tile_df = read_file_table(spark, source)
-        # Project to [path, size, file]: size and file are not available from the
-        # tile read-back (FILE column is consumed into tile.path; no raw FILE ref
-        # is surfaced).  Null those columns but keep the 3-column contract.
-        return tile_df.selectExpr(
-            "tile.path AS path",
-            "CAST(NULL AS BIGINT) AS size",
-            "CAST(NULL AS STRING) AS file",
+        resolved = resolve_file_table(spark, source, skip_ordering=skip_ordering)
+        # Project resolved DataFrame to the [path, size, file] contract:
+        #   source → path  (resolved /Volumes/... path from the FILE column or
+        #                   plain path column — real path, not a NULL placeholder)
+        #   size           real BIGINT size where the table carries it; null otherwise
+        #   file = NULL    no raw FILE ref is surfaced from a table read-back; the
+        #                  FILE column is consumed internally by resolve_file_table
+        return resolved.select(
+            F.col("source").alias("path"),
+            F.col("size"),
+            F.lit(None).cast("string").alias("file"),
         )
 
     # --- location source: compose enumerate_files ---

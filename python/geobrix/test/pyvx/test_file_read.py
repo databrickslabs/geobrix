@@ -1,6 +1,10 @@
-"""Task 6: vector_file_read — function-layer FILE read (parity with raster)."""
+"""Task 6/Task-2: vector_file_read — function-layer FILE read (parity with raster)
+and table mode (FILE-column-table read gap closure).
+"""
 
 import json
+import shutil
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -183,3 +187,123 @@ def test_vector_file_read_gpkg_wkt_mode(spark, tmp_path):
         isinstance(r["geometry"], str) and r["geometry"].startswith("POINT")
         for r in rows
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 2: table mode for vector_file_read
+# (FILE-column-table read gap, plain-path branch, no FILE support needed locally)
+# ---------------------------------------------------------------------------
+
+
+def _make_path_table(spark, name, paths):
+    """Create a plain Hive table with a single ``path`` column from *paths*.
+
+    Drops and recreates so tests are idempotent.  Uses the same warehouse-dir
+    cleanup pattern as the resolve_file_table tests in test_file_gbx.py.
+    """
+    spark.sql(f"DROP TABLE IF EXISTS {name}")
+    wh = spark.conf.get("spark.sql.warehouse.dir", "spark-warehouse").replace(
+        "file:", ""
+    )
+    stale = Path(wh) / name
+    if stale.exists():
+        shutil.rmtree(str(stale))
+    df = spark.createDataFrame([(p,) for p in paths], "path string")
+    df.write.saveAsTable(name)
+
+
+def test_vector_file_read_table_roundtrip_external(spark, tmp_path):
+    """Table mode round-trip: write a gpkg to a local dir acting as the Volume
+    staging area, register its path in a plain Hive table, then read back via
+    ``vector_file_read`` table mode and assert feature count + geometry type.
+
+    Uses the plain (no FILE column) branch of ``resolve_file_table`` so the test
+    runs on local[2] without FILE support.  Feature-level semantics (one .gpkg = one
+    row = one FILE ref → decode yields all its features) is verified end-to-end.
+    """
+    import shapely
+
+    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+    gpkg_path = tmp_path / "roundtrip.gpkg"
+    _write_gpkg(gpkg_path, 4)
+
+    tbl = "_vfr_table_roundtrip_ext"
+    _make_path_table(spark, tbl, [str(gpkg_path)])
+
+    # Auto-detect: dotted-looking table name → table mode
+    df = vector_file_read(spark, tbl, driver="GPKG")
+    rows = df.collect()
+
+    assert len(rows) == 4, f"expected 4 features from table mode, got {len(rows)}"
+    assert all(r["geometry"] is not None for r in rows)
+    for r in rows:
+        geom = shapely.from_wkb(bytes(r["geometry"]))
+        assert geom.geom_type == "Point", f"unexpected geom type: {geom.geom_type}"
+
+
+def test_vector_file_read_source_type_detection(spark, tmp_path):
+    """_classify_vector_source routes correctly for all source_type values.
+
+    - ``source_type='auto'`` + dotted, extension-less, non-existent → ``'table'``
+    - ``source_type='auto'`` + ``/``-prefixed path → ``'path'``
+    - ``source_type='auto'`` + path with file extension → ``'path'``
+    - ``source_type='auto'`` + existing filesystem directory → ``'path'``
+    - Explicit ``source_type='table'`` overrides heuristic → ``'table'``
+    - Explicit ``source_type='path'`` overrides heuristic → ``'path'``
+    """
+    from databricks.labs.gbx.pyvx.file_read import _classify_vector_source
+
+    # Qualified table names → table
+    assert _classify_vector_source("catalog.schema.table", "auto") == "table"
+    assert _classify_vector_source("schema.table", "auto") == "table"
+    assert (
+        _classify_vector_source("my_table", "auto") == "table"
+    )  # no dot, no ext, non-existent
+
+    # Absolute path → path
+    assert _classify_vector_source("/Volumes/cat/sch/vol/file.gpkg", "auto") == "path"
+    assert _classify_vector_source("/tmp/something", "auto") == "path"
+
+    # String with file extension → path
+    assert _classify_vector_source("relative_file.gpkg", "auto") == "path"
+    assert _classify_vector_source("data.geojson", "auto") == "path"
+
+    # Existing directory on the filesystem → path
+    assert _classify_vector_source(str(tmp_path), "auto") == "path"
+
+    # Explicit overrides
+    assert _classify_vector_source("catalog.schema.tbl", "path") == "path"
+    assert _classify_vector_source("/Volumes/cat/sch/vol/data", "table") == "table"
+
+
+def test_vector_file_read_table_skip_ordering(spark, tmp_path):
+    """skip_ordering kwarg is forwarded to resolve_file_table.
+
+    Patches ``resolve_file_table`` in the ``pyvx.file_read`` module and asserts
+    it is called with the ``skip_ordering`` value the caller specified.
+    """
+    import databricks.labs.gbx.pyvx.file_read as vfr_mod
+    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+    gpkg_path = tmp_path / "f.gpkg"
+    _write_gpkg(gpkg_path, 1)
+
+    tbl = "_vfr_skip_ordering_fwd_test"
+    _make_path_table(spark, tbl, [str(gpkg_path)])
+
+    original_rft = vfr_mod.resolve_file_table
+    calls = []
+
+    def _spy(sp, t, *, skip_ordering=False):
+        calls.append(skip_ordering)
+        return original_rft(sp, t, skip_ordering=skip_ordering)
+
+    with patch.object(vfr_mod, "resolve_file_table", _spy):
+        vector_file_read(spark, tbl, driver="GPKG", skip_ordering=False).collect()
+        vector_file_read(spark, tbl, driver="GPKG", skip_ordering=True).collect()
+
+    assert calls == [
+        False,
+        True,
+    ], f"resolve_file_table must be called with skip_ordering forwarded; got {calls}"

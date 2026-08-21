@@ -6,14 +6,6 @@ import pytest
 from databricks.labs.gbx.pyrx.file_table import read_file_table
 
 
-def test_strip_dbfs_scheme():
-    from databricks.labs.gbx.pyrx.file_table import _strip_dbfs_scheme
-
-    assert _strip_dbfs_scheme("dbfs:/Volumes/c/s/v/f.tif") == "/Volumes/c/s/v/f.tif"
-    assert _strip_dbfs_scheme("/Volumes/c/s/v/f.tif") == "/Volumes/c/s/v/f.tif"
-    assert _strip_dbfs_scheme(None) is None
-
-
 def _make_plain_table(spark, name):
     # Spark 4.0 refuses saveAsTable when the physical warehouse location exists
     # without a matching catalog entry (LOCATION_ALREADY_EXISTS).  Drop the catalog

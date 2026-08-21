@@ -25,14 +25,6 @@ from databricks.labs.gbx.ds.file_gbx import (  # noqa: F401  re-exported for bac
 from . import file_props
 from .core.virtual_tile import V2_TILE_SCHEMA
 
-
-def _strip_dbfs_scheme(uri):
-    """Return a FUSE-openable /Volumes path from a FileRef .uri (dbfs:/Volumes/...)."""
-    if uri is None:
-        return None
-    return uri[len("dbfs:") :] if uri.startswith("dbfs:") else uri
-
-
 # plain (non-FILE) columns the reader is willing to project into a tile
 _TILE_PLAIN_COLS = (
     "cellid",
@@ -118,7 +110,11 @@ def read_file_table(
     resolved = resolve_file_table(spark, table, skip_ordering=skip_ordering)
 
     # Identify tile fields and non-tile passthrough columns from the resolved schema.
-    # 'source', 'size', 'path_mode' are consumed here; everything else is passthrough.
+    # 'source' and 'path_mode' are consumed into the tile struct (source→tile.path,
+    # path_mode→tile.path_mode).  'size' is intentionally dropped here: the V2 tile
+    # struct has no size field, and the raster reader does not use file size — size
+    # is only relevant to gbx_file_read's flat [path, size, file] contract.  Callers
+    # that need size should use resolve_file_table or gbx_file_read directly.
     resolved_col_set = set(resolved.schema.fieldNames()) - {
         "source",
         "size",

@@ -2273,10 +2273,29 @@ def _make_unsorted_path_table(spark, name):
 
 
 def test_resolve_file_table_external_orders_by_source(spark):
-    """resolve_file_table default (skip_ordering=False) returns source sorted asc, nulls last."""
+    """resolve_file_table default (skip_ordering=False) returns source sorted asc, nulls last.
+
+    The test proves that orderBy does the work by asserting:
+    1. The raw table scan order is provably NOT sorted (rows were inserted in
+       reverse-alpha order: /z, /a, /m).
+    2. resolve_file_table with skip_ordering=False returns rows sorted asc,
+       nulls last — proving orderBy, not lucky scan order, produced the result.
+    """
     from databricks.labs.gbx.ds.file_gbx import resolve_file_table
 
     _make_unsorted_path_table(spark, "_rft_order_test")
+
+    # Precondition: raw scan order must NOT be sorted so the test can't false-pass.
+    raw_paths = [
+        r["path"] for r in spark.sql("SELECT path FROM _rft_order_test").collect()
+    ]
+    sorted_raw = sorted(raw_paths, key=lambda s: (s is None, s or ""))
+    assert raw_paths != sorted_raw, (
+        "Precondition failed: raw table scan order is already sorted; "
+        "the test cannot prove that resolve_file_table's orderBy did the work. "
+        f"raw_paths={raw_paths}"
+    )
+
     result = resolve_file_table(spark, "_rft_order_test")
     assert (
         "source" in result.columns
@@ -2336,3 +2355,70 @@ def test_resolve_file_table_no_file_typed_column_in_result(spark):
     assert "source" in result.columns
     assert "size" in result.columns
     assert "path_mode" in result.columns
+
+
+# ---------------------------------------------------------------------------
+# gbx_file_read table mode — Task 3: real size + ordering
+# ---------------------------------------------------------------------------
+
+
+def _make_sized_path_table(spark, name):
+    """Create a plain Hive table with (path, size) rows inserted in REVERSE alpha order."""
+    import shutil
+    from pathlib import Path
+
+    spark.sql(f"DROP TABLE IF EXISTS {name}")
+    wh = spark.conf.get("spark.sql.warehouse.dir", "spark-warehouse").replace(
+        "file:", ""
+    )
+    stale = Path(wh) / name
+    if stale.exists():
+        shutil.rmtree(str(stale))
+    df = spark.createDataFrame(
+        [("/z/z.tif", 300), ("/a/a.tif", 100), ("/m/m.tif", 200)],
+        "path string, size long",
+    )
+    df.write.saveAsTable(name)
+
+
+def test_gbx_file_read_table_carries_real_size_and_order(spark):
+    """gbx_file_read table mode returns real size (not all NULL) and rows ordered by path.
+
+    The table has a ``size`` column; the pre-Task-3 implementation forced
+    ``CAST(NULL AS BIGINT) AS size``.  After Task 3 the table-mode branch
+    delegates to ``resolve_file_table`` so real sizes are carried through.
+    Ordering is also asserted: rows must be sorted by path asc, nulls last.
+    """
+    from databricks.labs.gbx.ds.file_gbx import gbx_file_read
+
+    tbl = "_gbx_file_read_tbl_size_order_test"
+    _make_sized_path_table(spark, tbl)
+
+    result = gbx_file_read(spark, tbl, source_type="table")
+    rows = result.collect()
+
+    # Schema contract: [path, size, file].
+    assert result.columns == [
+        "path",
+        "size",
+        "file",
+    ], f"Schema must be [path, size, file]; got {result.columns}"
+
+    # Real sizes — not all NULL.
+    sizes = [r["size"] for r in rows]
+    assert any(
+        s is not None for s in sizes
+    ), f"Expected real sizes from the table; got all NULL: {sizes}"
+    assert set(sizes) == {100, 200, 300}, f"Expected sizes 100/200/300; got {sizes}"
+
+    # Rows ordered by path asc, nulls last.
+    paths = [r["path"] for r in rows]
+    assert paths == sorted(
+        paths, key=lambda s: (s is None, s or "")
+    ), f"Expected rows ordered by path; got {paths}"
+
+    # file column must be NULL (no raw FILE ref from a table read-back).
+    files = [r["file"] for r in rows]
+    assert all(
+        f is None for f in files
+    ), f"Expected file=NULL for all rows; got {files}"

@@ -281,6 +281,10 @@ def test_existing_build_unaffected_by_new_flags():
         "geobrix[light-dbr19] @ file:///Volumes/c/s/v/geobrix-0.5.0-py3-none-any.whl"
         in src
     )
+    # The classic %pip cell MUST --force-reinstall: the wheel version is a fixed 0.5.0
+    # across rebuilds, so without it pip treats an already-installed 0.5.0 (from a prior
+    # run on a warm cluster) as satisfied and silently runs STALE geobrix code.
+    assert "--force-reinstall" in src
     assert "dbutils.notebook.exit" in src
     assert nb["nbformat"] == 4
     # None of the four new cell types should appear

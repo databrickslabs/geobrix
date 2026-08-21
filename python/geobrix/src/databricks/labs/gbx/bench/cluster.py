@@ -3324,8 +3324,14 @@ def build_bench_notebook(cfg: dict) -> dict:
         # Classic cluster: single %pip cell = one kernel restart; dbutils.library.restartPython()
         # is NOT called (the %pip magic already triggers it; a second restart crashes on
         # DBR 19.x-snapshot). PEP 508 URL-reference form resolves extras from the wheel file.
-        _install_cell_src = '%pip install --quiet "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
-            wheel=cfg["wheel"]
+        # --force-reinstall is REQUIRED: the wheel version is a fixed 0.5.0 across rebuilds, so
+        # without it pip treats an already-installed 0.5.0 (from a prior run on a warm cluster)
+        # as satisfied and silently runs STALE geobrix code -- e.g. a freshly added bench helper
+        # is missing (AttributeError). It stays a single %pip cell (one restart).
+        _install_cell_src = (
+            '%pip install --quiet --force-reinstall "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
+                wheel=cfg["wheel"]
+            )
         )
     cells = [
         # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.

@@ -121,6 +121,10 @@ def _is_routine_unavailable(exc: Exception) -> bool:
     routine_unavailable_keywords = (
         "UNRESOLVED_ROUTINE",
         "UNRESOLVABLE_ROUTINE",
+        # TVF-specific error class emitted by local/OSS Spark when read_files /
+        # list_files are not registered; must be recognised so _detect_tier falls
+        # through to FUSE instead of incorrectly declaring "read_files" available.
+        "UNRESOLVABLE_TABLE_VALUED_FUNCTION",
         "PARSE_SYNTAX_ERROR",
         "UNSUPPORTED",
         "CANNOT RESOLVE",

@@ -1664,6 +1664,324 @@ def run_pmtiles_agg(
         )
 
 
+def _error_row(fn, category, run_id, api, warmup, env, e, **extra):
+    """Module-private helper: build a status='error' ResultRow with zeroed timing.
+
+    Factors the repeated 20-field error-row pattern across the FILE bench legs.
+    ``**extra`` forwards keyword arguments specific to each leg (e.g.
+    ``file_mode``, ``layout``) so callers stay readable.
+    """
+    return ResultRow(
+        run_id=run_id,
+        api=api,
+        fn=fn,
+        category=category,
+        mode="spark-path",
+        tile_px=0,
+        bands=0,
+        dtype="",
+        srid=0,
+        rows=0,
+        nodata_frac=0.0,
+        warmup_iters=warmup,
+        measured_iters=0,
+        iter_median_s=0.0,
+        iter_min_s=0.0,
+        iter_p90_s=0.0,
+        throughput_mpix_s=0.0,
+        throughput_rows_s=0.0,
+        peak_rss_mb=0.0,
+        status="error",
+        note=str(e)[-500:],
+        output_fingerprint="",
+        **extra,
+        **env,
+    )
+
+
+def run_gtiff_file_read(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoTIFF read via gbx_file_read + count.
+
+    ``file_mode`` ∈ {"fuse", "external", "managed"}.  ``source`` is a Volume dir
+    for fuse/external, or a FILE-table name for managed.
+
+    On a FUSE-only tier (local[2], no FILE), external/managed raise ValueError from
+    ``gbx_file_read`` → clean ``status="na_by_design"`` row (FILE unavailable note).
+
+    Returns a single ResultRow (mode="spark-path", category="reader").
+    """
+    from databricks.labs.gbx.ds.file_gbx import gbx_file_read
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+    access = {"fuse": "auto", "external": "external", "managed": "managed"}[file_mode]
+
+    def _job():
+        refs = gbx_file_read(spark, source, access=access)
+        return int(refs.count())
+
+    try:
+        # Probe once: on a FUSE-only tier, external/managed raise ValueError →
+        # clean na_by_design skip (local has no FILE tier; this is the on-cluster gate).
+        try:
+            n0 = _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gtiff_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                **env,
+            )
+        refs = gbx_file_read(spark, source, access=access)
+        parts, slots = measure_parallelism(spark, refs)
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gtiff_file_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n0,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n0 / 1000.0) if (ms and n0) else 0.0,
+            per_tile_avg_ms=(ms / n0) if (ms and n0) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status="ok" if n0 > 0 else "empty",
+            note=f"gtiff FILE read [{file_mode}] over {_src_name}",
+            output_fingerprint="",
+            file_mode=file_mode,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gtiff_file_read",
+            "reader",
+            run_id,
+            api,
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+        )
+
+
+def run_gtiff_file_write(
+    spark,
+    tile_df,
+    target: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    filespace: Optional[str] = None,
+    layout: str = "order",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoTIFF write: FILE table (managed/external) or FUSE gtiff_gbx.
+
+    ``file_mode`` ∈ {"fuse", "external", "managed"}.  For FUSE, uses
+    ``tile_df.write.format("gtiff_gbx").mode("overwrite").save(target)``.  For FILE
+    modes, delegates to ``write_file_table(..., file_mode=file_mode, ...)``.
+
+    ``tile_df`` may carry virtual tiles (``tile.path`` set, raster None) — this leg
+    thereby covers virtual-tile → Volume/FILE-table write.
+
+    Records ``file_mode``, ``layout``, and ``measure_parallelism(spark, tile_df)``.
+    Performs a read-back correctness check after timing.
+
+    On a FUSE-only tier (local[2]), FILE modes raise ValueError →
+    ``status="na_by_design"`` (FILE unavailable).
+
+    Returns a single ResultRow (mode="spark-path", category="writer").
+    """
+    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx.pyrx.file_table import write_file_table
+
+    register(spark)
+    env = capture_env(where)
+    parts, slots = measure_parallelism(spark, tile_df)
+    n = int(tile_df.count())
+
+    if file_mode == "fuse":
+
+        def _job():
+            tile_df.write.format("gtiff_gbx").mode("overwrite").save(target)
+
+    else:  # managed or external
+
+        def _job():
+            write_file_table(
+                spark,
+                tile_df,
+                target,
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                overwrite=True,
+            )
+
+    # Probe once: on FUSE-only tier, external/managed raise ValueError → na_by_design.
+    try:
+        _job()
+    except ValueError as ve:
+        return ResultRow(
+            run_id=run_id,
+            api="lightweight",
+            fn="gtiff_file_write",
+            category="writer",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=0,
+            nodata_frac=0.0,
+            warmup_iters=warmup,
+            measured_iters=0,
+            iter_median_s=0.0,
+            iter_min_s=0.0,
+            iter_p90_s=0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=0.0,
+            peak_rss_mb=0.0,
+            status="na_by_design",
+            note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+            output_fingerprint="",
+            file_mode=file_mode,
+            layout=layout,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gtiff_file_write",
+            "writer",
+            run_id,
+            "lightweight",
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+            layout=layout,
+        )
+
+    try:
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+
+        # Correctness check: read back and compare count.
+        if file_mode == "fuse":
+            back_n = int(spark.read.format("gtiff_gbx").load(target).count())
+        else:
+            from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+            back_n = int(read_file_table(spark, target).count())
+
+        _ok = back_n == n
+        _status = "ok" if _ok else "error"
+        _note = f"gtiff FILE write [{file_mode}] {n} tiles" + (
+            f" -- readback {back_n} != {n}" if not _ok else ""
+        )
+        return ResultRow(
+            run_id=run_id,
+            api="lightweight",
+            fn="gtiff_file_write",
+            category="writer",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+            per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status=_status,
+            note=_note,
+            output_fingerprint="",
+            file_mode=file_mode,
+            layout=layout,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gtiff_file_write",
+            "writer",
+            run_id,
+            "lightweight",
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+            layout=layout,
+        )
+
+
 def _tin_result_row(
     *,
     run_id: str,

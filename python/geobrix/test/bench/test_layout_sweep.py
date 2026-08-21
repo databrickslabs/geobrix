@@ -136,14 +136,13 @@ def test_layout_sweep_uses_separate_targets(spark, tmp_path):
 def test_layout_sweep_gtiff_fmt(spark, tmp_path):
     """Smoke-test the gtiff format path of the sweep."""
     import numpy as np
-
-    # Build a minimal one-tile DataFrame (materialized GeoTIFF)
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.bench.readers import run_file_write_layout_sweep
     from databricks.labs.gbx.ds.raster import reader_schema_v2
 
+    # Build a minimal one-tile DataFrame (materialized GeoTIFF)
     transform = from_origin(10.0, 50.0, 0.5, 0.5)
     profile = dict(
         driver="GTiff",

@@ -2170,6 +2170,61 @@ def run_gpkg_file_read(
         )
 
 
+def run_gpkg_chunksize_sweep(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    chunk_sizes: tuple = (1000, 10000, 100000),
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> List["ResultRow"]:
+    """Sweep ``chunkSize`` across GeoPackage FILE reads and confirm fanout-invariance.
+
+    GeoPackage is one staged file per partition; ``chunkSize`` + the
+    per-partition ``_VEC_STAGED_FILES`` LRU amortize one open/stage across many
+    chunk reads — the vector analog of raster multi-window amortization.
+    Partition count is file-count bound; it does **not** grow with chunkSize
+    (chunkSize is within-task amortization, not a fanout lever).
+
+    Calls ``run_gpkg_file_read`` once per value in ``chunk_sizes`` and returns
+    one ResultRow per chunkSize.  Each row records ``chunk_size`` and
+    ``input_partitions`` so the fanout-invariance claim is checkable at a glance.
+
+    Args:
+        spark: active SparkSession.
+        source: Volume dir (fuse/external) or FILE-table name (managed).
+        run_id: benchmark run identifier label.
+        warmup: warmup iterations.
+        measured: measured iterations.
+        file_mode: ``"fuse"``, ``"external"``, or ``"managed"``.
+        chunk_sizes: chunkSize values to sweep (default: 1k / 10k / 100k).
+        api: api label recorded in each ResultRow.
+        where: env_where label recorded in each ResultRow.
+
+    Returns:
+        List of ResultRow — one per chunkSize in ``chunk_sizes`` order.
+    """
+    results: List["ResultRow"] = []
+    for cs in chunk_sizes:
+        row = run_gpkg_file_read(
+            spark,
+            source,
+            run_id,
+            warmup,
+            measured,
+            file_mode=file_mode,
+            chunk_size=cs,
+            api=api,
+            where=where,
+        )
+        results.append(row)
+    return results
+
+
 def _gpkg_fuse_readback(spark, path: str, n: int) -> Tuple[str, str]:
     """Read back a fuse-written GPKG and return (status, note) for the ResultRow.
 

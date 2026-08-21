@@ -53,6 +53,8 @@ prepare-then-read pipeline.
 | `clipCrs` | _none_ | CRS for `clipPolygons` that lack an embedded SRID (e.g. `"EPSG:27700"`). Precedence: an EWKB/EWKT polygon's embedded SRID → `clipCrs` → the raster's CRS. |
 | `tileSize` | _none_ | Cut the whole raster into a regular fixed-size pixel grid: `"w,h"` (e.g. `"512,512"`) or a single `"512"` for square tiles. One tile per grid cell; edge cells are clamped to the extent. Mutually exclusive with `clipPolygons` and `windows`. Materialized tiles are guarded to the ~2 GB Spark-cell limit (a too-large `tileSize` raises a clear error); virtual tiles (`virtualTiles=true`) carry no bytes and are unguarded. |
 | `overlapPercent` | `0` | Overlap between adjacent `tileSize` cells, as a percentage of tile size (`overlap_px = ceil(tile_dim · pct/100)`, `step = tile_dim − overlap_px`). Applies to **`tileSize` only** (an error otherwise). Default `0` = non-overlapping grid. |
+| `tilesTable` | _none_ | Delta table to use as a tile index (see [pre-computed tile inputs](#advanced-pre-computed-tile-inputs) below). |
+| `skipOrdering` | `"false"` | Pass `"true"` to suppress the auto-sort-by-source-path that `tilesTable` reads apply by default. See [tilesTable auto-order](#tiles-table-auto-order) below. |
 
 :::tip Why overlap?
 A hard tiling grid can slice straight through a spatial feature (a field, a building, an airport)
@@ -447,6 +449,58 @@ Both options reduce plan time from the directory walk (~1.5 s at 10k files) to a
 - **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog); the reader then opens a small number of large files whose headers are comparatively cheap.
 
 **A tile index is not a materialized-tile table.** `manifest` / `tilesTable` catalog *where the rasters are* (paths, plus optional windows) — essentially a saved file listing. The raster bytes stay in files and are read lazily (especially with `virtualTiles=true`); the index only lets the reader skip re-walking the directory. That is different from an ingest that has already **decoded** rasters into a Delta table with a tile-struct/bytes column — if you have that, read it directly with `spark.table(...)`; you don't need a reader at all.
+
+### tilesTable auto-order and `skipOrdering` {#tiles-table-auto-order}
+
+When `tilesTable` is set, the reader **auto-orders tiles by source path** before planning
+partitions. This groups all tiles from the same source GeoTIFF into adjacent partitions, so a
+worker that opens a large raster once can decode all its windows without reopening it. For a
+table with many tiles per source file (a common windowed-GeoTIFF ingest), this amortization
+meaningfully reduces open overhead — each file is opened once per partition instead of once per
+tile.
+
+Pass `skipOrdering="true"` when the table is already physically ordered (e.g. written with
+`layout="order"` or `layout="cluster"`) or when you apply ordering downstream:
+
+```python
+spark.read.format("raster_gbx") \
+    .option("tilesTable", "geospatial.myschema.tile_index") \
+    .option("skipOrdering", "true") \
+    .option("virtualTiles", "true") \
+    .load("/")
+```
+
+#### Durable co-location: `CLUSTER BY` + `OPTIMIZE`
+
+`layout="order"` (the default write layout) sorts rows by path at insert time, which groups
+tiles per source for the lifetime of that write. New inserts and compaction can scatter them.
+For a stable layout that survives compaction, use `layout="cluster"` at write time and run
+`OPTIMIZE` afterward:
+
+```python
+from databricks.labs.gbx.ds.file_gbx import gbx_file_write
+
+gbx_file_write(
+    tiles_df,
+    target="geospatial.myschema.tile_index",
+    layout="cluster",      # CLUSTER BY path in the DDL
+    file_mode="auto",
+)
+```
+
+```sql
+-- After initial write (or after bulk inserts), materialize clustering:
+OPTIMIZE geospatial.myschema.tile_index;
+```
+
+With `layout="cluster"`, `OPTIMIZE` physically co-locates tiles from the same source into the
+same data files. Subsequent reads with `tilesTable` have source-adjacent rows from the
+start — `skipOrdering="true"` is safe once the table has been optimized, and it avoids
+re-sorting an already-ordered scan.
+
+`layout="order"` (insert-time `ORDER BY path`) is the simpler default: no DDL change, no
+`OPTIMIZE` required. It works well for tables that are built once. Use `layout="cluster"` when
+the table is updated incrementally and you run periodic `OPTIMIZE` as part of maintenance.
 
 ## Next Steps
 

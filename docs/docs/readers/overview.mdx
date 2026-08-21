@@ -82,6 +82,25 @@ See **[GBX Common Functions](../common-functions)**.
 See the [Raster Reader](./raster) page for full raster usage/options, and the vector
 reader pages for the OGR `(geom_0, geom_0_srid, geom_0_srid_proj, …attributes)` schema.
 
+### FILE-column-table reads {#file-column-table-reads}
+
+Both the raster and vector light-tier readers can read directly from a FILE-column Delta table
+(a table whose rows carry FILE references to geospatial files) in addition to Volume paths.
+Both auto-order by the resolved source path by default. The ordering effect differs by format:
+
+- **Raster (`tilesTable`)** — a single GeoTIFF can produce many tile rows; auto-ordering
+  groups those tiles together so each executor opens the source file once and reads all its
+  windows, amortizing the open cost. See [Raster Reader → tilesTable auto-order](./raster#tiles-table-auto-order).
+- **Vector (`vector_file_read`)** — one vector file maps to exactly one table row (one FILE
+  ref). Every source opens exactly once regardless of row order, so auto-ordering is a
+  **deterministic, cross-format-consistent default**, not a throughput lever. See
+  [Vector Reader → Reading from a FILE-column table](./vector#vector-file-table-read).
+
+Both support an opt-out: `skipOrdering="true"` (raster DataSource option) and
+`skip_ordering=True` (`vector_file_read` kwarg). Use either when the table is already
+physically ordered (written with `layout="order"` or `layout="cluster"`) to avoid the
+redundant sort step.
+
 ## Benchmarks
 
 Each `*_gbx` lightweight reader corresponds to a `*_ogr` (or `gdal`/`gtiff_gdal`) heavyweight

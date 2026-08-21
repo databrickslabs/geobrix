@@ -82,6 +82,76 @@ df.write.mode("overwrite").saveAsTable("main.geo.features")  # Delta table on Da
 
 Reading a folder fans the files across the cluster (one partition per file), so ingest scales with the data — unlike a single-node `pyogrio.read_*` that parses one file on one machine. See [Benchmarking](../api/benchmarking) for light-vs-heavy ingest figures.
 
+### Reading from a FILE-column table {#vector-file-table-read}
+
+`vector_file_read` (light tier) accepts either a Volume path/directory **or** a FILE-column
+Delta table name. A FILE-column table stores one vector file per row — each FILE reference
+points to a complete vector file (e.g. a `.gpkg`). Reading decodes all features from each
+referenced file via pyogrio.
+
+```python
+from databricks.labs.gbx.pyvx import vector_file_read
+
+# Read all vector files referenced in a FILE-column table
+features = vector_file_read(
+    spark,
+    "main.geo.vector_files",   # fully-qualified table name
+    driver="GPKG",
+    as_wkb=True,
+)
+features.show()
+```
+
+`source_type="auto"` (the default) distinguishes a table from a path: a string starting
+with `/`, matching a URI scheme, or having a known vector file extension is treated as a path;
+a dotted name, an extension-less string, or a non-existent path is treated as a table. Pass
+`source_type="table"` or `source_type="path"` to bypass the heuristic.
+
+**Auto-order default.** `vector_file_read` auto-orders by the resolved source path before
+decoding. For a vector FILE table, one file maps to one row — every source opens exactly once
+regardless of row order. Auto-ordering produces a **deterministic, cross-format-consistent
+default** row sequence; it is not a throughput lever here (there are no multiple tiles per file
+to amortize). Pass `skip_ordering=True` when the table is already physically ordered or when
+you control ordering downstream:
+
+```python
+features = vector_file_read(
+    spark,
+    "main.geo.vector_files",
+    skip_ordering=True,    # preserve table/scan order; no additional sort step
+)
+```
+
+#### Durable co-location: `CLUSTER BY` + `OPTIMIZE`
+
+Use `layout="cluster"` in `vector_file_write` (or `gbx_file_write`) to declare `CLUSTER BY path`
+in the table DDL. After a bulk insert, run `OPTIMIZE` to materialize the clustering — rows for
+the same source land in the same data files, which makes repeated reads and compaction-stable:
+
+```python
+from databricks.labs.gbx.pyvx import vector_file_write
+
+vector_file_write(
+    spark,
+    local_out="/tmp/roads.gpkg",
+    target="main.geo.vector_files",
+    layout="cluster",           # CLUSTER BY path in the DDL
+    file_mode="auto",
+)
+```
+
+```sql
+-- After initial write or after bulk inserts, materialize clustering:
+OPTIMIZE main.geo.vector_files;
+```
+
+Once the table has been optimized, pass `skip_ordering=True` when reading — the rows are already
+co-located, and skipping the sort avoids a redundant step.
+
+`layout="order"` (the default) applies `ORDER BY path` at insert time and works well for tables
+built in a single write. Use `layout="cluster"` for tables updated incrementally and maintained
+with periodic `OPTIMIZE`.
+
 </TabItem>
 <TabItem value="heavyweight" label="Heavyweight · ogr">
 
@@ -197,7 +267,7 @@ primitives. The table below shows which are active in this reader and which are 
 | Common capability | Used here? | How / why |
 |---|---|---|
 | `list_local_files` (session-free enumeration) | Used | Directory reads — `recursive`, `include_hidden`, `extensions`, and `path_glob_filter` are routed through this shared predicate for all format-specific readers. |
-| `gbx_file_read` / FILE-tier read | Not in the DataSource | The DataSource is session-less on Connect; FILE-tier reads go through `vector_file_read` (function layer) which injects `_file_ref` on the driver before `mapInPandas`. |
+| `gbx_file_read` / FILE-tier read | Not in the DataSource | The DataSource is session-less on Connect; FILE-tier reads go through `vector_file_read` (function layer) which injects `_file_ref` on the driver before `mapInPandas`. `vector_file_read` also accepts a FILE-column Delta table name — see [Reading from a FILE-column table](#vector-file-table-read). |
 | `gbx_file_write` / FILE-tier write | Not in the DataSource | FILE-tier writes go through `vector_file_write` (function layer). The DataSource writer commits via FUSE. |
 
 ## Next Steps

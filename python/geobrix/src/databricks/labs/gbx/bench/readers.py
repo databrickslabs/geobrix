@@ -1982,6 +1982,527 @@ def run_gtiff_file_write(
         )
 
 
+def run_gpkg_file_read(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    chunk_size: int = 10000,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoPackage read via vector_file_read / gpkg_gbx + count.
+
+    ``file_mode`` in {"fuse", "external", "managed"}.  ``source`` is a Volume
+    dir for fuse/external (a directory of .gpkg files), or a FILE-table name
+    for managed.
+
+    - fuse: reads the dir via ``spark.read.format("gpkg_gbx").option("chunkSize",
+      chunk_size).load(source)``; records ``chunk_size`` in the result.
+    - external: ``vector_file_read(spark, source, driver="GPKG", access="external")``
+      raises ValueError on a FUSE-only tier → ``status="na_by_design"``.
+    - managed: ``read_file_table(spark, source)`` → filter non-null path + count.
+
+    Timed ``_job`` = ``df.filter("geometry IS NOT NULL").count()`` (fuse/external)
+    or ``df.filter(F.col("tile.path").isNotNull()).count()`` (managed).
+
+    Records ``chunk_size``, ``file_mode``, and ``measure_parallelism`` on the
+    input df.
+
+    Returns a single ResultRow (mode="spark-path", category="reader").
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    # --- build the input df and _job based on file_mode -------------------- #
+    if file_mode == "fuse":
+        df = (
+            spark.read.format("gpkg_gbx")
+            .option("chunkSize", str(chunk_size))
+            .load(source)
+        )
+        # Detect geometry column via *_srid sibling (robust to any GPKG layer name).
+        _srid_cols = [f.name for f in df.schema.fields if f.name.endswith("_srid")]
+        _gcol = _srid_cols[0][: -len("_srid")] if _srid_cols else "geometry"
+
+        def _job():
+            import pyspark.sql.functions as _F
+
+            return int(df.filter(_F.col(_gcol).isNotNull()).count())
+
+    elif file_mode == "external":
+        # Probe once: on a FUSE-only tier, vector_file_read raises ValueError →
+        # clean na_by_design skip (no FILE tier available locally).
+        try:
+            from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+            df = vector_file_read(spark, source, driver="GPKG", access="external")
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                chunk_size=chunk_size,
+                **env,
+            )
+
+        def _job():
+            import pyspark.sql.functions as _F
+
+            return int(df.filter(_F.col("geometry").isNotNull()).count())
+
+    else:  # managed
+        from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+        df = read_file_table(spark, source)
+
+        def _job():
+            import pyspark.sql.functions as _F
+
+            return int(df.filter(_F.col("tile.path").isNotNull()).count())
+
+    # --- probe once for count + parallelism --------------------------------- #
+    try:
+        try:
+            n0 = _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                chunk_size=chunk_size,
+                **env,
+            )
+        parts, slots = measure_parallelism(spark, df)
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gpkg_file_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n0,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n0 / 1000.0) if (ms and n0) else 0.0,
+            per_tile_avg_ms=(ms / n0) if (ms and n0) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status="ok" if n0 > 0 else "empty",
+            note=f"gpkg FILE read [{file_mode}] over {_src_name}",
+            output_fingerprint="",
+            file_mode=file_mode,
+            chunk_size=chunk_size,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gpkg_file_read",
+            "reader",
+            run_id,
+            api,
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+            chunk_size=chunk_size,
+        )
+
+
+def _gpkg_fuse_readback(spark, path: str, n: int) -> Tuple[str, str]:
+    """Read back a fuse-written GPKG and return (status, note) for the ResultRow.
+
+    Finds the geometry column via the *_srid sibling, counts non-null geometries,
+    and returns ("ok", ...) if the count matches *n*, ("error", ...) otherwise.
+    On any exception returns ("error", truncated exception message).
+    """
+    try:
+        import pyspark.sql.functions as _F
+
+        back = spark.read.format("gpkg_gbx").load(path)
+        _srid_fields = [f.name for f in back.schema.fields if f.name.endswith("_srid")]
+        if _srid_fields:
+            _gcol = _srid_fields[0][: -len("_srid")]
+            back_n = int(back.filter(_F.col(_gcol).isNotNull()).count())
+        else:
+            back_n = int(back.count())
+        ok = back_n == n
+        note = f"gpkg FILE write [fuse] {n} features" + (
+            f" -- readback {back_n} != {n}" if not ok else ""
+        )
+        return "ok" if ok else "error", note
+    except Exception as e:  # noqa: BLE001
+        return "error", f"readback error: {str(e)[-450:]}"
+
+
+def run_gpkg_file_write(
+    spark,
+    local_out: str,
+    target: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    filespace: Optional[str] = None,
+    layout: str = "order",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoPackage write: FILE table (managed/external) or FUSE gpkg_gbx.
+
+    ``file_mode`` in {"fuse", "external", "managed"}.  ``local_out`` is a path
+    to a local/FUSE-accessible .gpkg file (the assembled source to write from).
+
+    - fuse: reads ``local_out`` via ``spark.read.format("gpkg_gbx")``, caches the
+      DataFrame, then times ``df.write.format("gpkg_gbx").mode("overwrite").save(target_iter)``
+      per iteration into fresh sub-directories to avoid append/overwrite contention.
+      Performs a read-back correctness check on the last written target.
+    - managed/external: delegates to ``vector_file_write(spark, local_out, target,
+      driver="GPKG", file_mode=file_mode, ...)``.  On a FUSE-only tier both modes
+      raise ValueError → ``status="na_by_design"``.
+
+    Records ``file_mode``, ``layout``, and ``measure_parallelism`` on the source df.
+
+    Returns a single ResultRow (mode="spark-path", category="writer").
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    if file_mode == "fuse":
+        # Read the assembled .gpkg file into a cached DataFrame.
+        try:
+            df = spark.read.format("gpkg_gbx").load(local_out)
+            df = df.cache()
+            n = int(df.count())
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+        parts, slots = measure_parallelism(spark, df)
+
+        # Per-iteration target paths to avoid append/overwrite contention.
+        # Include .gpkg extension so the writer places the file at the exact
+        # target path (without extension, GDAL appends .gpkg, producing a
+        # path different from what the readback expects).
+        _targets = [f"{target}/iter.m{i}.gpkg" for i in range(max(1, measured))]
+        _iter_idx = [0]
+
+        def _job():
+            t = _targets[_iter_idx[0] % len(_targets)]
+            _iter_idx[0] += 1
+            df.write.format("gpkg_gbx").mode("overwrite").save(t)
+
+        # Probe once: fuse write should not raise ValueError, but guard anyway.
+        try:
+            _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+        try:
+            stats = time_iters(_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+
+            # Read-back correctness check on the last written target.
+            _last = _targets[(max(1, measured) - 1) % len(_targets)]
+            _status, _note = _gpkg_fuse_readback(spark, _last, n)
+
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=n,
+                nodata_frac=0.0,
+                warmup_iters=stats["warmup_iters"],
+                measured_iters=stats["measured_iters"],
+                iter_median_s=ms / 1000.0,
+                iter_min_s=stats["iter_min_ms"] / 1000.0,
+                iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+                per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+                peak_rss_mb=peak_rss_mb(),
+                status=_status,
+                note=_note,
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+    else:  # managed or external
+        from databricks.labs.gbx.pyvx.file_write import vector_file_write
+
+        # Read the source gpkg to get parallelism info.
+        try:
+            df_src = spark.read.format("gpkg_gbx").load(local_out)
+            parts, slots = measure_parallelism(spark, df_src)
+            n = int(df_src.count())
+        except Exception:  # noqa: BLE001
+            parts, slots, n = 0, 0, 0
+
+        def _job():
+            vector_file_write(
+                spark,
+                local_out,
+                target,
+                driver="GPKG",
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                overwrite=True,
+            )
+
+        # Probe once: on FUSE-only tier, managed/external raise ValueError → na_by_design.
+        try:
+            _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+        try:
+            stats = time_iters(_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+
+            # Correctness check: read back from the FILE table.
+            import pyspark.sql.functions as _F
+
+            from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+            back_n = int(
+                read_file_table(spark, target)
+                .filter(_F.col("tile.path").isNotNull())
+                .count()
+            )
+            _ok = back_n == n
+            _status = "ok" if _ok else "error"
+            _note = f"gpkg FILE write [{file_mode}] {n} features" + (
+                f" -- readback {back_n} != {n}" if not _ok else ""
+            )
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=n,
+                nodata_frac=0.0,
+                warmup_iters=stats["warmup_iters"],
+                measured_iters=stats["measured_iters"],
+                iter_median_s=ms / 1000.0,
+                iter_min_s=stats["iter_min_ms"] / 1000.0,
+                iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+                per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+                peak_rss_mb=peak_rss_mb(),
+                status=_status,
+                note=_note,
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+
 def _tin_result_row(
     *,
     run_id: str,

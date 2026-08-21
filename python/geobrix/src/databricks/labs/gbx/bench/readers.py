@@ -8383,6 +8383,169 @@ def run_file_write_layout_sweep(
     return results
 
 
+def run_layout_scan_comparison(
+    spark,
+    *,
+    tables_by_layout: dict,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    file_mode: str,
+    where: str = "cluster",
+    include_shuffle_input: bool = False,
+) -> List["ResultRow"]:
+    """Measure writer-layout effects on sequential scan and shuffle-input cost.
+
+    For each layout in ``tables_by_layout``, reads the FILE table via
+    ``read_file_table`` and times:
+
+    * A sequential scan (``df.count()``) → category ``"layout-scan"``.
+    * Optionally, the shuffle-input cost (``df.repartition(n, "path").count()``)
+      → category ``"layout-shuffle-input"`` (emitted when
+      ``include_shuffle_input=True``).
+
+    The grouped-read wall-clock is **not** measured here — the grouped read
+    self-amortizes via its own ``repartition(n, path).sortWithinPartitions(path)``
+    regardless of layout.  The comparison axis is scan/pruning/shuffle cost.
+
+    Args:
+        spark: active SparkSession.
+        tables_by_layout: dict mapping layout name → FILE-table name.
+        run_id: benchmark run identifier label.
+        warmup: number of warmup iterations.
+        measured: number of measured iterations.
+        file_mode: ``"fuse"``, ``"external"``, or ``"managed"``.
+        where: env_where label recorded in each ResultRow.
+        include_shuffle_input: when True, also emits a
+            ``"layout-shuffle-input"`` row per layout measuring the
+            repartition shuffle cost to a downstream grouped read.
+
+    Returns:
+        List of ResultRow — one ``"layout-scan"`` row per layout, plus one
+        ``"layout-shuffle-input"`` row per layout when
+        ``include_shuffle_input=True``.
+    """
+    from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+    env = capture_env(where)
+    out: List["ResultRow"] = []
+
+    for layout, table in tables_by_layout.items():
+        try:
+            df = read_file_table(spark, table)
+            parts, slots = measure_parallelism(spark, df)
+
+            # --- layout-scan: sequential scan (df.count()) ---
+            def _scan(df=df):
+                return int(df.count())
+
+            n = _scan()
+            scan_stats = time_iters(_scan, warmup, measured)
+            ms = scan_stats["iter_median_ms"]
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn="layout_scan",
+                    category="layout-scan",
+                    mode="spark-path",
+                    tile_px=0,
+                    bands=0,
+                    dtype="",
+                    srid=0,
+                    rows=n,
+                    nodata_frac=0.0,
+                    warmup_iters=scan_stats["warmup_iters"],
+                    measured_iters=scan_stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=scan_stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=scan_stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=scan_stats["iter_total_wall_clock_ms"]
+                    / 1000.0,
+                    avg_wall_clock_s=scan_stats["avg_wall_clock_ms"] / 1000.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status="ok" if n > 0 else "empty",
+                    note=f"layout-scan [{layout}] table={table}",
+                    output_fingerprint="",
+                    file_mode=file_mode,
+                    layout=layout,
+                    input_partitions=parts,
+                    launched_tasks=parts,
+                    slots_available=slots,
+                    **env,
+                )
+            )
+
+            # --- layout-shuffle-input: repartition shuffle cost ---
+            if include_shuffle_input:
+                n_parts = max(1, parts)
+
+                def _shuffle(df=df, n_parts=n_parts):
+                    return int(df.repartition(n_parts, "path").count())
+
+                shuf_stats = time_iters(_shuffle, warmup, measured)
+                ms_shuf = shuf_stats["iter_median_ms"]
+                out.append(
+                    ResultRow(
+                        run_id=run_id,
+                        api="lightweight",
+                        fn="layout_shuffle_input",
+                        category="layout-shuffle-input",
+                        mode="spark-path",
+                        tile_px=0,
+                        bands=0,
+                        dtype="",
+                        srid=0,
+                        rows=n,
+                        nodata_frac=0.0,
+                        warmup_iters=shuf_stats["warmup_iters"],
+                        measured_iters=shuf_stats["measured_iters"],
+                        iter_median_s=ms_shuf / 1000.0,
+                        iter_min_s=shuf_stats["iter_min_ms"] / 1000.0,
+                        iter_p90_s=shuf_stats["iter_p90_ms"] / 1000.0,
+                        iter_total_wall_clock_s=shuf_stats["iter_total_wall_clock_ms"]
+                        / 1000.0,
+                        avg_wall_clock_s=shuf_stats["avg_wall_clock_ms"] / 1000.0,
+                        throughput_mpix_s=0.0,
+                        throughput_rows_s=(
+                            (n / (ms_shuf / 1000.0)) if (ms_shuf and n) else 0.0
+                        ),
+                        peak_rss_mb=peak_rss_mb(),
+                        status="ok" if n > 0 else "empty",
+                        note=(
+                            f"layout-shuffle-input [{layout}] "
+                            f"table={table} repartition({n_parts})"
+                        ),
+                        output_fingerprint="",
+                        file_mode=file_mode,
+                        layout=layout,
+                        input_partitions=parts,
+                        launched_tasks=parts,
+                        slots_available=slots,
+                        **env,
+                    )
+                )
+
+        except Exception as e:  # noqa: BLE001
+            out.append(
+                _error_row(
+                    "layout_scan",
+                    "layout-scan",
+                    run_id,
+                    "lightweight",
+                    warmup,
+                    env,
+                    e,
+                    file_mode=file_mode,
+                    layout=layout,
+                )
+            )
+
+    return out
+
+
 def _print_summary(rows: List[ResultRow]) -> None:
     """Print a compact results table to stdout."""
     if not rows:

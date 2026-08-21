@@ -22,6 +22,23 @@ from databricks.labs.gbx.bench.results import ResultRow
 from databricks.labs.gbx.bench.runner import capture_env, peak_rss_mb, time_iters
 
 
+def measure_parallelism(spark, df):
+    """(input_partitions, slots_available) for a timed df, Connect-safe.
+
+    input_partitions: number of partitions that carry >=1 row, via
+    spark_partition_id() (no .rdd -> Connect-safe). slots_available: cluster task
+    slots via bench.runner._bench_parallelism (classic:
+    sparkContext.defaultParallelism; Connect: spark.sql.shuffle.partitions). The
+    QA report derives slots-used = min(input_partitions, slots_available) and
+    idle = slots_available - slots-used from these two numbers."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench.runner import _bench_parallelism
+
+    parts = int(df.select(F.spark_partition_id().alias("_pid")).distinct().count())
+    return parts, int(_bench_parallelism(spark))
+
+
 def _read_one_file_light(file_path: str, size_mib: int) -> int:
     """Open a raster file, compute tiles, return tile count."""
     import rasterio

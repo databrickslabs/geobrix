@@ -25,9 +25,9 @@ GeoBrix is [supported on DBR 17.3 LTS, 18 LTS, and — for the lightweight tier 
 - **[Band math: 60–130× lightweight win](#pure-core)** — spectral indices run 60–130× faster on the lightweight tier (NumPy in-process vs. heavyweight subprocess `gdal_calc` per call). This is the single largest advantage and sustains at scale.
 - **[Lightweight at parity for aggregators and geometry](#results)** — `st_asmvt` MVT encoding (~6% gap), `pmtiles_agg` archive folding (~7% gap), and quadbin/BNG grid math (±20% variance) all run within or very near parity on a cluster, with decoded output matching exactly.
 
-## Results
+## Measurement modes
 
-Representative results across the benchmark families, organized by function group.
+Every function is benchmarked two ways. The full result tables by function family are in [Results](#results) below; this section explains the two measurement modes and the consistency check they share.
 
 Each function is timed under two independent models:
 

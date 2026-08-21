@@ -2903,8 +2903,9 @@ for _ls_mode in _ls_modes:
     # external: full layout sweep (all three layouts -- the FILE-table layout dimension).
     # fuse/managed: only "order" layout (mode-comparison baseline; fuse ignores layout anyway).
     _ls_layouts = ("order", "cluster", "plain") if _ls_mode == "external" else ("order",)
-    # managed needs the filespace to create a MANAGED FILE table; external does not.
-    _ls_filespace = FILE_FILESPACE if _ls_mode == "managed" else None
+    # Vector external writes need a filespace (staging dir for the assembled .gpkg);
+    # raster external ignores it. Both managed modes use it.
+    _ls_filespace = FILE_FILESPACE if _ls_mode in ("external", "managed") else None
     # Target prefix: filesystem PATH for fuse (run_file_write_layout_sweep appends
     # "_{layout}" to form the per-layout path); TABLE NAME for external/managed (appending
     # "_{layout}" gives a valid three-part table name: schema.table_layout).

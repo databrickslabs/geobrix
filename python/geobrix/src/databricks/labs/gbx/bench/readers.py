@@ -2579,21 +2579,44 @@ def run_gpkg_file_write(
             stats = time_iters(_job, warmup, measured)
             ms = stats["iter_median_ms"]
 
-            # Correctness check: read back from the FILE table.
+            # Correctness check: round-trip read via vector_file_read.
+            # A vector FILE write stores the whole .gpkg as ONE FILE reference,
+            # so read_file_table returns 1 file ref, not per-feature rows.
+            # Validate by reading the features back via vector_file_read and
+            # comparing feature count to the source.
             import pyspark.sql.functions as _F
 
             from databricks.labs.gbx.pyrx.file_table import read_file_table
+            from databricks.labs.gbx.pyvx.file_read import vector_file_read
 
-            back_n = int(
-                read_file_table(spark, target)
-                .filter(_F.col("tile.path").isNotNull())
-                .count()
+            file_refs = read_file_table(spark, target).filter(
+                _F.col("tile.path").isNotNull()
             )
-            _ok = back_n == n
-            _status = "ok" if _ok else "error"
-            _note = f"gpkg FILE write [{file_mode}] {n} features" + (
-                f" -- readback {back_n} != {n}" if not _ok else ""
-            )
+            _file_ref_count = int(file_refs.count())
+
+            # Round-trip: read the features back from the FILE reference(s).
+            try:
+                features_back = vector_file_read(
+                    spark,
+                    target,
+                    driver="GPKG",
+                    access=file_mode,
+                )
+                back_n = int(features_back.count())
+                _ok = back_n == n and _file_ref_count >= 1
+                _status = "ok" if _ok else "error"
+                _note = (
+                    f"gpkg FILE write [{file_mode}] {n} features"
+                    + (f" -- readback {back_n} != {n}" if back_n != n else "")
+                    + (" (0 file refs)" if _file_ref_count == 0 else "")
+                )
+            except Exception as _rt_e:
+                _ok = False
+                _status = "error"
+                _note = (
+                    f"gpkg FILE write [{file_mode}] {n} features "
+                    f"-- round-trip read failed: {str(_rt_e)[:80]}"
+                )
             print(
                 f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg2}: "
                 f"{_status}, {n} rows, {ms / 1000.0:.1f}s",

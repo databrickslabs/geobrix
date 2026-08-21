@@ -109,10 +109,12 @@ def test_build_bench_notebook_cells():
     )
     nb = cl.build_bench_notebook(cfg)
     src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    assert (
-        "geobrix[light-dbr19] @ file:///Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl"
-        in src
-    )
+    # Classic install cell is a two-step subprocess (force-reinstall geobrix CODE only via
+    # --no-deps, then a non-forced deps install) -- NOT the old single-%pip URL-reference form.
+    # See fix(bench): classic install force-reinstalls geobrix CODE only, not the closure.
+    assert "/Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl" in src
+    assert "--force-reinstall" in src and "--no-deps" in src
+    assert "geobrix[light-dbr19]" in src
     assert "HeavyBenchMain" in src and "_jvm" in src
     assert "run_spark_path" in src or "run_pure_core" in src
     assert "bench_results" in src

@@ -2077,6 +2077,43 @@ def run_gpkg_file_read(
             return int(df.filter(_F.col("geometry").isNotNull()).count())
 
     else:  # managed
+        # Guard: a MANAGED read requires a FILE-column TABLE source, not a path or
+        # directory. A Volume path cannot yield a MANAGED FILE reference — that is
+        # minted on write. Return na_by_design early (symmetric with the raster
+        # gbx_file_read gate and vector_file_read's own managed guard) rather than
+        # letting SHOW TBLPROPERTIES receive a bare path and raise a parse error.
+        if source.startswith("/") or source.startswith("dbfs:"):
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=(
+                    "access='managed' is only valid for a MANAGED FILE-column table "
+                    "source. A Volume path/directory cannot yield a MANAGED FILE "
+                    "reference — minted on write via vector_file_write."
+                ),
+                output_fingerprint="",
+                file_mode=file_mode,
+                chunk_size=chunk_size,
+                **env,
+            )
         from databricks.labs.gbx.pyrx.file_table import read_file_table
 
         df = read_file_table(spark, source)

@@ -3328,10 +3328,8 @@ def build_bench_notebook(cfg: dict) -> dict:
         # without it pip treats an already-installed 0.5.0 (from a prior run on a warm cluster)
         # as satisfied and silently runs STALE geobrix code -- e.g. a freshly added bench helper
         # is missing (AttributeError). It stays a single %pip cell (one restart).
-        _install_cell_src = (
-            '%pip install --quiet --force-reinstall "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
-                wheel=cfg["wheel"]
-            )
+        _install_cell_src = '%pip install --quiet --force-reinstall "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
+            wheel=cfg["wheel"]
         )
     cells = [
         # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.

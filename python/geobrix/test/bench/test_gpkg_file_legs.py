@@ -76,6 +76,25 @@ def test_gpkg_file_read_fuse_ok_records_chunksize(spark, tmp_path):
     assert r.chunk_size == 1000
 
 
+def test_gpkg_file_read_managed_directory_path_is_na_by_design(spark, tmp_path):
+    """BUG A: run_gpkg_file_read(file_mode='managed', source=<dir>) must return
+    status='na_by_design', NOT crash with a Spark parse error.
+    The managed path requires a FILE-column table name, not a Volume directory.
+    This test FAILS (error/exception) until the BUG-A fix is applied.
+    """
+    from databricks.labs.gbx.bench.readers import run_gpkg_file_read
+
+    _write_n_gpkg(tmp_path, 1, rows=3)
+    r = run_gpkg_file_read(
+        spark, str(tmp_path), "t", 0, 1, file_mode="managed", where="venv"
+    )
+    assert r.status == "na_by_design", (
+        f"Expected na_by_design for managed read over a directory path, got: "
+        f"status={r.status!r} note={r.note!r}"
+    )
+    assert r.file_mode == "managed"
+
+
 def test_gpkg_file_write_fuse_ok(spark, tmp_path):
     from databricks.labs.gbx.bench.readers import run_gpkg_file_write
 

@@ -2852,10 +2852,22 @@ from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
 from databricks.labs.gbx.ds.register import register as _ds_reg
 _ls_rows = []
-# Build GeoTIFF tile_df from the rows corpus (saturation: 10k tiles > cluster slots).
+# Build GeoTIFF tile_df for the WRITE sweep. The write leg demonstrates write + the layout
+# effect; it does NOT need the full read pool. Writing all 10k tiles x 3 layouts x
+# (warmup+measured) is ~60k large-blob writes + OPTIMIZE and dominated the leg wall-clock
+# (~50 min) for no added signal. Cap to a bounded subset that still exceeds the cluster slot
+# count (fair writer fanout), then repartition to re-spread so .limit() cannot collapse the
+# write to a single partition (which would starve slots and distort the timing).
 _ds_reg(spark)
 _ls_gtiff_src = f"{CORPUS}/rows"
-_ls_tile_df = spark.read.format("raster_gbx").option("filterRegex", r".*\\.tif$").load(_ls_gtiff_src)
+_LS_WRITE_TILES = 1000  # >> cluster task slots -> saturates; ~10x less write than the full pool
+_ls_tile_df = (
+    spark.read.format("raster_gbx")
+    .option("filterRegex", r".*\\.tif$")
+    .load(_ls_gtiff_src)
+    .limit(_LS_WRITE_TILES)
+    .repartition(160)
+)
 # file_mode for FILE tables: use "external" when filespace is provisioned; fuse otherwise.
 _ls_file_mode = "external" if FILE_FILESPACE else "fuse"
 _ls_filespace = FILE_FILESPACE or None

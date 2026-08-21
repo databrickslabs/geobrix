@@ -309,3 +309,16 @@ def test_all_four_cells_emitted_together():
     assert "run_gpkg_chunksize_sweep" in src
     assert "run_file_write_layout_sweep" in src
     assert "run_layout_scan_comparison" in src
+
+
+def test_layout_sweep_gtiff_write_source_is_bounded():
+    """The GeoTIFF write-sweep must CAP its tile source. Writing the full read pool
+    (10k tiles) x 3 layouts x (warmup+measured) is ~60k large-blob writes + OPTIMIZE and
+    dominated the leg wall-clock for no added signal. It must .limit to a bounded count and
+    repartition to re-spread (so .limit cannot collapse the write to one partition and
+    starve slots)."""
+    nb = cl.build_bench_notebook(_base_cfg(layout_sweep=True))
+    src = _src(nb)
+    assert "_LS_WRITE_TILES" in src
+    assert ".limit(_LS_WRITE_TILES)" in src
+    assert ".repartition(" in src

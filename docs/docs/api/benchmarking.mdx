@@ -214,26 +214,20 @@ spread over the workers).
 
 ### Reader plan-time listing
 
-Before any tile is read, the reader must **enumerate the source directory** and open
-each file header to determine tile windows. On a UC Volume with thousands of files this
-driver-side walk is the dominant planning cost — and it runs every time a job starts,
-even when `virtualTiles=true` (the directory walk still happens; only the per-file
-`rasterio.open` is skipped by virtual-tile planning).
+Before any tile is read, the reader **enumerates the source directory** to determine tile windows. The default listing is fast — a stat-free walk that plans ~10k files in ~1.5 s on a UC Volume — and it runs once at plan time even when `virtualTiles=true` (only the per-file `rasterio.open` is skipped by virtual-tile planning; the directory walk still happens).
 
 Measured on a **10,002-file corpus** on a dogfood workspace (driver-side microbenchmark,
 warm run):
 
 | Method | Median (s) | vs. baseline |
 |---|---|---|
-| `os.walk` enumeration (default) | 1.357 | — |
+| Default directory listing (stat-free) | ~1.5 | — |
 | Pre-computed manifest / tile table | **0.037** | **~37× faster** |
 
-The manifest path skips the directory walk and header opens entirely — planning
-reduces to a single file or table read regardless of tile count.
+The manifest path skips the directory walk and header opens entirely — planning reduces to a single file or table read regardless of tile count. Because the default listing is already fast, supplying a manifest or tile table is an **optional** optimization rather than a critical remedy; it is most useful when you already maintain a pre-computed tile index, or when the listing cost accumulates across a very large number of repeated job runs.
 
-:::tip Use a manifest or tile table for large directories
-When a directory contains thousands of rasters, supply a pre-computed tile list
-instead of loading the directory directly:
+:::tip Pre-computed tile inputs (`manifest` / tile table)
+Supply a pre-computed tile list to skip the directory walk entirely:
 
 ```python
 # Option 1 — manifest (JSON or Parquet: path + window per tile)
@@ -250,10 +244,9 @@ df = spark.read.format("raster_gbx") \
     .load("/")
 ```
 
-Both options reduce planning from an `os.walk` over the Volume FUSE mount (1.4 s at
-10K files, growing linearly) to a single file or table read (**~37× faster** at that
-scale). The benefit is purely at plan time and is independent of which functions run
-on the tiles.
+Both options reduce planning to a single file or table read (**~37× faster** than the
+directory walk at 10k files). The benefit is purely at plan time and is independent of
+which functions run on the tiles.
 :::
 
 ### NetCDF readers

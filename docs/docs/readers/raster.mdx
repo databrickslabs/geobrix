@@ -87,39 +87,9 @@ the [COG Reader](./cog).
 **Internally-tiled sources** split on a block-snapped grid.
 :::
 
-#### Loading many small files {#loading-many-small-files}
+#### Directory reads {#loading-many-small-files}
 
-:::tip Loading many small files
-Reading a directory of many rasters incurs planning overhead regardless of `virtualTiles`: the reader still walks the directory and opens each file header to compute tile windows. On a UC Volume this driver-side walk is the dominant planning cost.
-
-**Measured at 10,002 files (dogfood workspace, warm run):**
-
-| Method | Plan-time median |
-|---|---|
-| Default directory load (`os.walk`) | 1.357 s |
-| Pre-computed manifest or tile table | **0.037 s (~37× faster)** |
-
-For large tile counts, prefer one of:
-- **`manifest` option** — supply a JSON or Parquet file listing `path` + `window` for each tile; the reader skips the directory walk and header opens entirely.
-  ```python
-  spark.read.format("raster_gbx") \
-      .option("manifest", "/Volumes/catalog/schema/vol/tiles.json") \
-      .option("virtualTiles", "true") \
-      .load("/Volumes/catalog/schema/vol/rasters")
-  ```
-- **`tilesTable` option** — point to a Delta table that serves as a **tile index**: one row per tile with a `path` column (+ optional `window` / dimension columns). It is a catalog of file *references*, **not** the tile pixels — the reader still opens each referenced file and extracts its window; it only skips discovering the files by walking the directory.
-  ```python
-  spark.read.format("raster_gbx") \
-      .option("tilesTable", "geospatial.myschema.tile_index") \
-      .option("virtualTiles", "true") \
-      .load("/")
-  ```
-- **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog); the reader then opens a small number of large files whose headers are comparatively cheap.
-
-**A tile index is not a materialized-tile table.** `manifest` / `tilesTable` catalog *where the rasters are* (paths, plus optional windows) — essentially a saved file listing. The raster bytes stay in files and are read lazily (especially with `virtualTiles=true`); the index only lets the reader skip re-walking the directory. That is different from an ingest that has already **decoded** rasters into a Delta table with a tile-struct/bytes column — if you have that, read it directly with `spark.table(...)`; you don't need a reader at all.
-
-The planning overhead grows linearly with file count; at 10K+ files a manifest or tile index is the most effective remedy. See [Benchmarking → Reader plan-time listing](../api/benchmarking#reader-plan-time-listing) for the methodology.
-:::
+Reading a directory plans every file (fast, stat-free listing — ~1.5 s at 10k files); for pre-computed windows or very large tile counts see [Advanced: pre-computed tile inputs](#advanced-pre-computed-tile-inputs) below.
 
 :::tip Reading GeoBrix output with a stock Spark reader
 Stock Spark file readers (`spark.read.format("binaryFile")`, `text`, `parquet`, …)
@@ -450,6 +420,33 @@ primitives. The table below shows which are active in this reader and which are 
 | `list_local_files` (session-free enumeration) | Used | All directory reads — `recursive`, `include_hidden`, `extensions`, `path_glob_filter` options are routed through this shared predicate. |
 | `enumerate_files` (FILE-tier enumeration) | Not in the DataSource | The DataSource is session-less on Connect and does not call `enumerate_files`; FILE-tier enumeration is only available through `gbx_file_read` at the function layer. |
 | `gbx_file_read` / `gbx_file_write` (FILE tier) | Not in the DataSource | The DataSource is FUSE-only (session-less on Connect); FILE reads go through `gbx_file_read` → `rst_fromfile` at the function layer. |
+
+## Advanced: pre-computed tile inputs (`manifest` / tile index) {#advanced-pre-computed-tile-inputs}
+
+The default directory read is fast — a stat-free listing plans ~10k files in ~1.5 s — so most reads need nothing special. The `manifest` and `tilesTable` options are an optional optimization for two specific cases:
+
+- **Pre-computed windows you already maintain** — a manifest or tile index lets the reader use your saved file listing directly, skipping the directory walk entirely.
+- **Very large tile counts** where even a fast listing accumulates across many repeated job runs.
+
+Both options reduce plan time from the directory walk (~1.5 s at 10k files) to a single file or table read. See [Benchmarking → Reader plan-time listing](../api/benchmarking#reader-plan-time-listing) for the measured numbers.
+
+- **`manifest` option** — supply a JSON or Parquet file listing `path` + `window` for each tile; the reader skips the directory walk and header opens entirely.
+  ```python
+  spark.read.format("raster_gbx") \
+      .option("manifest", "/Volumes/catalog/schema/vol/tiles.json") \
+      .option("virtualTiles", "true") \
+      .load("/Volumes/catalog/schema/vol/rasters")
+  ```
+- **`tilesTable` option** — point to a Delta table that serves as a **tile index**: one row per tile with a `path` column (+ optional `window` / dimension columns). It is a catalog of file *references*, **not** the tile pixels — the reader still opens each referenced file and extracts its window; it only skips discovering the files by walking the directory.
+  ```python
+  spark.read.format("raster_gbx") \
+      .option("tilesTable", "geospatial.myschema.tile_index") \
+      .option("virtualTiles", "true") \
+      .load("/")
+  ```
+- **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog); the reader then opens a small number of large files whose headers are comparatively cheap.
+
+**A tile index is not a materialized-tile table.** `manifest` / `tilesTable` catalog *where the rasters are* (paths, plus optional windows) — essentially a saved file listing. The raster bytes stay in files and are read lazily (especially with `virtualTiles=true`); the index only lets the reader skip re-walking the directory. That is different from an ingest that has already **decoded** rasters into a Delta table with a tile-struct/bytes column — if you have that, read it directly with `spark.table(...)`; you don't need a reader at all.
 
 ## Next Steps
 

@@ -117,6 +117,9 @@ When `tile.raster` contains binary data, use it with rasterio or GDAL:
 
 `rst_fromfile` takes a path and returns a **virtual** tile in the light tier (bytes-free by default; pass `materialize=True` to force bytes). `rst_fromcontent` always returns a **materialized** tile — it takes bytes you already have (e.g. from `spark.read.format("binaryFile")`) and embeds them directly.
 
+To enumerate paths from a Volume directory and decode each one in a single pipeline, compose
+`gbx_file_read` with `rst_fromfile` — see [GBX Common Functions](../common-functions).
+
 <CodeFromTest code={tileStructureExamples} functionName="comparing_fromfile_vs_fromcontent_tiles" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="comparing_fromfile_vs_fromcontent_tiles_output" />
 
 ---

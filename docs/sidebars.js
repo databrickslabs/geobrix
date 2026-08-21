@@ -73,6 +73,7 @@ const sidebars = {
       collapsed: true,
       link: { type: 'doc', id: 'readers-writers' },
       items: [
+        'common-functions',
         {
           type: 'category',
           label: 'Readers',

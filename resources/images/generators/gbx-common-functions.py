@@ -56,9 +56,11 @@ HEADER_H = 86
 
 # Three tiers
 TIER_GAP = 20
-TIER1_H  = 220    # generic functions
-TIER2_H  = 220    # format-specific
-TIER3_H  = 130    # session-free core
+# Content is shifted up within each band (small top offset, see t{1,2,3}y) and the band height
+# gives balanced bottom padding so no card spills past the band edge.
+TIER1_H  = 236    # generic functions
+TIER2_H  = 236    # format-specific
+TIER3_H  = 124    # session-free core
 PILL_OVERHANG = 24
 
 # Stage columns
@@ -181,9 +183,7 @@ def render():
     parts.append(text(PAD, PAD + 30, "GeoBrix · GBX Common Functions",
                       size=28, weight=800, fill=C_INK))
     parts.append(text(PAD, PAD + 56,
-                      "One shared file-access base under every lightweight reader and writer — "
-                      "generic session-ful functions on top, format-specific decoders/encoders "
-                      "in the middle, session-free core floor below",
+                      "One shared file-access base under every lightweight reader and writer.",
                       size=13.5, fill=C_MUTED))
     # Legend (top-right)
     lx = CANVAS_W - PAD - 360
@@ -199,7 +199,7 @@ def render():
     # ========================= TIER 1: GENERIC FUNCTIONS =========================
     parts.append(lane_band(tier1_top, TIER1_H, ACCENT_READ, TINT_READ,
                             "GENERIC", 'gbx_file_read / gbx_file_write  (session-ful, function layer)'))
-    t1y = tier1_top + 22
+    t1y = tier1_top + 6
 
     # --- READ box ---
     bx, bw, bh = C1_X + 14, C1_W - 28, 80
@@ -225,7 +225,7 @@ def render():
                  border=ACCENT_WRITE, mono_font=True, h=21, size=11)
     parts.append(wc)
     parts.append(text(bx2 + 12, wy_box + 48, "df, target, *, file_mode=", size=10, weight=500, fill=C_MUTED))
-    parts.append(mono(bx2 + 12 + 140, wy_box + 48, '"auto"', size=10, weight=700, fill=ACCENT_WRITE))
+    parts.append(mono(bx2 + 12 + 124, wy_box + 48, '"auto"', size=10, weight=700, fill=ACCENT_WRITE))
     parts.append(text(bx2 + 12, wy_box + 65, "returns None (writes Delta table)", size=10, weight=500, fill=C_MUTED_2))
 
     # --- NO-GATING callout ---
@@ -265,7 +265,7 @@ def render():
     parts.append(lane_band(tier2_top, TIER2_H, ACCENT_WRITE, TINT_WRITE,
                             "FORMAT-SPECIFIC",
                             "rst_fromfile / vector_file_read / write_file_table  (decoders/encoders)"))
-    t2y = tier2_top + 22
+    t2y = tier2_top + 6
 
     # Raster decode
     rx_bx = C1_X + 14; rx_bw = (CANVAS_W - 2*PAD - 28) // 2 - 20; rx_bh = 80
@@ -320,7 +320,7 @@ def render():
     parts.append(lane_band(tier3_top, TIER3_H, C_FUSE, TINT_FUSE,
                             "SESSION-FREE CORE",
                             "list_local_files / enumerate_files / to_local_path  (no SparkSession required)"))
-    t3y = tier3_top + 22
+    t3y = tier3_top + 8
 
     funcs = [
         ("list_local_files",  "path, *, extensions=None  → list[str]", "sorted paths — FUSE only, every DataSource reader uses this"),
@@ -339,18 +339,21 @@ def render():
         parts.append(text(fx + 10, t3y + 80, note, size=9, weight=500, fill=C_MUTED_2))
 
     # ========================= ARROWS =========================
-    # Tier-1 generic → Tier-2 format-specific (down arrows)
+    # Each vertical connector ENDS in the clear gap ABOVE the lower band's pill+descriptor row
+    # (never crossing that row), so no arrow cuts the descriptor text at any x. Arrowheads point
+    # into each band from just above; x's sit on the target-box centres.
+    # Tier-1 generic → Tier-2 format-specific
     mid_t1  = tier1_top + TIER1_H + 2
-    mid_t2  = tier2_top - 2
-    cx_left  = C1_X + 14 + (C1_W - 28) // 2
-    cx_right = (C1_X + 14 + rx_bw + 20) + vr_bw // 2
+    mid_t2  = tier2_top - PILL_OVERHANG - 2
+    cx_left  = C1_X + 14 + rx_bw // 2                      # → rst_fromfile centre
+    cx_right = (C1_X + 14 + rx_bw + 20) + vr_bw // 2       # → vector_file_read centre
     for cx in (cx_left, cx_right):
         parts.append(arrow_line(cx, mid_t1, cx, mid_t2,
                                 marker="arrow", color=C_MUTED_2, width=2, dash="5 4"))
 
-    # Tier-2 format-specific → Tier-3 core (down arrows)
+    # Tier-2 format-specific → Tier-3 core (into the 3 core-box centres)
     mid_t2b = tier2_top + TIER2_H + 2
-    mid_t3  = tier3_top - 2
+    mid_t3  = tier3_top - PILL_OVERHANG - 2
     for i in range(3):
         fx_c = C1_X + 14 + i * (col_w + 10) + col_w // 2
         parts.append(arrow_line(fx_c, mid_t2b, fx_c, mid_t3,

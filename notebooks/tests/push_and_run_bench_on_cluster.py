@@ -456,6 +456,14 @@ def main() -> int:
     # --layout-scan: compare sequential-scan cost across write layouts (FILE tables).
     layout_scan = "--layout-scan" in sys.argv
     layout_scan_only = "--layout-scan-only" in sys.argv
+    # --vector-table-read: read a FILE-column table back via vector_file_read TABLE mode
+    #   (managed/external), across the layout-sweep's gpkg FILE tables.
+    vector_table_read = "--vector-table-read" in sys.argv
+    vector_table_read_only = "--vector-table-read-only" in sys.argv
+    # --raster-decode-read: pixel-decode throughput (rst_avg) over raster FILE tiles across
+    #   managed/external/fuse, plus the auto-order-vs-skipOrdering amortization comparison.
+    raster_decode_read = "--raster-decode-read" in sys.argv
+    raster_decode_read_only = "--raster-decode-read-only" in sys.argv
     # --file-filespace <id>: filespace identifier for FILE EXTERNAL/MANAGED table creation.
     file_filespace = _arg("--file-filespace", "")
     # --gpkg-corpus <path>: GeoPackage bench corpus base dir (staged by stage_gpkg_bench_corpus).
@@ -627,6 +635,12 @@ def main() -> int:
         #  --layout-scan: sequential-scan + shuffle-input cost across write layouts (FILE tables).
         layout_scan=layout_scan,
         layout_scan_only=layout_scan_only,
+        #  --vector-table-read: vector_file_read TABLE mode over the layout-sweep's gpkg FILE tables.
+        vector_table_read=vector_table_read,
+        vector_table_read_only=vector_table_read_only,
+        #  --raster-decode-read: rst_avg pixel-decode over raster FILE tiles + auto-vs-skip ordering.
+        raster_decode_read=raster_decode_read,
+        raster_decode_read_only=raster_decode_read_only,
         #  --file-filespace: filespace identifier for FILE EXTERNAL/MANAGED tables.
         file_filespace=file_filespace,
         #  --gpkg-corpus: GeoPackage bench corpus base dir.
@@ -686,6 +700,12 @@ def main() -> int:
         cfg["modes"] = "spark-path"
     if layout_scan_only:
         # Layout scan benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if vector_table_read_only:
+        # Vector table-read benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if raster_decode_read_only:
+        # Raster decode-read benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).
@@ -771,6 +791,8 @@ def main() -> int:
         or cfg.get("gpkg_chunksize_only")
         or cfg.get("layout_sweep_only")
         or cfg.get("layout_scan_only")
+        or cfg.get("vector_table_read_only")
+        or cfg.get("raster_decode_read_only")
     )
     if (
         cfg["modes"] in ("spark-path", "both")

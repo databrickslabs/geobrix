@@ -336,6 +336,13 @@ LAYOUT_SCAN_ONLY = {layout_scan_only!r}
 # --vector-table-read-only: ONLY run the vector table-read leg, skip fn benchmarks.
 BENCHMARK_VECTOR_TABLE_READ = {benchmark_vector_table_read!r}
 VECTOR_TABLE_READ_ONLY = {vector_table_read_only!r}
+# --raster-decode-read: measure raster pixel-decode throughput across managed/external/fuse
+# (reads FILE tiles from the layout-sweep tables and forces pixel decode via rst_avg).
+# Also emits an ordering-amortization comparison (auto-order vs skipOrdering) for
+# managed/external.  Requires FILE tables written by the layout sweep leg.
+# --raster-decode-read-only: ONLY run this leg, skip fn benchmarks.
+BENCHMARK_RASTER_DECODE_READ = {benchmark_raster_decode_read!r}
+RASTER_DECODE_READ_ONLY = {raster_decode_read_only!r}
 # Filespace identifier for FILE EXTERNAL/MANAGED table creation (e.g. a TBLPROPERTIES
 # filespace path such as "/Volumes/catalog/schema/vol/filespace"). Empty string means no
 # filespace provisioned; external/managed legs yield na_by_design on FUSE-only tiers or
@@ -386,7 +393,7 @@ _READER_ONLY = (
     or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
     or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY or GROUPED_FILE_ONLY
     or FILE_MATRIX_ONLY or GPKG_CHUNKSIZE_ONLY or LAYOUT_SWEEP_ONLY or LAYOUT_SCAN_ONLY
-    or VECTOR_TABLE_READ_ONLY
+    or VECTOR_TABLE_READ_ONLY or RASTER_DECODE_READ_ONLY
 )
 corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
 # Function-bench summaries annotate results with the row-pool size; reader-only runs have no
@@ -3100,6 +3107,74 @@ if _vtr_rows:
     _show_md(f"Vector FILE-column-table read -- {RUN_ID}", _md)
 """
 
+_CELL_RASTER_DECODE_READ = """# Raster pixel-decode throughput benchmark: rst_avg over FILE tiles (MANAGED/EXTERNAL/FUSE).
+# Reads GeoTIFF tiles from the layout-sweep FILE tables (or a Volume dir for fuse) and
+# forces actual pixel decode via rst_avg -- NOT enumeration (gbx_file_read+count).
+# For managed/external: also emits an ordering-amortization comparison (auto-order vs
+# skipOrdering=True) to measure the T8 same-source sort payoff on open/LRU reuse.
+# Skipped cleanly when FILE_FILESPACE is not set (no FILE tables were provisioned).
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import results
+print("=== raster decode-read starting ===", flush=True)
+_rdr_rows = []
+# _TABLE_SCHEMA derives from the results TABLE name (first two dot-separated parts).
+_TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
+if not FILE_FILESPACE:
+    print(
+        "RASTER DECODE READ SKIPPED: FILE_FILESPACE not set. "
+        "Run the layout sweep with --file-filespace provisioned to create FILE "
+        "tables, then re-run with --raster-decode-read / --raster-decode-read-only.",
+        flush=True,
+    )
+else:
+    # FILE tables written by the gtiff layout-sweep leg (external order layout):
+    #   managed: {_TABLE_SCHEMA}.bench_layout_gtiff_managed_order
+    #   external: {_TABLE_SCHEMA}.bench_layout_gtiff_external_order
+    # fuse: uses the GeoTIFF corpus dir (virtualTiles=true, no table ordering concept).
+    _rdr_modes = (
+        ("managed", f"{_TABLE_SCHEMA}.bench_layout_gtiff_managed_order"),
+        ("external", f"{_TABLE_SCHEMA}.bench_layout_gtiff_external_order"),
+        ("fuse", CORPUS + "/bench-corpus-reader-10k"),
+    )
+    for _rdr_fm, _rdr_src in _rdr_modes:
+        print(
+            f"[raster-decode-read] mode={_rdr_fm}"
+            + (f" source={_rdr_src}" if _rdr_fm == 'fuse'
+               else f" table={_rdr_src}"),
+            flush=True,
+        )
+        # For fuse: single row (no table ordering); for managed/external:
+        # skip_ordering=None emits two rows (auto-order + skip-order comparison).
+        _rdr_skip = None if _rdr_fm in ("managed", "external") else False
+        _rdr_batch = _rd.run_raster_decode_read_sweep(
+            spark,
+            _rdr_src,
+            RUN_ID,
+            SPARK_WARMUP,
+            SPARK_MEASURED,
+            file_mode=_rdr_fm,
+            skip_ordering=_rdr_skip,
+            where="cluster",
+        )
+        for _rdr_r in _rdr_batch:
+            _sink([_rdr_r]); lw.append(_rdr_r); _rdr_rows.append(_rdr_r)
+            print(
+                f"[raster-decode-read] mode={_rdr_fm} {_rdr_r.mode}: "
+                f"{_rdr_r.status}, {_rdr_r.rows} tiles, {_rdr_r.iter_median_s:.1f}s",
+                flush=True,
+            )
+if _rdr_rows:
+    _df_rdr = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND fn = 'gtiff_decode_read'"
+    )
+    try:
+        display(_df_rdr)
+    except Exception:
+        _df_rdr.show(100, truncate=False)
+    _md = results.summarize(_rdr_rows)
+    _show_md(f"Raster decode-read (FILE) -- {RUN_ID}", _md)
+"""
+
 _CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr (+ row-count parity)
 # Two-leg pipeline (scaled branch):
 #   Leg 1 (reader): spark.read.format(fmt).load(copies/) -> Delta ingest table (forces
@@ -3362,6 +3437,8 @@ def build_bench_notebook(cfg: dict) -> dict:
         layout_scan_only=bool(cfg.get("layout_scan_only")),
         benchmark_vector_table_read=bool(cfg.get("vector_table_read")),
         vector_table_read_only=bool(cfg.get("vector_table_read_only")),
+        benchmark_raster_decode_read=bool(cfg.get("raster_decode_read")),
+        raster_decode_read_only=bool(cfg.get("raster_decode_read_only")),
         file_filespace=str(cfg.get("file_filespace", "") or ""),
         gpkg_corpus=str(cfg.get("gpkg_corpus", "") or ""),
     )
@@ -3414,6 +3491,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     layout_scan_only = bool(cfg.get("layout_scan_only"))
     benchmark_vector_table_read = bool(cfg.get("vector_table_read"))
     vector_table_read_only = bool(cfg.get("vector_table_read_only"))
+    benchmark_raster_decode_read = bool(cfg.get("raster_decode_read"))
+    raster_decode_read_only = bool(cfg.get("raster_decode_read_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
@@ -3518,6 +3597,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             layout_sweep_only,
             layout_scan_only,
             vector_table_read_only,
+            raster_decode_read_only,
         )
     )
     if not _any_only:
@@ -3555,6 +3635,10 @@ def build_bench_notebook(cfg: dict) -> dict:
         (
             benchmark_vector_table_read or vector_table_read_only,
             [_CELL_VECTOR_TABLE_READ],
+        ),
+        (
+            benchmark_raster_decode_read or raster_decode_read_only,
+            [_CELL_RASTER_DECODE_READ],
         ),
     ]
     for _enabled, _cell_srcs in _bench_cells:

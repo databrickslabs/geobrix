@@ -2882,6 +2882,320 @@ def run_vector_table_read_sweep(
         )
 
 
+def run_raster_decode_read_sweep(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    skip_ordering: Optional[bool] = None,
+    expected_n: int = 0,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> List["ResultRow"]:
+    """Time raster pixel-decode throughput from FILE tiles across MANAGED / EXTERNAL / FUSE.
+
+    Reads GeoTIFF tiles (written by the layout sweep) and forces **pixel decode** via
+    ``rst_avg`` — the same FILE code path used by ``run_virtual_tile_pixel_read``.
+    This measures actual decode-read throughput, NOT enumeration (gbx_file_read+count).
+
+    ``file_mode`` ∈ {"fuse", "external", "managed"}:
+
+    - **fuse**: loads ``source`` (a Volume dir) via ``raster_gbx`` with
+      ``virtualTiles=true``, applies ``rst_avg`` to force pixel reads via the shipping
+      ``file_ref_arg`` / ``open_windowed_via_fileref`` FILE path.  Returns one row.
+      ``skip_ordering`` is ignored for fuse (no table ordering concept).
+    - **external** / **managed**: loads ``source`` (a FILE-column Delta table name)
+      via ``read_file_table(spark, source, skip_ordering=<val>)``, applies ``rst_avg``
+      to force pixel decode.  On a FUSE-only tier (local[2], no FILE), raises ValueError
+      → clean ``status="na_by_design"`` row.
+
+    **Ordering-amortization comparison** (``skip_ordering=None``, the default, for
+    managed/external):
+    Runs the decode job **twice** — once with the T8 auto-order (same-source tiles
+    grouped → ``open_windowed_via_fileref`` reuse across consecutive tiles in a source
+    file, amortising the open cost) and once with ``skipOrdering=True`` (random order,
+    no batching).  Returns **two** ``ResultRow`` objects so the ordering payoff is
+    directly measurable.  ``mode="spark-path"`` for the ordered variant;
+    ``mode="spark-path-skip-order"`` for the unordered variant.
+
+    When ``skip_ordering`` is explicitly ``True`` or ``False``, only that variant runs
+    and a single row is returned.
+
+    Per-task avg = total / n_tasks (n_tasks < slots; no saturation repartition added).
+
+    Args:
+        spark: Active SparkSession.
+        source: Volume dir (fuse) or FILE-column table name (managed/external).
+        run_id: Benchmark run label.
+        warmup: Warmup iterations.
+        measured: Measured iterations.
+        file_mode: "fuse", "external", or "managed".
+        skip_ordering: None = run both variants (ordered + unordered, managed/external
+            only).  True / False = run only that variant.  Ignored for fuse mode.
+        expected_n: Expected tile count; 0 = accept any non-zero count.
+        api: Tier label recorded in the result row.
+        where: Env label recorded in the result row.
+
+    Returns:
+        List of one or two ResultRow instances (mode="spark-path" / "spark-path-skip-order").
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    import pyspark.sql.functions as _F
+
+    from databricks.labs.gbx.pyrx import functions as _pyrx
+
+    def _na_row(mode_label: str, note: str) -> "ResultRow":
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gtiff_decode_read",
+            category="reader",
+            mode=mode_label,
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=0,
+            nodata_frac=0.0,
+            warmup_iters=warmup,
+            measured_iters=0,
+            iter_median_s=0.0,
+            iter_min_s=0.0,
+            iter_p90_s=0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=0.0,
+            peak_rss_mb=0.0,
+            status="na_by_design",
+            note=note,
+            output_fingerprint="",
+            file_mode=file_mode,
+            **env,
+        )
+
+    # ------------------------------------------------------------------ fuse #
+    if file_mode == "fuse":
+        # Load a Volume directory as virtual tiles and force pixel decode via rst_avg.
+        # skip_ordering has no meaning for a directory scan; ignored here.
+        def _fuse_job():
+            return (
+                spark.read.format("raster_gbx")
+                .option("virtualTiles", "true")
+                .load(source)
+                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .count()
+            )
+
+        _src_short = os.path.basename(str(source).rstrip("/\\")) or source
+        print(f"[raster-decode-read] [fuse] {_src_short}…", flush=True)
+        try:
+            # Probe once to get row count + measure parallelism.
+            _ref_df = (
+                spark.read.format("raster_gbx")
+                .option("virtualTiles", "true")
+                .load(source)
+            )
+            parts, slots = measure_parallelism(spark, _ref_df)
+            n0 = _fuse_job()
+            stats = time_iters(_fuse_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+            n_tasks = max(1, parts)
+            _ok = (expected_n == 0 and n0 > 0) or (expected_n > 0 and n0 == expected_n)
+            _status = "ok" if _ok else ("error" if expected_n > 0 else "empty")
+            _note = f"raster decode-read [fuse] {_src_short}: {n0} tiles" + (
+                f" -- readback {n0} != {expected_n}"
+                if expected_n > 0 and not _ok
+                else ""
+            )
+            print(
+                f"[raster-decode-read] [fuse] {_src_short}: "
+                f"{_status}, {n0} tiles, {ms / 1000.0:.1f}s",
+                flush=True,
+            )
+            return [
+                ResultRow(
+                    run_id=run_id,
+                    api=api,
+                    fn="gtiff_decode_read",
+                    category="reader",
+                    mode="spark-path",
+                    tile_px=0,
+                    bands=0,
+                    dtype="",
+                    srid=0,
+                    rows=n0,
+                    nodata_frac=0.0,
+                    warmup_iters=stats["warmup_iters"],
+                    measured_iters=stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                    avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                    per_tile_avg_s=(ms / n_tasks / 1000.0) if (ms and n_tasks) else 0.0,
+                    per_tile_avg_ms=(ms / n_tasks) if (ms and n_tasks) else 0.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status=_status,
+                    note=_note,
+                    output_fingerprint="",
+                    file_mode=file_mode,
+                    input_partitions=parts,
+                    launched_tasks=parts,
+                    slots_available=slots,
+                    **env,
+                )
+            ]
+        except Exception as e:  # noqa: BLE001
+            return [
+                _error_row(
+                    "gtiff_decode_read",
+                    "reader",
+                    run_id,
+                    api,
+                    warmup,
+                    env,
+                    e,
+                    file_mode=file_mode,
+                )
+            ]
+
+    # ------------------------------------------- managed / external (table) #
+    # Determine which skip_ordering variants to run.
+    if skip_ordering is None:
+        _variants = [(False, "spark-path"), (True, "spark-path-skip-order")]
+    elif skip_ordering:
+        _variants = [(True, "spark-path-skip-order")]
+    else:
+        _variants = [(False, "spark-path")]
+
+    # Probe once (default ordering) to get tile count + check FILE availability.
+    from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+    try:
+        _probe_df = read_file_table(spark, source, skip_ordering=False)
+        _n_probe = int(
+            _probe_df.select(_pyrx.rst_avg(_F.col("tile")).alias("avg")).count()
+        )
+    except ValueError as ve:
+        note = f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}"
+        return [_na_row(ml, note) for _, ml in _variants]
+    except Exception as e:  # noqa: BLE001
+        return [
+            _error_row(
+                "gtiff_decode_read",
+                "reader",
+                run_id,
+                api,
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+            )
+        ]
+
+    parts, slots = measure_parallelism(spark, _probe_df)
+    n_tasks = max(1, parts)
+    _tbl_short = source.rsplit(".", 1)[-1]
+
+    out: List["ResultRow"] = []
+    for _skip_ord, _mode_label in _variants:
+        print(
+            f"[raster-decode-read] [{file_mode}] {_tbl_short}"
+            f" skip_ordering={_skip_ord}…",
+            flush=True,
+        )
+
+        def _table_job(skip_ord=_skip_ord):
+            return int(
+                read_file_table(spark, source, skip_ordering=skip_ord)
+                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .count()
+            )
+
+        try:
+            stats = time_iters(_table_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+            n0 = _n_probe
+            if expected_n > 0:
+                _ok = n0 == expected_n
+                _status = "ok" if _ok else "error"
+                _note = (
+                    f"raster decode-read [{file_mode}] {_tbl_short}"
+                    f" skip_ordering={_skip_ord}: {n0} tiles"
+                    + (f" -- readback {n0} != {expected_n}" if not _ok else "")
+                )
+            else:
+                _status = "ok" if n0 > 0 else "empty"
+                _note = (
+                    f"raster decode-read [{file_mode}] {_tbl_short}"
+                    f" skip_ordering={_skip_ord}: {n0} tiles"
+                )
+            print(
+                f"[raster-decode-read] [{file_mode}] {_tbl_short}"
+                f" skip_ordering={_skip_ord}: {_status}, {n0} tiles,"
+                f" {ms / 1000.0:.1f}s",
+                flush=True,
+            )
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api=api,
+                    fn="gtiff_decode_read",
+                    category="reader",
+                    mode=_mode_label,
+                    tile_px=0,
+                    bands=0,
+                    dtype="",
+                    srid=0,
+                    rows=n0,
+                    nodata_frac=0.0,
+                    warmup_iters=stats["warmup_iters"],
+                    measured_iters=stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                    avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                    per_tile_avg_s=(ms / n_tasks / 1000.0) if (ms and n_tasks) else 0.0,
+                    per_tile_avg_ms=(ms / n_tasks) if (ms and n_tasks) else 0.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status=_status,
+                    note=_note,
+                    output_fingerprint="",
+                    file_mode=file_mode,
+                    input_partitions=parts,
+                    launched_tasks=parts,
+                    slots_available=slots,
+                    **env,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            out.append(
+                _error_row(
+                    "gtiff_decode_read",
+                    "reader",
+                    run_id,
+                    api,
+                    warmup,
+                    env,
+                    e,
+                    file_mode=file_mode,
+                )
+            )
+
+    return out
+
+
 def _tin_result_row(
     *,
     run_id: str,

@@ -559,3 +559,99 @@ def test_notebook_vector_table_read_regression_existing_build_unaffected():
     nb_default = cl.build_bench_notebook(_base_cfg())
     nb_explicit = cl.build_bench_notebook(_base_cfg(vector_table_read=False))
     assert _src(nb_default) == _src(nb_explicit)
+
+
+# ---------------------------------------------------------------------------
+# Raster decode-read (Task C)
+# ---------------------------------------------------------------------------
+
+
+def test_notebook_includes_raster_decode_read_cell_when_flag_set():
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read=True))
+    src = _src(nb)
+    assert "run_raster_decode_read_sweep" in src
+
+
+def test_notebook_raster_decode_read_only_suppresses_fn_benchmarks():
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read_only=True))
+    src = _src(nb)
+    assert "run_raster_decode_read_sweep" in src
+    assert "# (a) Lightweight pure-core" not in src
+    assert "# (c) Lightweight spark-path" not in src
+
+
+def test_notebook_raster_decode_read_cell_absent_by_default():
+    nb = cl.build_bench_notebook(_base_cfg())
+    src = _src(nb)
+    assert "run_raster_decode_read_sweep" not in src
+
+
+def test_notebook_raster_decode_read_preamble_variables():
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read=True))
+    src = _src(nb)
+    assert "BENCHMARK_RASTER_DECODE_READ" in src
+    assert "RASTER_DECODE_READ_ONLY" in src
+
+
+def test_notebook_raster_decode_read_guards_on_file_filespace():
+    """Cell skips cleanly when FILE_FILESPACE is not set."""
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read=True))
+    src = _src(nb)
+    assert "FILE_FILESPACE" in src
+    assert "RASTER DECODE READ SKIPPED" in src
+
+
+def test_notebook_raster_decode_read_covers_all_three_modes():
+    """Cell includes managed, external, and fuse mode legs."""
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read=True))
+    src = _src(nb)
+    for fm in ("managed", "external", "fuse"):
+        assert fm in src, f"Expected file_mode {fm!r} in raster-decode-read cell"
+
+
+def test_notebook_raster_decode_read_uses_gtiff_layout_tables():
+    """Cell reads the bench_layout_gtiff tables produced by the layout sweep."""
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read=True))
+    src = _src(nb)
+    assert "bench_layout_gtiff_managed_order" in src
+    assert "bench_layout_gtiff_external_order" in src
+
+
+def test_notebook_raster_decode_read_includes_ordering_comparison():
+    """Cell uses skip_ordering=None for managed/external so both ordering variants run."""
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read=True))
+    src = _src(nb)
+    # The ordering-amortization comparison: skip_ordering=None triggers the two-row emit.
+    assert "skip_ordering" in src
+    assert "skip-order" in src or "skip_ordering=None" in src
+
+
+def test_notebook_raster_decode_read_fn_in_results():
+    """Cell queries fn='gtiff_decode_read' from the results table."""
+    nb = cl.build_bench_notebook(_base_cfg(raster_decode_read=True))
+    src = _src(nb)
+    assert "gtiff_decode_read" in src
+
+
+def test_notebook_raster_decode_read_regression_existing_build_unaffected():
+    """Adding raster_decode_read=False (default) leaves the existing cell set unchanged."""
+    nb_default = cl.build_bench_notebook(_base_cfg())
+    nb_explicit = cl.build_bench_notebook(_base_cfg(raster_decode_read=False))
+    assert _src(nb_default) == _src(nb_explicit)
+
+
+def test_existing_build_does_not_include_raster_decode_read():
+    """Regression: run_raster_decode_read_sweep absent in the default build."""
+    nb = cl.build_bench_notebook(_base_cfg())
+    src = _src(nb)
+    assert "run_raster_decode_read_sweep" not in src
+
+
+def test_raster_decode_read_and_vector_table_read_can_combine():
+    """Both flags can be set together; both cells are emitted."""
+    nb = cl.build_bench_notebook(
+        _base_cfg(raster_decode_read=True, vector_table_read=True)
+    )
+    src = _src(nb)
+    assert "run_raster_decode_read_sweep" in src
+    assert "run_vector_table_read_sweep" in src

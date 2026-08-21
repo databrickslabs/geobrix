@@ -448,7 +448,7 @@ primitives. The table below shows which are active in this reader and which are 
 | Common capability | Used here? | How / why |
 |---|---|---|
 | `list_local_files` (session-free enumeration) | Used | All directory reads — `recursive`, `include_hidden`, `extensions`, `path_glob_filter` options are routed through this shared predicate. |
-| `enumerate_files` (FILE-tier enumeration) | Used by the function layer | The `spark.read.format` DataSource is session-less on Connect; FILE-tier enumeration is only available through `gbx_file_read` at the function layer. |
+| `enumerate_files` (FILE-tier enumeration) | Not in the DataSource | The DataSource is session-less on Connect and does not call `enumerate_files`; FILE-tier enumeration is only available through `gbx_file_read` at the function layer. |
 | `gbx_file_read` / `gbx_file_write` (FILE tier) | Not in the DataSource | The DataSource is FUSE-only (session-less on Connect); FILE reads go through `gbx_file_read` → `rst_fromfile` at the function layer. |
 
 ## Next Steps

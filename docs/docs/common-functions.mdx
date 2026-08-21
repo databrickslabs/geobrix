@@ -59,14 +59,21 @@ each path into tile structs, compose with `rst_fromfile` (the canonical raster p
 
 ## Session-free core (safe inside DataSource readers/writers)
 
-These functions use only FUSE (`os.walk` / `stat`) and require no `SparkSession`. They are the
-enumeration and path-normalization primitives every DataSource reader consumes internally.
-They are **Connect-safe**: no `sparkContext`, `.rdd`, `_jvm`, or `conf.set`.
+These functions require no `SparkSession` to function — their minimum viable mode is
+FUSE (`os.walk` / `stat`), which is always available. `list_local_files` is FUSE-only.
+`enumerate_files` accepts an optional `spark=` and issues Spark SQL (`read_files` /
+`list_files`) when a FILE-capable session is present, degrading to a FUSE list when not —
+it is **not** session-free in the strict sense but degrades gracefully. All are
+**Connect-safe**: no `sparkContext`, `.rdd`, `_jvm`, or `conf.set`.
+
+`list_local_files` is the single shared enumeration routine every DataSource reader
+consumes internally. `enumerate_files` and the path helpers are used at the function
+layer, not inside DataSource readers.
 
 | Function | Signature | Returns | Role |
 |---|---|---|---|
 | `list_local_files` | `list_local_files(path, *, recursive=True, include_hidden=False, extensions=None, path_glob_filter=None)` | `list[str]` (sorted paths) | Directory enumeration — the single shared routine every DataSource reader uses. FUSE only; no session required. |
-| `enumerate_files` | `enumerate_files(path, *, recursive=True, include_hidden=False, extensions=None, path_glob_filter=None, spark=None)` | DataFrame `[path, size, file]` or `list[dict]` | Session-ful when FILE is available (returns a Spark DataFrame); falls back to a FUSE list of dicts otherwise. |
+| `enumerate_files` | `enumerate_files(path, *, recursive=True, include_hidden=False, extensions=None, path_glob_filter=None, spark=None)` | DataFrame `[path, size, file]` or `list[dict]` | Issues Spark SQL when a FILE-capable session is present; falls back to a FUSE list of dicts otherwise. Used at the function layer, not inside DataSource readers. |
 | `to_local_path` | `to_local_path(path) -> str` | FUSE path string | Normalizes a URI-scheme path (`dbfs:/Volumes/...`) to a bare FUSE path (`/Volumes/...`). |
 | `to_spark_uri` | `to_spark_uri(path) -> str` | URI string | Inverse: bare FUSE path to `dbfs:/Volumes/...` for Spark SQL contexts. |
 

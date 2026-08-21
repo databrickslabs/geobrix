@@ -375,4 +375,5 @@ if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else default
     with open(out, "w") as f:
         f.write(render())
+        f.write("\n")
     print(f"wrote {out}")

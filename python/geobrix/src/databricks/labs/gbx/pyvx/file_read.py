@@ -58,6 +58,22 @@ def vector_file_read(
     ``access`` gating happens HERE (session present): explicit "managed"/"external"
     on a FUSE-only runtime raises the actionable error via ``resolve_access``.
     """
+    if access == "managed":
+        # Aligned with gbx_file_read: MANAGED is valid ONLY for a MANAGED
+        # FILE-column TABLE source. vector_file_read reads a Volume path/directory
+        # of vector files (a location source), which can never yield a MANAGED
+        # reference — that is minted on WRITE via vector_file_write. Raise the
+        # same-shape error and point at the table-capable read-backs.
+        raise ValueError(
+            "access='managed' is only valid for a MANAGED FILE-column table source. "
+            "vector_file_read reads a Volume path/directory of vector files (a "
+            "location source), which cannot yield a MANAGED FILE reference — that is "
+            "minted on write via vector_file_write. "
+            "To read back a MANAGED vector FILE table, use read_file_table (or "
+            "gbx_file_read(access='managed')) on that table. Use access='external' "
+            "for FILE EXTERNAL references to existing Volume files, or access='auto' "
+            "for graceful FILE/FUSE fallback."
+        )
     resolve_access(access, tier=file_access_tier(spark), spark=spark)
 
     exts = _EXT_FOR_DRIVER.get(driver) or None

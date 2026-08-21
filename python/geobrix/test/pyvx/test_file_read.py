@@ -63,14 +63,31 @@ def test_vector_file_read_injects_file_ref_when_supported(spark, tmp_path, monke
     assert captured.get("injected") is True
 
 
-def test_vector_file_read_managed_raises_on_fuse(spark, tmp_path):
+def test_vector_file_read_managed_on_path_raises(spark, tmp_path):
+    """access='managed' on a location (path/dir) source raises the table-only rule
+    error — aligned with gbx_file_read. vector_file_read is location-only, so
+    managed can never resolve here."""
+    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+    _write_geojson(tmp_path / "a.geojson", 1)
+    with pytest.raises(
+        ValueError, match="only valid for a MANAGED FILE-column table source"
+    ):
+        vector_file_read(spark, str(tmp_path), driver="GeoJSON", access="managed")
+
+
+def test_vector_file_read_managed_raises_regardless_of_tier(spark, tmp_path):
+    """managed raises the table-only error even on a FILE-capable tier — it is a
+    source-kind rule, not a tier gate (vector_file_read reads a location)."""
     from databricks.labs.gbx.pyvx.file_read import vector_file_read
 
     _write_geojson(tmp_path / "a.geojson", 1)
     with patch(
-        "databricks.labs.gbx.pyvx.file_read.file_access_tier", return_value="fuse"
+        "databricks.labs.gbx.pyvx.file_read.file_access_tier", return_value="list_files"
     ):
-        with pytest.raises(ValueError, match="FILE is not available"):
+        with pytest.raises(
+            ValueError, match="only valid for a MANAGED FILE-column table source"
+        ):
             vector_file_read(spark, str(tmp_path), driver="GeoJSON", access="managed")
 
 

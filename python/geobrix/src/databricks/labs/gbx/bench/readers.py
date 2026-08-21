@@ -1765,9 +1765,15 @@ def run_gtiff_file_read(
             )
         refs = gbx_file_read(spark, source, access=access)
         parts, slots = measure_parallelism(spark, refs)
+        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        print(f"[gtiff-read] [{file_mode}] {_src_name}…", flush=True)
         stats = time_iters(_job, warmup, measured)
         ms = stats["iter_median_ms"]
-        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        print(
+            f"[gtiff-read] [{file_mode}] {_src_name}: "
+            f"{'ok' if n0 > 0 else 'empty'}, {n0} rows, {ms / 1000.0:.1f}s",
+            flush=True,
+        )
         return ResultRow(
             run_id=run_id,
             api=api,
@@ -1918,6 +1924,10 @@ def run_gtiff_file_write(
         )
 
     try:
+        _tgt_name = os.path.basename(str(target).rstrip("/\\"))
+        print(
+            f"[gtiff-write] [{file_mode}] {layout} {_tgt_name} ({n} tiles)…", flush=True
+        )
         stats = time_iters(_job, warmup, measured)
         ms = stats["iter_median_ms"]
 
@@ -1933,6 +1943,11 @@ def run_gtiff_file_write(
         _status = "ok" if _ok else "error"
         _note = f"gtiff FILE write [{file_mode}] {n} tiles" + (
             f" -- readback {back_n} != {n}" if not _ok else ""
+        )
+        print(
+            f"[gtiff-write] [{file_mode}] {layout} {_tgt_name}: "
+            f"{_status}, {n} rows, {ms / 1000.0:.1f}s",
+            flush=True,
         )
         return ResultRow(
             run_id=run_id,
@@ -2156,9 +2171,15 @@ def run_gpkg_file_read(
                 **env,
             )
         parts, slots = measure_parallelism(spark, df)
+        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        print(f"[gpkg-read] [{file_mode}] chunk={chunk_size} {_src_name}…", flush=True)
         stats = time_iters(_job, warmup, measured)
         ms = stats["iter_median_ms"]
-        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        print(
+            f"[gpkg-read] [{file_mode}] chunk={chunk_size} {_src_name}: "
+            f"{'ok' if n0 > 0 else 'empty'}, {n0} rows, {ms / 1000.0:.1f}s",
+            flush=True,
+        )
         return ResultRow(
             run_id=run_id,
             api=api,
@@ -2246,7 +2267,12 @@ def run_gpkg_chunksize_sweep(
         List of ResultRow — one per chunkSize in ``chunk_sizes`` order.
     """
     results: List["ResultRow"] = []
-    for cs in chunk_sizes:
+    _n_cs = len(chunk_sizes)
+    for _i_cs, cs in enumerate(chunk_sizes, 1):
+        print(
+            f"[chunksize] [{file_mode}] chunk={cs} ({_i_cs} of {_n_cs})…",
+            flush=True,
+        )
         row = run_gpkg_file_read(
             spark,
             source,
@@ -2257,6 +2283,12 @@ def run_gpkg_chunksize_sweep(
             chunk_size=cs,
             api=api,
             where=where,
+        )
+        print(
+            f"[chunksize] [{file_mode}] chunk={cs}: "
+            f"{row.status}, {row.rows} rows, {row.iter_median_s:.1f}s"
+            f" ({_i_cs} of {_n_cs})",
+            flush=True,
         )
         results.append(row)
     return results
@@ -2404,12 +2436,22 @@ def run_gpkg_file_write(
             )
 
         try:
+            _src_gpkg = os.path.basename(str(local_out))
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg} ({n} features)…",
+                flush=True,
+            )
             stats = time_iters(_job, warmup, measured)
             ms = stats["iter_median_ms"]
 
             # Read-back correctness check on the last written target.
             _last = _targets[(max(1, measured) - 1) % len(_targets)]
             _status, _note = _gpkg_fuse_readback(spark, _last, n)
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg}: "
+                f"{_status}, {n} rows, {ms / 1000.0:.1f}s",
+                flush=True,
+            )
 
             return ResultRow(
                 run_id=run_id,
@@ -2529,6 +2571,11 @@ def run_gpkg_file_write(
             )
 
         try:
+            _src_gpkg2 = os.path.basename(str(local_out))
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg2} ({n} features)…",
+                flush=True,
+            )
             stats = time_iters(_job, warmup, measured)
             ms = stats["iter_median_ms"]
 
@@ -2546,6 +2593,11 @@ def run_gpkg_file_write(
             _status = "ok" if _ok else "error"
             _note = f"gpkg FILE write [{file_mode}] {n} features" + (
                 f" -- readback {back_n} != {n}" if not _ok else ""
+            )
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg2}: "
+                f"{_status}, {n} rows, {ms / 1000.0:.1f}s",
+                flush=True,
             )
             return ResultRow(
                 run_id=run_id,
@@ -8362,9 +8414,15 @@ def run_file_write_layout_sweep(
         List of ResultRow — one per layout in ``layouts`` order.
     """
     results: List["ResultRow"] = []
+    _n_layouts = len(layouts)
 
-    for layout in layouts:
+    for _i_sweep, layout in enumerate(layouts, 1):
         target = f"{target_prefix}_{layout}"
+        print(
+            f"[write-sweep] {fmt} [{file_mode}] {layout} writing…"
+            f" ({_i_sweep} of {_n_layouts})",
+            flush=True,
+        )
 
         if fmt == "gtiff":
             row = run_gtiff_file_write(
@@ -8415,6 +8473,12 @@ def run_file_write_layout_sweep(
                     note=(existing_note + f" OPTIMIZE skipped: {skip_reason}").strip(),
                 )
 
+        print(
+            f"[write-sweep] {fmt} [{file_mode}] {layout}: "
+            f"{row.status}, {row.rows} rows, {row.iter_median_s:.1f}s"
+            f" ({_i_sweep} of {_n_layouts})",
+            flush=True,
+        )
         results.append(row)
 
     return results
@@ -8467,7 +8531,12 @@ def run_layout_scan_comparison(
     env = capture_env(where)
     out: List["ResultRow"] = []
 
-    for layout, table in tables_by_layout.items():
+    _n_layouts = len(tables_by_layout)
+    for _i_layout, (layout, table) in enumerate(tables_by_layout.items(), 1):
+        print(
+            f"[layout-scan] [{layout}] ({_i_layout} of {_n_layouts})…",
+            flush=True,
+        )
         try:
             df = read_file_table(spark, table)
             parts, slots = measure_parallelism(spark, df)
@@ -8479,6 +8548,12 @@ def run_layout_scan_comparison(
             n = _scan()
             scan_stats = time_iters(_scan, warmup, measured)
             ms = scan_stats["iter_median_ms"]
+            print(
+                f"[layout-scan] [{layout}]: "
+                f"{'ok' if n > 0 else 'empty'}, {n} rows, {ms / 1000.0:.1f}s"
+                f" ({_i_layout} of {_n_layouts})",
+                flush=True,
+            )
             out.append(
                 ResultRow(
                     run_id=run_id,

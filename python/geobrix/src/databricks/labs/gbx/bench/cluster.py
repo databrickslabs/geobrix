@@ -2708,6 +2708,7 @@ _CELL_GROUPED_FILE = """# Grouped FILE-amortization benchmark: rst_clip_grouped 
 # (pure Python; no JAR). Skips cleanly when the multiwindow manifest is absent.
 import os as _os
 from databricks.labs.gbx.bench import grouped_file as _gf
+print("=== grouped FILE-amortization starting ===", flush=True)
 _gfile_manifest = _gf.resolve_manifest_path(corpus_path=MULTIWINDOW_CORPUS)
 if not _os.path.exists(_gfile_manifest):
     print(
@@ -2751,6 +2752,7 @@ _CELL_FILE_MATRIX = """# FILE-access matrix: GeoTIFF + GeoPackage reads across f
 import os as _os
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
+print("=== FILE-access matrix starting ===", flush=True)
 _fm_rows = []
 _fm_gtiff_src = f"{CORPUS}/rows"
 # Stage GeoPackage FILE matrix corpus (idempotent: existing copies_N/ dirs reused).
@@ -2759,7 +2761,9 @@ _fm_gpkg_dirs = _cv.stage_gpkg_bench_corpus(
 )
 # Use the ~80-slot bracket for the mode sweep; fall back to the first available dir.
 _fm_gpkg_src = _fm_gpkg_dirs.get(80) or next(iter(_fm_gpkg_dirs.values()), None)
-for _fm in ("fuse", "external", "managed"):
+_fm_modes = ("fuse", "external", "managed")
+for _fm_i, _fm in enumerate(_fm_modes, 1):
+    print(f"[read-matrix] {_fm} ({_fm_i} of {len(_fm_modes)})…", flush=True)
     # Isolation: managed reads require a FILE-managed table (not a raw Volume path).
     # Use a per-mode filespace sub-path when FILE_FILESPACE is set so each mode's
     # table is distinct and no layout advantage carries between modes.
@@ -2785,6 +2789,7 @@ for _fm in ("fuse", "external", "managed"):
             file_mode=_fm, chunk_size=10000, api="lightweight", where="cluster",
         )
         _sink([_r]); lw.append(_r); _fm_rows.append(_r)
+    print(f"[read-matrix] {_fm}: done", flush=True)
 if _fm_rows:
     _df_fm = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' "
@@ -2805,6 +2810,7 @@ _CELL_GPKG_CHUNKSIZE = """# GeoPackage chunkSize sweep: confirms fanout-invarian
 # partitions >= cluster slots (saturation). Each ResultRow is _sink'd immediately.
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
+print("=== GPKG chunkSize sweep starting ===", flush=True)
 _cs_dirs = _cv.stage_gpkg_bench_corpus(
     spark, GPKG_CORPUS, rows=100000, copies_ladder=(10, 80, 160)
 )
@@ -2851,6 +2857,7 @@ import os as _os
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
 from databricks.labs.gbx.ds.register import register as _ds_reg
+print("=== FILE write layout sweep starting ===", flush=True)
 _ls_rows = []
 # Build GeoTIFF tile_df for the WRITE sweep. IMPORTANT: `.limit(N)` does NOT bound a raster_gbx
 # read -- Spark 4's Python DataSource API has no limit pushdown, so `.load(dir).limit(N)` still
@@ -2926,6 +2933,7 @@ _CELL_LAYOUT_SCAN = """# Layout scan comparison: sequential-scan cost across wri
 # produces Volume dirs, not FILE tables, so scan has no applicable tables).
 # Each ResultRow is _sink'd immediately (serialized).
 from databricks.labs.gbx.bench import readers as _rd
+print("=== layout scan comparison starting ===", flush=True)
 _scan_rows = []
 if not FILE_FILESPACE:
     print(

@@ -341,7 +341,14 @@ def run_grouped_file(
     ctx = {"geom_wkb": geom_wkb, "geom_crs": geom_crs, "target_srid": 3857}
 
     out: List[ResultRow] = []
-    for mode in modes:
+    _n_modes = len(modes)
+    for _i_mode, mode in enumerate(modes, 1):
+        if progress:
+            print(
+                f"[grouped] mode={mode} ({_i_mode} of {_n_modes})  "
+                f"{len(fn_names)} fn(s)…",
+                flush=True,
+            )
         prior = _set_file_env(mode)
         try:
             df = build_tile_df(spark, rows, mode=mode).cache()

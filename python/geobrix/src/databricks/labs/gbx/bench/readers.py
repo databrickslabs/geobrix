@@ -8219,6 +8219,115 @@ def run_large_raster_profile(
     return out
 
 
+def run_file_write_layout_sweep(
+    spark,
+    *,
+    fmt: str,
+    source,
+    target_prefix: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    file_mode: str,
+    filespace: Optional[str] = None,
+    layouts: tuple = ("order", "cluster", "plain"),
+    where: str = "cluster",
+) -> List["ResultRow"]:
+    """Run the FILE-write leg for each layout and return one ResultRow per layout.
+
+    Loops ``layouts`` ("order"/"cluster"/"plain"), calls the format's write leg
+    (``run_gtiff_file_write`` for ``fmt="gtiff"``, ``run_gpkg_file_write`` for
+    ``fmt="gpkg"``) with ``layout=<L>`` and a per-layout target
+    ``{target_prefix}_{L}`` (leg isolation — each layout writes its own table
+    so no layout can advantage another by inheriting a prior write's on-disk
+    grouping).
+
+    For ``layout="cluster"``, runs ``OPTIMIZE <table>`` after the write inside a
+    guarded ``try`` block:
+    - On success: appends ``" +OPTIMIZE"`` to the row's ``note``.
+    - On failure/skip: appends the skip reason to the row's ``note``.
+
+    ``file_mode="fuse"`` legs pass ``layout`` through to the write leg (the
+    DataSource writer ignores it), but still record it so the sweep row is
+    complete.  The meaningful layout bite is on FILE-table writes (on-cluster
+    legs).
+
+    Args:
+        spark: active SparkSession.
+        fmt: ``"gtiff"`` or ``"gpkg"``.
+        source: for ``"gtiff"`` — a tile DataFrame (passed as ``tile_df``);
+                for ``"gpkg"`` — a path to a local/FUSE-accessible .gpkg file.
+        target_prefix: path prefix; each layout writes to ``{target_prefix}_{L}``.
+        run_id: benchmark run identifier label.
+        warmup: number of warmup iterations.
+        measured: number of measured iterations.
+        file_mode: ``"fuse"``, ``"external"``, or ``"managed"``.
+        filespace: filespace identifier (passed through for FILE modes).
+        layouts: ordered tuple of layout names to sweep.
+        where: env_where label recorded in each ResultRow.
+
+    Returns:
+        List of ResultRow — one per layout in ``layouts`` order.
+    """
+    results: List["ResultRow"] = []
+
+    for layout in layouts:
+        target = f"{target_prefix}_{layout}"
+
+        if fmt == "gtiff":
+            row = run_gtiff_file_write(
+                spark,
+                source,
+                target,
+                run_id,
+                warmup,
+                measured,
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                where=where,
+            )
+        elif fmt == "gpkg":
+            row = run_gpkg_file_write(
+                spark,
+                source,
+                target,
+                run_id,
+                warmup,
+                measured,
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                where=where,
+            )
+        else:
+            raise ValueError(f"run_file_write_layout_sweep: unsupported fmt={fmt!r}")
+
+        # For the "cluster" layout, attempt OPTIMIZE on the FILE table.
+        # FUSE legs have no Delta table → guard and record skip reason.
+        if layout == "cluster":
+            import dataclasses
+
+            try:
+                spark.sql(f"OPTIMIZE `{target}`")
+                # Append "+OPTIMIZE" to the note on success.
+                existing_note = row.note or ""
+                row = dataclasses.replace(
+                    row, note=(existing_note + " +OPTIMIZE").strip()
+                )
+            except Exception as exc:  # noqa: BLE001
+                skip_reason = str(exc)[:160]
+                existing_note = row.note or ""
+                row = dataclasses.replace(
+                    row,
+                    note=(existing_note + f" OPTIMIZE skipped: {skip_reason}").strip(),
+                )
+
+        results.append(row)
+
+    return results
+
+
 def _print_summary(rows: List[ResultRow]) -> None:
     """Print a compact results table to stdout."""
     if not rows:

@@ -593,25 +593,33 @@ class VectorGbxReader(DataSourceReader):
         raw_path = options.get("path")
         if not raw_path:
             raise ValueError("vector_gbx requires a 'path' (e.g. .load(path)).")
-        # FILE access mode: "auto" (default), "managed" (FILE MANAGED), or "external"
-        # (FILE EXTERNAL). Validated here for forward-compat; the DataSource reader
-        # itself always reads via FUSE (to_local_path) — tier-gating is the function
-        # layer's job (Task 6/7), where a real SparkSession is available.
+        # FILE access mode. The df.read.format('vector_gbx') DataSource is
+        # FUSE-only (session-less on Spark Connect / DBR 19): 'auto' and 'fuse'
+        # both read via to_local_path. 'managed'/'external' are function-layer
+        # concerns — reject them here with a pointer at vector_file_read so the
+        # option is never silently ignored (mirrors the FUSE-only writer's
+        # rejection, which points at vector_file_write).
         access = options.get("access", "auto")
-        if access not in ("auto", "managed", "external"):
+        if access not in ("auto", "fuse", "managed", "external"):
             raise ValueError(
-                f"vector_gbx 'access' option must be 'auto', 'managed', or 'external'; "
-                f"got {access!r}"
+                f"vector_gbx 'access' option must be 'auto', 'fuse', 'managed', or "
+                f"'external'; got {access!r}"
+            )
+        if access in ("managed", "external"):
+            raise ValueError(
+                f"access='{access}' is not supported on the "
+                f"df.read.format('vector_gbx') reader (FUSE-only, session-less on "
+                f"Spark Connect). Use the function-layer API instead: "
+                f"from databricks.labs.gbx.pyvx.file_read import vector_file_read. "
+                f"It reads a directory of vector files with FILE (MANAGED/EXTERNAL) "
+                f"leverage where the runtime supports it."
             )
         self.access = access
 
         # Session-free path resolution: a DataSource reader is session-less on
-        # Spark Connect (getActiveSession() -> None). resolve_local_path calls
-        # file_access_tier + resolve_access, which raises for explicit managed/external
-        # on a fuse-tier runtime — the same false-break that was at the second probe.
-        # Use to_local_path, the session-free FUSE primitive (strips scheme, returns
-        # /Volumes/... as-is). FILE-tier reads are the function layer's responsibility
-        # (Task 6/7), where a real session is available.
+        # Spark Connect (getActiveSession() -> None). Use to_local_path, the
+        # session-free FUSE primitive (strips scheme, returns /Volumes/... as-is).
+        # managed/external are already rejected above, so only auto/fuse reach here.
         from databricks.labs.gbx.ds._listing import to_local_path
 
         self.path = to_local_path(raw_path)
@@ -790,15 +798,11 @@ class VectorGbxReader(DataSourceReader):
         JVM reader.
 
         FILE access mode (``self.access``):
-        - ``"auto"``: silently uses FUSE when FILE is unavailable; no error.
-        - ``"managed"`` / ``"external"``: explicit FILE. The NO-GATING rule is enforced
-          in ``__init__`` (driver-side) — not here. On Spark Connect workers (Serverless
-          DBR 19+), ``SparkSession.getActiveSession()`` returns None so probing the tier
-          here would always resolve to "fuse", giving a false ValueError for valid
-          FILE-capable runtimes.
+        - ``"auto"`` / ``"fuse"``: reads via FUSE (to_local_path).
+        - ``"managed"`` / ``"external"``: rejected at __init__ time with a pointer
+          to ``vector_file_read``; never reaches read().
         """
-        # NO-GATING validation was moved to __init__ (driver-side). read() runs on
-        # executors and must not re-probe the capability tier.
+        # managed/external are rejected in __init__; read() always takes the FUSE path.
 
         import numpy as np
         import pyarrow as pa

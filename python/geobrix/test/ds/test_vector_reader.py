@@ -152,7 +152,8 @@ def test_shapefile_gbx_reads_directory_of_shp_zip(spark, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# FILE access mode tests (Task 6: vector reader gains file_gbx FILE read)
+# FILE access mode tests (Task 2: make access option honest — managed/external
+# reject with a pointer to vector_file_read; auto/fuse read via FUSE unchanged)
 # ---------------------------------------------------------------------------
 
 # Helpers shared by FILE tests
@@ -190,94 +191,46 @@ def _read_all(rdr):
     return tbl.to_pydict()
 
 
-def test_vector_file_read_managed_tier_returns_same_rows(tmp_path):
-    """With access='managed', rows match the FUSE baseline.
+def test_vector_gbx_access_managed_rejected(tmp_path):
+    """DataSource reader is FUSE-only; access='managed' points the caller at the
+    function-layer vector_file_read (mirrors the FUSE-only writer's rejection)."""
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
 
-    After Task 4 the DataSource __init__ no longer probes the tier, so
-    construction with access='managed' always succeeds — no mock required.
-    """
+    p = _gj_file_path(str(tmp_path))
+    with pytest.raises(ValueError, match="vector_file_read"):
+        VectorGbxReader({"path": p, "access": "managed"})
+
+
+def test_vector_gbx_access_external_rejected(tmp_path):
+    """DataSource reader is FUSE-only; access='external' points the caller at the
+    function-layer vector_file_read."""
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = _gj_file_path(str(tmp_path))
+    with pytest.raises(ValueError, match="vector_file_read"):
+        VectorGbxReader({"path": p, "access": "external"})
+
+
+def test_vector_gbx_access_auto_reads_fuse(tmp_path):
+    """access='auto' reads correctly (unchanged FUSE behavior)."""
     from databricks.labs.gbx.ds.vector import VectorGbxReader
 
     p = _gj_file_path(str(tmp_path))
 
-    # Baseline: FUSE read (no access option)
-    rdr_fuse = VectorGbxReader({"path": p})
-    fuse_rows = _read_all(rdr_fuse)
-
-    # FILE read: no longer needs a mock — __init__ does not probe the tier.
-    rdr_file = VectorGbxReader({"path": p, "access": "managed"})
-    file_rows = _read_all(rdr_file)
-
-    assert file_rows["id"] == fuse_rows["id"]
-    assert len(file_rows["id"]) == 2
-
-
-def test_vector_file_read_external_tier_returns_same_rows(tmp_path):
-    """With access='external', rows match the FUSE baseline.
-
-    After Task 4 the DataSource __init__ no longer probes the tier, so
-    construction with access='external' always succeeds — no mock required.
-    """
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    rdr_fuse = VectorGbxReader({"path": p})
-    fuse_rows = _read_all(rdr_fuse)
-
-    # No longer needs a mock — __init__ does not probe the tier.
-    rdr_file = VectorGbxReader({"path": p, "access": "external"})
-    file_rows = _read_all(rdr_file)
-
-    assert sorted(file_rows["id"]) == sorted(fuse_rows["id"])
-    assert len(file_rows["id"]) == 2
-
-
-def test_vector_fuse_fallback_access_auto_unchanged(tmp_path):
-    """access='auto' reads correctly (unchanged FUSE behavior).
-
-    After Task 4 no tier probe is made in __init__, so no mock is needed.
-    """
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    rdr = VectorGbxReader({"path": p, "access": "auto"})
-    rows = _read_all(rdr)
+    rows = _read_all(VectorGbxReader({"path": p, "access": "auto"}))
 
     assert sorted(rows["id"]) == [1, 2]
 
 
-def test_vector_explicit_file_on_fuse_succeeds(tmp_path):
-    """access='managed' constructs successfully — the DataSource no longer probes tier.
-
-    After Task 4 the in-__init__ FILE-tier probe (the false-break) is removed.
-    Construction with access='managed' always succeeds; NO-GATING enforcement
-    moves to the function layer (Task 6/7) where a real session is available.
-    """
+def test_vector_gbx_access_fuse_reads_fuse(tmp_path):
+    """'fuse' is an explicit synonym for the default FUSE read."""
     from databricks.labs.gbx.ds.vector import VectorGbxReader
 
     p = _gj_file_path(str(tmp_path))
 
-    # Must NOT raise — construction is tier-agnostic after the false-break removal.
-    rdr = VectorGbxReader({"path": p, "access": "managed"})
-    assert rdr.access == "managed"
+    rows = _read_all(VectorGbxReader({"path": p, "access": "fuse"}))
 
-
-def test_vector_explicit_external_on_fuse_succeeds(tmp_path):
-    """access='external' constructs successfully — the DataSource no longer probes tier.
-
-    After Task 4 the in-__init__ FILE-tier probe (the false-break) is removed.
-    Construction with access='external' always succeeds; NO-GATING enforcement
-    moves to the function layer (Task 6/7) where a real session is available.
-    """
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    # Must NOT raise — construction is tier-agnostic after the false-break removal.
-    rdr = VectorGbxReader({"path": p, "access": "external"})
-    assert rdr.access == "external"
+    assert sorted(rows["id"]) == [1, 2]
 
 
 def test_vector_staging_amortized_once_per_source(tmp_path):
@@ -355,12 +308,11 @@ def test_vector_access_invalid_option_raises():
 
 
 def test_vector_read_does_not_reprobe_file_access_tier(tmp_path):
-    """read() works correctly after Task 4: no tier probe in __init__ or read().
+    """read() works correctly after Task 2: access='managed' rejects at __init__ time.
 
-    After Task 4, file_access_tier is no longer imported in vector.py.
-    Construction with access='managed' succeeds unconditionally; read()
-    reads data normally.  This is the regression guard that the full read
-    path (partitions + read) still works.
+    After Task 2, access='managed'/'external' raise at __init__ with a pointer
+    to vector_file_read.  The FUSE path (access='auto') must still read data
+    normally.  This is the regression guard that the full read path works.
     """
     import pyarrow as pa
 
@@ -368,11 +320,14 @@ def test_vector_read_does_not_reprobe_file_access_tier(tmp_path):
 
     p = _gj_file_path(str(tmp_path))
 
-    # Construction succeeds without any mock — __init__ does not probe the tier.
-    rdr = VectorGbxReader({"path": p, "access": "managed"})
+    # access='managed' must raise — reject at construction time.
+    with pytest.raises(ValueError, match="vector_file_read"):
+        VectorGbxReader({"path": p, "access": "managed"})
+
+    # FUSE path (auto) must still work end-to-end.
+    rdr = VectorGbxReader({"path": p, "access": "auto"})
     parts = rdr.partitions()
     batches = [b for part in parts for b in rdr.read(part)]
-    # Verify rows were actually read (regression guard)
     tbl = pa.Table.from_batches(batches)
     assert tbl.num_rows == 2
 
@@ -394,23 +349,18 @@ def test_vector_auto_access_fuse_runtime_reads_correctly(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: session-free enumeration + false-break removal
+# Task 4 (no-reprobe) + Task 2 (managed/external rejection) regression guards
 # ---------------------------------------------------------------------------
 
 
-def test_vector_reader_no_false_break_on_connect(tmp_path):
-    """access='managed'/'external' must NOT raise even when the tier is 'fuse'.
+def test_vector_reader_managed_external_rejected_unconditionally(tmp_path):
+    """access='managed'/'external' must ALWAYS raise with a pointer to vector_file_read.
 
-    On Spark Connect, getActiveSession()=None -> file_access_tier resolves to
-    "fuse".  The old code called resolve_local_path which called resolve_access,
-    which raises for explicit-FILE + fuse-tier.  After Fix B, to_local_path is
-    used instead, which is session-free and never tier-gates.
-
-    Simulated by patching file_access_tier in file_gbx to return "fuse", which
-    is what a real Connect session-less reader would encounter.
+    After Task 2, the DataSource reader is declared FUSE-only.  The rejection is
+    unconditional — it does not matter what tier the runtime is, nor whether a
+    SparkSession is present.  The old test (no_false_break_on_connect) asserted
+    that managed/external did NOT raise; that behavior is now intentionally changed.
     """
-    from unittest.mock import patch
-
     from databricks.labs.gbx.ds import vector as vec
 
     p = str(tmp_path / "pts.geojson")
@@ -418,17 +368,11 @@ def test_vector_reader_no_false_break_on_connect(tmp_path):
         b'{"type":"FeatureCollection","features":[]}'
     )
 
-    # Patch file_access_tier at its source to simulate a FUSE-only runtime.
-    # Before Fix B, resolve_local_path would call this and raise for managed/external.
-    # After Fix B, to_local_path is called instead — no tier check, never raises.
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"):
-        rdr_managed = vec._GeoJSONReader({"path": p, "access": "managed"})
-        rdr_external = vec._GeoJSONReader({"path": p, "access": "external"})
+    with pytest.raises(ValueError, match="vector_file_read"):
+        vec._GeoJSONReader({"path": p, "access": "managed"})
 
-    assert rdr_managed.access == "managed"
-    assert rdr_external.access == "external"
-    assert rdr_managed.path == p
-    assert rdr_external.path == p
+    with pytest.raises(ValueError, match="vector_file_read"):
+        vec._GeoJSONReader({"path": p, "access": "external"})
 
 
 def test_vector_members_via_shared_core(tmp_path):

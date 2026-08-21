@@ -3130,11 +3130,13 @@ else:
     # FILE tables written by the gtiff layout-sweep leg (external order layout):
     #   managed: {_TABLE_SCHEMA}.bench_layout_gtiff_managed_order
     #   external: {_TABLE_SCHEMA}.bench_layout_gtiff_external_order
-    # fuse: uses the GeoTIFF corpus dir (virtualTiles=true, no table ordering concept).
+    # fuse: uses the GeoTIFF corpus row-pool dir (virtualTiles=true, no table ordering
+    # concept) — the SAME {CORPUS}/rows the file-matrix + layout-sweep gtiff legs read,
+    # so all legs are corpus-consistent (CORPUS = a seeded corpus dir with rows/).
     _rdr_modes = (
         ("managed", f"{_TABLE_SCHEMA}.bench_layout_gtiff_managed_order"),
         ("external", f"{_TABLE_SCHEMA}.bench_layout_gtiff_external_order"),
-        ("fuse", CORPUS + "/bench-corpus-reader-10k"),
+        ("fuse", CORPUS + "/rows"),
     )
     for _rdr_fm, _rdr_src in _rdr_modes:
         print(

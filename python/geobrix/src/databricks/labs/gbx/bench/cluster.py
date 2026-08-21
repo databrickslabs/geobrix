@@ -3333,16 +3333,43 @@ def build_bench_notebook(cfg: dict) -> dict:
             "dbutils.library.restartPython()\n"
         ).format(wheel=cfg["wheel"])
     else:
-        # Classic cluster: single %pip cell = one kernel restart; dbutils.library.restartPython()
-        # is NOT called (the %pip magic already triggers it; a second restart crashes on
-        # DBR 19.x-snapshot). PEP 508 URL-reference form resolves extras from the wheel file.
-        # --force-reinstall is REQUIRED: the wheel version is a fixed 0.5.0 across rebuilds, so
-        # without it pip treats an already-installed 0.5.0 (from a prior run on a warm cluster)
-        # as satisfied and silently runs STALE geobrix code -- e.g. a freshly added bench helper
-        # is missing (AttributeError). It stays a single %pip cell (one restart).
-        _install_cell_src = '%pip install --quiet --force-reinstall "geobrix[light-dbr19] @ file://{wheel}" markdown'.format(
-            wheel=cfg["wheel"]
-        )
+        # Classic cluster: two-step subprocess install (same shape as serverless), one restart.
+        # WHY NOT a single `%pip install --force-reinstall "geobrix[..] @ file://<whl>"`:
+        #  - The fixed 0.5.0 version means a PLAIN install skips stale code (a warm-cluster prior
+        #    0.5.0 is treated as satisfied -> a freshly added bench helper is missing).
+        #  - But a FULL --force-reinstall reinstalls the entire closure every run: slow (it
+        #    re-fetches DBR-provided numpy/pandas/rasterio from the mirror -> ~tens of minutes)
+        #    AND it re-resolves transitive deps, bumping rio-tiler's UNPINNED cachetools past
+        #    pyiceberg's <7 cap (dependency-conflict warning).
+        # Fix: (1) --force-reinstall --no-deps the wheel -> refresh ONLY geobrix code (fast,
+        # touches nothing else); (2) a NON-forced deps install -> adds only MISSING deps and
+        # leaves satisfied ones (incl DBR's cachetools<7) untouched, so no pyiceberg conflict and
+        # DBR-provided packages are skipped. One dbutils.library.restartPython() (no %pip magic,
+        # so no double/triple restart on the DBR 19.x-snapshot).
+        _install_cell_src = (
+            "import subprocess, sys\n"
+            "WHL = {wheel!r}\n"
+            "r = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet', '--force-reinstall',\n"
+            "     '--no-deps', WHL],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('whl (code) install rc:', r.returncode, flush=True)\n"
+            "if r.returncode != 0:\n"
+            "    raise RuntimeError('whl install failed: '\n"
+            "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
+            "r2 = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
+            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('deps install rc:', r2.returncode, flush=True)\n"
+            "if r2.returncode != 0:\n"
+            "    raise RuntimeError('deps install failed: '\n"
+            "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
+            "print('installs done; restarting Python', flush=True)\n"
+            "dbutils.library.restartPython()\n"
+        ).format(wheel=cfg["wheel"])
     cells = [
         # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.
         # [light-dbr19] is the classic DBR 19 variant of [light]: it drops the

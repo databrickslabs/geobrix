@@ -277,14 +277,15 @@ def test_existing_build_unaffected_by_new_flags():
     """Existing callers without new flags produce a structurally valid notebook."""
     nb = cl.build_bench_notebook(_base_cfg())
     src = _src(nb)
-    assert (
-        "geobrix[light-dbr19] @ file:///Volumes/c/s/v/geobrix-0.5.0-py3-none-any.whl"
-        in src
-    )
-    # The classic %pip cell MUST --force-reinstall: the wheel version is a fixed 0.5.0
-    # across rebuilds, so without it pip treats an already-installed 0.5.0 (from a prior
-    # run on a warm cluster) as satisfied and silently runs STALE geobrix code.
+    # The wheel path is referenced (two-step install: force-reinstall --no-deps the wheel).
+    assert "/Volumes/c/s/v/geobrix-0.5.0-py3-none-any.whl" in src
+    # The classic install MUST force-reinstall the geobrix CODE ONLY (--force-reinstall
+    # --no-deps): the fixed 0.5.0 version means a plain install runs STALE code, but a
+    # FULL --force-reinstall reinstalls the whole closure (slow + bumps rio-tiler's unpinned
+    # cachetools past pyiceberg's <7 cap). Deps are then a separate NON-forced step.
     assert "--force-reinstall" in src
+    assert "--no-deps" in src
+    assert "geobrix[light-dbr19]" in src  # the non-forced deps step
     assert "dbutils.notebook.exit" in src
     assert nb["nbformat"] == 4
     # None of the four new cell types should appear

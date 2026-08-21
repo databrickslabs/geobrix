@@ -892,6 +892,10 @@ class RasterGbxReader(DataSourceReader):
         # from those sources instead of walking self.path.
         self.manifest = options.get("manifest")
         self.tiles_table = options.get("tilesTable")
+        # skipOrdering: when True, suppress the T8 sort-by-source-path at the end
+        # of partitions() so rows are returned in manifest/table/walk enumeration
+        # order.  Default False preserves today's always-on sort (B-ORDERHOME).
+        self.skip_ordering = str(options.get("skipOrdering", "false")).lower() == "true"
         if self.manifest and self.tiles_table:
             raise ValueError(
                 "raster_gbx: 'manifest' and 'tilesTable' are mutually exclusive; "
@@ -952,6 +956,9 @@ class RasterGbxReader(DataSourceReader):
             # same file are adjacent. Maximises per-worker open/stage cache reuse
             # when a worker processes consecutive partitions from the same source.
             # None-safe: place None values at the end (deterministic ordering).
+            # skipOrdering=True bypasses this sort (opt-out for pre-ordered tables).
+            if self.skip_ordering:
+                return parts
             return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
 
         # Default path: walk self.path and plan partitions per file.
@@ -978,6 +985,9 @@ class RasterGbxReader(DataSourceReader):
                 )
             )
         # None-safe: place None values at the end (deterministic ordering).
+        # skipOrdering=True bypasses this sort (opt-out for pre-ordered input).
+        if self.skip_ordering:
+            return result
         return sorted(result, key=lambda p: (p.file_path is None, p.file_path or ""))
 
     def read(self, partition: "_TilePartition") -> Iterator[Tuple]:

@@ -403,3 +403,85 @@ def test_partitions_manifest_full_spark_read(tmp_path, spark):
     assert tile["path"] == str(tmp_path / "raster.tif")
     assert tile["window"]["width"] == 4
     assert tile["window"]["height"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Task 3: skipOrdering DataSource option
+# ---------------------------------------------------------------------------
+
+
+def test_raster_tilestable_skip_ordering_option_manifest_path(tmp_path):
+    """skipOrdering='true' on the manifest/tilesTable path suppresses the T8 sort.
+
+    Uses a manifest (no Spark table needed) since both manifest and tilesTable
+    share the same sort gate at the end of the Approach-1 branch.
+
+    Checks:
+    - Default (no skipOrdering): partitions sorted by file_path asc.
+    - skipOrdering='true': partitions preserve the manifest input order (unsorted).
+    """
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    # Manifest with paths in reverse-alpha order — unsorted input.
+    manifest = [
+        {"path": "/z/z.tif", "window": [0, 0, 4, 4]},
+        {"path": "/a/a.tif", "window": [0, 0, 4, 4]},
+        {"path": "/m/m.tif", "window": [0, 0, 4, 4]},
+    ]
+    mf = str(tmp_path / "tiles.json")
+    with open(mf, "w") as fh:
+        json.dump(manifest, fh)
+
+    # Default: must be sorted.
+    r_sorted = RasterGbxReader({"path": "/x", "manifest": mf})
+    parts_sorted = r_sorted.partitions()
+    paths_sorted = [p.file_path for p in parts_sorted]
+    assert paths_sorted == sorted(
+        paths_sorted
+    ), f"Default must sort by file_path; got {paths_sorted}"
+
+    # skipOrdering='true': must preserve input order (unsorted).
+    r_skip = RasterGbxReader({"path": "/x", "manifest": mf, "skipOrdering": "true"})
+    parts_skip = r_skip.partitions()
+    paths_skip = [p.file_path for p in parts_skip]
+    # Precondition: input IS unsorted.
+    assert paths_skip != sorted(
+        paths_skip
+    ), f"Precondition: manifest order must be unsorted; got {paths_skip}"
+    assert paths_skip == [
+        "/z/z.tif",
+        "/a/a.tif",
+        "/m/m.tif",
+    ], f"skipOrdering=true must preserve manifest order; got {paths_skip}"
+
+
+def test_raster_dir_walk_skip_ordering_option():
+    """skipOrdering='true' on directory-walk path preserves walk order (unsorted)."""
+    from unittest.mock import patch
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
+
+    with (
+        # _list_source_files calls list_local_files from file_gbx; patch at source.
+        patch(
+            "databricks.labs.gbx.ds.file_gbx.list_local_files",
+            return_value=["/z/z.tif", "/a/a.tif", "/m/m.tif"],
+        ),
+        patch("databricks.labs.gbx.ds.raster._plan_partitions_for_file") as mock_ppf,
+    ):
+        # Non-sorted input to prove the sort gate is bypassed.
+        mock_ppf.side_effect = lambda file_path, **kw: [
+            _TilePartition(file_path=file_path, window=(0, 0, 4, 4))
+        ]
+        r = RasterGbxReader({"path": "/some/dir", "skipOrdering": "true"})
+        parts = r.partitions()
+
+    paths = [p.file_path for p in parts]
+    assert paths == [
+        "/z/z.tif",
+        "/a/a.tif",
+        "/m/m.tif",
+    ], f"skipOrdering=true on walk path must preserve walk order; got {paths}"
+    assert paths != sorted(
+        paths
+    ), "Precondition: walk order must be unsorted to prove the sort gate was bypassed"

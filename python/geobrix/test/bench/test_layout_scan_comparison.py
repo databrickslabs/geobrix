@@ -133,3 +133,55 @@ def test_layout_scan_comparison_no_grouped_tile_map(spark, tmp_path):
         "run_layout_scan_comparison must NOT call grouped_tile_map "
         "(scan leg measures scan/shuffle cost, not grouped-read wall-clock)"
     )
+
+
+def test_layout_scan_comparison_shuffle_repartitions_by_tile_path(spark, tmp_path):
+    """Shuffle-input leg repartitions by tile.path (struct subfield), not bare 'path'.
+
+    Structural guard: the _shuffle closure inside run_layout_scan_comparison must use
+    col("tile.path") for the repartition key.  A bare "path" string would silently
+    random-repartition because read_file_table returns a DataFrame with a 'tile' struct
+    column (whose .path sub-field carries the file path), not a top-level 'path' column.
+    """
+    import inspect
+
+    from databricks.labs.gbx.bench.readers import run_layout_scan_comparison
+
+    src = inspect.getsource(run_layout_scan_comparison)
+    # Must reference the struct sub-field, not a bare top-level column name.
+    assert "tile.path" in src, (
+        "_shuffle must repartition by tile.path (struct subfield); "
+        "bare 'path' would silently random-repartition on a FILE table"
+    )
+    # Regression guard: the old bare-string form must not remain.
+    assert 'repartition(n_parts, "path")' not in src, (
+        '_shuffle must NOT use repartition(n_parts, "path") — '
+        'that silently random-repartitions; use col("tile.path") instead'
+    )
+
+
+def test_layout_scan_comparison_shuffle_input_no_analysis_exception(spark, tmp_path):
+    """include_shuffle_input=True completes without AnalysisException on a tile-struct table.
+
+    Builds a table whose schema matches what read_file_table returns for a plain-path
+    table (cellid + path + crs), exercises the _shuffle closure, and asserts it returns
+    a positive count.  The test fails if the wrong repartition key raises AnalysisException.
+    """
+    from databricks.labs.gbx.bench.readers import run_layout_scan_comparison
+
+    t = _make_tile_table(spark, "scan_shuf_ae")
+    rows = run_layout_scan_comparison(
+        spark,
+        tables_by_layout={"order": t},
+        run_id="t_ae",
+        warmup=0,
+        measured=1,
+        file_mode="fuse",
+        where="venv",
+        include_shuffle_input=True,
+    )
+    shuf_rows = [r for r in rows if r.category == "layout-shuffle-input"]
+    assert len(shuf_rows) == 1, "expected exactly one layout-shuffle-input row"
+    assert (
+        shuf_rows[0].rows > 0
+    ), "_shuffle returned 0 rows; repartition key may be wrong"

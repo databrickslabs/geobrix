@@ -2907,6 +2907,8 @@ if _ls_rows:
 
 _CELL_LAYOUT_SCAN = """# Layout scan comparison: sequential-scan cost across write layouts (order/cluster/plain).
 # Reads the FILE tables written by the layout sweep via read_file_table and times df.count().
+# Covers both formats written by the sweep: GeoTIFF (bench_layout_gtiff_*) and
+# GeoPackage (bench_layout_gpkg_*) -- symmetric with _CELL_LAYOUT_SWEEP.
 # Skip cleanly when FILE_FILESPACE is not set (no FILE tables to scan -- fuse-mode sweep
 # produces Volume dirs, not FILE tables, so scan has no applicable tables).
 # Each ResultRow is _sink'd immediately (serialized).
@@ -2923,14 +2925,15 @@ else:
     # Tables written by the layout sweep: one per (format x layout).
     # The scan compares sequential-scan cost; the sweep must have run first (same run
     # or a prior run with the same FILE_FILESPACE) so the tables exist.
-    _tables_by_layout = {
+    # GeoTIFF layouts
+    _tables_by_layout_gtiff = {
         "order": FILE_FILESPACE + "/bench_layout_gtiff_order",
         "cluster": FILE_FILESPACE + "/bench_layout_gtiff_cluster",
         "plain": FILE_FILESPACE + "/bench_layout_gtiff_plain",
     }
-    _scan_rows = _rd.run_layout_scan_comparison(
+    _scan_rows_gtiff = _rd.run_layout_scan_comparison(
         spark,
-        tables_by_layout=_tables_by_layout,
+        tables_by_layout=_tables_by_layout_gtiff,
         run_id=RUN_ID,
         warmup=SPARK_WARMUP,
         measured=SPARK_MEASURED,
@@ -2938,8 +2941,28 @@ else:
         where="cluster",
         include_shuffle_input=True,
     )
-    for _r in _scan_rows:
+    for _r in _scan_rows_gtiff:
         _sink([_r]); lw.append(_r)
+    _scan_rows.extend(_scan_rows_gtiff)
+    # GeoPackage layouts (symmetric with the gtiff sweep above)
+    _tables_by_layout_gpkg = {
+        "order": FILE_FILESPACE + "/bench_layout_gpkg_order",
+        "cluster": FILE_FILESPACE + "/bench_layout_gpkg_cluster",
+        "plain": FILE_FILESPACE + "/bench_layout_gpkg_plain",
+    }
+    _scan_rows_gpkg = _rd.run_layout_scan_comparison(
+        spark,
+        tables_by_layout=_tables_by_layout_gpkg,
+        run_id=RUN_ID,
+        warmup=SPARK_WARMUP,
+        measured=SPARK_MEASURED,
+        file_mode="managed",
+        where="cluster",
+        include_shuffle_input=True,
+    )
+    for _r in _scan_rows_gpkg:
+        _sink([_r]); lw.append(_r)
+    _scan_rows.extend(_scan_rows_gpkg)
 if _scan_rows:
     _df_scan = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' "

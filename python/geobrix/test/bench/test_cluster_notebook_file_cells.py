@@ -225,6 +225,22 @@ def test_notebook_layout_scan_passes_tables_by_layout():
     assert "tables_by_layout" in src
 
 
+def test_notebook_layout_scan_covers_both_formats():
+    """Scan cell references both gtiff and gpkg layout tables (symmetric with sweep).
+
+    The layout sweep writes bench_layout_gtiff_* AND bench_layout_gpkg_* tables;
+    the scan must cover both formats so the comparison is not one-sided.
+    """
+    nb = cl.build_bench_notebook(_base_cfg(layout_scan=True))
+    src = _src(nb)
+    assert "bench_layout_gtiff_order" in src, "gtiff layout tables must be scanned"
+    assert "bench_layout_gtiff_cluster" in src
+    assert "bench_layout_gtiff_plain" in src
+    assert "bench_layout_gpkg_order" in src, "gpkg layout tables must be scanned"
+    assert "bench_layout_gpkg_cluster" in src
+    assert "bench_layout_gpkg_plain" in src
+
+
 def test_notebook_layout_scan_preamble_variables():
     nb = cl.build_bench_notebook(_base_cfg(layout_scan=True))
     src = _src(nb)

@@ -8483,7 +8483,9 @@ def run_layout_scan_comparison(
                 n_parts = max(1, parts)
 
                 def _shuffle(df=df, n_parts=n_parts):
-                    return int(df.repartition(n_parts, "path").count())
+                    import pyspark.sql.functions as _F
+
+                    return int(df.repartition(n_parts, _F.col("tile.path")).count())
 
                 shuf_stats = time_iters(_shuffle, warmup, measured)
                 ms_shuf = shuf_stats["iter_median_ms"]

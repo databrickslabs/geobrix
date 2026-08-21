@@ -234,6 +234,16 @@ def test_is_routine_unavailable_detects_unresolved_routine():
     exc_not_found = Exception("function read_files does not exist")
     assert file_gbx._is_routine_unavailable(exc_not_found)
 
+    # UNRESOLVABLE_TABLE_VALUED_FUNCTION: emitted by local/OSS Spark when
+    # read_files / list_files SQL TVFs are not registered.  Must be recognised
+    # so file_access_tier falls through to FUSE instead of wrongly reporting
+    # "read_files" tier available.
+    exc_tvf = Exception(
+        "[UNRESOLVABLE_TABLE_VALUED_FUNCTION] Could not resolve `read_files` "
+        "to a table-valued function."
+    )
+    assert file_gbx._is_routine_unavailable(exc_tvf)
+
 
 def test_is_routine_unavailable_returns_false_for_path_errors():
     """_is_routine_unavailable returns False for PATH_NOT_FOUND and other data/IO errors."""

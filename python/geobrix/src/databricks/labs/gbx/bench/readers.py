@@ -2697,6 +2697,191 @@ def run_gpkg_file_write(
             )
 
 
+def run_vector_table_read_sweep(
+    spark,
+    table: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    expected_n: int = 0,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a vector FILE-column-table read via ``vector_file_read`` table mode.
+
+    Reads the FILE-column Delta table written by the gpkg write leg (via
+    ``vector_file_write``) back through the Task-2 vector table-read entry:
+    ``vector_file_read(spark, table, source_type='table')``.  Measures wall-clock
+    read+decode time and feature-count parity.
+
+    ``file_mode`` ∈ {"managed", "external", "fuse"}.
+
+    - **managed/external**: calls ``vector_file_read(spark, table,
+      source_type='table')`` (the new TABLE mode).  Measures ``df.count()`` as the
+      timed job.  If ``expected_n > 0``, asserts feature-count parity: ``status="ok"``
+      when the decoded count matches, ``status="error"`` with a note otherwise.
+      If ``expected_n == 0`` (unknown), reports ``status="ok"`` on any non-zero count.
+      Records ``file_mode``, ``input_partitions``, ``launched_tasks``,
+      ``slots_available``.  Progress prints: ``[gpkg-table-read] [{file_mode}]...``.
+    - **fuse**: a vector FILE write stores the whole .gpkg as ONE FILE reference in a
+      FILE-column Delta table (minted on write).  A FUSE-only tier has no FILE tier and
+      therefore no written FILE tables to read back → clean ``status="na_by_design"``.
+
+    Per-task avg = total / n_tasks (n_tasks < cores; do NOT force saturation; do NOT
+    add a blob-shuffle repartition).
+
+    Returns a single ResultRow (mode="spark-path", category="reader").
+    """
+    env = capture_env(where)
+
+    if file_mode == "fuse":
+        # A FUSE-only tier has no FILE-column Delta tables to read back.
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gpkg_table_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=0,
+            nodata_frac=0.0,
+            warmup_iters=warmup,
+            measured_iters=0,
+            iter_median_s=0.0,
+            iter_min_s=0.0,
+            iter_p90_s=0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=0.0,
+            peak_rss_mb=0.0,
+            status="na_by_design",
+            note=(
+                "FILE FUSE tier has no FILE-column Delta table; "
+                "vector table-read requires a managed or external FILE table."
+            ),
+            output_fingerprint="",
+            file_mode=file_mode,
+            **env,
+        )
+
+    # managed or external: read back via the new TABLE mode.
+    try:
+        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+        # Probe once: on a FUSE-only tier, resolve_file_table raises ValueError
+        # (FILE unavailable) → na_by_design.
+        try:
+            df = vector_file_read(spark, table, source_type="table")
+            n0 = int(df.count())
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_table_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                **env,
+            )
+
+        parts, slots = measure_parallelism(spark, df)
+        _tbl_short = table.rsplit(".", 1)[-1]
+        print(
+            f"[gpkg-table-read] [{file_mode}] {_tbl_short} ({n0} features)…",
+            flush=True,
+        )
+
+        def _job():
+            return int(vector_file_read(spark, table, source_type="table").count())
+
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        n_tasks = max(1, parts)
+
+        # Parity check.
+        if expected_n > 0:
+            _ok = n0 == expected_n
+            _status = "ok" if _ok else "error"
+            _note = f"gpkg TABLE read [{file_mode}] {_tbl_short}: {n0} features" + (
+                f" -- readback {n0} != {expected_n}" if not _ok else ""
+            )
+        else:
+            _status = "ok" if n0 > 0 else "empty"
+            _note = f"gpkg TABLE read [{file_mode}] {_tbl_short}: {n0} features"
+
+        print(
+            f"[gpkg-table-read] [{file_mode}] {_tbl_short}: "
+            f"{_status}, {n0} features, {ms / 1000.0:.1f}s",
+            flush=True,
+        )
+
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gpkg_table_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n0,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n_tasks / 1000.0) if (ms and n_tasks) else 0.0,
+            per_tile_avg_ms=(ms / n_tasks) if (ms and n_tasks) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status=_status,
+            note=_note,
+            output_fingerprint="",
+            file_mode=file_mode,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gpkg_table_read",
+            "reader",
+            run_id,
+            api,
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+        )
+
+
 def _tin_result_row(
     *,
     run_id: str,

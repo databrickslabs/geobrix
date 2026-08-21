@@ -331,6 +331,11 @@ LAYOUT_SWEEP_ONLY = {layout_sweep_only!r}
 # the layout-sweep leg). --layout-scan-only: ONLY run the layout scan.
 BENCHMARK_LAYOUT_SCAN = {benchmark_layout_scan!r}
 LAYOUT_SCAN_ONLY = {layout_scan_only!r}
+# --vector-table-read: measure vector FILE-column-table read (vector_file_read TABLE mode)
+# across managed/external.  Requires FILE tables written by the layout sweep leg.
+# --vector-table-read-only: ONLY run the vector table-read leg, skip fn benchmarks.
+BENCHMARK_VECTOR_TABLE_READ = {benchmark_vector_table_read!r}
+VECTOR_TABLE_READ_ONLY = {vector_table_read_only!r}
 # Filespace identifier for FILE EXTERNAL/MANAGED table creation (e.g. a TBLPROPERTIES
 # filespace path such as "/Volumes/catalog/schema/vol/filespace"). Empty string means no
 # filespace provisioned; external/managed legs yield na_by_design on FUSE-only tiers or
@@ -381,6 +386,7 @@ _READER_ONLY = (
     or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
     or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY or GROUPED_FILE_ONLY
     or FILE_MATRIX_ONLY or GPKG_CHUNKSIZE_ONLY or LAYOUT_SWEEP_ONLY or LAYOUT_SCAN_ONLY
+    or VECTOR_TABLE_READ_ONLY
 )
 corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
 # Function-bench summaries annotate results with the row-pool size; reader-only runs have no
@@ -3030,6 +3036,70 @@ if _scan_rows:
     _show_md(f"Layout scan comparison -- {RUN_ID}", _md)
 """
 
+_CELL_VECTOR_TABLE_READ = """# Vector FILE-column-table read benchmark: vector_file_read TABLE mode across managed/external.
+# Reads the FILE-column Delta tables written by the gpkg write leg (layout sweep) back through
+# the vector table-read entry (vector_file_read table mode).  Measures read+decode throughput
+# and feature-count parity.  fuse mode is na_by_design (no FILE-column table on FUSE tier).
+# Skipped cleanly when FILE_FILESPACE is not set (no FILE tables were provisioned).
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import results
+print("=== vector FILE-column-table read starting ===", flush=True)
+_vtr_rows = []
+# _TABLE_SCHEMA derives from the results TABLE name (first two dot-separated parts).
+# TABLE = "catalog.schema.bench_results" -> _TABLE_SCHEMA = "catalog.schema"
+_TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
+if not FILE_FILESPACE:
+    print(
+        "VECTOR TABLE READ SKIPPED: FILE_FILESPACE not set. "
+        "Run the layout sweep with --file-filespace provisioned to create FILE "
+        "tables, then re-run with --vector-table-read / --vector-table-read-only.",
+        flush=True,
+    )
+else:
+    # Tables written by the gpkg write leg (layout sweep, "order" layout):
+    #   managed: {_TABLE_SCHEMA}.bench_layout_gpkg_managed_order
+    #   external: {_TABLE_SCHEMA}.bench_layout_gpkg_external_order
+    # fuse: na_by_design (returned cleanly by run_vector_table_read_sweep).
+    _vtr_modes = ("managed", "external", "fuse")
+    for _vtr_mode in _vtr_modes:
+        if _vtr_mode == "fuse":
+            _vtr_table = ""
+        elif _vtr_mode == "managed":
+            _vtr_table = f"{_TABLE_SCHEMA}.bench_layout_gpkg_managed_order"
+        else:
+            _vtr_table = f"{_TABLE_SCHEMA}.bench_layout_gpkg_external_order"
+        print(
+            f"[gpkg-table-read] mode={_vtr_mode}"
+            + (f" table={_vtr_table}" if _vtr_mode != "fuse" else " (na_by_design)"),
+            flush=True,
+        )
+        _vtr_r = _rd.run_vector_table_read_sweep(
+            spark,
+            _vtr_table if _vtr_mode != "fuse" else "",
+            RUN_ID,
+            SPARK_WARMUP,
+            SPARK_MEASURED,
+            file_mode=_vtr_mode,
+            where="cluster",
+        )
+        _sink([_vtr_r]); lw.append(_vtr_r); _vtr_rows.append(_vtr_r)
+        print(
+            f"[gpkg-table-read] mode={_vtr_mode}: {_vtr_r.status}, "
+            f"{_vtr_r.rows} features, {_vtr_r.iter_median_s:.1f}s",
+            flush=True,
+        )
+if _vtr_rows:
+    _df_vtr = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND fn = 'gpkg_table_read'"
+    )
+    try:
+        display(_df_vtr)
+    except Exception:
+        _df_vtr.show(100, truncate=False)
+    _md = results.summarize(_vtr_rows)
+    _show_md(f"Vector FILE-column-table read -- {RUN_ID}", _md)
+"""
+
 _CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr (+ row-count parity)
 # Two-leg pipeline (scaled branch):
 #   Leg 1 (reader): spark.read.format(fmt).load(copies/) -> Delta ingest table (forces
@@ -3290,6 +3360,8 @@ def build_bench_notebook(cfg: dict) -> dict:
         layout_sweep_only=bool(cfg.get("layout_sweep_only")),
         benchmark_layout_scan=bool(cfg.get("layout_scan")),
         layout_scan_only=bool(cfg.get("layout_scan_only")),
+        benchmark_vector_table_read=bool(cfg.get("vector_table_read")),
+        vector_table_read_only=bool(cfg.get("vector_table_read_only")),
         file_filespace=str(cfg.get("file_filespace", "") or ""),
         gpkg_corpus=str(cfg.get("gpkg_corpus", "") or ""),
     )
@@ -3340,6 +3412,8 @@ def build_bench_notebook(cfg: dict) -> dict:
     layout_sweep_only = bool(cfg.get("layout_sweep_only"))
     benchmark_layout_scan = bool(cfg.get("layout_scan"))
     layout_scan_only = bool(cfg.get("layout_scan_only"))
+    benchmark_vector_table_read = bool(cfg.get("vector_table_read"))
+    vector_table_read_only = bool(cfg.get("vector_table_read_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
@@ -3443,6 +3517,7 @@ def build_bench_notebook(cfg: dict) -> dict:
             gpkg_chunksize_only,
             layout_sweep_only,
             layout_scan_only,
+            vector_table_read_only,
         )
     )
     if not _any_only:
@@ -3477,6 +3552,10 @@ def build_bench_notebook(cfg: dict) -> dict:
         (benchmark_gpkg_chunksize or gpkg_chunksize_only, [_CELL_GPKG_CHUNKSIZE]),
         (benchmark_layout_sweep or layout_sweep_only, [_CELL_LAYOUT_SWEEP]),
         (benchmark_layout_scan or layout_scan_only, [_CELL_LAYOUT_SCAN]),
+        (
+            benchmark_vector_table_read or vector_table_read_only,
+            [_CELL_VECTOR_TABLE_READ],
+        ),
     ]
     for _enabled, _cell_srcs in _bench_cells:
         if _enabled:

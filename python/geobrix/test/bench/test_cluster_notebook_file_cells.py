@@ -481,3 +481,81 @@ def test_layout_sweep_write_sweep_progress_includes_mode():
     src = _src(nb)
     assert "[write-sweep]" in src
     assert "mode=" in src
+
+
+# ---------------------------------------------------------------------------
+# Vector FILE-column-table read (Task 5)
+# ---------------------------------------------------------------------------
+
+
+def test_notebook_includes_vector_table_read_cell_when_flag_set():
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read=True))
+    src = _src(nb)
+    assert "run_vector_table_read_sweep" in src
+
+
+def test_notebook_vector_table_read_only_suppresses_fn_benchmarks():
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read_only=True))
+    src = _src(nb)
+    assert "run_vector_table_read_sweep" in src
+    assert "# (a) Lightweight pure-core" not in src
+    assert "# (c) Lightweight spark-path" not in src
+
+
+def test_notebook_vector_table_read_cell_absent_by_default():
+    nb = cl.build_bench_notebook(_base_cfg())
+    src = _src(nb)
+    assert "run_vector_table_read_sweep" not in src
+
+
+def test_notebook_vector_table_read_preamble_variables():
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read=True))
+    src = _src(nb)
+    assert "BENCHMARK_VECTOR_TABLE_READ" in src
+    assert "VECTOR_TABLE_READ_ONLY" in src
+
+
+def test_notebook_vector_table_read_guards_on_file_filespace():
+    """Cell skips cleanly when FILE_FILESPACE is not set."""
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read=True))
+    src = _src(nb)
+    assert "FILE_FILESPACE" in src
+    assert "VECTOR TABLE READ SKIPPED" in src
+
+
+def test_notebook_vector_table_read_covers_managed_and_external():
+    """Cell includes both managed and external mode legs."""
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read=True))
+    src = _src(nb)
+    assert "managed" in src
+    assert "external" in src
+
+
+def test_notebook_vector_table_read_fuse_is_na_by_design():
+    """Cell includes fuse mode (which yields na_by_design at runtime)."""
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read=True))
+    src = _src(nb)
+    assert "fuse" in src
+    assert "na_by_design" in src
+
+
+def test_notebook_vector_table_read_reuses_layout_sweep_tables():
+    """Cell reads the bench_layout_gpkg tables produced by the layout sweep."""
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read=True))
+    src = _src(nb)
+    assert "bench_layout_gpkg_managed_order" in src
+    assert "bench_layout_gpkg_external_order" in src
+
+
+def test_notebook_vector_table_read_fn_in_results():
+    """Cell queries fn='gpkg_table_read' from the results table."""
+    nb = cl.build_bench_notebook(_base_cfg(vector_table_read=True))
+    src = _src(nb)
+    assert "gpkg_table_read" in src
+
+
+def test_notebook_vector_table_read_regression_existing_build_unaffected():
+    """Adding vector_table_read=False (default) leaves the existing cell set unchanged."""
+    nb_default = cl.build_bench_notebook(_base_cfg())
+    nb_explicit = cl.build_bench_notebook(_base_cfg(vector_table_read=False))
+    assert _src(nb_default) == _src(nb_explicit)

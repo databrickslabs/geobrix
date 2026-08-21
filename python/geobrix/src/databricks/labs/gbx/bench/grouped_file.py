@@ -303,6 +303,7 @@ def run_grouped_file(
     where: str = "docker",
     category: str = "grouped-file",
     progress: bool = True,
+    file_mode: str = "na",
 ) -> List[ResultRow]:
     """Benchmark grouped fns df->df across the three tile modes.
 
@@ -364,6 +365,7 @@ def run_grouped_file(
                             n,
                             stats,
                             env,
+                            file_mode=file_mode,
                         )
                     )
                     if progress:
@@ -372,7 +374,17 @@ def run_grouped_file(
                     Exception
                 ) as e:  # noqa: BLE001 - one fn/mode must not abort the leg
                     out.append(
-                        _err_row(fn_name, category, run_id, mode, input_tile, n, env, e)
+                        _err_row(
+                            fn_name,
+                            category,
+                            run_id,
+                            mode,
+                            input_tile,
+                            n,
+                            env,
+                            e,
+                            file_mode=file_mode,
+                        )
                     )
                     if progress:
                         print(f"  {fn_name} [{mode}] ERROR: {str(e)[:160]}", flush=True)
@@ -382,7 +394,9 @@ def run_grouped_file(
     return out
 
 
-def _ok_row(fn, category, run_id, mode, input_tile, n, stats, env) -> ResultRow:
+def _ok_row(
+    fn, category, run_id, mode, input_tile, n, stats, env, *, file_mode: str = "na"
+) -> ResultRow:
     ms = stats["iter_median_ms"]
     return ResultRow(
         run_id=run_id,
@@ -413,11 +427,14 @@ def _ok_row(fn, category, run_id, mode, input_tile, n, stats, env) -> ResultRow:
         input_tile=input_tile,
         output_disposition="materialized",
         split_strategy=mode,
+        file_mode=file_mode,
         **env,
     )
 
 
-def _err_row(fn, category, run_id, mode, input_tile, n, env, e) -> ResultRow:
+def _err_row(
+    fn, category, run_id, mode, input_tile, n, env, e, *, file_mode: str = "na"
+) -> ResultRow:
     return ResultRow(
         run_id=run_id,
         api="lightweight",
@@ -443,6 +460,7 @@ def _err_row(fn, category, run_id, mode, input_tile, n, env, e) -> ResultRow:
         input_tile=input_tile,
         output_disposition="na",
         split_strategy=mode,
+        file_mode=file_mode,
         **env,
     )
 

@@ -312,14 +312,16 @@ def test_all_four_cells_emitted_together():
     assert "run_layout_scan_comparison" in src
 
 
-def test_layout_sweep_gtiff_write_source_is_bounded():
-    """The GeoTIFF write-sweep must CAP its tile source. Writing the full read pool
-    (10k tiles) x 3 layouts x (warmup+measured) is ~60k large-blob writes + OPTIMIZE and
-    dominated the leg wall-clock for no added signal. It must .limit to a bounded count and
-    repartition to re-spread (so .limit cannot collapse the write to one partition and
-    starve slots)."""
+def test_layout_sweep_gtiff_write_source_is_cached_not_limited():
+    """The GeoTIFF write-sweep source must be .cache()'d and must NOT rely on .limit() to
+    bound a raster_gbx read. Spark 4's Python DataSource API has no limit pushdown, so
+    `.load(dir).limit(N)` still opens EVERY tile in dir on each action -- the write leg's ~5
+    actions would re-scan the whole directory and inflate the write timing. The source dir is
+    sized instead (GBX_BENCH_CORPUS -> a ~1k-tile pool) and .cache()'d so the actions share one
+    metadata read."""
     nb = cl.build_bench_notebook(_base_cfg(layout_sweep=True))
     src = _src(nb)
-    assert "_LS_WRITE_TILES" in src
-    assert ".limit(_LS_WRITE_TILES)" in src
-    assert ".repartition(" in src
+    assert "_ls_tile_df" in src
+    assert ".cache()" in src
+    # the ineffective .limit()-based cap must be gone (it did not bound the read)
+    assert "_LS_WRITE_TILES" not in src

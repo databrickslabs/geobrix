@@ -2852,21 +2852,22 @@ from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
 from databricks.labs.gbx.ds.register import register as _ds_reg
 _ls_rows = []
-# Build GeoTIFF tile_df for the WRITE sweep. The write leg demonstrates write + the layout
-# effect; it does NOT need the full read pool. Writing all 10k tiles x 3 layouts x
-# (warmup+measured) is ~60k large-blob writes + OPTIMIZE and dominated the leg wall-clock
-# (~50 min) for no added signal. Cap to a bounded subset that still exceeds the cluster slot
-# count (fair writer fanout), then repartition to re-spread so .limit() cannot collapse the
-# write to a single partition (which would starve slots and distort the timing).
+# Build GeoTIFF tile_df for the WRITE sweep. IMPORTANT: `.limit(N)` does NOT bound a raster_gbx
+# read -- Spark 4's Python DataSource API has no limit pushdown, so `.load(dir).limit(N)` still
+# opens EVERY tile in `dir` on each action (read() opens each virtual tile for metadata). The
+# write leg has ~5 actions (measure-parallelism, count, probe-write, measured-write, read-back),
+# so an un-cached, unbounded source re-scans the whole directory ~5x per layout -- dominating the
+# wall-clock AND inflating the write timing. So (1) size the SOURCE DIR to what the write demo
+# needs -- point GBX_BENCH_CORPUS at a ~1k-tile pool (e.g. bench-corpus-1024-1k) -- and (2)
+# `.cache()` so the leg's actions share ONE metadata read. The write still materializes pixels per
+# tile (the real write cost); caching only removes the redundant re-opens.
 _ds_reg(spark)
 _ls_gtiff_src = f"{CORPUS}/rows"
-_LS_WRITE_TILES = 1000  # >> cluster task slots -> saturates; ~10x less write than the full pool
 _ls_tile_df = (
     spark.read.format("raster_gbx")
     .option("filterRegex", r".*\\.tif$")
     .load(_ls_gtiff_src)
-    .limit(_LS_WRITE_TILES)
-    .repartition(160)
+    .cache()
 )
 # file_mode for FILE tables: use "external" when filespace is provisioned; fuse otherwise.
 _ls_file_mode = "external" if FILE_FILESPACE else "fuse"

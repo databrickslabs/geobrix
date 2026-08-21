@@ -12,7 +12,7 @@ GeoBrix ships a benchmark suite that compares the two [execution tiers](./execut
 This page leads with the headline results (**[At a glance](#at-a-glance)**), then full tables of representative results by function family — both the **pure-core** (algorithm-in-isolation) view and the **spark-path at scale** view from a cluster. How the benchmark works, and how to run it yourself on a Databricks cluster or locally, is covered at the end.
 
 :::note Runtime support vs. benchmark environment
-GeoBrix is [supported on both DBR 17.3 LTS and DBR 18 LTS](../installation#supported-databricks-runtimes). The per-result **Environment** stamps below record the specific cluster each benchmark actually ran on (DBR 17.3 LTS); they are factual records of the run, not a statement that DBR 18 is unsupported.
+GeoBrix is [supported on DBR 17.3 LTS, 18 LTS, and — for the lightweight tier — 19 LTS](../installation#supported-databricks-runtimes). The per-result **Environment** stamps below record the specific runtime each benchmark actually ran on; the results on this page span **DBR 17.3 LTS and 18.x**. Those stamps are factual records of each run, not a statement that any supported runtime is faster, slower, or unsupported — re-running the suite on another supported runtime is expected to land within noise. FILE-capability benchmarks run on a FILE-enabled runtime and are stamped accordingly.
 :::
 
 ## At a glance

@@ -103,3 +103,83 @@ def test_vector_file_read_as_wkb_false_returns_wkt(spark, tmp_path):
         isinstance(r["geometry"], str) and r["geometry"].startswith("POINT")
         for r in rows
     )
+
+
+# ---------------------------------------------------------------------------
+# BUG B: pyogrio.read_dataframe (geopandas-required) must not be used
+# ---------------------------------------------------------------------------
+
+
+def _write_gpkg(p, n):
+    """Write a .gpkg with n Point features using pyogrio.write_arrow (no geopandas)."""
+    import pyarrow as pa
+    import pyogrio
+    import shapely
+
+    wkbs = [bytes(shapely.to_wkb(shapely.Point(float(i), float(i)))) for i in range(n)]
+    tbl = pa.table({"geometry": pa.array(wkbs, type=pa.binary())})
+    pyogrio.write_arrow(
+        tbl,
+        str(p),
+        driver="GPKG",
+        geometry_name="geometry",
+        geometry_type="Point",
+        crs="EPSG:4326",
+    )
+
+
+def test_vector_file_read_source_uses_read_arrow_not_read_dataframe():
+    """Static guard: file_read.py must not call read_dataframe (geopandas-required).
+    Uses read_arrow instead, which works without geopandas.
+    This test FAILS until the BUG-B fix is applied.
+    """
+    import inspect
+
+    from databricks.labs.gbx.pyvx import file_read
+
+    src = inspect.getsource(file_read)
+    assert "read_dataframe" not in src, (
+        "file_read.py still calls pyogrio.read_dataframe which requires geopandas. "
+        "Refactor to pyogrio.read_arrow."
+    )
+    assert "import geopandas" not in src and "geopandas." not in src, (
+        "file_read.py must not import or call geopandas (not a light-tier dep). "
+        "Comments mentioning the name are fine; actual imports/calls are not."
+    )
+
+
+def test_vector_file_read_gpkg_reads_wkb_without_geopandas(spark, tmp_path):
+    """Behavioral test: vector_file_read reads a .gpkg and returns WKB bytes.
+    The fixture is written via pyogrio.write_arrow (no geopandas), so this
+    exercises the geopandas-free read path end-to-end.
+    """
+    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+    _write_gpkg(tmp_path / "t.gpkg", 3)
+    with patch("databricks.labs.gbx.pyvx.file_read.file_supported", return_value=False):
+        df = vector_file_read(spark, str(tmp_path), driver="GPKG", as_wkb=True)
+        rows = df.collect()
+    assert len(rows) == 3
+    assert all(r["source"].endswith("t.gpkg") for r in rows)
+    assert all(r["geometry"] is not None for r in rows)
+    # Each value must be valid WKB — round-trip through shapely
+    import shapely
+
+    for r in rows:
+        geom = shapely.from_wkb(bytes(r["geometry"]))
+        assert geom.geom_type == "Point"
+
+
+def test_vector_file_read_gpkg_wkt_mode(spark, tmp_path):
+    """as_wkb=False on a .gpkg returns WKT strings (no geopandas needed)."""
+    from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+    _write_gpkg(tmp_path / "t.gpkg", 2)
+    with patch("databricks.labs.gbx.pyvx.file_read.file_supported", return_value=False):
+        df = vector_file_read(spark, str(tmp_path), driver="GPKG", as_wkb=False)
+        rows = df.collect()
+    assert len(rows) == 2
+    assert all(
+        isinstance(r["geometry"], str) and r["geometry"].startswith("POINT")
+        for r in rows
+    )

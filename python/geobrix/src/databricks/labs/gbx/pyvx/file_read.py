@@ -121,15 +121,23 @@ def vector_file_read(
                         local = None
                 if local is None:
                     local = to_local_path(src)
-                gdf = pyogrio.read_dataframe(local, layer=_layer)
-                for geom in gdf.geometry:
+                # Use read_arrow (pyogrio, no external geometry framework needed). The geometry column is
+                # returned as raw WKB bytes; meta["geometry_name"] names it.
+                # GeoJSON drivers return geometry_name="" and use "wkb_geometry".
+                meta, arrow_table = pyogrio.read_arrow(local, layer=_layer)
+                geom_col = meta.get("geometry_name") or "wkb_geometry"
+                geom_array = arrow_table.column(geom_col)
+                for wkb_scalar in geom_array:
+                    wkb_bytes = wkb_scalar.as_py()
                     srcs.append(src)
-                    if geom is None:
+                    if wkb_bytes is None:
                         geoms.append(None)
                     elif _as_wkb:
-                        geoms.append(bytearray(geom.wkb))
+                        geoms.append(bytearray(wkb_bytes))
                     else:
-                        geoms.append(geom.wkt)
+                        import shapely as _shapely
+
+                        geoms.append(_shapely.from_wkb(bytes(wkb_bytes)).wkt)
             if srcs:
                 yield pd.DataFrame({"source": srcs, "geometry": geoms})
             else:

@@ -225,11 +225,12 @@ def test_notebook_layout_scan_passes_tables_by_layout():
     assert "tables_by_layout" in src
 
 
-def test_notebook_layout_scan_covers_both_formats():
-    """Scan cell references both gtiff and gpkg external layout tables (symmetric with sweep).
+def test_notebook_layout_scan_covers_gtiff_all_layouts():
+    """Scan cell reads the gtiff external layout tables for all three layouts.
 
     The layout sweep writes FILE EXTERNAL tables for all three layouts; the scan reads them via
-    read_file_table to compare sequential-scan and shuffle-input cost across layouts.
+    read_file_table to compare sequential-scan and shuffle-input cost across layouts. Raster
+    writes one FILE-ref row PER TILE, so the layout dimension has a real scan/prune effect.
     """
     nb = cl.build_bench_notebook(_base_cfg(layout_scan=True))
     src = _src(nb)
@@ -239,13 +240,29 @@ def test_notebook_layout_scan_covers_both_formats():
     ), "gtiff external order table must be scanned"
     assert "bench_layout_gtiff_external_cluster" in src
     assert "bench_layout_gtiff_external_plain" in src
-    assert (
-        "bench_layout_gpkg_external_order" in src
-    ), "gpkg external order table must be scanned"
-    assert "bench_layout_gpkg_external_cluster" in src
-    assert "bench_layout_gpkg_external_plain" in src
     # scan must use external file_mode (not managed)
     assert 'file_mode="external"' in src
+
+
+def test_notebook_layout_scan_skips_gpkg_by_design():
+    """The gpkg layout scan is cleanly SKIPPED BY DESIGN, never wired into the scan.
+
+    A vector FILE write stores the whole .gpkg as ONE FILE reference (one row per external
+    table), so a per-layout sequential-scan comparison across order/cluster/plain is
+    meaningless. The cell must print a clear skip note and must NOT construct a
+    tables_by_layout mapping over the gpkg external tables.
+    """
+    nb = cl.build_bench_notebook(_base_cfg(layout_scan=True))
+    src = _src(nb)
+    # A clear skip note referencing gpkg must be present.
+    assert "gpkg SKIPPED BY DESIGN" in src
+    # The gpkg external tables must NOT be scanned (not passed to run_layout_scan_comparison).
+    assert "bench_layout_gpkg_external_order" not in src
+    assert "bench_layout_gpkg_external_cluster" not in src
+    assert "bench_layout_gpkg_external_plain" not in src
+    # A gpkg-specific tables_by_layout mapping must be gone.
+    assert "_tables_by_layout_gpkg" not in src
+    assert "_scan_rows_gpkg" not in src
 
 
 def test_notebook_layout_scan_preamble_variables():
@@ -440,7 +457,13 @@ def test_layout_sweep_table_schema_derived_from_table():
 
 
 def test_layout_sweep_managed_passes_filespace():
-    """Managed leg passes FILE_FILESPACE as filespace; external passes None."""
+    """Both FILE legs pass FILE_FILESPACE as filespace; only fuse passes None.
+
+    Managed needs the filespace for FILE MANAGED storage; vector external needs it
+    as the staging directory where the assembled .gpkg lands before try_to_file
+    references it (raster external ignores it). The cell therefore sets
+    _ls_filespace = FILE_FILESPACE for both external and managed, None for fuse.
+    """
     nb = cl.build_bench_notebook(
         _base_cfg(
             layout_sweep=True,
@@ -448,7 +471,7 @@ def test_layout_sweep_managed_passes_filespace():
         )
     )
     src = _src(nb)
-    # The cell sets _ls_filespace = FILE_FILESPACE if managed else None.
+    # The cell sets _ls_filespace = FILE_FILESPACE if _ls_mode in (external, managed) else None.
     assert "FILE_FILESPACE if _ls_mode" in src
 
 

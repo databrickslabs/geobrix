@@ -2960,8 +2960,11 @@ if _ls_rows:
 _CELL_LAYOUT_SCAN = """# Layout scan comparison: sequential-scan cost across write layouts (order/cluster/plain).
 # Reads the FILE EXTERNAL tables written by the layout sweep via read_file_table and times
 # df.count() and df.repartition(n, "path").count().
-# Covers both formats: GeoTIFF (bench_layout_gtiff_external_*) and
-# GeoPackage (bench_layout_gpkg_external_*) -- symmetric with _CELL_LAYOUT_SWEEP external leg.
+# GeoTIFF only (bench_layout_gtiff_external_*): raster writes one FILE-ref ROW PER TILE, so
+# the order/cluster/plain layout dimension has a real scan/prune effect. GeoPackage is SKIPPED
+# BY DESIGN -- a vector FILE write stores the whole .gpkg as ONE FILE reference (one row per
+# external table), so a per-layout scan comparison is meaningless; the vector FILE write +
+# round-trip parity is measured in the layout SWEEP (gpkg_file_write) instead.
 # Skip cleanly when FILE_FILESPACE is not set (external tables only exist when the layout
 # sweep ran with a provisioned filespace).
 # Each ResultRow is _sink'd immediately (serialized).
@@ -2998,25 +3001,22 @@ else:
     for _r in _scan_rows_gtiff:
         _sink([_r]); lw.append(_r)
     _scan_rows.extend(_scan_rows_gtiff)
-    # GeoPackage external tables (symmetric with the gtiff scan above).
-    _tables_by_layout_gpkg = {
-        "order":   f"{_scan_schema}.bench_layout_gpkg_external_order",
-        "cluster": f"{_scan_schema}.bench_layout_gpkg_external_cluster",
-        "plain":   f"{_scan_schema}.bench_layout_gpkg_external_plain",
-    }
-    _scan_rows_gpkg = _rd.run_layout_scan_comparison(
-        spark,
-        tables_by_layout=_tables_by_layout_gpkg,
-        run_id=RUN_ID,
-        warmup=SPARK_WARMUP,
-        measured=SPARK_MEASURED,
-        file_mode="external",
-        where="cluster",
-        include_shuffle_input=True,
+    # GeoPackage layout scan: SKIPPED BY DESIGN.
+    # A vector FILE write (vector_file_write) stores the WHOLE .gpkg as ONE FILE
+    # reference, so each bench_layout_gpkg_external_<layout> table holds exactly ONE
+    # row. A sequential-scan / pruning comparison across order/cluster/plain is
+    # meaningless on single-row tables (nothing to prune, nothing to cluster), so the
+    # gpkg leg is not wired into run_layout_scan_comparison. The meaningful vector FILE
+    # measurement is the write leg + round-trip feature-parity check in the layout
+    # SWEEP (bench_layout_gpkg_* / gpkg_file_write), not a per-layout scan.
+    print(
+        "[layout-scan] gpkg SKIPPED BY DESIGN: a vector FILE write stores the whole "
+        ".gpkg as ONE FILE reference (one row per external table), so a per-layout "
+        "sequential-scan comparison across order/cluster/plain is not meaningful. The "
+        "vector FILE write + round-trip parity is measured in the layout SWEEP "
+        "(gpkg_file_write), not here.",
+        flush=True,
     )
-    for _r in _scan_rows_gpkg:
-        _sink([_r]); lw.append(_r)
-    _scan_rows.extend(_scan_rows_gpkg)
 if _scan_rows:
     _df_scan = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' "

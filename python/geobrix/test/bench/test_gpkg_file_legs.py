@@ -110,3 +110,126 @@ def test_gpkg_file_write_fuse_ok(spark, tmp_path):
         where="venv",
     )
     assert r.status in ("ok", "na_by_design")
+
+
+def test_gpkg_file_write_external_na_by_design_on_fuse(spark, tmp_path):
+    """external FILE write on a FUSE-only tier (local[2]) → na_by_design, not a crash.
+
+    vector_file_write copies the assembled .gpkg into the staging filespace, then
+    gbx_file_write raises ValueError (FILE write-primitive unavailable) → the probe
+    catches it and returns na_by_design.
+    """
+    from databricks.labs.gbx.bench.readers import run_gpkg_file_write
+
+    out = _write_one_gpkg(tmp_path, rows=5)
+    r = run_gpkg_file_write(
+        spark,
+        out,
+        "no_cat.no_sch.bench_gpkg_ext",
+        "t",
+        0,
+        1,
+        file_mode="external",
+        filespace=str(tmp_path / "fs"),  # vector external needs a staging filespace
+        where="venv",
+    )
+    assert r.status == "na_by_design", f"got status={r.status!r} note={r.note!r}"
+    assert r.file_mode == "external"
+
+
+def test_gpkg_file_write_managed_na_by_design_on_fuse(spark, tmp_path):
+    """managed FILE write on a FUSE-only tier (local[2]) → na_by_design, not a crash."""
+    from databricks.labs.gbx.bench.readers import run_gpkg_file_write
+
+    out = _write_one_gpkg(tmp_path, rows=5)
+    r = run_gpkg_file_write(
+        spark,
+        out,
+        "no_cat.no_sch.bench_gpkg_mgd",
+        "t",
+        0,
+        1,
+        file_mode="managed",
+        filespace=str(tmp_path / "fs"),
+        where="venv",
+    )
+    assert r.status == "na_by_design", f"got status={r.status!r} note={r.note!r}"
+    assert r.file_mode == "managed"
+
+
+# ---------------------------------------------------------------------------
+# FILE-mode readback (_gpkg_file_readback): a vector FILE write stores the whole
+# .gpkg as ONE FILE reference in a FILE-column Delta table. Correctness is FEATURE
+# parity, resolved via read_file_table -> tile.path -> vector_file_read(PATH).
+# These tests stand in for read_file_table (FILE tier absent on local[2]) so the
+# round-trip logic itself is exercised on the fuse tier.
+# ---------------------------------------------------------------------------
+
+
+def _tile_path_df(spark, gpkg_path):
+    """Mimic read_file_table's output: a DataFrame with a `tile` struct whose
+    ``.path`` sub-field is a resolved /Volumes-style path to the written .gpkg."""
+    from pyspark.sql import functions as F
+
+    return spark.createDataFrame([(gpkg_path,)], "path string").select(
+        F.struct(F.col("path")).alias("tile")
+    )
+
+
+def test_gpkg_file_readback_reads_path_not_table_name(spark, tmp_path, monkeypatch):
+    """The FILE-mode readback resolves tile.path via read_file_table and reads THAT
+    path with vector_file_read — it must NOT hand the schema.table name to
+    vector_file_read (which reads a LOCATION and would raise FileNotFoundError).
+
+    If the readback regressed to passing the table name, the real vector_file_read
+    below would fail and status would be 'error', not 'ok'.
+    """
+    from databricks.labs.gbx.bench import readers as rd
+
+    gpkg = _write_one_gpkg(tmp_path, rows=7)
+    monkeypatch.setattr(
+        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        lambda _s, _t: _tile_path_df(_s, gpkg),
+    )
+    status, note, refs = rd._gpkg_file_readback(
+        spark, "cat.sch.bench_layout_gpkg_external_order", 7, "external"
+    )
+    assert status == "ok", f"expected ok, got status={status!r} note={note!r}"
+    assert refs == 1
+    assert "7 features" in note
+
+
+def test_gpkg_file_readback_feature_count_mismatch_is_error(
+    spark, tmp_path, monkeypatch
+):
+    """Round-trip feature count that disagrees with the source → status='error'."""
+    from databricks.labs.gbx.bench import readers as rd
+
+    gpkg = _write_one_gpkg(tmp_path, rows=5)
+    monkeypatch.setattr(
+        "databricks.labs.gbx.pyrx.file_table.read_file_table",
+        lambda _s, _t: _tile_path_df(_s, gpkg),
+    )
+    status, note, refs = rd._gpkg_file_readback(spark, "cat.sch.tbl", 999, "managed")
+    assert status == "error"
+    assert "readback 5 != 999" in note
+
+
+def test_gpkg_file_readback_no_file_refs_is_error(spark, monkeypatch):
+    """A table with no non-null tile.path row → status='error' (0 file refs)."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import readers as rd
+
+    def _null_tile(_s, _t):
+        return _s.createDataFrame([(None,)], "path string").select(
+            F.struct(F.col("path")).alias("tile")
+        )
+
+    monkeypatch.setattr(
+        "databricks.labs.gbx.pyrx.file_table.read_file_table", _null_tile
+    )
+    status, note, refs = rd._gpkg_file_readback(spark, "cat.sch.tbl", 5, "external")
+    assert status == "error"
+    assert refs == 0
+    assert "0 file refs" in note

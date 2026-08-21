@@ -2320,6 +2320,65 @@ def _gpkg_fuse_readback(spark, path: str, n: int) -> Tuple[str, str]:
         return "error", f"readback error: {str(e)[-450:]}"
 
 
+def _gpkg_file_readback(
+    spark, target: str, n: int, file_mode: str
+) -> Tuple[str, str, int]:
+    """Read back a vector FILE write and return ``(status, note, file_ref_count)``.
+
+    A vector FILE write (``vector_file_write``) stores the WHOLE .gpkg as ONE FILE
+    reference in a FILE-column Delta table at *target* — NOT one row per feature.
+    Correctness is therefore FEATURE parity, never a file-ref count:
+    ``read_file_table`` resolves ``tile.path`` to a FUSE-openable /Volumes path
+    (managed: the ``create_file`` ``.uri`` with the ``dbfs:`` scheme stripped;
+    external: the staged Volume path), then that single .gpkg is read back via the
+    vector FILE read path (``vector_file_read`` on the PATH) and its feature count
+    is compared to the source *n*.
+
+    Crucial: *target* (a ``schema.table`` name) must NEVER be handed to
+    ``vector_file_read`` — that function reads a LOCATION path/directory and would
+    raise ``FileNotFoundError`` (external) or the managed-source guard (managed).
+    The resolved ``tile.path`` (a Volume file path) is what gets read.
+
+    On any exception returns ``("error", <msg>, 0)`` — never raises (mirrors
+    :func:`_gpkg_fuse_readback`).
+    """
+    try:
+        import pyspark.sql.functions as _F
+
+        from databricks.labs.gbx.pyrx.file_table import read_file_table
+        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+        _tbl = read_file_table(spark, target).filter(_F.col("tile.path").isNotNull())
+        _paths = [
+            r["path"] for r in _tbl.select(_F.col("tile.path").alias("path")).collect()
+        ]
+        _ref_count = len(_paths)
+        if not _paths:
+            return (
+                "error",
+                f"gpkg FILE write [{file_mode}] {n} features -- 0 file refs",
+                0,
+            )
+        # One .gpkg per write: read its features back via the vector FILE read path,
+        # pointed at the RESOLVED path (access='auto' → graceful FILE/FUSE, never
+        # raises for a location source).
+        features_back = vector_file_read(spark, _paths[0], driver="GPKG", access="auto")
+        back_n = int(features_back.count())
+        _ok = back_n == n and _ref_count >= 1
+        _status = "ok" if _ok else "error"
+        _note = f"gpkg FILE write [{file_mode}] {n} features" + (
+            f" -- readback {back_n} != {n}" if back_n != n else ""
+        )
+        return _status, _note, _ref_count
+    except Exception as e:  # noqa: BLE001
+        return (
+            "error",
+            f"gpkg FILE write [{file_mode}] {n} features "
+            f"-- round-trip read failed: {str(e)[:120]}",
+            0,
+        )
+
+
 def run_gpkg_file_write(
     spark,
     local_out: str,
@@ -2579,44 +2638,12 @@ def run_gpkg_file_write(
             stats = time_iters(_job, warmup, measured)
             ms = stats["iter_median_ms"]
 
-            # Correctness check: round-trip read via vector_file_read.
-            # A vector FILE write stores the whole .gpkg as ONE FILE reference,
-            # so read_file_table returns 1 file ref, not per-feature rows.
-            # Validate by reading the features back via vector_file_read and
-            # comparing feature count to the source.
-            import pyspark.sql.functions as _F
-
-            from databricks.labs.gbx.pyrx.file_table import read_file_table
-            from databricks.labs.gbx.pyvx.file_read import vector_file_read
-
-            file_refs = read_file_table(spark, target).filter(
-                _F.col("tile.path").isNotNull()
-            )
-            _file_ref_count = int(file_refs.count())
-
-            # Round-trip: read the features back from the FILE reference(s).
-            try:
-                features_back = vector_file_read(
-                    spark,
-                    target,
-                    driver="GPKG",
-                    access=file_mode,
-                )
-                back_n = int(features_back.count())
-                _ok = back_n == n and _file_ref_count >= 1
-                _status = "ok" if _ok else "error"
-                _note = (
-                    f"gpkg FILE write [{file_mode}] {n} features"
-                    + (f" -- readback {back_n} != {n}" if back_n != n else "")
-                    + (" (0 file refs)" if _file_ref_count == 0 else "")
-                )
-            except Exception as _rt_e:
-                _ok = False
-                _status = "error"
-                _note = (
-                    f"gpkg FILE write [{file_mode}] {n} features "
-                    f"-- round-trip read failed: {str(_rt_e)[:80]}"
-                )
+            # Correctness check: round-trip read.
+            # A vector FILE write stores the whole .gpkg as ONE FILE reference in a
+            # FILE-column Delta table at `target`; read it back via the vector FILE
+            # read path (resolve tile.path, then vector_file_read that PATH) and
+            # compare FEATURE count to the source (never a file-ref count).
+            _status, _note, _ = _gpkg_file_readback(spark, target, n, file_mode)
             print(
                 f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg2}: "
                 f"{_status}, {n} rows, {ms / 1000.0:.1f}s",

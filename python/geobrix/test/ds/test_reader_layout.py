@@ -68,7 +68,7 @@ def test_raster_default_path_partitions_path_ordered():
     """Default os.walk path: even when list_files returns paths in non-sorted order the
     explicit sort in partitions() ensures output is ordered by file_path."""
     with (
-        patch("databricks.labs.gbx.ds.raster._listing.list_files") as mock_lf,
+        patch("databricks.labs.gbx.ds.file_gbx.list_local_files") as mock_lf,
         patch("databricks.labs.gbx.ds.raster._plan_partitions_for_file") as mock_ppf,
     ):
         # Deliberately non-sorted input to prove the explicit sort does the work.
@@ -92,7 +92,7 @@ def test_raster_default_path_multi_tile_per_file_grouped():
     }
 
     with (
-        patch("databricks.labs.gbx.ds.raster._listing.list_files") as mock_lf,
+        patch("databricks.labs.gbx.ds.file_gbx.list_local_files") as mock_lf,
         patch("databricks.labs.gbx.ds.raster._plan_partitions_for_file") as mock_ppf,
     ):
         mock_lf.return_value = ["/z/z.tif", "/a/a.tif"]  # non-sorted

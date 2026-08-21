@@ -102,12 +102,12 @@ def main() -> int:
         except Exception:
             pass
         print("Uploading to %s (overwrite if exists)..." % volume_path)
-        w.files.upload_from(
-            file_path=volume_path,
-            source_path=str(whl.resolve()),
-            overwrite=True,
-            use_parallel=False,
-        )
+        # Use files.upload (streaming PUT) — NOT files.upload_from. upload_from hits
+        # an admin-gated bulk API that PermissionDenies non-account-admins on some
+        # workspaces (e.g. dogfood: "This API is disabled for users without account
+        # admin status"), while the streaming files.upload works for everyone.
+        with open(whl.resolve(), "rb") as _fh:
+            w.files.upload(volume_path, _fh, overwrite=True)
         print("Done: %s" % volume_path)
     else:
         print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: skipping wheel build/upload.")

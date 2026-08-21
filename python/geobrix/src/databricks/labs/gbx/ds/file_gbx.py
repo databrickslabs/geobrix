@@ -67,6 +67,11 @@ __all__ = [
     "StageTooLargeError",
     "_accept_basename",
     "list_local_files",
+    # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
+    "_table_props",
+    "_describe_cols",
+    # Generic session-ful FILE-column table read
+    "resolve_file_table",
     # Generic session-ful read
     "_classify_source",
     "gbx_file_read",
@@ -1832,6 +1837,175 @@ def ingest_files(
 # =============================================================================
 # Generic format-agnostic read: gbx_file_read
 # =============================================================================
+
+
+# =============================================================================
+# FILE-column table helpers (moved from pyrx/file_table.py — shared core)
+# =============================================================================
+# These helpers were formerly private to pyrx/file_table.py.  They are now
+# canonical here so both the raster reader (pyrx/file_table.py) and future
+# format-agnostic consumers (vector table read, gbx_file_read table mode) can
+# share them without duplication.  pyrx/file_table.py imports them from here.
+
+
+def _table_props(spark: SparkSession, table: str) -> dict:
+    """Return TBLPROPERTIES for *table* as a plain dict (key → value)."""
+    rows = spark.sql(f"SHOW TBLPROPERTIES {table}").collect()
+    return {r["key"]: r["value"] for r in rows}
+
+
+def _describe_cols(spark: SparkSession, table: str):
+    """Return ``(plain_col_names_set, file_col_name_or_None)`` for *table*.
+
+    FILE-typed columns are excluded from the plain set and reported separately.
+    Column discovery via ``DESCRIBE TABLE`` — **Serverless-GC-safe** (never
+    touches ``spark.table(...).schema``, which Spark Connect refuses when a
+    FILE column is present).
+
+    Partition/metadata header rows (``col_name`` is ``None`` or starts with
+    ``#``) are ignored.
+
+    Matches FILE-type variants returned by different DBR versions:
+    - bare ``"file"``
+    - qualified ``"file managed"``, ``"file external"``, ``"file (managed)"``
+    - reversed ``"managed file"``, ``"external file"``
+    """
+    desc = spark.sql(f"DESCRIBE TABLE {table}").collect()
+    plain = set()
+    file_col = None
+    for r in desc:
+        col_name = r["col_name"]
+        data_type = (r["data_type"] or "").lower()
+        if not col_name or col_name.startswith("#"):
+            continue
+        is_file_type = (
+            data_type == "file"
+            or data_type.startswith("file ")
+            or data_type.endswith(" file")
+        )
+        if is_file_type:
+            file_col = col_name
+        else:
+            plain.add(col_name)
+    return plain, file_col
+
+
+def resolve_file_table(
+    spark: SparkSession,
+    table: str,
+    *,
+    skip_ordering: bool = False,
+) -> DataFrame:
+    """Resolve a FILE-column Delta table to a DataFrame with source paths.
+
+    Shared core for FILE-column table reads.  Handles FILE column detection,
+    path resolution (MANAGED uri-stripping / EXTERNAL / plain), size discovery,
+    and auto-ordering — so every format-specific reader (raster, vector) can
+    delegate here rather than duplicating this logic.
+
+    **Columns returned:**
+
+    - ``source`` (STRING): resolved ``/Volumes/...`` path.  For MANAGED FILE
+      tables on a FILE-capable runtime, the FILE column's ``.uri`` subfield is
+      projected via SQL and the ``dbfs:`` scheme prefix is stripped.  For all
+      other cases (EXTERNAL table, un-stamped table, or runtime without FILE
+      support) the plain ``path`` column is used as-is.  If the table has no
+      ``path`` column, ``source`` is NULL.
+    - ``size`` (BIGINT or null): file size from the table where the ``size``
+      column is present; null otherwise.
+    - ``path_mode`` (STRING): ``"managed"`` or ``"external"`` — derived from
+      the table's ``geobrix.file.write_strategy`` TBLPROPERTY.  Un-stamped
+      tables default to ``"external"``.
+    - All other non-FILE columns from the table (excluding ``path`` and
+      ``size``, which are consumed into ``source`` and ``size``).
+
+    **Serverless-GC safety:** column discovery uses ``DESCRIBE TABLE`` (not
+    ``spark.table(...).schema``); the FILE column is only referenced in the
+    SQL projection when ``file_supported(spark)`` is True *and* the table is
+    MANAGED — on Serverless-GC (FILE currently absent) the plain-column branch
+    is taken and the FILE column is never touched.  The returned DataFrame is
+    lazy; no ``.collect()`` of FILE-typed values occurs.
+
+    **Ordering:** unless ``skip_ordering=True``, the result is sorted by
+    ``source`` ascending with NULLs last (``F.col("source").asc_nulls_last()``)
+    so that tiles from the same source file land in the same partition, which
+    amortizes per-source open costs (the T8 convention for table reads).
+
+    Args:
+        spark: Active SparkSession (driver-side; never called from a worker).
+        table: Fully-qualified or unqualified Delta table name.
+        skip_ordering: If True, suppress the auto-sort and return rows in table
+            scan order.  Use when the table is already physically ordered (e.g.
+            written with ``layout="order"`` or ``layout="cluster"``) or when
+            the caller applies its own ordering downstream.
+
+    Returns:
+        A lazy Spark DataFrame with columns ``[source, size, path_mode,
+        <passthrough plain cols>]``.
+    """
+    from databricks.labs.gbx.pyrx import file_props as _fp
+
+    parsed = _fp.parse_props(_table_props(spark, table))
+    file_mode = parsed["file_mode"] or "external"
+
+    plain, file_col_name = _describe_cols(spark, table)
+
+    # Determine whether to resolve path via the FILE column's .uri subfield.
+    # FILE column is referenced only when file_supported(spark) is True — on
+    # Serverless-GC today (FILE absent) we fall through to the plain branch.
+    use_managed_uri = (
+        file_mode == "managed" and file_col_name is not None and file_supported(spark)
+    )
+
+    # Passthrough columns: all plain columns except 'path' and 'size' (which
+    # become the 'source' and 'size' output columns respectively).
+    passthrough_cols = [c for c in sorted(plain) if c not in ("path", "size")]
+    has_size = "size" in plain
+
+    if use_managed_uri:
+        # Managed + FILE-capable: project the FILE column to resolve .uri.
+        # Exclude 'path' and 'size' from the SELECT (path comes from uri).
+        select_cols = passthrough_cols + [file_col_name]
+        if not select_cols:
+            raise ValueError(f"no columns to project from {table!r}")
+        base = spark.sql(f"SELECT {', '.join(select_cols)} FROM {table}")
+        source_expr = F.expr(f"regexp_replace({file_col_name}.uri, '^dbfs:', '')")
+        size_expr = F.lit(None).cast("bigint")
+    else:
+        # Plain branch: FILE column never referenced (Serverless-GC-safe).
+        path_cols = ["path"] if "path" in plain else []
+        sz_cols = ["size"] if has_size else []
+        all_cols = path_cols + sz_cols + passthrough_cols
+        if not all_cols:
+            raise ValueError(f"no plain columns to project from {table!r}")
+        base = spark.sql(f"SELECT {', '.join(all_cols)} FROM {table}")
+        source_expr = F.col("path") if "path" in plain else F.lit(None).cast("string")
+        size_expr = (
+            F.col("size").cast("bigint") if has_size else F.lit(None).cast("bigint")
+        )
+
+    # Build output: source, size, path_mode + passthrough cols.
+    out = base.withColumn("source", source_expr)
+    out = out.withColumn("size", size_expr)
+    out = out.withColumn("path_mode", F.lit(file_mode))
+
+    # Drop the raw 'path' column (replaced by 'source') and the FILE col (if selected).
+    cols_to_drop = []
+    if "path" in plain and not use_managed_uri:
+        # 'path' was selected in the plain branch; replaced by 'source'.
+        cols_to_drop.append("path")
+    if use_managed_uri and file_col_name is not None:
+        # FILE col was selected in the managed branch; already consumed into 'source'.
+        cols_to_drop.append(file_col_name)
+    if cols_to_drop:
+        out = out.drop(*cols_to_drop)
+
+    # Auto-order by source (nulls last) unless caller opts out.
+    if not skip_ordering:
+        out = out.orderBy(F.col("source").asc_nulls_last())
+
+    # Return canonical column order: source, size, path_mode, passthrough.
+    return out.select("source", "size", "path_mode", *passthrough_cols)
 
 
 def _classify_source(source: str) -> str:

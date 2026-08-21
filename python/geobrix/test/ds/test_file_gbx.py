@@ -2242,3 +2242,97 @@ def test_enumerate_fuse_includes_hidden_subdirectory_files_when_enabled(tmp_path
     assert result == sorted(
         [str(normal / "data.geojsonl"), str(scratch / "data.geojsonl")]
     )
+
+
+# ---------------------------------------------------------------------------
+# resolve_file_table tests (Task 1 — shared core for FILE-column table reads)
+# ---------------------------------------------------------------------------
+
+
+def _make_unsorted_path_table(spark, name):
+    """Create a plain Hive table with path rows inserted in REVERSE alphabetical order.
+
+    Rows: "/z/z.tif", "/a/a.tif", "/m/m.tif" — clearly unsorted so ordering
+    tests are meaningful.
+    """
+    import shutil
+    from pathlib import Path
+
+    spark.sql(f"DROP TABLE IF EXISTS {name}")
+    wh = spark.conf.get("spark.sql.warehouse.dir", "spark-warehouse").replace(
+        "file:", ""
+    )
+    stale = Path(wh) / name
+    if stale.exists():
+        shutil.rmtree(str(stale))
+    df = spark.createDataFrame(
+        [("/z/z.tif",), ("/a/a.tif",), ("/m/m.tif",)],
+        "path string",
+    )
+    df.write.saveAsTable(name)
+
+
+def test_resolve_file_table_external_orders_by_source(spark):
+    """resolve_file_table default (skip_ordering=False) returns source sorted asc, nulls last."""
+    from databricks.labs.gbx.ds.file_gbx import resolve_file_table
+
+    _make_unsorted_path_table(spark, "_rft_order_test")
+    result = resolve_file_table(spark, "_rft_order_test")
+    assert (
+        "source" in result.columns
+    ), "resolve_file_table must return a 'source' column"
+    sources = [r["source"] for r in result.collect()]
+    assert sources == sorted(
+        sources, key=lambda s: (s is None, s or "")
+    ), f"sources must be sorted asc nulls-last; got {sources}"
+
+
+def test_resolve_file_table_skip_ordering_preserves_input_order(spark, monkeypatch):
+    """resolve_file_table(skip_ordering=True) must NOT call orderBy."""
+    from pyspark.sql import DataFrame
+
+    from databricks.labs.gbx.ds.file_gbx import resolve_file_table
+
+    _make_unsorted_path_table(spark, "_rft_skip_order_test")
+
+    orderby_called = []
+    orig_orderby = DataFrame.orderBy
+
+    def _spy_orderby(self, *args, **kwargs):
+        orderby_called.append(True)
+        return orig_orderby(self, *args, **kwargs)
+
+    monkeypatch.setattr(DataFrame, "orderBy", _spy_orderby)
+
+    result = resolve_file_table(spark, "_rft_skip_order_test", skip_ordering=True)
+    sources = [r["source"] for r in result.collect()]
+
+    assert (
+        not orderby_called
+    ), "orderBy was called even with skip_ordering=True — ordering must be suppressed"
+    assert set(sources) == {
+        "/z/z.tif",
+        "/a/a.tif",
+        "/m/m.tif",
+    }, f"all rows must be returned; got {sources}"
+
+
+def test_resolve_file_table_no_file_typed_column_in_result(spark):
+    """resolve_file_table result schema must not contain a FILE-typed column.
+
+    Column discovery uses DESCRIBE TABLE, not spark.table(...).schema, which is
+    Serverless-GC-unsafe. The result DataFrame must expose only plain-column types
+    (source STRING, size BIGINT, path_mode STRING, passthrough) — never a FILE ref.
+    """
+    from databricks.labs.gbx.ds.file_gbx import resolve_file_table
+
+    _make_unsorted_path_table(spark, "_rft_no_file_col_test")
+    result = resolve_file_table(spark, "_rft_no_file_col_test")
+    col_names_lower = [c.lower() for c in result.columns]
+    assert (
+        "file" not in col_names_lower
+    ), f"result schema must not contain a 'file' column; got {result.columns}"
+    # Verify core output columns exist
+    assert "source" in result.columns
+    assert "size" in result.columns
+    assert "path_mode" in result.columns

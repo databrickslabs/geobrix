@@ -13,7 +13,16 @@ from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import BinaryType, LongType, StringType
 
-from . import _file_ref, file_props
+# _table_props and _describe_cols are now canonical in ds/file_gbx.py.
+# Import them here so existing code that references them via
+# ``from databricks.labs.gbx.pyrx.file_table import _table_props`` keeps working.
+from databricks.labs.gbx.ds.file_gbx import (  # noqa: F401  re-exported for backward compatibility
+    _describe_cols,
+    _table_props,
+    resolve_file_table,
+)
+
+from . import file_props
 from .core.virtual_tile import V2_TILE_SCHEMA
 
 
@@ -63,41 +72,6 @@ def _absent_fields():
     }
 
 
-def _table_props(spark: SparkSession, table: str) -> dict:
-    rows = spark.sql(f"SHOW TBLPROPERTIES {table}").collect()
-    return {r["key"]: r["value"] for r in rows}
-
-
-def _describe_cols(spark: SparkSession, table: str):
-    """Return ``(plain_col_names, file_col_name_or_None)`` for a table.
-
-    FILE-typed columns are excluded from the plain set and reported separately.
-    Partition/metadata header rows (``col_name`` is ``None`` or starts with ``#``)
-    are ignored.
-    """
-    desc = spark.sql(f"DESCRIBE TABLE {table}").collect()
-    plain = set()
-    file_col = None
-    for r in desc:
-        col_name = r["col_name"]
-        data_type = (r["data_type"] or "").lower()
-        if not col_name or col_name.startswith("#"):
-            continue
-        # Match bare "file" and qualifier variants emitted by some DBR versions:
-        # "file managed", "file external", "file (managed)", "managed file", etc.
-        # Startswith and endswith together cover both ordering conventions.
-        is_file_type = (
-            data_type == "file"
-            or data_type.startswith("file ")
-            or data_type.endswith(" file")
-        )
-        if is_file_type:
-            file_col = col_name
-        else:
-            plain.add(col_name)
-    return plain, file_col
-
-
 def _project_sql(table: str, present: list) -> str:
     if not present:
         raise ValueError(f"no plain columns to project from {table!r}")
@@ -108,15 +82,21 @@ def _project_sql(table: str, present: list) -> str:
 def read_file_table(
     spark: SparkSession,
     table: str,
+    *,
+    skip_ordering: bool = False,
 ) -> DataFrame:
     """Read a GeoBrix FILE-column table, returning a DataFrame with a ``tile`` column.
 
     The ``tile`` column is ``V2_TILE_SCHEMA``-shaped.
 
+    Delegates FILE-column detection, path resolution (MANAGED uri-stripping /
+    EXTERNAL / plain), and source-path ordering to
+    :func:`~databricks.labs.gbx.ds.file_gbx.resolve_file_table`.  The raster
+    tile-struct wrapping (``V2_TILE_SCHEMA`` field assembly) is performed here.
+
     **Managed + FILE-capable runtime**: ``tile.path`` is set to the FILE column's
     ``.uri`` subfield with the ``dbfs:`` scheme stripped to a FUSE-openable
-    ``/Volumes/...`` path; ``path_mode`` is ``"managed"``.  The FILE column is
-    projected at the SQL level so the strip stays distributable (no ``.collect()``).
+    ``/Volumes/...`` path; ``path_mode`` is ``"managed"``.
 
     **All other cases** (external table, or ``file_supported`` returns False):
     only plain columns are projected; the FILE column is never referenced
@@ -124,68 +104,53 @@ def read_file_table(
     property, or ``"external"`` when the table is not GeoBrix-stamped.
 
     Non-tile columns pass through unchanged.
+
+    Args:
+        spark: Active SparkSession.
+        table: Fully-qualified or unqualified Delta table name.
+        skip_ordering: Passed through to :func:`resolve_file_table`.  Default
+            ``False`` preserves (and centralises) the T8 sort-by-source
+            convention for table reads.
     """
-    parsed = file_props.parse_props(_table_props(spark, table))
-    file_mode = parsed["file_mode"] or "external"
+    # Delegate FILE-column detection + path resolution + ordering to the
+    # shared core in ds/file_gbx.py.  The resolved DF has columns:
+    #   source (STRING), size (BIGINT|null), path_mode (STRING), <passthrough>
+    resolved = resolve_file_table(spark, table, skip_ordering=skip_ordering)
 
-    # Enumerate columns via DESCRIBE TABLE — NOT spark.table(...).schema, which is
-    # unsafe on Serverless GC when a FILE column is present.
-    plain, file_col_name = _describe_cols(spark, table)
-    present = [c for c in _TILE_PLAIN_COLS if c in plain]
-    passthrough = [c for c in plain if c not in _TILE_PLAIN_COLS]
-
-    # Determine whether to resolve path via the FILE column's .uri subfield.
-    # FILE column is ONLY referenced when file_supported(spark) is True — on
-    # Serverless-GC today (FILE absent) we fall through to the plain-column branch.
-    use_managed_uri = (
-        file_mode == "managed"
-        and file_col_name is not None
-        and _file_ref.file_supported(spark)
-    )
-
-    if use_managed_uri:
-        # Managed + FILE-capable: project the FILE column to resolve .uri, but
-        # exclude any plain `path` column from the SELECT (the uri IS the path now).
-        present_for_select = [c for c in present if c != "path"]
-        base = spark.sql(
-            _project_sql(table, present_for_select + passthrough + [file_col_name])
-        )
-        path_col = F.expr(f"regexp_replace({file_col_name}.uri, '^dbfs:', '')")
-        path_mode_col = F.lit("managed")
-    else:
-        # Plain branch: today's behavior — FILE column never referenced.
-        base = spark.sql(_project_sql(table, present + passthrough))
-        path_col = None  # use F.col("path") via `present` membership below
-        path_mode_col = F.lit(file_mode)
+    # Identify tile fields and non-tile passthrough columns from the resolved schema.
+    # 'source', 'size', 'path_mode' are consumed here; everything else is passthrough.
+    resolved_col_set = set(resolved.schema.fieldNames()) - {
+        "source",
+        "size",
+        "path_mode",
+    }
+    # Recognized tile fields (V2_TILE_SCHEMA minus 'path', which comes from 'source')
+    tile_fields_present = {
+        c for c in _TILE_PLAIN_COLS if c != "path" and c in resolved_col_set
+    }
+    # Non-tile extra columns — sit alongside 'tile' in the final output
+    non_tile_passthrough = [c for c in resolved_col_set if c not in _TILE_PLAIN_COLS]
 
     # Build typed null expressions lazily (requires active SparkContext).
     absent = _absent_fields()
 
-    # field order/types match V2_TILE_SCHEMA
-    # (cellid, raster, path, path_mode, window, clip_polygon, clip_crs, crs, metadata)
-    # For `path`: managed+capable branch uses the uri-derived expression; otherwise
-    # falls through to the standard present/absent logic.
-    present_for_struct = (
-        [c for c in present if c != "path"] if use_managed_uri else present
-    )
-
-    # Build the struct by iterating V2_TILE_SCHEMA.fieldNames() so the emitted
-    # field order exactly matches the schema regardless of future reorders.
-    # Two computed columns get special treatment:
-    #   path      — managed+capable branch uses the uri-derived expression;
-    #               all other branches fall through to present/absent.
-    #   path_mode — always the computed path_mode_col (not in present/absent).
+    # Build the tile struct by iterating V2_TILE_SCHEMA.fieldNames() so the
+    # emitted field order exactly matches the schema regardless of future reorders.
+    # Three computed columns get special treatment:
+    #   path      — taken from the 'source' column produced by resolve_file_table
+    #   path_mode — taken from the 'path_mode' column (resolved file mode)
+    #   raster    — always absent (null BINARY); FILE tables carry no BINARY raster
     tile_struct = F.struct(
         *[
             (
-                path_col.alias("path")
-                if c == "path" and use_managed_uri
+                F.col("source").alias("path")
+                if c == "path"
                 else (
-                    path_mode_col.alias("path_mode")
+                    F.col("path_mode").alias("path_mode")
                     if c == "path_mode"
                     else (
                         F.col(c).alias(c)
-                        if c in present_for_struct
+                        if c in tile_fields_present
                         else absent[c].alias(c)
                     )
                 )
@@ -194,8 +159,8 @@ def read_file_table(
         ]
     )
     # "raster" is intentionally absent from a FILE table (null BINARY).
-    out = base.withColumn("tile", tile_struct)
-    return out.select("tile", *passthrough)
+    out = resolved.withColumn("tile", tile_struct)
+    return out.select("tile", *non_tile_passthrough)
 
 
 # ---------------------------------------------------------------------------

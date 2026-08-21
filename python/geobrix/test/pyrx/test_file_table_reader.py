@@ -137,13 +137,15 @@ def test_managed_capable_branch_uses_file_uri(spark, monkeypatch):
     """Managed+capable: tile.path comes from FILE .uri (dbfs: stripped); path_mode=managed."""
     _make_managed_stub_table(spark, "file_tbl_managed_cap")
 
-    import databricks.labs.gbx.pyrx._file_ref as fr
-    import databricks.labs.gbx.pyrx.file_table as ft
+    # _table_props, _describe_cols, _FILE_SUPPORT_CACHE are now canonical in
+    # ds/file_gbx.py (moved from pyrx/file_table.py for the shared core).
+    # Patch them at their canonical location so resolve_file_table sees the stubs.
+    from databricks.labs.gbx.ds import file_gbx as fg
     from databricks.labs.gbx.pyrx import file_props
 
     # Stamp as managed table
     monkeypatch.setattr(
-        ft,
+        fg,
         "_table_props",
         lambda *a, **k: {
             file_props.WRITE_STRATEGY_KEY: "managed:plain",
@@ -152,12 +154,12 @@ def test_managed_capable_branch_uses_file_uri(spark, monkeypatch):
     )
     # Report tile_file as the FILE-typed column (plain set excludes it)
     monkeypatch.setattr(
-        ft,
+        fg,
         "_describe_cols",
         lambda s, t: ({"cellid", "path", "crs"}, "tile_file"),
     )
-    # FILE is supported
-    monkeypatch.setattr(fr, "_FILE_SUPPORT_CACHE", {id(spark): True})
+    # FILE is supported — patch the cache in ds/file_gbx.py (canonical home)
+    monkeypatch.setattr(fg, "_FILE_SUPPORT_CACHE", {id(spark): True})
 
     out = read_file_table(spark, "file_tbl_managed_cap")
 
@@ -178,13 +180,13 @@ def test_not_capable_branch_no_file_col_reference(spark, monkeypatch):
     """Not-capable: FILE column is never referenced; path comes from plain column."""
     _make_managed_stub_table(spark, "file_tbl_managed_notcap")
 
-    import databricks.labs.gbx.pyrx._file_ref as fr
-    import databricks.labs.gbx.pyrx.file_table as ft
+    # Patch at canonical location (ds/file_gbx.py) — moved from pyrx/file_table.py
+    from databricks.labs.gbx.ds import file_gbx as fg
     from databricks.labs.gbx.pyrx import file_props
 
     # Stamp as managed table
     monkeypatch.setattr(
-        ft,
+        fg,
         "_table_props",
         lambda *a, **k: {
             file_props.WRITE_STRATEGY_KEY: "managed:plain",
@@ -193,12 +195,12 @@ def test_not_capable_branch_no_file_col_reference(spark, monkeypatch):
     )
     # Report tile_file as the FILE-typed column — but FILE is NOT supported
     monkeypatch.setattr(
-        ft,
+        fg,
         "_describe_cols",
         lambda s, t: ({"cellid", "path", "crs"}, "tile_file"),
     )
-    # FILE is NOT supported
-    monkeypatch.setattr(fr, "_FILE_SUPPORT_CACHE", {id(spark): False})
+    # FILE is NOT supported — patch canonical cache
+    monkeypatch.setattr(fg, "_FILE_SUPPORT_CACHE", {id(spark): False})
 
     # Capture the SQL issued to verify file col is never referenced
     issued_sqls = []
@@ -223,16 +225,21 @@ def test_not_capable_branch_no_file_col_reference(spark, monkeypatch):
 
 def test_read_never_selects_star_or_file_column(spark, monkeypatch):
     # guard: the SQL the reader issues must project named plain columns, not *
-    import databricks.labs.gbx.pyrx.file_table as ft
-
-    seen = {}
-    real = ft._project_sql
+    # read_file_table delegates to resolve_file_table (ds/file_gbx.py), which issues
+    # the SELECT directly via spark.sql().  Spy on spark.sql to capture the query.
+    issued_sqls = []
+    real_spark_sql = spark.sql
     monkeypatch.setattr(
-        ft, "_project_sql", lambda *a, **k: seen.setdefault("sql", real(*a, **k))
+        spark, "sql", lambda s, **kw: issued_sqls.append(s) or real_spark_sql(s, **kw)
     )
     _make_plain_table(spark, "file_tbl_r2")
     read_file_table(spark, "file_tbl_r2")
-    assert "*" not in seen["sql"] and "SELECT" in seen["sql"].upper()
+    # Find the SELECT issued for the tile table (not DESCRIBE / SHOW TBLPROPERTIES)
+    select_sqls = [s for s in issued_sqls if s.strip().upper().startswith("SELECT")]
+    assert select_sqls, f"no SELECT issued; captured: {issued_sqls}"
+    for sql in select_sqls:
+        assert "*" not in sql, f"SELECT * used in: {sql!r}"
+        assert "SELECT" in sql.upper()
 
 
 # ---------------------------------------------------------------------------
@@ -241,7 +248,7 @@ def test_read_never_selects_star_or_file_column(spark, monkeypatch):
 
 
 def test_read_file_table_passes_spark_to_file_supported(spark, monkeypatch):
-    """read_file_table must call file_supported WITH the spark session, not None.
+    """resolve_file_table must call file_supported WITH the spark session, not None.
 
     V1 root-cause investigation: the leading hypothesis was that spark wasn't
     passed, letting getActiveSession()=None on Spark Connect (DBR 14+) defeat
@@ -250,22 +257,25 @@ def test_read_file_table_passes_spark_to_file_supported(spark, monkeypatch):
 
     We set up a managed table context (file_mode='managed', file_col present)
     so the code reaches the file_supported gate rather than short-circuiting.
+
+    After re-basing: resolve_file_table (in ds/file_gbx.py) owns the
+    file_supported call, so we spy at the canonical location.
     """
-    import databricks.labs.gbx.pyrx._file_ref as fr
-    import databricks.labs.gbx.pyrx.file_table as ft
+    from databricks.labs.gbx.ds import file_gbx as fg
     from databricks.labs.gbx.pyrx import file_props
 
     _make_managed_stub_table(spark, "file_tbl_session_spy")
 
     received_sessions = []
-    real_file_supported = fr.file_supported
+    real_file_supported = fg.file_supported
 
     def spy_file_supported(sess=None):
         received_sessions.append(sess)
         return real_file_supported(sess)
 
+    # Patch at canonical location in ds/file_gbx.py
     monkeypatch.setattr(
-        ft,
+        fg,
         "_table_props",
         lambda *a, **k: {
             file_props.WRITE_STRATEGY_KEY: "managed:plain",
@@ -273,9 +283,9 @@ def test_read_file_table_passes_spark_to_file_supported(spark, monkeypatch):
         },
     )
     monkeypatch.setattr(
-        ft, "_describe_cols", lambda s, t: ({"cellid", "path", "crs"}, "tile_file")
+        fg, "_describe_cols", lambda s, t: ({"cellid", "path", "crs"}, "tile_file")
     )
-    monkeypatch.setattr(fr, "file_supported", spy_file_supported)
+    monkeypatch.setattr(fg, "file_supported", spy_file_supported)
 
     read_file_table(spark, "file_tbl_session_spy")
 
@@ -348,3 +358,86 @@ def test_describe_cols_file_type_detection(data_type, expected_is_file):
             file_col is None
         ), f"data_type={data_type!r}: falsely detected as FILE; file_col={file_col!r}"
         assert "tile_file" in plain
+
+
+# ---------------------------------------------------------------------------
+# Task 1: byte-identical tile struct after resolve_file_table re-base
+# ---------------------------------------------------------------------------
+
+
+def test_read_file_table_tile_struct_unchanged_after_rebase(spark):
+    """read_file_table tile struct is byte-identical after resolve_file_table re-base.
+
+    After re-basing read_file_table on resolve_file_table, the tile struct
+    (fields, path resolution for external/plain, Serverless-GC fallback) must
+    produce the same output as before the refactor.
+    """
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    _make_plain_table(spark, "_rft_rebase_struct")
+    out = read_file_table(spark, "_rft_rebase_struct")
+
+    # 1. Output must have 'tile' column
+    assert "tile" in out.columns
+
+    # 2. Tile struct field names match V2_TILE_SCHEMA exactly (field order locked)
+    actual_names = [f.name for f in out.schema["tile"].dataType.fields]
+    assert actual_names == V2_TILE_SCHEMA.fieldNames(), (
+        f"tile struct field names diverged from V2_TILE_SCHEMA after re-base.\n"
+        f"  expected: {V2_TILE_SCHEMA.fieldNames()}\n"
+        f"  actual:   {actual_names}"
+    )
+
+    # 3. Path resolution: plain table → tile.path = original path string; path_mode = "external"
+    rows = {r["tile"]["path"]: r["tile"] for r in out.collect()}
+    assert "/Volumes/main/s/v/a.tif" in rows, "expected path not found after re-base"
+    tile_a = rows["/Volumes/main/s/v/a.tif"]
+    assert (
+        tile_a["path_mode"] == "external"
+    ), f"path_mode must be 'external' for un-stamped table; got {tile_a['path_mode']!r}"
+    # path field value unchanged
+    assert tile_a["path"] == "/Volumes/main/s/v/a.tif"
+    # raster is null (FILE table has no BINARY raster column)
+    assert tile_a["raster"] is None
+
+
+def test_read_file_table_skip_ordering_param_accepted(spark):
+    """read_file_table accepts skip_ordering kwarg (new param — must not raise)."""
+    _make_plain_table(spark, "_rft_skip_ordering_param")
+    # Default (False): should not raise
+    out1 = read_file_table(spark, "_rft_skip_ordering_param")
+    assert "tile" in out1.columns
+    # Explicit True: should not raise
+    out2 = read_file_table(spark, "_rft_skip_ordering_param", skip_ordering=True)
+    assert "tile" in out2.columns
+
+
+def test_read_file_table_managed_capable_tile_struct_unchanged(spark, monkeypatch):
+    """Managed+capable branch: tile.path comes from FILE uri (dbfs: stripped), unchanged after re-base."""
+    _make_managed_stub_table(spark, "_rft_rebase_managed")
+
+    from databricks.labs.gbx.ds import file_gbx as fg
+    from databricks.labs.gbx.pyrx import file_props
+
+    # Stamp as managed
+    monkeypatch.setattr(
+        fg,
+        "_table_props",
+        lambda s, t: {
+            file_props.WRITE_STRATEGY_KEY: "managed:plain",
+            file_props.WRITER_VERSION_KEY: "1",
+        },
+    )
+    monkeypatch.setattr(
+        fg,
+        "_describe_cols",
+        lambda s, t: ({"cellid", "path", "crs"}, "tile_file"),
+    )
+    # FILE is supported — patch canonical cache in ds/file_gbx.py
+    monkeypatch.setattr(fg, "_FILE_SUPPORT_CACHE", {id(spark): True})
+
+    out = read_file_table(spark, "_rft_rebase_managed")
+    rows = {r["tile"]["cellid"]: r["tile"] for r in out.collect()}
+    assert rows[1]["path_mode"] == "managed"
+    assert rows[1]["path"] == "/Volumes/main/s/v/a.tif"
+    assert rows[2]["path"] == "/Volumes/main/s/v/b.tif"

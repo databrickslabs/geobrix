@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import math
 import os
 import shutil
 import tempfile
@@ -77,6 +78,82 @@ from databricks.labs.gbx.ds.file_gbx import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Mosaic-mode tile grid helpers
+# ---------------------------------------------------------------------------
+
+#: Default tile edge length (pixels) when MosaicOptions.tile_size is None.
+_MOSAIC_DEFAULT_TILE_SIZE = 1024
+
+
+def _tile_grid_windows(
+    src_width: int, src_height: int, tile_size: int, overlap_pct: float
+):
+    """Yield ``(row_idx, col_idx, Window)`` for each tile in the native pixel grid.
+
+    Parameters
+    ----------
+    src_width, src_height:
+        Source raster dimensions in pixels.
+    tile_size:
+        Tile edge length in pixels (square grid cells).
+    overlap_pct:
+        Tile-edge overlap as a percentage of tile_size (0 = non-overlapping).
+        A positive value expands each tile's read window by
+        ``ceil(tile_size * overlap_pct / 100)`` pixels on every side (halo),
+        clamped to the source bounds.
+
+    Yields
+    ------
+    (row_idx, col_idx, rasterio.windows.Window)
+        Row-major order (row 0 col 0, row 0 col 1, ...).  The Window is
+        pixel-aligned to the source and clamped to [0, src_*) on every edge.
+    """
+    from rasterio.windows import Window
+
+    n_cols = math.ceil(src_width / tile_size)
+    n_rows = math.ceil(src_height / tile_size)
+    halo = int(math.ceil(tile_size * overlap_pct / 100.0)) if overlap_pct > 0 else 0
+
+    for r in range(n_rows):
+        for c in range(n_cols):
+            base_col = c * tile_size
+            base_row = r * tile_size
+            base_w = min(tile_size, src_width - base_col)
+            base_h = min(tile_size, src_height - base_row)
+
+            # Expand with halo (clamped to source bounds on every edge).
+            exp_col = max(0, base_col - halo)
+            exp_row = max(0, base_row - halo)
+            exp_right = min(src_width, base_col + base_w + halo)
+            exp_bottom = min(src_height, base_row + base_h + halo)
+            exp_w = exp_right - exp_col
+            exp_h = exp_bottom - exp_row
+
+            yield r, c, Window(exp_col, exp_row, exp_w, exp_h)
+
+
+def _is_all_nodata(data, nodata) -> bool:
+    """Return True when every pixel in *data* matches *nodata*.
+
+    Parameters
+    ----------
+    data:
+        numpy array of pixel values (any shape).
+    nodata:
+        Source nodata value (may be None, float, or NaN).
+
+    Returns False when nodata is None (no declared nodata → cannot prune).
+    """
+    import numpy as np
+
+    if nodata is None:
+        return False
+    if isinstance(nodata, float) and math.isnan(nodata):
+        return bool(np.all(np.isnan(data)))
+    return bool(np.all(data == nodata))
+
 
 # ---------------------------------------------------------------------------
 # Mosaic-mode option model
@@ -410,6 +487,17 @@ class CogGbxWriter(DataSourceWriter):
         return c.upper()
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        # Mosaic mode: branch before tile_envelope check so that path-column
+        # inputs produce a mini-COG grid instead of a single output file.
+        if self.mosaic_opts is not None:
+            if self.tile_envelope:
+                raise ValueError(
+                    "cog_gbx mosaic mode requires a top-level 'path' column "
+                    "(file_gbx output); tile envelope input is not yet supported "
+                    "with mosaic mode."
+                )
+            return self._write_mosaic(iterator)
+
         if self.tile_envelope:
             # v2 (source, tile) envelope. driverMode over v2 tiles is a follow-on
             # (see module docstring / task-5): the path-gather-then-driver-convert
@@ -520,6 +608,140 @@ class CogGbxWriter(DataSourceWriter):
                     os.remove(tmp)
             written.append(out_path)
         return CogCommitMessage(paths=written, pending_paths=pending)
+
+    def _write_mosaic(self, iterator: Iterator) -> WriterCommitMessage:
+        """Mosaic-mode write: tile each source into bounded, non-overlapping mini-COGs.
+
+        For each input path row the source is NEVER fully materialised in RAM.
+        Instead, the source is opened once with rasterio and each tile window is
+        read independently (``src.read(window=…)``).  Each window's decoded size
+        is bounded by ``tile_size × tile_size × bands × itemsize`` — small by
+        design.  If a window exceeds the connect-aware cap (rare), it falls back
+        to ``_windowed_materialize_bytes`` (block-streaming, no full-array in RAM).
+
+        Output:
+          ``<out_dir>/tile_<row>_<col>.tif`` — a mini-COG (driver=COG, internal
+          tiling + overviews) for each non-empty tile cell.
+
+        The returned :class:`CogCommitMessage` carries all written paths in
+        ``msg.paths``; ``pending_paths`` is always empty (mosaic write never
+        defers to driver-side ``prepare_cogs``).
+
+        Task 3 reads ``msg.paths`` from all partition messages in ``commit()``
+        and builds the ``.vrt`` mosaic index.
+        """
+        import numpy as np
+        import rasterio
+        from rasterio.io import MemoryFile
+
+        from databricks.labs.gbx.pyrx.core import compression as _comp
+
+        opts = self.mosaic_opts
+        tile_size = (
+            opts.tile_size if opts.tile_size is not None else _MOSAIC_DEFAULT_TILE_SIZE
+        )
+        overlap_pct = opts.overlap_percent
+        prune_empty = opts.prune_empty
+
+        os.makedirs(self.out_dir, exist_ok=True)
+        written: List[str] = []
+
+        for row in iterator:
+            src_path = _listing.to_local_path(str(row["path"]))
+
+            with rasterio.open(src_path) as src:
+                src_width, src_height = src.width, src.height
+                count = src.count
+                out_dtype = src.dtypes[0]
+                src_nodata = src.nodata
+
+                for tile_row, tile_col, window in _tile_grid_windows(
+                    src_width, src_height, tile_size, overlap_pct
+                ):
+                    out_name = f"tile_{tile_row}_{tile_col}.tif"
+                    out_path = os.path.join(self.out_dir, out_name)
+
+                    if self.cog_skip_if_exists and os.path.exists(out_path):
+                        written.append(out_path)
+                        continue
+
+                    # Compute decoded window size before reading (cheap, header-only).
+                    decoded_size = (
+                        count
+                        * int(window.width)
+                        * int(window.height)
+                        * np.dtype(out_dtype).itemsize
+                    )
+
+                    if decoded_size > self._cap:
+                        # Large tile (rare by design): block-streaming path via
+                        # _windowed_materialize_bytes — at most one block in RAM
+                        # at a time.  Skip pruneEmpty for large tiles (reading a
+                        # down-sampled proxy to check nodata is not worth the
+                        # complexity for a case that should never occur in practice).
+                        _logger.info(
+                            "cog_gbx mosaic: tile %d,%d decoded size %d bytes "
+                            "exceeds cap %d bytes; using block-streaming path",
+                            tile_row,
+                            tile_col,
+                            decoded_size,
+                            self._cap,
+                        )
+                        from databricks.labs.gbx.pyrx.core.open_tile import (
+                            _windowed_materialize_bytes,
+                        )
+                        from databricks.labs.gbx.pyrx.core.virtual_tile import (
+                            VirtualTile,
+                        )
+
+                        vt = VirtualTile(
+                            cellid=0,
+                            path=src_path,
+                            window=(
+                                int(window.col_off),
+                                int(window.row_off),
+                                int(window.width),
+                                int(window.height),
+                            ),
+                        )
+                        window_bytes = _windowed_materialize_bytes(vt)
+                        self._bytes_to_cog(window_bytes, out_path)
+                        written.append(out_path)
+                        continue
+
+                    # Normal path: read whole window (bounded ≤ cap), check prune,
+                    # build GTiff bytes from already-read data (single read pass).
+                    data = src.read(window=window)
+
+                    # pruneEmpty: skip tiles that are entirely nodata.
+                    if prune_empty and _is_all_nodata(data, src_nodata):
+                        continue
+
+                    # Build GTiff bytes for this window.  Profile mirrors
+                    # _window_dataset_bytes / materialize_to_bytes for fidelity:
+                    # same driver, height, width, count, transform, compression.
+                    profile = src.profile.copy()
+                    profile.update(
+                        driver="GTiff",
+                        height=int(window.height),
+                        width=int(window.width),
+                        count=count,
+                        transform=src.window_transform(window),
+                    )
+                    profile.update(
+                        _comp.creation_opts(
+                            out_dtype, decoded_bytes=decoded_size, compress="auto"
+                        )
+                    )
+                    with MemoryFile() as mf:
+                        with mf.open(**profile) as dst:
+                            dst.write(data)
+                        window_bytes = mf.read()
+
+                    self._bytes_to_cog(window_bytes, out_path)
+                    written.append(out_path)
+
+        return CogCommitMessage(paths=written)
 
     def _out_path_for(self, vt, row) -> str:
         """Output COG path for a v2 tile row (name_col > tile.path > source > cellid)."""

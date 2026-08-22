@@ -68,6 +68,7 @@ __all__ = [
     "_accept_basename",
     "list_local_files",
     "_fuse_direct_disabled",
+    "_resolve_session_for_cap",
     # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
@@ -944,25 +945,28 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
 
     ``spark``: optional explicit session (preferred on Spark Connect / DBR 14+
     where ``getActiveSession()`` can return None in some threading contexts).
-    When omitted, ``file_supported()`` resolves the session internally.
+    When omitted, the session is resolved via ``_resolve_session_for_cap()``
+    (same mechanism as ``file_supported()``).
 
     Serverless-safe: no .rdd / _jvm / _jsc / sparkContext / conf.set.
 
-    Scoped FUSE-direct (DEFAULT, Approach B):
-    For a whole-file virtual tile (``tile.window IS NULL``) whose path is
-    FUSE-accessible (``/Volumes/...``, ``/dbfs/...``), the per-row
-    ``try_to_file`` mint is skipped — the worker opens the file via
-    ``rasterio.open(path)`` (FUSE-direct, ~5 ms) rather than
-    ``FileRef.open()`` (byte-range stream, ~525 ms on Serverless env v6).
-    WINDOWED tiles (``tile.window IS NOT NULL``) always receive a FileRef so
-    consecutive same-source opens amortize across the partition (one expensive
-    open shared across all windows). Remote paths (``s3://``, ``abfss://``,
-    ``gs://``) and MANAGED-non-FUSE paths keep the FileRef for the governed
-    byte-range stream. FILE governance and lifecycle are unaffected — this only
-    changes HOW a resolved FUSE file is opened.
+    Size-gated FUSE-direct (DEFAULT):
+    For a whole-file virtual tile (``tile.window IS NULL``) on a FUSE-accessible
+    path (``/Volumes/...``, ``/dbfs/...``) that is LARGER than the connect-aware
+    stream cap, the ``try_to_file`` mint is skipped — the worker opens it lazily
+    via FUSE, never materializing the whole file (essential under the ~1 GB
+    Serverless per-task cap). SMALL whole-file tiles (<= cap) keep the FileRef
+    and STREAM — bulk in-memory read is faster on Serverless (small-file
+    FUSE-direct regressed the dir read ~1.6× in benchmarking). The cap is baked
+    at plan-build: 64 MiB on Connect/Serverless, 256 MiB classic
+    (``GBX_STREAM_MAX_BYTES`` overrides both). WINDOWED tiles
+    (``tile.window IS NOT NULL``), remote paths (``s3://``, ``abfss://``,
+    ``gs://``), and MANAGED-non-FUSE paths keep the FileRef for the governed
+    byte-range stream. A NULL or missing ``path_file_size`` metadata value
+    makes the size comparison NULL, which falls through to the try_to_file
+    branch (safe stream fallback). FILE governance and lifecycle are unaffected.
     Set ``GBX_DISABLE_FUSE_DIRECT=1`` to force the byte-range stream for every
-    read (a kill-switch for regression isolation or environments where
-    FUSE-direct misbehaves).
+    read (kill-switch for regression isolation).
     """
     # NOTE: on a FILE-enabled session the first call to file_supported() triggers
     # a synchronous feature-detect query (memoized once per session) — so building
@@ -978,21 +982,30 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
         _tc = F.col(tile_col) if isinstance(tile_col, str) else tile_col
         path_col = _tc["path"]
         if not _fuse_direct_disabled():
-            # Scoped FUSE-direct (DEFAULT): a WHOLE-FILE virtual tile (window IS
-            # NULL) whose path is FUSE-accessible (/Volumes, /dbfs) skips the
-            # try_to_file mint AND the byte-range stream — the worker opens the
-            # file directly via rasterio.open (~5 ms) instead of FileRef.open()
-            # (~525 ms on Serverless env v6). NULL here means the UDF receives
-            # file_ref=None and takes open_tile's FUSE-direct local-path branch.
-            # WINDOWED tiles (split/striped: window IS NOT NULL) keep the FileRef
-            # so consecutive same-source opens amortize across the group; remote
-            # paths (s3://, abfss://, gs://) and MANAGED-non-FUSE paths keep the
-            # FileRef for the governed byte-range stream. FILE governance/lifecycle
-            # is unaffected — this only changes HOW a resolved file is opened.
-            # Set GBX_DISABLE_FUSE_DIRECT=1 to force the stream for every read.
+            # Size-gated FUSE-direct (DEFAULT): a WHOLE-FILE virtual tile (window IS
+            # NULL) on a FUSE-accessible path (/Volumes, /dbfs) that is LARGER than
+            # the connect-aware stream cap skips the try_to_file mint AND the
+            # byte-range stream — the worker opens it lazily via FUSE, never
+            # materializing the whole file (essential under the ~1 GB Serverless
+            # per-task cap). SMALL whole-file tiles (<= cap) keep the FileRef and
+            # STREAM (bulk in-memory read + parse) — faster on Serverless, where a
+            # small-file FUSE-direct regressed the dir read ~1.6x in benchmarking.
+            # WINDOWED tiles (split/striped: window IS NOT NULL), remote paths
+            # (s3://, abfss://, gs://), and MANAGED-non-FUSE paths keep the FileRef
+            # for the governed byte-range stream. NULL here => the UDF receives
+            # file_ref=None and takes open_tile's FUSE local-path branch. FILE
+            # governance/lifecycle is unaffected — this only changes HOW a resolved
+            # file is opened. Cap = 64 MiB Connect/Serverless, 256 MiB classic
+            # (GBX_STREAM_MAX_BYTES override), from _connect_aware_lru_sizing, baked
+            # at plan-build. The reader stamps path_file_size into tile metadata; a
+            # missing/NULL size falls through to the stream branch. Set
+            # GBX_DISABLE_FUSE_DIRECT=1 to force the stream for every read.
+            _sess = spark if spark is not None else _resolve_session_for_cap()
+            cap_bytes = _connect_aware_lru_sizing(_sess)[0]
             whole_file = _tc["window"].isNull()
             fuse_path = path_col.startswith("/Volumes") | path_col.startswith("/dbfs")
-            return F.when(whole_file & fuse_path, F.lit(None)).otherwise(
+            large = _tc["metadata"]["path_file_size"].cast("long") > F.lit(cap_bytes)
+            return F.when(whole_file & fuse_path & large, F.lit(None)).otherwise(
                 F.call_function("try_to_file", path_col)
             )
         return F.call_function("try_to_file", path_col)
@@ -1128,6 +1141,25 @@ def _fuse_direct_disabled() -> bool:
     Worker-safe: reads os.environ only (no SparkSession).
     """
     return os.environ.get("GBX_DISABLE_FUSE_DIRECT") == "1"
+
+
+def _resolve_session_for_cap() -> Optional["SparkSession"]:
+    """Resolve the active SparkSession for baking the connect-aware stream cap.
+
+    Mirrors the session-resolution in file_supported(): tries getActiveSession()
+    first, falls back to getOrCreate(), returns None if both fail.  None is an
+    acceptable result — _connect_aware_lru_sizing(None) returns the 256 MiB classic
+    cap as a safe fallback (same as the non-Connect branch).
+
+    Worker-safe: no .rdd / _jvm / conf.set.
+    """
+    sess = SparkSession.getActiveSession()
+    if sess is not None:
+        return sess
+    try:
+        return SparkSession.builder.getOrCreate()
+    except Exception:
+        return None
 
 
 def _is_fuse_path(path: str) -> bool:

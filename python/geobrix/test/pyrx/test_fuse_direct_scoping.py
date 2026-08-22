@@ -1,15 +1,18 @@
-"""Tests for scoped FUSE-direct default and kill-switch (GBX_DISABLE_FUSE_DIRECT).
+"""Tests for size-gated FUSE-direct default and kill-switch (GBX_DISABLE_FUSE_DIRECT).
 
 Covers:
-  - file_ref_arg expression structure: DEFAULT is scoped CASE WHEN (window IS NULL +
-    FUSE path), KILL-SWITCH (GBX_DISABLE_FUSE_DIRECT=1) gives bare try_to_file.
+  - file_ref_arg expression structure: DEFAULT is size-gated CASE WHEN (window IS
+    NULL + FUSE path + path_file_size > cap), KILL-SWITCH gives bare try_to_file.
+  - Cap baking: the connect-aware stream cap from _connect_aware_lru_sizing is baked
+    into the plan-level Column at driver-build time (honors GBX_STREAM_MAX_BYTES).
   - _fuse_direct_disabled() unit: False by default; True only when env=="1".
   - open_tile routing: whole-file tile (window=None) with file_ref=None reads via
     FUSE-direct local-path; tile with a present file_ref uses open_windowed_via_fileref.
   - Pixel equivalence: FUSE-direct (file_ref=None) == stream (file_ref present).
   - Materialized tile (raster set): unaffected regardless of env var.
-  - CRITICAL SCOPING: the CASE WHEN condition includes window IS NULL predicate,
-    so windowed tiles (window NOT NULL) always get try_to_file (stream), not NULL.
+  - CRITICAL SIZE GATE: the CASE WHEN condition includes the size > cap predicate, so
+    small whole-file tiles (path_file_size <= cap) keep the FileRef and stream instead
+    of taking the FUSE-direct path (small-file FUSE-direct regressed Serverless ~1.6x).
 """
 
 import io
@@ -86,14 +89,20 @@ def test_fuse_direct_disabled_false_for_other_values(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_file_ref_arg_default_is_scoped_case_when(spark, monkeypatch):
-    """DEFAULT (env unset): file_ref_arg returns a CASE WHEN scoped to window IS NULL.
+def test_file_ref_arg_default_is_size_gated_case_when(spark, monkeypatch):
+    """DEFAULT (env unset): file_ref_arg returns a size-gated CASE WHEN expression.
 
-    The expression must contain BOTH a window IS NULL predicate (scoping the
-    FUSE-direct path to whole-file tiles only) AND try_to_file (in the ELSE branch
-    for windowed / non-FUSE tiles). A bare try_to_file would mean ALL /Volumes
-    tiles skip the stream, including windowed ones — that would regress striped
-    raster reads by 10-290x.
+    The WHEN condition must reference ALL THREE predicates:
+      1. window IS NULL          — whole-file tiles only (windowed → stream)
+      2. path starts with /Volumes or /dbfs — FUSE-accessible paths only
+      3. path_file_size > cap    — large files only (small → stream, faster on Serverless)
+
+    And the OTHERWISE branch must be try_to_file.
+
+    A bare try_to_file would send ALL /Volumes tiles to FUSE-direct regardless of
+    size, including small ones that are faster to stream on Serverless (~1.6x
+    regression measured on-cluster) and windowed ones that need the FileRef for
+    amortized opens (10-290x regression for striped rasters).
     """
     from unittest import mock
 
@@ -112,18 +121,46 @@ def test_file_ref_arg_default_is_scoped_case_when(spark, monkeypatch):
     # Must be a CASE WHEN (not bare try_to_file)
     assert (
         "CASE" in expr_str.upper() or "WHEN" in expr_str.upper()
-    ), f"Expected CASE WHEN expression for scoped default, got: {expr_str!r}"
-    # Must include try_to_file (in the ELSE branch for non-null-window / non-FUSE tiles)
+    ), f"Expected CASE WHEN expression for size-gated default, got: {expr_str!r}"
+    # Must include try_to_file (in the OTHERWISE branch)
     assert (
         "try_to_file" in expr_str
     ), f"Expected try_to_file in CASE WHEN expression, got: {expr_str!r}"
+    # Must include the size predicate: path_file_size metadata field
+    assert (
+        "path_file_size" in expr_str
+    ), f"Expected path_file_size in size-gated expression, got: {expr_str!r}"
+    # Must include a cast to long/bigint for the size comparison
+    expr_lower = expr_str.lower()
+    assert "bigint" in expr_lower or "long" in expr_lower or "cast" in expr_lower, (
+        f"Expected cast to long/bigint in expression (for path_file_size comparison), "
+        f"got: {expr_str!r}"
+    )
+    # Must include a > comparison (size > cap)
+    assert (
+        ">" in expr_str
+    ), f"Expected '>' comparison in expression (path_file_size > cap), got: {expr_str!r}"
+    # Must include the window IS NULL predicate
+    assert (
+        "window" in expr_lower
+    ), f"Expected window IS NULL predicate in expression, got: {expr_str!r}"
+    assert (
+        "null" in expr_lower
+    ), f"Expected null reference (window IS NULL) in expression, got: {expr_str!r}"
+    # Must include the FUSE path prefix check (/Volumes)
+    assert (
+        "volumes" in expr_lower or "/Volumes" in expr_str
+    ), f"Expected /Volumes path prefix check in expression, got: {expr_str!r}"
 
 
-def test_file_ref_arg_default_contains_window_null_predicate(spark, monkeypatch):
-    """DEFAULT: the CASE WHEN condition includes the window IS NULL predicate.
+def test_file_ref_arg_cap_baking(spark, monkeypatch):
+    """CAP BAKING: the connect-aware stream cap is baked into the Column at plan-build.
 
-    This is the SCOPING predicate. It ensures whole-file tiles (window IS NULL)
-    get FUSE-direct, while windowed tiles (window IS NOT NULL) keep the FileRef.
+    With GBX_STREAM_MAX_BYTES=12345, file_ref_arg must produce a Column expression
+    that literally contains 12345. This proves _connect_aware_lru_sizing is called
+    on the driver at plan-build time and its result is embedded as a literal in the
+    Spark plan — NOT deferred to the worker. On Serverless (Connect session), the
+    cap would be 64 MiB; on Classic, 256 MiB. The env override wins in both cases.
     """
     from unittest import mock
 
@@ -132,6 +169,7 @@ def test_file_ref_arg_default_contains_window_null_predicate(spark, monkeypatch)
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     monkeypatch.delenv("GBX_DISABLE_FUSE_DIRECT", raising=False)
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
 
     with mock.patch(
         "databricks.labs.gbx.ds.file_gbx.file_supported", return_value=True
@@ -139,22 +177,18 @@ def test_file_ref_arg_default_contains_window_null_predicate(spark, monkeypatch)
         result = file_ref_arg(F.col("tile"))
         expr_str = str(result._jc)
 
-    # The window IS NULL predicate must appear in the expression.
-    # Spark may render it as "isnull(tile.window)", "(tile.window IS NULL)", etc.
-    expr_lower = expr_str.lower()
-    assert (
-        "window" in expr_lower
-    ), f"Expected 'window' IS NULL predicate in expression, got: {expr_str!r}"
-    assert (
-        "null" in expr_lower
-    ), f"Expected null reference in expression (window IS NULL), got: {expr_str!r}"
+    assert "12345" in expr_str, (
+        f"Cap from GBX_STREAM_MAX_BYTES must be baked as a literal into the plan-level "
+        f"Column expression. Expected '12345' in expr, got: {expr_str!r}"
+    )
 
 
 def test_file_ref_arg_kill_switch_returns_bare_try_to_file(spark, monkeypatch):
     """KILL-SWITCH (GBX_DISABLE_FUSE_DIRECT=1): bare try_to_file, no CASE WHEN.
 
     The kill-switch forces the byte-range stream for EVERY tile (equivalent to
-    the pre-Approach-B behavior) to allow regression isolation.
+    the pre-size-gate behavior) to allow regression isolation. It must produce a
+    bare try_to_file with no size gate, no window predicate, no path_file_size.
     """
     from unittest import mock
 
@@ -176,6 +210,11 @@ def test_file_ref_arg_kill_switch_returns_bare_try_to_file(spark, monkeypatch):
     assert (
         "CASE" not in expr_str.upper() and "WHEN" not in expr_str.upper()
     ), f"Kill-switch must produce bare try_to_file (no CASE WHEN), got: {expr_str!r}"
+    # No size gate in kill-switch mode — path_file_size must not appear.
+    assert "path_file_size" not in expr_str, (
+        f"Kill-switch must not reference path_file_size (bare stream, no size gate), "
+        f"got: {expr_str!r}"
+    )
 
 
 def test_file_ref_arg_file_not_supported_returns_null(spark, monkeypatch):
@@ -409,26 +448,34 @@ def test_open_tile_routing_depends_only_on_file_ref_presence(gtiff_bytes, monkey
 # ---------------------------------------------------------------------------
 
 
-def test_windowed_tile_keeps_fileref_for_amortized_stream(spark, monkeypatch):
-    """CRITICAL SCOPING: windowed tiles always get try_to_file (ref), not NULL.
+def test_file_ref_arg_size_gate_all_three_conditions_required(spark, monkeypatch):
+    """CRITICAL SIZE GATE: FUSE-direct requires ALL THREE conditions — size is the new gate.
 
-    With DEFAULT env (GBX_DISABLE_FUSE_DIRECT unset), file_ref_arg returns a
-    CASE WHEN expression scoped by:
+    With DEFAULT env (GBX_DISABLE_FUSE_DIRECT unset), file_ref_arg returns a CASE WHEN:
 
-        WHEN (tile.window IS NULL) AND (tile.path LIKE /Volumes% OR LIKE /dbfs%)
-        THEN NULL                 ← whole-file FUSE tile → FUSE-direct (~5 ms)
-        ELSE try_to_file(path)    ← windowed / non-FUSE → stream for amortization
+        WHEN (tile.window IS NULL)                     -- whole-file only
+          AND (path STARTS WITH /Volumes OR /dbfs)     -- FUSE-accessible only
+          AND (path_file_size CAST AS LONG > cap)      -- LARGE files only
+        THEN NULL                   ← FUSE-direct (lazy open, never materializes file)
+        ELSE try_to_file(path)      ← stream (all other tiles)
 
-    A windowed tile (window IS NOT NULL) CANNOT satisfy the null-window condition,
-    so it falls through to try_to_file(path) — the FileRef arrives at the worker
-    and one expensive FileRef.open() (~525 ms) amortizes across ALL windows from
-    that source in the same partition. Bypassing this for windowed tiles would
-    regress striped-raster reads 10–290x.
+    WHY THREE CONDITIONS MATTER:
+    - Small files (path_file_size <= cap) CANNOT satisfy the third condition and
+      MUST stream. Benchmarking showed small-file FUSE-direct regressed Serverless
+      dir reads by ~1.6x — stream (bulk in-memory read + parse) is faster for small
+      files on Serverless.
+    - Large files (> cap) take FUSE-direct so they are opened lazily, never loading
+      the whole file into the ~1 GB Serverless per-task memory budget.
+    - A NULL or missing path_file_size makes the comparison NULL, which Spark's
+      three-valued logic evaluates to FALSE in a WHEN condition — so tiles without
+      a known size fall through to try_to_file (safe stream fallback).
+    - Windowed tiles (window IS NOT NULL) cannot satisfy the first condition and
+      always get the FileRef for amortized opens (one expensive .open() shared
+      across all windows from the same source). Bypassing this would regress
+      striped-raster reads 10-290x.
 
-    This test asserts the STRUCTURE of the CASE WHEN expression: the window IS NULL
-    predicate appears in the condition, AND try_to_file appears in the ELSE branch.
-    We cannot evaluate a per-row CASE WHEN without a running Spark plan, but we can
-    confirm the structure that guarantees the correct routing semantics.
+    This test asserts the STRUCTURE of the expression (not per-row evaluation —
+    try_to_file is a Databricks built-in and is UNRESOLVED on OSS/Docker Spark).
     """
     from unittest import mock
 
@@ -444,25 +491,33 @@ def test_windowed_tile_keeps_fileref_for_amortized_stream(spark, monkeypatch):
         result = file_ref_arg(F.col("tile"))
         expr_str = str(result._jc)
 
-    # The expression must be a CASE WHEN (proves scoping — not a bare try_to_file)
+    # Must be a CASE WHEN (not a bare try_to_file)
     assert "CASE" in expr_str.upper() or "WHEN" in expr_str.upper(), (
-        "SCOPING FAILURE: file_ref_arg must return a CASE WHEN expression in DEFAULT "
-        f"mode. A bare try_to_file would bypass scoping and send ALL /Volumes tiles "
-        f"to FUSE-direct, including windowed ones (10-290x regression). Got: {expr_str!r}"
-    )
-
-    # The condition must include the window IS NULL predicate.
-    # Spark may render this as: isnull(tile.window), (tile.window IS NULL), etc.
-    expr_lower = expr_str.lower()
-    assert "window" in expr_lower, (
-        f"SCOPING FAILURE: window IS NULL predicate missing from CASE WHEN condition. "
-        f"Without it, even windowed tiles (window NOT NULL) would be FUSE-direct. "
+        "SIZE GATE FAILURE: file_ref_arg must return a CASE WHEN in DEFAULT mode. "
+        f"A bare try_to_file bypasses the gate and sends ALL tiles FUSE-direct. "
         f"Got: {expr_str!r}"
     )
 
-    # try_to_file must appear in the ELSE branch (windowed tiles get the ref).
+    # The size predicate (path_file_size > cap) must appear in the WHEN condition.
+    # Small whole-file tiles cannot satisfy this — they must stream.
+    assert "path_file_size" in expr_str, (
+        "SIZE GATE FAILURE: path_file_size missing from CASE WHEN condition. "
+        "Without the size predicate, small files take FUSE-direct (regresses "
+        f"Serverless ~1.6x). Got: {expr_str!r}"
+    )
+
+    # The window IS NULL predicate must appear in the WHEN condition.
+    expr_lower = expr_str.lower()
+    assert "window" in expr_lower, (
+        f"SCOPING FAILURE: window IS NULL predicate missing from CASE WHEN condition. "
+        f"Without it, even windowed tiles (window NOT NULL) would be FUSE-direct "
+        f"(10-290x regression for striped rasters). Got: {expr_str!r}"
+    )
+
+    # try_to_file must appear in the OTHERWISE branch (all non-large / non-FUSE / windowed
+    # tiles keep the FileRef for the governed byte-range stream).
     assert "try_to_file" in expr_str, (
-        f"SCOPING FAILURE: try_to_file missing from CASE WHEN expression. "
-        f"Windowed tiles must receive the FileRef for amortized stream opens. "
+        f"SIZE GATE FAILURE: try_to_file missing from CASE WHEN expression. "
+        f"Non-large / windowed / remote tiles must receive the FileRef. "
         f"Got: {expr_str!r}"
     )

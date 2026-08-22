@@ -67,6 +67,7 @@ __all__ = [
     "StageTooLargeError",
     "_accept_basename",
     "list_local_files",
+    "_fuse_volumes_preferred",
     # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
@@ -946,6 +947,16 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
     When omitted, ``file_supported()`` resolves the session internally.
 
     Serverless-safe: no .rdd / _jvm / _jsc / sparkContext / conf.set.
+
+    FUSE optimisation (Approach B, 2026-08-22):
+    When ``GBX_PREFER_FUSE_VOLUMES=1`` is set (Spark Connect / Serverless) and
+    FILE is otherwise supported, the per-row ``try_to_file`` mint is skipped for
+    FUSE-accessible paths (``/Volumes/...``, ``/dbfs/...``) because the worker
+    will open those tiles via FUSE-direct (~5 ms) rather than the FILE stream
+    (~525 ms).  Remote paths (``s3://``, ``abfss://``, ``gs://``) still receive
+    a full FileRef so the byte-range stream path is preserved for them.
+    FILE-column-table tiles are minted by the table scan, not by this function,
+    so their behavior is unaffected.
     """
     # NOTE: on a FILE-enabled session the first call to file_supported() triggers
     # a synchronous feature-detect query (memoized once per session) — so building
@@ -959,7 +970,18 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
         # returns the bare str "tile" (so callers can use it as a column name).
         # A bare str does not support ["path"] subscript — coerce to Column first.
         _tc = F.col(tile_col) if isinstance(tile_col, str) else tile_col
-        return F.call_function("try_to_file", _tc["path"])
+        path_col = _tc["path"]
+        if _fuse_volumes_preferred():
+            # Approach B: skip the per-tile try_to_file mint for FUSE-accessible
+            # paths (/Volumes, /dbfs) — workers will open these via FUSE-direct.
+            # Remote paths (s3://, abfss://, gs://) still get a FileRef so their
+            # byte-range stream path is preserved.  The CASE WHEN is evaluated
+            # per row in the Spark plan (no session required on workers).
+            fuse_cond = path_col.startswith("/Volumes") | path_col.startswith("/dbfs")
+            return F.when(fuse_cond, F.lit(None)).otherwise(
+                F.call_function("try_to_file", path_col)
+            )
+        return F.call_function("try_to_file", path_col)
     # FILE not supported or no session — pass None (UDF uses fallback path).
     return F.lit(None)
 
@@ -1076,6 +1098,23 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
 # =============================================================================
 # FUSE staging (from pyrx/core/preparer.py)
 # =============================================================================
+
+
+def _fuse_volumes_preferred() -> bool:
+    """Return True when FUSE-direct reads should be preferred for /Volumes paths.
+
+    On Spark Connect / Serverless, FUSE-direct (``rasterio.open("/Volumes/...")``)
+    is ~100× faster than the byte-range FILE stream (``FileRef.open()``) per
+    Approach-B benchmarks (Serverless env v6, 2026-08-22):
+      FUSE-direct open ~5 ms  <<  FILE stream open ~525 ms
+
+    Gating: set ``GBX_PREFER_FUSE_VOLUMES=1`` in the cluster / worker environment
+    (e.g. via cluster advanced settings or a notebook ``%env``) to activate the
+    optimised path.  Classic behavior is unchanged when the env var is absent.
+
+    Worker-safe: no SparkSession dependency — evaluated from ``os.environ`` only.
+    """
+    return os.environ.get("GBX_PREFER_FUSE_VOLUMES") == "1"
 
 
 def _is_fuse_path(path: str) -> bool:

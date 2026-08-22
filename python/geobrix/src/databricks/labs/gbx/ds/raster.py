@@ -1076,7 +1076,9 @@ class RasterGbxReader(DataSourceReader):
                         "count": str(ds.count),
                         "path_file_size": str(file_size),
                     }
-                    win = partition.window  # always set for non-whole-file virtual tiles
+                    win = (
+                        partition.window
+                    )  # always set for non-whole-file virtual tiles
                 yield (
                     source,
                     _v2_tile_row(

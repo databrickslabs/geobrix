@@ -298,20 +298,39 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
         #   - clip_polygon is not None → fall through; local-path branch clips.
         #   - warp needed → open_windowed_via_fileref raises FileRefReadError → fall through.
         # On any FileRefReadError fall through to the local-path branch below.
+        #
+        # Approach B (FUSE optimisation, 2026-08-22): when GBX_PREFER_FUSE_VOLUMES=1
+        # (Connect/Serverless) AND the tile path is FUSE-accessible (/Volumes, /dbfs),
+        # skip the byte-range stream entirely and go straight to the FUSE path below.
+        # Benchmark: FUSE-direct ~5 ms << FILE stream ~525 ms on Serverless (env v6).
+        # Remote paths (s3://, abfss://) still use the stream.  Classic behavior is
+        # unchanged (env var absent → normal path).
         if file_ref is not None and tile.clip_polygon is None:
-            try:
-                from databricks.labs.gbx.pyrx._file_ref import (
-                    FileRefReadError,
-                    open_windowed_via_fileref,
-                )
+            from databricks.labs.gbx.ds.file_gbx import (
+                _fuse_volumes_preferred,
+                _is_fuse_path,
+            )
 
-                with open_windowed_via_fileref(
-                    file_ref, tile.window, pending, tile_crs=tile.crs
-                ) as ds:
-                    yield ds
-                return
-            except FileRefReadError:
-                pass  # fall through to local-path branch
+            _skip_stream = (
+                tile.path is not None
+                and _is_fuse_path(tile.path)
+                and _fuse_volumes_preferred()
+            )
+            if not _skip_stream:
+                try:
+                    from databricks.labs.gbx.pyrx._file_ref import (
+                        FileRefReadError,
+                        open_windowed_via_fileref,
+                    )
+
+                    with open_windowed_via_fileref(
+                        file_ref, tile.window, pending, tile_crs=tile.crs
+                    ) as ds:
+                        yield ds
+                    return
+                except FileRefReadError:
+                    pass  # fall through to local-path branch
+            # FUSE-preferred /Volumes path: fall through directly to local-path branch.
 
         # Local-path branch: shared helper handles file_ref degradation
         # (as_local_file → tile.path) and today's plain tile.path read (file_ref=None).

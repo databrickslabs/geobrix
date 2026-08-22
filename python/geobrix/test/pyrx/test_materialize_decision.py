@@ -2,12 +2,14 @@
 
 Covers:
   - size_bytes <= cap → "stream"
-  - size_bytes > cap  → "fuse"
+  - size_bytes > cap  → "fuse"  (kind="read" or "write")
+  - kind="ingest" + size > cap → "error"  (explicit materialize=True guard)
+  - kind="ingest" + size <= cap → "stream"
   - size_bytes is None → "stream" (safe default, matches NULL-size read gate)
   - GBX_STREAM_MAX_BYTES env override is respected (proves cap wiring)
   - classic-session cap: 256 MiB; a 200 MiB input is "stream" without override
-  - kind values "read"/"write"/"ingest" all behave identically in this task
-    (size-vs-cap only — no kind branching yet)
+  - kind values "read"/"write" behave identically (fuse over cap)
+  - kind="ingest" differs: "error" over cap, "stream" at/below cap
 """
 
 import pytest
@@ -99,7 +101,8 @@ class TestEnvOverride:
     def test_env_override_applies_to_ingest_kind(self, monkeypatch):
         monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
         assert materialize_decision(12344, kind="ingest") == "stream"
-        assert materialize_decision(12346, kind="ingest") == "fuse"
+        # ingest over cap → "error" (explicit materialize guard), not "fuse"
+        assert materialize_decision(12346, kind="ingest") == "error"
 
     def test_none_size_is_stream_regardless_of_override(self, monkeypatch):
         monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
@@ -107,22 +110,52 @@ class TestEnvOverride:
 
 
 # ---------------------------------------------------------------------------
-# D. kind values are all identical in this task (size-vs-cap only)
+# D. kind="ingest" over cap → "error" (explicit materialize=True guard)
 # ---------------------------------------------------------------------------
 
 
-class TestKindParity:
-    """All kind values produce the same result for the same size."""
+class TestIngestKind:
+    """kind="ingest" diverges from "read"/"write": over cap returns "error", not "fuse"."""
 
-    @pytest.mark.parametrize("kind", ["read", "write", "ingest"])
-    def test_below_cap_stream_for_all_kinds(self, kind):
-        assert materialize_decision(1, kind=kind) == "stream"
+    def test_ingest_at_cap_is_stream(self, monkeypatch):
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "100")
+        assert materialize_decision(100, kind="ingest") == "stream"
 
-    @pytest.mark.parametrize("kind", ["read", "write", "ingest"])
-    def test_above_cap_fuse_for_all_kinds(self, kind, monkeypatch):
+    def test_ingest_below_cap_is_stream(self, monkeypatch):
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "100")
+        assert materialize_decision(99, kind="ingest") == "stream"
+
+    def test_ingest_over_cap_is_error(self, monkeypatch):
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "100")
+        assert materialize_decision(101, kind="ingest") == "error"
+
+    def test_ingest_large_file_is_error(self):
+        # 1 GiB is well over the 256 MiB classic cap
+        assert materialize_decision(1024 * 1024**2, kind="ingest") == "error"
+
+    def test_ingest_none_is_stream(self):
+        # None → "stream" for all kinds (safe default)
+        assert materialize_decision(None, kind="ingest") == "stream"
+
+
+# ---------------------------------------------------------------------------
+# E. read/write over cap still → "fuse" (unchanged by ingest branch)
+# ---------------------------------------------------------------------------
+
+
+class TestReadWriteStillFuse:
+    """kind="read" and "write" over cap remain "fuse" — ingest branch must not affect them."""
+
+    @pytest.mark.parametrize("kind", ["read", "write"])
+    def test_over_cap_is_fuse_not_error(self, kind, monkeypatch):
         monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "100")
         assert materialize_decision(101, kind=kind) == "fuse"
 
-    @pytest.mark.parametrize("kind", ["read", "write", "ingest"])
-    def test_none_stream_for_all_kinds(self, kind):
+    @pytest.mark.parametrize("kind", ["read", "write"])
+    def test_below_cap_is_stream(self, kind, monkeypatch):
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "100")
+        assert materialize_decision(99, kind=kind) == "stream"
+
+    @pytest.mark.parametrize("kind", ["read", "write"])
+    def test_none_is_stream(self, kind):
         assert materialize_decision(None, kind=kind) == "stream"

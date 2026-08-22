@@ -1171,15 +1171,19 @@ def materialize_decision(
 
     Returns:
       "stream" — size_bytes <= cap: safe to hold in memory (bulk read / full materialize).
-      "fuse"   — size_bytes  > cap: too big for RAM; the caller must open lazily via FUSE
-                 (reads) or windowed-stream (writes).
-      (Later tasks extend the return set: "error" for explicit materialize=True over cap
-       [kind="ingest"], and "driver" for COG large sources [kind="write"]. This task
-       implements only "stream"/"fuse".)
+      "fuse"   — size_bytes  > cap AND kind in {"read","write"}: too big for RAM; caller
+                 must open lazily via FUSE (reads) or windowed-stream (writes).
+      "error"  — size_bytes  > cap AND kind == "ingest": explicit materialize=True was
+                 requested but the file is too big for the Serverless task cap; the caller
+                 must raise StageTooLargeError with an actionable message.  This prevents
+                 silent OOM when a user passes rst_fromfile(path, materialize=True) with a
+                 multi-hundred-MiB source on Serverless.
 
-    kind is one of {"read","write","ingest"} (accepted now for the future branches; this
-    task's logic is size-vs-cap only and does not branch on kind). size_bytes is None →
-    "stream" (safe default; unknown size, matches the read gate's NULL-size behavior).
+    kind is one of {"read","write","ingest"}:
+    - "read" / "write": over-cap → "fuse" (lazy open, no bytes in RAM).
+    - "ingest": over-cap → "error" (explicit materialize guard — fail fast).
+    size_bytes is None → "stream" (safe default; unknown size, matches the read gate's
+    NULL-size behavior), regardless of kind.
 
     Cap = _connect_aware_lru_sizing(spark or _resolve_session_for_cap())[0]
     (64 MiB Connect/Serverless, 256 MiB classic, GBX_STREAM_MAX_BYTES override).
@@ -1189,7 +1193,12 @@ def materialize_decision(
         return "stream"
     _sess = spark if spark is not None else _resolve_session_for_cap()
     cap = _connect_aware_lru_sizing(_sess)[0]
-    return "stream" if size_bytes <= cap else "fuse"
+    if size_bytes <= cap:
+        return "stream"
+    # Over cap: branch on kind.
+    if kind == "ingest":
+        return "error"
+    return "fuse"
 
 
 def _is_fuse_path(path: str) -> bool:

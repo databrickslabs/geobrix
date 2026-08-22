@@ -719,9 +719,29 @@ def _fromfile_impl(path, driver, materialize):
         # on /Volumes paths (returns a temp local copy when staging is needed).
         from rasterio.io import MemoryFile
 
+        from databricks.labs.gbx.ds.file_gbx import (
+            StageTooLargeError,
+            materialize_decision,
+        )
+
         try:
             staged, is_temp = _stage_local_if_needed(local)
             try:
+                # Serverless-cap guard: fail fast with an actionable error rather than
+                # attempting a full file read that would OOM on a ~1 GiB Serverless task.
+                # materialize_decision(kind="ingest") returns "error" when size_bytes
+                # exceeds the connect-aware cap (64 MiB Serverless / 256 MiB classic).
+                # The virtual default (materialize=False) never reaches this branch.
+                import os as _os_cap
+
+                _file_size = _os_cap.path.getsize(staged)
+                if materialize_decision(_file_size, "ingest") == "error":
+                    raise StageTooLargeError(
+                        f"rst_fromfile materialize=True unsuccessful: "
+                        f"{_file_size / 1024 ** 2:.1f} MiB exceeds the Serverless "
+                        f"materialize cap. Omit materialize=True (the virtual default "
+                        f"is Serverless-safe) or split the source (sizeInMB=)."
+                    )
                 with open(staged, "rb") as _fh:
                     _src_bytes = _fh.read()
             finally:
@@ -738,6 +758,11 @@ def _fromfile_impl(path, driver, materialize):
                     with mf.open(**profile) as dst:
                         dst.write(data)
                     new_bytes = mf.read()
+        except StageTooLargeError:
+            # Cap-guard error: propagate — this is an actionable, user-visible error,
+            # not a bad-path that should silently null out. The UDF boundary converts
+            # it to a task failure on Spark, but direct callers (e.g. tests) see it.
+            raise
         except Exception:  # noqa: BLE001 — null-on-error, matching heavyweight
             return None
         return _serde.build_tile(new_bytes, drv, 0)

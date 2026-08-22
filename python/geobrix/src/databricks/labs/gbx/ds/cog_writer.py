@@ -63,7 +63,7 @@ import os
 import shutil
 import tempfile
 from dataclasses import dataclass, field
-from typing import Iterator, List, Optional
+from typing import Dict, Iterator, List, Optional
 
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
@@ -77,6 +77,212 @@ from databricks.labs.gbx.ds.file_gbx import (
 )
 
 _logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Mosaic-mode option model
+# ---------------------------------------------------------------------------
+
+_DGGS_SYSTEMS = frozenset({"quadbin", "bng", "h3"})
+_VALID_GRID_SYSTEMS = frozenset({"none"}) | _DGGS_SYSTEMS
+_VALID_MERGE_STRATEGIES = frozenset({"none", "min", "max", "avg", "first", "last"})
+_VALID_VRT_PATHS = frozenset({"relative", "absolute"})
+
+
+@dataclass
+class MosaicOptions:
+    """Validated options for cog_gbx mosaic mode (native mini-COG + VRT tiling).
+
+    Constructed only by :func:`parse_mosaic_options`; never instantiated directly.
+    ``None`` returned by that function means single-COG mode (unchanged behaviour).
+
+    Attributes
+    ----------
+    grid_system:
+        ``"none"`` = native pixel-tiling (Phase A).  DGGS systems (``quadbin``,
+        ``bng``, ``h3``) are reserved for later phases and are rejected by the
+        parser until that support lands.
+    tile_size:
+        Tile edge length in pixels (native tiling only).  ``None`` = use writer
+        default.
+    overlap_percent:
+        Tile-edge overlap as a percentage of tile_size (native tiling only).
+    merge_strategy:
+        Pixel-merge rule for overlapping tiles.  ``"none"`` = last-write wins.
+    prune_empty:
+        When ``True`` (default) skip writing tiles that contain only NoData.
+    write_vrt:
+        When ``True`` (default) emit a ``.vrt`` mosaic index alongside the tiles.
+    vrt_paths:
+        Controls tile paths embedded inside the VRT: ``"relative"`` (default) or
+        ``"absolute"``.
+    grid_min_resolution / grid_max_resolution / grid_step_resolution:
+        DGGS-only resolution range options.  Must be ``None`` when
+        ``grid_system="none"``.
+    """
+
+    grid_system: str = "none"
+    tile_size: Optional[int] = None
+    overlap_percent: float = 0.0
+    merge_strategy: str = "none"
+    prune_empty: bool = True
+    write_vrt: bool = True
+    vrt_paths: str = "relative"
+    grid_min_resolution: Optional[int] = None
+    grid_max_resolution: Optional[int] = None
+    grid_step_resolution: Optional[int] = None
+
+
+def _parse_bool(value, default: bool) -> bool:
+    """Coerce *value* (string or bool) to bool.  Strings ``'false'/'0'/'no'`` are
+    ``False``; anything else truthy is ``True``.  ``None`` returns *default*."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).lower() not in ("false", "0", "no", "")
+
+
+def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
+    """Parse and validate mosaic-mode options from a raw options mapping.
+
+    *opts* is typically the ``self.options`` dict from a Spark DataSource V2
+    ``DataSource.writer()`` call (all values are strings), but the function also
+    accepts Python-typed values for direct unit-test use.
+
+    Returns
+    -------
+    ``None``
+        When mosaic mode is NOT triggered (neither ``mosaic`` nor ``gridSystem``
+        is present in *opts*, or ``mosaic`` is explicitly false).
+    :class:`MosaicOptions`
+        A fully-validated mosaic configuration.
+
+    Raises
+    ------
+    ValueError
+        When a supplied option combination is invalid or unsupported in this
+        release (e.g. a DGGS grid system, contradictory ``driverMode``, or a
+        native-only option combined with a DGGS system).
+    """
+    mosaic_raw = opts.get("mosaic")
+    grid_system_raw = opts.get("gridSystem")
+
+    # ── mosaic-mode trigger ──────────────────────────────────────────────────
+    # Triggered when `mosaic` is truthy OR `gridSystem` is explicitly supplied.
+    if mosaic_raw is None and grid_system_raw is None:
+        return None  # single-COG mode — existing path unchanged
+
+    # Explicit opt-out: mosaic=false with no gridSystem.
+    if grid_system_raw is None and not _parse_bool(mosaic_raw, True):
+        return None
+
+    # ── gridSystem ───────────────────────────────────────────────────────────
+    grid_system = (
+        str(grid_system_raw).lower() if grid_system_raw is not None else "none"
+    )
+    if grid_system not in _VALID_GRID_SYSTEMS:
+        raise ValueError(
+            f"gridSystem={grid_system!r} is not a recognised value; "
+            f"must be one of {sorted(_VALID_GRID_SYSTEMS)}"
+        )
+
+    # Phase A restriction: only native tiling (gridSystem='none') is supported.
+    # DGGS systems are reserved for a future release.
+    if grid_system in _DGGS_SYSTEMS:
+        raise ValueError(
+            f"gridSystem={grid_system!r} is not supported in this release; "
+            f"only gridSystem='none' (native tiling) is available."
+        )
+
+    is_dggs = grid_system in _DGGS_SYSTEMS  # always False in Phase A; kept for clarity
+
+    # ── driverMode contradiction ─────────────────────────────────────────────
+    # driverMode produces a single driver-side COG; mosaic mode produces many
+    # per-tile mini-COGs on executors.  The two are mutually exclusive.
+    driver_mode_raw = opts.get("driverMode")
+    if driver_mode_raw is not None:
+        if _parse_bool(driver_mode_raw, False):
+            raise ValueError(
+                "driverMode=True and mosaic mode are contradictory: driverMode "
+                "produces a single driver-side COG while mosaic mode produces "
+                "per-tile mini-COGs on executors. "
+                "Use one or the other, not both."
+            )
+
+    # ── tileSize (native only) ────────────────────────────────────────────────
+    tile_size_raw = opts.get("tileSize")
+    tile_size: Optional[int] = int(tile_size_raw) if tile_size_raw is not None else None
+    if is_dggs and tile_size is not None:
+        raise ValueError(
+            f"tileSize is only valid with gridSystem='none' (native tiling); "
+            f"got gridSystem={grid_system!r}"
+        )
+
+    # ── overlapPercent (native only) ──────────────────────────────────────────
+    overlap_raw = opts.get("overlapPercent")
+    overlap_percent: float = float(overlap_raw) if overlap_raw is not None else 0.0
+    if is_dggs and overlap_raw is not None:
+        raise ValueError(
+            f"overlapPercent is only valid with gridSystem='none' (native tiling); "
+            f"got gridSystem={grid_system!r}"
+        )
+
+    # ── mergeStrategy ─────────────────────────────────────────────────────────
+    merge_raw = opts.get("mergeStrategy", "none")
+    merge_strategy = str(merge_raw).lower()
+    if merge_strategy not in _VALID_MERGE_STRATEGIES:
+        raise ValueError(
+            f"mergeStrategy={merge_raw!r} is not recognised; "
+            f"must be one of {sorted(_VALID_MERGE_STRATEGIES)}"
+        )
+
+    # ── pruneEmpty / writeVrt / vrtPaths ──────────────────────────────────────
+    prune_empty = _parse_bool(opts.get("pruneEmpty"), True)
+    write_vrt = _parse_bool(opts.get("writeVrt"), True)
+
+    vrt_paths_raw = opts.get("vrtPaths", "relative")
+    vrt_paths = str(vrt_paths_raw).lower()
+    if vrt_paths not in _VALID_VRT_PATHS:
+        raise ValueError(f"vrtPaths={vrt_paths_raw!r} must be 'relative' or 'absolute'")
+
+    # ── DGGS-only resolution options ──────────────────────────────────────────
+    grid_min_raw = opts.get("gridMinResolution")
+    grid_max_raw = opts.get("gridMaxResolution")
+    grid_step_raw = opts.get("gridStepResolution")
+
+    grid_min: Optional[int] = int(grid_min_raw) if grid_min_raw is not None else None
+    grid_max: Optional[int] = int(grid_max_raw) if grid_max_raw is not None else None
+    grid_step: Optional[int] = int(grid_step_raw) if grid_step_raw is not None else None
+
+    if not is_dggs:
+        if grid_min is not None:
+            raise ValueError(
+                f"gridMinResolution is only valid with a DGGS gridSystem "
+                f"(quadbin, bng, h3); got gridSystem={grid_system!r}"
+            )
+        if grid_max is not None:
+            raise ValueError(
+                f"gridMaxResolution is only valid with a DGGS gridSystem "
+                f"(quadbin, bng, h3); got gridSystem={grid_system!r}"
+            )
+        if grid_step is not None:
+            raise ValueError(
+                f"gridStepResolution is only valid with a DGGS gridSystem "
+                f"(quadbin, bng, h3); got gridSystem={grid_system!r}"
+            )
+
+    return MosaicOptions(
+        grid_system=grid_system,
+        tile_size=tile_size,
+        overlap_percent=overlap_percent,
+        merge_strategy=merge_strategy,
+        prune_empty=prune_empty,
+        write_vrt=write_vrt,
+        vrt_paths=vrt_paths,
+        grid_min_resolution=grid_min,
+        grid_max_resolution=grid_max,
+        grid_step_resolution=grid_step,
+    )
 
 
 @dataclass
@@ -139,6 +345,10 @@ class CogGbxWriter(DataSourceWriter):
         driver_mode=False,
         driver_mode_verbose=True,
         cog_bigtiff="YES",
+        # Mosaic mode (Phase A: native mini-COG + VRT).  ``None`` = single-COG
+        # mode (default, unchanged behaviour).  Set by CogGbxDataSource.writer()
+        # after calling parse_mosaic_options(); Tasks 2–3 read self.mosaic_opts.
+        mosaic_opts: Optional[MosaicOptions] = None,
     ):
         assert_path_schema(schema)
         self.tile_envelope = _is_v2_envelope(schema)
@@ -160,6 +370,8 @@ class CogGbxWriter(DataSourceWriter):
         self.driver_mode = driver_mode
         self.driver_mode_verbose = driver_mode_verbose
         self.cog_bigtiff = cog_bigtiff
+        # Mosaic mode: None = single-COG (unchanged); set for Tasks 2–3 to read.
+        self.mosaic_opts = mosaic_opts
         # Driver-capture the connect-aware materialize cap. __init__ runs on the
         # DRIVER (DataSource V2 contract) where a live session is present; the
         # instance is pickled to workers, so self._cap travels to write(). Resolving

@@ -27,7 +27,7 @@ class CogGbxDataSource(RasterGbxDataSource):
         return CogGbxReader(self.options)
 
     def writer(self, schema: StructType, overwrite: bool) -> DataSourceWriter:
-        from databricks.labs.gbx.ds.cog_writer import CogGbxWriter
+        from databricks.labs.gbx.ds.cog_writer import CogGbxWriter, parse_mosaic_options
 
         path = self.options.get("path")
         if not path:
@@ -48,6 +48,9 @@ class CogGbxDataSource(RasterGbxDataSource):
         )
         _predictor_raw = self.options.get("predictor")
         _predictor = int(_predictor_raw) if _predictor_raw is not None else None
+        # Parse and validate mosaic-mode options up front (raises ValueError
+        # before any I/O if the combination is unsupported).
+        _mosaic_opts = parse_mosaic_options(self.options)
         return CogGbxWriter(
             path,
             schema,
@@ -68,4 +71,5 @@ class CogGbxDataSource(RasterGbxDataSource):
             driver_mode_verbose=self.options.get("driverModeVerbose", "true").lower()
             == "true",
             cog_bigtiff=self.options.get("cogBigTiff", "YES"),
+            mosaic_opts=_mosaic_opts,
         )

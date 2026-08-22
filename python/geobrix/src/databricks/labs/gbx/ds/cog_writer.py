@@ -164,6 +164,195 @@ _VALID_GRID_SYSTEMS = frozenset({"none"}) | _DGGS_SYSTEMS
 _VALID_MERGE_STRATEGIES = frozenset({"none", "min", "max", "avg", "first", "last"})
 _VALID_VRT_PATHS = frozenset({"relative", "absolute"})
 
+# ---------------------------------------------------------------------------
+# VRT mosaic index builder (pure Python + rasterio — no osgeo dependency)
+# ---------------------------------------------------------------------------
+
+#: Mapping from rasterio dtype string to GDAL VRT dataType attribute name.
+_RASTERIO_TO_GDAL_DTYPE: Dict[str, str] = {
+    "uint8": "Byte",
+    "int8": "Int8",
+    "uint16": "UInt16",
+    "int16": "Int16",
+    "uint32": "UInt32",
+    "int32": "Int32",
+    "float32": "Float32",
+    "float64": "Float64",
+    "complex64": "CFloat32",
+    "complex128": "CFloat64",
+}
+
+
+def _build_mosaic_vrt(
+    tile_paths: List[str],
+    out_dir: str,
+    vrt_paths: str = "relative",
+) -> str:
+    """Build a GDAL VRT mosaic index at ``<out_dir>/mosaic.vrt``.
+
+    Pure Python + rasterio — no ``osgeo`` / native GDAL Python bindings
+    required (light-tier / Serverless safe).
+
+    Algorithm
+    ---------
+    1. Open each tile to read its affine transform, width, height, CRS, band
+       count, dtype, and nodata value.
+    2. Compute the mosaic bounding box as the union of all tile extents.
+    3. Derive the mosaic ``rasterXSize`` / ``rasterYSize`` and
+       ``GeoTransform``.
+    4. For each band, emit one ``<SimpleSource>`` per tile.  The
+       ``<DstRect>`` offset is computed from the tile's spatial position
+       relative to the mosaic origin.
+    5. ``vrt_paths="relative"`` (default) writes bare filenames and sets
+       ``relativeToVRT="1"`` so the VRT is portable.
+       ``vrt_paths="absolute"`` writes full paths with ``relativeToVRT="0"``.
+
+    Assumptions (valid for Phase A native-pixel tiling):
+    - All tiles share the same CRS, pixel size, band count, and dtype.
+    - The source uses a north-up affine transform (no rotation).
+
+    Parameters
+    ----------
+    tile_paths:
+        Absolute paths to the mini-COG tiles to include in the VRT.
+    out_dir:
+        Directory where ``mosaic.vrt`` will be written (same directory as
+        the tiles, so relative paths are bare filenames).
+    vrt_paths:
+        ``"relative"`` (default) or ``"absolute"``.
+
+    Returns
+    -------
+    str
+        Absolute path to the written ``mosaic.vrt``.
+    """
+    import xml.etree.ElementTree as ET
+
+    import rasterio
+
+    vrt_out = os.path.join(out_dir, "mosaic.vrt")
+
+    # ── Step 1: collect tile metadata ─────────────────────────────────────
+    metas = []
+    for path in tile_paths:
+        with rasterio.open(path) as ds:
+            metas.append(
+                {
+                    "path": path,
+                    "width": ds.width,
+                    "height": ds.height,
+                    "transform": ds.transform,
+                    "crs": ds.crs,
+                    "dtypes": ds.dtypes,  # tuple, one per band
+                    "count": ds.count,
+                    "nodata": ds.nodata,
+                }
+            )
+
+    if not metas:
+        _logger.warning("_build_mosaic_vrt: no tile paths supplied; VRT not written.")
+        return vrt_out
+
+    # ── Step 2: compute mosaic envelope ───────────────────────────────────
+    # Use the first tile as the reference for CRS / pixel size.
+    ref = metas[0]
+    pixel_x = ref["transform"].a  # positive (east)
+    pixel_y = ref["transform"].e  # negative (north-up)
+    crs = ref["crs"]
+    count = ref["count"]
+    dtypes = ref["dtypes"]
+    nodata = ref["nodata"]
+
+    mosaic_left = min(m["transform"].c for m in metas)
+    mosaic_top = max(m["transform"].f for m in metas)
+    mosaic_right = max(m["transform"].c + m["width"] * pixel_x for m in metas)
+    mosaic_bottom = min(m["transform"].f + m["height"] * pixel_y for m in metas)
+
+    mosaic_width = int(round((mosaic_right - mosaic_left) / pixel_x))
+    mosaic_height = int(round((mosaic_top - mosaic_bottom) / abs(pixel_y)))
+
+    # ── Step 3: build VRT XML tree ─────────────────────────────────────────
+    root = ET.Element(
+        "VRTDataset",
+        {
+            "rasterXSize": str(mosaic_width),
+            "rasterYSize": str(mosaic_height),
+        },
+    )
+
+    # SRS (WKT)
+    srs_el = ET.SubElement(root, "SRS")
+    srs_el.text = crs.to_wkt() if crs else ""
+
+    # GeoTransform: x_origin, pixel_x, rot_x, y_origin, rot_y, pixel_y
+    gt_text = (
+        f" {mosaic_left:.15g},"
+        f"  {pixel_x:.15g},"
+        f"  0,"
+        f"  {mosaic_top:.15g},"
+        f"  0,"
+        f"  {pixel_y:.15g}"
+    )
+    ET.SubElement(root, "GeoTransform").text = gt_text
+
+    # ── Step 4: per-band VRTRasterBand with one SimpleSource per tile ──────
+    for band_idx in range(1, count + 1):
+        dtype_name = _RASTERIO_TO_GDAL_DTYPE.get(str(dtypes[band_idx - 1]), "Float32")
+        band_el = ET.SubElement(
+            root, "VRTRasterBand", {"dataType": dtype_name, "band": str(band_idx)}
+        )
+        if nodata is not None:
+            ET.SubElement(band_el, "NoDataValue").text = repr(float(nodata))
+
+        for meta in metas:
+            t = meta["transform"]
+            tile_w = meta["width"]
+            tile_h = meta["height"]
+
+            # Pixel offset of this tile within the mosaic coordinate frame.
+            dst_x = int(round((t.c - mosaic_left) / pixel_x))
+            dst_y = int(round((mosaic_top - t.f) / abs(pixel_y)))
+
+            if vrt_paths == "relative":
+                fn_text = os.path.basename(meta["path"])
+                rel_attr = "1"
+            else:
+                fn_text = meta["path"]
+                rel_attr = "0"
+
+            src_el = ET.SubElement(band_el, "SimpleSource")
+            fn_el = ET.SubElement(src_el, "SourceFilename", {"relativeToVRT": rel_attr})
+            fn_el.text = fn_text
+            ET.SubElement(src_el, "SourceBand").text = str(band_idx)
+            ET.SubElement(
+                src_el,
+                "SrcRect",
+                {
+                    "xOff": "0",
+                    "yOff": "0",
+                    "xSize": str(tile_w),
+                    "ySize": str(tile_h),
+                },
+            )
+            ET.SubElement(
+                src_el,
+                "DstRect",
+                {
+                    "xOff": str(dst_x),
+                    "yOff": str(dst_y),
+                    "xSize": str(tile_w),
+                    "ySize": str(tile_h),
+                },
+            )
+
+    # ── Step 5: write XML to disk ──────────────────────────────────────────
+    tree = ET.ElementTree(root)
+    with open(vrt_out, "wb") as fh:
+        tree.write(fh, xml_declaration=True, encoding="utf-8")
+
+    _logger.debug("_build_mosaic_vrt: wrote %s (%d members)", vrt_out, len(metas))
+    return vrt_out
+
 
 @dataclass
 class MosaicOptions:
@@ -908,6 +1097,24 @@ class CogGbxWriter(DataSourceWriter):
                 verbose=self.driver_mode_verbose,
                 bigtiff=self.cog_bigtiff,
             )
+
+        # ── Task 3: mosaic VRT index ──────────────────────────────────────
+        # Collect all mini-COG paths written by _write_mosaic() across all
+        # partitions and build a single portable VRT index file.
+        # Guarded by write_vrt=True (default); mosaic_opts=None (single-COG
+        # mode) skips this block entirely.
+        if self.mosaic_opts is not None and self.mosaic_opts.write_vrt:
+            all_tile_paths: List[str] = []
+            for m in messages:
+                if isinstance(m, CogCommitMessage):
+                    all_tile_paths.extend(m.paths)
+            if all_tile_paths:
+                _build_mosaic_vrt(
+                    all_tile_paths,
+                    self.out_dir,
+                    vrt_paths=self.mosaic_opts.vrt_paths,
+                )
+
         return None
 
     def abort(self, messages: List[Optional[WriterCommitMessage]]) -> None:

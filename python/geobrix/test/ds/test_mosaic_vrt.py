@@ -103,7 +103,7 @@ def _write_src_with_nodata_patch(
 def _run_mosaic(src_path: str, out_dir: str, **mosaic_kwargs) -> CogCommitMessage:
     """Run write() + commit() on the driver.  Returns the CogCommitMessage."""
     opts = parse_mosaic_options(
-        {"mosaic": "true", "gridSystem": "none", **mosaic_kwargs}
+        {"vrtMosaic": "true", "gridSystem": "none", **mosaic_kwargs}
     )
     writer = CogGbxWriter(
         str(out_dir),

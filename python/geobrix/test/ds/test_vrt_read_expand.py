@@ -127,7 +127,7 @@ def _build_mosaic(base_dir: pathlib.Path, n_cols: int = 2, n_rows: int = 1):
     schema = StructType([StructField("path", StringType(), False)])
     opts = parse_mosaic_options(
         {
-            "mosaic": "true",
+            "vrtMosaic": "true",
             "gridSystem": "none",
             "tileSize": str(
                 _TILE_W

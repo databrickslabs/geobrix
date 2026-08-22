@@ -120,7 +120,7 @@ def _make_writer(out_dir: str, mosaic_opts: MosaicOptions = None) -> CogGbxWrite
 def _default_mosaic_opts(**kwargs) -> MosaicOptions:
     """Return MosaicOptions(gridSystem='none', ...) from keyword overrides."""
     base = {
-        "mosaic": "true",
+        "vrtMosaic": "true",
         "gridSystem": "none",
     }
     base.update(kwargs)
@@ -394,7 +394,7 @@ def test_mosaic_options_pickle_roundtrip():
     """MosaicOptions survives pickle serialization (rides on writer to worker)."""
     opts = parse_mosaic_options(
         {
-            "mosaic": "true",
+            "vrtMosaic": "true",
             "gridSystem": "none",
             "tileSize": "256",
             "overlapPercent": "5.0",

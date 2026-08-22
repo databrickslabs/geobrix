@@ -27,7 +27,7 @@ processing:
 
 ## Prepare: write a VRT mosaic
 
-Pass `mosaic=true` and `gridSystem=none` to `cog_gbx` to enter mosaic mode.
+Pass `vrtMosaic=true` and `gridSystem=none` to `cog_gbx` to enter mosaic mode.
 The writer reads each source file window-by-window (one tile at a time — the
 source is never fully materialised in RAM), writes one mini-COG per tile, and
 then builds `mosaic.vrt` in the output directory.
@@ -42,7 +42,7 @@ sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw
 (
     sources
     .write.format("cog_gbx")
-    .option("mosaic", "true")
+    .option("vrtMosaic", "true")
     .option("gridSystem", "none")   # native pixel tiling — required
     .option("tileSize", "1024")     # tile edge in pixels (default 1024)
     .mode("overwrite")
@@ -70,7 +70,7 @@ tile names, and a re-run produces the same names for the same sources
 
 | Option | Default | Description |
 |---|---|---|
-| `mosaic` | — | Set `"true"` to activate mosaic mode. Either `mosaic` or `gridSystem` must be present. |
+| `vrtMosaic` | — | Set `"true"` to activate VRT-mosaic mode. Either `vrtMosaic` or `gridSystem` must be present. |
 | `gridSystem` | — | Tile grid: `"none"` (native pixel tiling — the only supported value). Grid-aligned systems (quadbin, BNG, H3) are planned and will be added in a future release. |
 | `tileSize` | `"1024"` | Tile edge length in pixels. Tiles are square. The last row and column are clipped to the source boundary. |
 | `overlapPercent` | `"0"` | Tile-edge halo as a percentage of `tileSize`. A value of `5` expands each tile's read window by `ceil(tileSize * 5 / 100)` pixels on every side, clamped to the source bounds. Default 0 — non-overlapping grid. |

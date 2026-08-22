@@ -100,7 +100,7 @@ def _write_mosaic_spark(spark, src_path: str, out_dir: str) -> str:
     df = spark.createDataFrame([{"path": src_path}], schema=_path_schema())
     (
         df.write.format("cog_gbx")
-        .option("mosaic", "true")
+        .option("vrtMosaic", "true")
         .option("gridSystem", "none")
         .option("tileSize", str(_TILE_SIZE))
         .mode("overwrite")

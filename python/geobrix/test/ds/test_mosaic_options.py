@@ -46,13 +46,13 @@ def test_non_mosaic_options_return_none():
 
 
 def test_mosaic_false_returns_none():
-    """mosaic='false' is an explicit opt-out → None (single-COG mode)."""
-    assert _parse_str(mosaic="false") is None
+    """vrtMosaic='false' is an explicit opt-out → None (single-COG mode)."""
+    assert _parse_str(vrtMosaic="false") is None
 
 
 def test_mosaic_false_bool_returns_none():
-    """mosaic=False (Python bool) → None."""
-    assert _parse(mosaic=False) is None
+    """vrtMosaic=False (Python bool) → None."""
+    assert _parse(vrtMosaic=False) is None
 
 
 # ── mosaic mode — valid native (gridSystem='none') ───────────────────────────
@@ -60,7 +60,7 @@ def test_mosaic_false_bool_returns_none():
 
 def test_grid_system_none_tile_size_parses_ok():
     """gridSystem='none' + tileSize=1024 → valid MosaicOptions with correct values."""
-    opts = _parse(mosaic="true", gridSystem="none", tileSize=1024)
+    opts = _parse(vrtMosaic="true", gridSystem="none", tileSize=1024)
     assert opts is not None
     assert opts.grid_system == "none"
     assert opts.tile_size == 1024
@@ -68,7 +68,9 @@ def test_grid_system_none_tile_size_parses_ok():
 
 def test_grid_system_none_with_overlap_parses_ok():
     """gridSystem='none' + overlapPercent=10.5 → valid MosaicOptions."""
-    opts = _parse(mosaic="true", gridSystem="none", tileSize=512, overlapPercent=10.5)
+    opts = _parse(
+        vrtMosaic="true", gridSystem="none", tileSize=512, overlapPercent=10.5
+    )
     assert opts is not None
     assert opts.overlap_percent == 10.5
     assert opts.tile_size == 512
@@ -76,7 +78,7 @@ def test_grid_system_none_with_overlap_parses_ok():
 
 def test_grid_system_none_defaults():
     """mosaic='true' + gridSystem='none' → all optional fields use documented defaults."""
-    opts = _parse(mosaic="true", gridSystem="none")
+    opts = _parse(vrtMosaic="true", gridSystem="none")
     assert opts is not None
     assert opts.grid_system == "none"
     assert opts.tile_size is None
@@ -100,21 +102,21 @@ def test_mosaic_trigger_grid_system_alone():
 def test_merge_strategy_variants():
     """mergeStrategy values min/max/avg/first/last/none are all accepted."""
     for strategy in ("none", "min", "max", "avg", "first", "last"):
-        opts = _parse(mosaic="true", mergeStrategy=strategy)
+        opts = _parse(vrtMosaic="true", mergeStrategy=strategy)
         assert opts is not None, f"mergeStrategy={strategy!r} should be accepted"
         assert opts.merge_strategy == strategy
 
 
 def test_write_vrt_false():
     """writeVrt=False stores correctly."""
-    opts = _parse(mosaic="true", writeVrt=False)
+    opts = _parse(vrtMosaic="true", writeVrt=False)
     assert opts is not None
     assert opts.write_vrt is False
 
 
 def test_vrt_paths_absolute():
     """vrtPaths='absolute' is accepted."""
-    opts = _parse(mosaic="true", vrtPaths="absolute")
+    opts = _parse(vrtMosaic="true", vrtPaths="absolute")
     assert opts is not None
     assert opts.vrt_paths == "absolute"
 
@@ -122,7 +124,7 @@ def test_vrt_paths_absolute():
 def test_string_values_parsed_correctly():
     """String-encoded options (as Spark passes them) parse to correct types."""
     opts = _parse_str(
-        mosaic="true",
+        vrtMosaic="true",
         gridSystem="none",
         tileSize="256",
         overlapPercent="5.0",
@@ -141,19 +143,19 @@ def test_string_values_parsed_correctly():
 
 def test_compression_with_mosaic_is_ok():
     """compress + mosaic mode → no error (encoding options pass through)."""
-    opts = _parse(mosaic="true", gridSystem="none", compress="zstd")
+    opts = _parse(vrtMosaic="true", gridSystem="none", compress="zstd")
     assert opts is not None
 
 
 def test_blocksize_with_mosaic_is_ok():
     """blockSize + mosaic mode → no error (encoding options pass through)."""
-    opts = _parse(mosaic="true", gridSystem="none", blockSize=512)
+    opts = _parse(vrtMosaic="true", gridSystem="none", blockSize=512)
     assert opts is not None
 
 
 def test_predictor_with_mosaic_is_ok():
     """predictor + mosaic mode → no error (encoding options pass through)."""
-    opts = _parse(mosaic="true", gridSystem="none", predictor=2)
+    opts = _parse(vrtMosaic="true", gridSystem="none", predictor=2)
     assert opts is not None
 
 
@@ -206,19 +208,19 @@ def test_overlap_percent_with_dggs_raises():
 def test_grid_min_resolution_with_none_raises():
     """gridMinResolution + gridSystem='none' → ValueError (DGGS-only option)."""
     with pytest.raises(ValueError, match="gridMinResolution"):
-        _parse(mosaic="true", gridSystem="none", gridMinResolution=4)
+        _parse(vrtMosaic="true", gridSystem="none", gridMinResolution=4)
 
 
 def test_grid_max_resolution_with_none_raises():
     """gridMaxResolution + gridSystem='none' → ValueError (DGGS-only option)."""
     with pytest.raises(ValueError, match="gridMaxResolution"):
-        _parse(mosaic="true", gridSystem="none", gridMaxResolution=8)
+        _parse(vrtMosaic="true", gridSystem="none", gridMaxResolution=8)
 
 
 def test_grid_step_resolution_with_none_raises():
     """gridStepResolution + gridSystem='none' → ValueError (DGGS-only option)."""
     with pytest.raises(ValueError, match="gridStepResolution"):
-        _parse(mosaic="true", gridSystem="none", gridStepResolution=1)
+        _parse(vrtMosaic="true", gridSystem="none", gridStepResolution=1)
 
 
 # ── driverMode + mosaic contradiction ────────────────────────────────────────
@@ -227,24 +229,24 @@ def test_grid_step_resolution_with_none_raises():
 def test_driver_mode_true_with_mosaic_raises():
     """driverMode=True + mosaic=True → ValueError (contradictory options)."""
     with pytest.raises(ValueError, match="driverMode"):
-        _parse(mosaic="true", driverMode=True)
+        _parse(vrtMosaic="true", driverMode=True)
 
 
 def test_driver_mode_string_true_with_mosaic_raises():
     """driverMode='true' (string, as from Spark) + mosaic='true' → ValueError."""
     with pytest.raises(ValueError, match="driverMode"):
-        _parse_str(mosaic="true", driverMode="true")
+        _parse_str(vrtMosaic="true", driverMode="true")
 
 
 def test_driver_mode_false_with_mosaic_is_ok():
     """driverMode=False + mosaic → no error (contradiction only when driverMode is True)."""
-    opts = _parse(mosaic="true", driverMode=False)
+    opts = _parse(vrtMosaic="true", driverMode=False)
     assert opts is not None
 
 
 def test_driver_mode_string_false_with_mosaic_is_ok():
     """driverMode='false' (string) + mosaic → no error."""
-    opts = _parse_str(mosaic="true", driverMode="false")
+    opts = _parse_str(vrtMosaic="true", driverMode="false")
     assert opts is not None
 
 

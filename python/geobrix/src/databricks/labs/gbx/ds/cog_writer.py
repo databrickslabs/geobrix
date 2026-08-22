@@ -453,8 +453,8 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
     Returns
     -------
     ``None``
-        When mosaic mode is NOT triggered (neither ``mosaic`` nor ``gridSystem``
-        is present in *opts*, or ``mosaic`` is explicitly false).
+        When mosaic mode is NOT triggered (neither ``vrtMosaic`` nor ``gridSystem``
+        is present in *opts*, or ``vrtMosaic`` is explicitly false).
     :class:`MosaicOptions`
         A fully-validated mosaic configuration.
 
@@ -465,15 +465,15 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
         release (e.g. a DGGS grid system, contradictory ``driverMode``, or a
         native-only option combined with a DGGS system).
     """
-    mosaic_raw = opts.get("mosaic")
+    mosaic_raw = opts.get("vrtMosaic")
     grid_system_raw = opts.get("gridSystem")
 
     # ── mosaic-mode trigger ──────────────────────────────────────────────────
-    # Triggered when `mosaic` is truthy OR `gridSystem` is explicitly supplied.
+    # Triggered when `vrtMosaic` is truthy OR `gridSystem` is explicitly supplied.
     if mosaic_raw is None and grid_system_raw is None:
         return None  # single-COG mode — existing path unchanged
 
-    # Explicit opt-out: mosaic=false with no gridSystem.
+    # Explicit opt-out: vrtMosaic=false with no gridSystem.
     if grid_system_raw is None and not _parse_bool(mosaic_raw, True):
         return None
 

@@ -334,7 +334,7 @@ def test_binding_injection_passes_lit_none_when_file_not_supported(spark):
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     with mock.patch(
-        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
+        "databricks.labs.gbx.ds.file_gbx.file_supported", return_value=False
     ):
         tile_col = F.col("tile")
         result_col = file_ref_arg(tile_col)
@@ -356,7 +356,7 @@ def test_binding_injection_uses_call_function_when_supported(spark):
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     with mock.patch(
-        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=True
+        "databricks.labs.gbx.ds.file_gbx.file_supported", return_value=True
     ):
         tile_col = F.col("tile")
         result_col = file_ref_arg(tile_col)
@@ -379,7 +379,7 @@ def test_binding_rewired_rst_height_returns_correct_value(spark, gtiff_bytes):
     from databricks.labs.gbx.pyrx import functions as prx
 
     with mock.patch(
-        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
+        "databricks.labs.gbx.ds.file_gbx.file_supported", return_value=False
     ):
         # Build a materialized tile from the gtiff_bytes fixture (4×3).
         df = spark.createDataFrame([(gtiff_bytes,)], ["raster"]).select(
@@ -559,7 +559,7 @@ def test_file_ref_arg_str_column_name_does_not_raise(spark):
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     with mock.patch(
-        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=True
+        "databricks.labs.gbx.ds.file_gbx.file_supported", return_value=True
     ):
         # String column-name path — was TypeError: string indices must be integers.
         result_str = file_ref_arg("tile")
@@ -575,7 +575,7 @@ def test_file_ref_arg_str_column_name_does_not_raise(spark):
 
     # False path: both forms must still return F.lit(None)-shaped Column (unchanged).
     with mock.patch(
-        "databricks.labs.gbx.pyrx._file_ref.file_supported", return_value=False
+        "databricks.labs.gbx.ds.file_gbx.file_supported", return_value=False
     ):
         result_false_str = file_ref_arg("tile")
         assert isinstance(result_false_str, Column)

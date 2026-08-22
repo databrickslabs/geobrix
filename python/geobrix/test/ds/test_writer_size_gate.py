@@ -56,6 +56,32 @@ def _write_geotiff(path: str, width: int = 8, height: int = 6, count: int = 1) -
             ds.write(data + (b - 1) * 100.0, b)
 
 
+def _write_compressible_geotiff(
+    path: str, width: int, height: int, count: int = 1, dtype: str = "uint16"
+) -> "tuple[int, int]":
+    """Write a large all-zeros (highly-compressible) raster.
+
+    Returns ``(compressed_on_disk_bytes, decoded_bytes)`` — the compressed file is
+    tiny while the decoded array (count*width*height*itemsize) is large, so a gate
+    that keys on compressed size would wrongly under-estimate RAM.
+    """
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=count,
+        dtype=dtype,
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.5, 0.5),
+        compress="deflate",
+    )
+    data = np.zeros((count, height, width), dtype=dtype)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+    decoded = count * width * height * int(np.dtype(dtype).itemsize)
+    return os.path.getsize(path), decoded
+
+
 def _virtual_tile(path: str, window=None, metadata: dict | None = None) -> VirtualTile:
     """Build a whole-file (or windowed) virtual tile pointing at *path*."""
     file_size = os.path.getsize(path)
@@ -86,7 +112,19 @@ def _write_one(out_dir: str, vt: VirtualTile) -> str:
 
 
 def _profile_key(ds) -> dict:
-    """Extract the profile keys relevant to equivalence checks."""
+    """Extract the profile keys relevant to equivalence checks.
+
+    Includes the STRUCTURAL layout fields (tiled / blockxsize / blockysize /
+    interleave) in addition to georeferencing/pixel-shape fields.  Empirically
+    (see the Fix-4 determination in the serverless-safe-materialize-policy fix
+    round) ``_windowed_materialize_bytes`` and ``materialize_to_bytes`` produce
+    IDENTICAL values for these four fields across striped/tiled sources, single-
+    and multi-band, small and large — because both build the profile from the
+    same source ``.profile.copy()`` and neither's compression authority
+    (``creation_opts``) touches tiling/interleave.  Asserting them here therefore
+    strengthens the equivalence guarantee rather than being an over-claim.
+    """
+    p = ds.profile
     return {
         "width": ds.width,
         "height": ds.height,
@@ -95,6 +133,10 @@ def _profile_key(ds) -> dict:
         "crs": str(ds.crs) if ds.crs else None,
         "nodata": ds.nodata,
         "transform": ds.transform,
+        "tiled": p.get("tiled"),
+        "blockxsize": p.get("blockxsize"),
+        "blockysize": p.get("blockysize"),
+        "interleave": p.get("interleave"),
     }
 
 
@@ -312,3 +354,159 @@ def test_large_tile_subwindow(tmp_path, monkeypatch):
             expected = ds.read(1)
 
     np.testing.assert_array_equal(actual, expected, err_msg="subwindow pixel mismatch")
+
+
+# ---------------------------------------------------------------------------
+# 7. Fix 1b — driver-captured cap passed into materialize_decision (not re-resolved)
+# ---------------------------------------------------------------------------
+
+
+def test_writer_captures_cap_in_init(tmp_path, monkeypatch):
+    """RasterGbxWriter captures the connect-aware cap in __init__ (runs on the
+    driver). The env override proves the capture reads the live cap at construction
+    time; the instance carries it to the pickled worker."""
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
+    schema = reader_schema_v2()
+    writer = RasterGbxWriter(str(tmp_path / "out"), schema, overwrite=True)
+    assert isinstance(writer._cap, int) and writer._cap > 0
+    assert writer._cap == 12345, "writer must capture the (env-overridden) cap"
+
+
+def test_writer_write_passes_cap_bytes_not_session(tmp_path, monkeypatch):
+    """write() passes cap_bytes=self._cap into materialize_decision — it must NOT
+    re-resolve the cap from a session on the worker (cap_bytes must be non-None)."""
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "654321")
+    src = str(tmp_path / "in.tif")
+    _write_geotiff(src)
+    out_dir = str(tmp_path / "out")
+    os.makedirs(out_dir)
+
+    schema = reader_schema_v2()
+    writer = RasterGbxWriter(out_dir, schema, overwrite=True)
+
+    import databricks.labs.gbx.ds.file_gbx as _fgbx
+
+    real = _fgbx.materialize_decision
+    seen: dict = {}
+
+    def _spy(size, kind, spark=None, cap_bytes=None):
+        seen["cap_bytes"] = cap_bytes
+        seen["kind"] = kind
+        return real(size, kind, spark=spark, cap_bytes=cap_bytes)
+
+    monkeypatch.setattr(_fgbx, "materialize_decision", _spy)
+
+    def _iter() -> Iterator[dict]:
+        yield _row(_virtual_tile(src))
+
+    writer.write(_iter())
+
+    assert (
+        seen.get("cap_bytes") is not None
+    ), "write() must pass a non-None cap_bytes (driver-captured), not re-resolve"
+    assert seen["cap_bytes"] == 654321
+    assert seen["kind"] == "write"
+
+
+# ---------------------------------------------------------------------------
+# 8. Fix 2 — gate on DECODED size, not compressed on-disk size
+# ---------------------------------------------------------------------------
+
+
+def test_write_gate_uses_decoded_size_not_compressed(tmp_path, monkeypatch):
+    """A highly-compressible tile (small compressed, large decoded) routes to the
+    windowed 'fuse' path because the DECODED size exceeds the cap — even though the
+    compressed on-disk size (advertised in path_file_size) does NOT. Proves the
+    write gate keys on decoded size, not compressed size."""
+    src = str(tmp_path / "compressible.tif")
+    compressed, decoded = _write_compressible_geotiff(src, 2048, 2048, dtype="uint16")
+
+    cap = 1 * 1024**2  # 1 MiB
+    assert compressed < cap < decoded, (
+        f"invalid test setup: need compressed({compressed}) < cap({cap}) "
+        f"< decoded({decoded})"
+    )
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", str(cap))
+
+    out_dir = str(tmp_path / "out")
+    os.makedirs(out_dir)
+
+    # Metadata advertises the SMALL compressed size; the OLD gate (path_file_size
+    # primary) would read this and wrongly choose "stream" (full materialize).
+    vt = VirtualTile(
+        cellid=1,
+        path=src,
+        window=None,
+        metadata={"path_file_size": str(compressed)},
+    )
+
+    schema = reader_schema_v2()
+    writer = RasterGbxWriter(out_dir, schema, overwrite=True)
+    assert writer._cap == cap
+
+    with patch(
+        "databricks.labs.gbx.pyrx.core.open_tile.materialize_to_bytes"
+    ) as mock_mat:
+        mock_mat.side_effect = AssertionError(
+            "materialize_to_bytes must NOT be called: decoded > cap → windowed path"
+        )
+
+        def _iter() -> Iterator[dict]:
+            yield _row(vt)
+
+        writer.write(_iter())
+
+    assert mock_mat.call_count == 0, (
+        "decoded size exceeds cap → the write gate must take the windowed 'fuse' "
+        "path, not full materialize"
+    )
+
+    # Output round-trips.
+    written = [f for f in os.listdir(out_dir) if f.endswith(".tif")]
+    assert len(written) == 1
+    with rasterio.open(os.path.join(out_dir, written[0])) as ds:
+        actual = ds.read()
+    with rasterio.open(src) as orig:
+        expected = orig.read()
+    np.testing.assert_array_equal(actual, expected)
+
+
+# ---------------------------------------------------------------------------
+# 9. Fix 3 — documented limitation: warp/clip tile falls back to full materialize
+# ---------------------------------------------------------------------------
+
+
+def test_windowed_materialize_falls_back_for_warp(tmp_path):
+    """ACCEPTED LIMITATION (documented in open_tile docstring + serverless-and-memory.mdx):
+    a virtual tile with a pending warp cannot be block-streamed, so
+    _windowed_materialize_bytes delegates to materialize_to_bytes — a FULL
+    materialize that holds the whole decoded array in RAM. This test documents that
+    the fall-back path IS taken (the OOM risk for very large warp/clip tiles remains
+    an accepted limitation; WarpedVRT block-streaming is backlog, not implemented)."""
+    src = str(tmp_path / "in.tif")
+    _write_geotiff(src)
+
+    # Pending reprojection (source is EPSG:4326; request EPSG:3857) → warp required.
+    vt = VirtualTile(
+        cellid=1,
+        path=src,
+        window=(0, 0, 8, 6),
+        crs="EPSG:3857",
+        metadata={"path_file_size": str(os.path.getsize(src))},
+    )
+
+    from databricks.labs.gbx.pyrx.core import open_tile as _ot
+
+    real = _ot.materialize_to_bytes
+    called = {"n": 0}
+
+    def _spy(tile):
+        called["n"] += 1
+        return real(tile)
+
+    with patch.object(_ot, "materialize_to_bytes", side_effect=_spy):
+        out = _windowed_materialize_bytes(vt)
+
+    assert called["n"] == 1, "warp tile must fall back to materialize_to_bytes"
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert ds.crs.to_epsg() == 3857, "fall-back output must be the warped result"

@@ -697,10 +697,18 @@ def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
 # ``virtualize_dir``/``virtualize_prefix`` (those exist only for functions that
 # COMPUTE new pixels and need somewhere to write them).
 # A bad/missing path yields NULL (matching the heavyweight's Option(...).orNull).
-def _fromfile_impl(path, driver, materialize):
-    """Shared body for both the Python-binding UDF (3-arg) and the SQL UDF (2-arg,
+def _fromfile_impl(path, driver, materialize, cap_bytes=None):
+    """Shared body for both the Python-binding UDF (4-arg) and the SQL UDF (2-arg,
     virtual). Returns a v2 tile row (virtual by default, materialized when asked),
-    or None on a bad/missing path."""
+    or None on a bad/missing path.
+
+    ``cap_bytes`` is the DRIVER-captured connect-aware materialize cap (baked by
+    ``rst_fromfile`` at Column-build time and carried in as an f.lit). It is used
+    ONLY on the materialize=True path. _fromfile_impl runs inside a UDF on a
+    session-less Serverless worker, so it must NOT re-resolve the cap from a live
+    session (that would wrongly use the 256 MiB classic cap). When ``cap_bytes`` is
+    None (the SQL UDF paths, which do not bake a driver cap), materialize_decision
+    falls back to session resolution."""
     if path is None:
         return None
     from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed, to_local_path
@@ -727,20 +735,38 @@ def _fromfile_impl(path, driver, materialize):
         try:
             staged, is_temp = _stage_local_if_needed(local)
             try:
-                # Serverless-cap guard: fail fast with an actionable error rather than
-                # attempting a full file read that would OOM on a ~1 GiB Serverless task.
-                # materialize_decision(kind="ingest") returns "error" when size_bytes
-                # exceeds the connect-aware cap (64 MiB Serverless / 256 MiB classic).
-                # The virtual default (materialize=False) never reaches this branch.
-                import os as _os_cap
+                # Serverless-cap guard: gate on the DECODED size (the RAM-relevant
+                # quantity — the read below decodes the WHOLE raster into memory),
+                # NOT the compressed on-disk size (getsize), which under-estimates
+                # RAM for a highly-compressible source and would let a large-decoded
+                # tile slip past the guard and OOM a ~1 GiB Serverless task. Read the
+                # header only (cheap; no pixel decode) to compute
+                # count*width*height*itemsize, then fail fast with an actionable error
+                # BEFORE reading the file. kind="ingest" → "error" over cap. The cap
+                # is the DRIVER-captured cap_bytes (baked by rst_fromfile); this runs
+                # inside a UDF on a session-less worker, so resolving the cap here
+                # would wrongly use the 256 MiB classic cap. The virtual default
+                # (materialize=False) never reaches this branch.
+                import numpy as _np_cap
+                import rasterio as _rio_cap
 
-                _file_size = _os_cap.path.getsize(staged)
-                if materialize_decision(_file_size, "ingest") == "error":
+                with _rio_cap.open(staged) as _hsrc:
+                    _decoded_bytes = (
+                        _hsrc.count
+                        * _hsrc.width
+                        * _hsrc.height
+                        * int(_np_cap.dtype(_hsrc.dtypes[0]).itemsize)
+                    )
+                if (
+                    materialize_decision(_decoded_bytes, "ingest", cap_bytes=cap_bytes)
+                    == "error"
+                ):
                     raise StageTooLargeError(
                         f"rst_fromfile materialize=True unsuccessful: "
-                        f"{_file_size / 1024 ** 2:.1f} MiB exceeds the Serverless "
-                        f"materialize cap. Omit materialize=True (the virtual default "
-                        f"is Serverless-safe) or split the source (sizeInMB=)."
+                        f"{_decoded_bytes / 1024 ** 2:.1f} MiB decoded exceeds the "
+                        f"Serverless materialize cap. Omit materialize=True (the "
+                        f"virtual default is Serverless-safe) or split the source "
+                        f"(sizeInMB=)."
                     )
                 with open(staged, "rb") as _fh:
                     _src_bytes = _fh.read()
@@ -803,9 +829,14 @@ def _fromfile_impl(path, driver, materialize):
 
 
 @f.udf(V2_TILE_SCHEMA)
-def _fromfile_udf(path, driver, materialize):
-    """Python-binding UDF: 3-arg (path, driver, materialize)."""
-    return _fromfile_impl(path, driver, bool(materialize))
+def _fromfile_udf(path, driver, materialize, cap_bytes):
+    """Python-binding UDF: 4-arg (path, driver, materialize, cap_bytes).
+
+    ``cap_bytes`` is the DRIVER-captured connect-aware materialize cap baked by
+    ``rst_fromfile`` as an f.lit — passed through so the worker-side cap guard
+    uses the correct 64 MiB Serverless cap instead of re-resolving (session-less
+    worker → wrong 256 MiB classic cap)."""
+    return _fromfile_impl(path, driver, bool(materialize), cap_bytes=cap_bytes)
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -855,7 +886,19 @@ def rst_fromfile(
         or NULL if the path cannot be opened.
     """
     drv = f.lit(driver) if isinstance(driver, str) else _col(driver)
-    return _fromfile_udf(_col(path), drv, f.lit(bool(materialize)))
+    # Driver-capture the connect-aware materialize cap HERE (Column-build runs on
+    # the driver, where a session is present) and bake it as an f.lit so the correct
+    # 64 MiB Serverless cap travels to the worker-side UDF. _fromfile_impl runs inside
+    # the UDF on a session-less worker; resolving the cap there would wrongly use the
+    # 256 MiB classic cap → a 64-256 MiB source with materialize=True would slip past
+    # the guard and OOM. Mirrors file_ref_arg's driver-side cap capture.
+    from databricks.labs.gbx.ds.file_gbx import (
+        _connect_aware_lru_sizing,
+        _resolve_session_for_cap,
+    )
+
+    _cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
+    return _fromfile_udf(_col(path), drv, f.lit(bool(materialize)), f.lit(_cap))
 
 
 # rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.

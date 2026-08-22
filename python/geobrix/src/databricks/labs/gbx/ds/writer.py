@@ -186,6 +186,20 @@ class RasterGbxWriter(DataSourceWriter):
             self.compress = compress
         self.compress_level = compress_level
         self.predictor = predictor
+        # Driver-capture the connect-aware materialize cap. __init__ runs on the
+        # DRIVER (DataSource V2 contract), where a live session is present; the
+        # instance is pickled to workers, so self._cap travels to write(). Resolving
+        # the cap inside write() (which runs per-partition on a Serverless worker
+        # with NO session) would silently fall back to the 256 MiB classic cap and
+        # mis-gate a 64-256 MiB tile as "stream" → full materialize → OOM. Use
+        # getActiveSession() (never getOrCreate): on the driver it returns the real
+        # session; off-driver / in unit tests it returns None → classic 256 MiB, and
+        # GBX_STREAM_MAX_BYTES still overrides. Mirrors file_ref_arg's driver capture.
+        from pyspark.sql import SparkSession
+
+        from databricks.labs.gbx.ds.file_gbx import _connect_aware_lru_sizing
+
+        self._cap = _connect_aware_lru_sizing(SparkSession.getActiveSession())[0]
         # Use self.path (scheme stripped), NOT the raw path: a dbfs:/file:-qualified
         # path makes os.path.isdir(path) False, which would silently skip the
         # overwrite cleanup and leave stale tiles from a prior write mixed in.
@@ -199,7 +213,6 @@ class RasterGbxWriter(DataSourceWriter):
     def write(self, iterator: Iterator) -> WriterCommitMessage:
         from databricks.labs.gbx.ds.file_gbx import materialize_decision
         from databricks.labs.gbx.pyrx.core.open_tile import (
-            _read_size_key,
             _to_virtual_tile,
             _windowed_materialize_bytes,
             materialize_to_bytes,
@@ -219,27 +232,32 @@ class RasterGbxWriter(DataSourceWriter):
                 # write that never holds the full pixel array in RAM — essential
                 # under the ~1 GiB Serverless per-task cap.
                 #
-                # Size source priority:
-                #   1. path_file_size (on-disk size stamped by the reader — preferred).
-                #   2. Decoded estimate from the tile header (no pixel read).
-                #   3. None → materialize_decision returns "stream" (safe default).
-                _meta = dict(vt.metadata or {})
-                _size = _read_size_key(_meta, "path_file_size")
-                if _size is None:
-                    # Fall back to decoded estimate from the tile header.
-                    try:
-                        import numpy as _np
+                # Gate on the DECODED size (count*width*height*itemsize from the
+                # tile header), NOT the compressed on-disk size: the "stream"
+                # branch does materialize_to_bytes → ds.read() → a full DECODED
+                # array in RAM, which can be ~10x the compressed size for a
+                # highly-compressible tile. path_file_size (compressed) would
+                # under-estimate RAM and mis-gate a large-decoded tile as "stream".
+                # open_header is header-only (no pixel read); for a windowed tile
+                # it reflects the WINDOW dims (exactly what ds.read() will hold).
+                # Unknown/failed header → None → "stream" (safe default). The cap
+                # is the driver-captured self._cap (see __init__): resolving it on
+                # a session-less Serverless worker would wrongly use the 256 MiB
+                # classic cap.
+                _size: Optional[int]
+                try:
+                    import numpy as _np
 
-                        with open_header(vt) as _h:
-                            _size = (
-                                _h.count
-                                * _h.width
-                                * _h.height
-                                * int(_np.dtype(_h.dtypes[0]).itemsize)
-                            )
-                    except Exception:
-                        _size = None  # unknown size → "stream" (safe default)
-                _decision = materialize_decision(_size, "write")
+                    with open_header(vt) as _h:
+                        _size = (
+                            _h.count
+                            * _h.width
+                            * _h.height
+                            * int(_np.dtype(_h.dtypes[0]).itemsize)
+                        )
+                except Exception:
+                    _size = None  # unknown size → "stream" (safe default)
+                _decision = materialize_decision(_size, "write", cap_bytes=self._cap)
                 if _decision == "fuse":
                     raster_bytes = _windowed_materialize_bytes(vt)
                 else:

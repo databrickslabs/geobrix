@@ -1,22 +1,33 @@
-"""Regression guard: every materializing entry point MUST route through the shared
+"""Regression guard: every materializing entry point still MENTIONS the shared
 size-safety decision gate.
 
-INVARIANT: The four code paths that can pull a whole file or tile into executor RAM
-are gated by either ``materialize_decision`` or ``_connect_aware_lru_sizing`` (which
-is the cap source for ``materialize_decision``).  If any of those calls is removed
-— e.g. replaced with a raw unbounded ``.read()`` / ``materialize_to_bytes`` — this
-test fails, preventing silent OOM on Serverless (the ~1 GB per-task RAM limit).
+SCOPE — what this proves, and what it does NOT:
 
-Entry points covered:
-  1. ``file_ref_arg``        (ds/file_gbx.py)  — uses _connect_aware_lru_sizing
-  2. ``RasterGbxWriter.write`` (ds/writer.py)  — uses materialize_decision
-  3. ``_fromfile_impl``      (pyrx/functions.py) — uses materialize_decision
-  4. ``CogGbxWriter.write``  (ds/cog_writer.py)  — uses materialize_decision
+This is a TEXTUAL tripwire.  Each check asserts that the identifier
+``materialize_decision`` (or its cap source ``_connect_aware_lru_sizing``) still
+appears in the function/method source.  It exists so a future refactor cannot
+SILENTLY DELETE the gate call — e.g. replace it with a raw unbounded ``.read()`` /
+``materialize_to_bytes`` — without turning this test red.
 
-These checks are STATIC (source-level).  They assert that the identifier appears
-in the function/method source, not that the function is called at runtime with
-specific arguments.  This is intentional: the guard should fail fast when a future
-refactor drops the call, without requiring a Spark session or sample data.
+It does **NOT** prove runtime Serverless memory-safety.  A green guard here says
+nothing about *how* the gate is called: it would still pass under the Fix-1
+worker-cap bug (where a writer re-resolved the cap on a session-less worker and got
+the wrong 256 MiB classic cap), or if the gate were called with a size that
+under-estimates RAM.  Those properties are proven by the behavioural tests
+(``test_materialize_decision.py``, ``test_writer_size_gate.py``,
+``test_cog_writer_size_gate.py``, ``test_fromfile_materialize_cap.py``), not here.
+Do not read a green result in this file as evidence that the materialize paths are
+memory-safe on Serverless.
+
+Entry points covered (source mentions the identifier):
+  1. ``file_ref_arg``        (ds/file_gbx.py)  — mentions _connect_aware_lru_sizing
+  2. ``RasterGbxWriter.write`` (ds/writer.py)  — mentions materialize_decision
+  3. ``_fromfile_impl``      (pyrx/functions.py) — mentions materialize_decision
+  4. ``CogGbxWriter.write``  (ds/cog_writer.py)  — mentions materialize_decision
+
+These checks are STATIC (source-level): the identifier must be present in the
+source text.  This is intentional — the guard should fire when a future refactor
+drops the call, without requiring a Spark session or sample data.
 """
 
 import inspect

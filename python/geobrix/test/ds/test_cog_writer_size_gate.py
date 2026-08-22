@@ -334,6 +334,52 @@ class TestCogWriterSizeGateRouting:
             str(src) in s or s == str(src) for s in sources_passed
         ), f"prepare_cogs must receive the pending source path; got {sources_passed}"
 
+    # B7. Fix 1c — driver-captured cap passed into materialize_decision
+
+    def test_cog_writer_captures_cap_in_init(self, tmp_path, monkeypatch):
+        """CogGbxWriter captures the connect-aware cap in __init__ (driver-side)."""
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "31337")
+        w = CogGbxWriter(str(tmp_path / "out"), _path_schema(), overwrite=True)
+        assert isinstance(w._cap, int) and w._cap > 0
+        assert w._cap == 31337, "writer must capture the (env-overridden) cap"
+
+    def test_cog_writer_write_passes_cap_bytes_not_session(self, tmp_path, monkeypatch):
+        """write() passes cap_bytes=self._cap into materialize_decision (non-None) —
+        it must NOT re-resolve the cap from a session on the worker."""
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "777777")
+        src = tmp_path / "in" / "small.tif"
+        src.parent.mkdir()
+        _write_src(str(src))
+        out = tmp_path / "out"
+        w = CogGbxWriter(str(out), _path_schema(), overwrite=True, cog_blocksize=256)
+
+        real = _fgbx.materialize_decision
+        seen: dict = {}
+
+        def _spy(size, kind, spark=None, cap_bytes=None):
+            seen["cap_bytes"] = cap_bytes
+            seen["kind"] = kind
+            return real(size, kind, spark=spark, cap_bytes=cap_bytes)
+
+        # cog_writer imports materialize_decision at module load, so patch there.
+        monkeypatch.setattr(_cw_mod, "materialize_decision", _spy)
+
+        from databricks.labs.gbx.pyrx.core import analysis as _analysis
+
+        real_convert = _analysis.cog_convert_file
+
+        def _spy_convert(s, d, **kwargs):
+            return real_convert(s, d, **kwargs)
+
+        with patch.object(_analysis, "cog_convert_file", side_effect=_spy_convert):
+            w.write(iter([{"path": str(src)}]))
+
+        assert (
+            seen.get("cap_bytes") is not None
+        ), "write() must pass a non-None cap_bytes (driver-captured), not re-resolve"
+        assert seen["cap_bytes"] == 777777
+        assert seen["kind"] == "cog_write"
+
     # B6. commit() in default mode does NOT call prepare_cogs for empty pending_paths
 
     def test_commit_no_pending_skips_prepare_cogs(self, tmp_path):

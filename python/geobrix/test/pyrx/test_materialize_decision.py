@@ -166,6 +166,68 @@ class TestReadWriteStillFuse:
 # ---------------------------------------------------------------------------
 
 
+class TestCapBytesOverride:
+    """cap_bytes is the DRIVER-captured cap: used DIRECTLY, no session resolution.
+
+    This is the Serverless-safety fix: write gates run materialize_decision from a
+    session-less worker, so they pass the driver-captured cap explicitly. When
+    cap_bytes is given, the passed value must win regardless of session or env — it
+    must NOT fall back to _connect_aware_lru_sizing (which would use the 256 MiB
+    classic cap on a session-less worker).
+    """
+
+    _100MiB = 100 * 1024**2
+
+    def test_cap_bytes_used_directly_read_over_cap_is_fuse(self):
+        # 100 MiB with a 64 MiB driver cap → over cap → "fuse" for read.
+        assert (
+            materialize_decision(self._100MiB, kind="read", cap_bytes=_64MiB) == "fuse"
+        )
+
+    def test_cap_bytes_used_directly_write_over_cap_is_fuse(self):
+        assert (
+            materialize_decision(self._100MiB, kind="write", cap_bytes=_64MiB) == "fuse"
+        )
+
+    def test_cap_bytes_used_directly_ingest_over_cap_is_error(self):
+        assert (
+            materialize_decision(self._100MiB, kind="ingest", cap_bytes=_64MiB)
+            == "error"
+        )
+
+    def test_cap_bytes_used_directly_cog_write_over_cap_is_driver(self):
+        # Over the 64 MiB cap but under the 10 GiB driver bound → "driver".
+        assert (
+            materialize_decision(self._100MiB, kind="cog_write", cap_bytes=_64MiB)
+            == "driver"
+        )
+
+    def test_cap_bytes_at_cap_is_stream(self):
+        assert materialize_decision(_64MiB, kind="read", cap_bytes=_64MiB) == "stream"
+
+    def test_cap_bytes_below_cap_is_stream(self):
+        assert (
+            materialize_decision(_64MiB - 1, kind="write", cap_bytes=_64MiB) == "stream"
+        )
+
+    def test_cap_bytes_wins_over_env_override(self, monkeypatch):
+        # A huge env cap would say "stream", but the explicit tiny cap_bytes wins.
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", str(1024**3))  # 1 GiB env cap
+        assert materialize_decision(self._100MiB, kind="read", cap_bytes=_64MiB) == (
+            "fuse"
+        ), "cap_bytes must be used directly, not re-resolved from env/session"
+
+    def test_cap_bytes_none_falls_back_to_session_resolution(self):
+        # cap_bytes=None → classic 256 MiB fallback (no session): 100 MiB → "stream".
+        assert materialize_decision(self._100MiB, kind="read", cap_bytes=None) == (
+            "stream"
+        )
+
+    def test_cap_bytes_none_is_stream(self):
+        # None size short-circuits before cap resolution regardless of cap_bytes.
+        assert materialize_decision(None, kind="read", cap_bytes=_64MiB) == "stream"
+
+
 class TestReportDetectedCap:
     """report_detected_cap returns the same cap that materialize_decision uses.
 

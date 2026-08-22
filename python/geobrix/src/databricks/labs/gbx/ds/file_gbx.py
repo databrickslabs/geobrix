@@ -1179,7 +1179,10 @@ def _resolve_session_for_cap() -> Optional["SparkSession"]:
 
 
 def materialize_decision(
-    size_bytes: Optional[int], kind: str, spark: Optional["SparkSession"] = None
+    size_bytes: Optional[int],
+    kind: str,
+    spark: Optional["SparkSession"] = None,
+    cap_bytes: Optional[int] = None,
 ) -> str:
     """Single connect-aware decision: is it safe to materialize this many bytes in RAM here?
 
@@ -1207,15 +1210,27 @@ def materialize_decision(
     size_bytes is None → "stream" (safe default; unknown size, matches the read gate's
     NULL-size behavior), regardless of kind.
 
-    Cap = _connect_aware_lru_sizing(spark or _resolve_session_for_cap())[0]
-    (64 MiB Connect/Serverless, 256 MiB classic, GBX_STREAM_MAX_BYTES override).
+    Cap resolution:
+    - When ``cap_bytes`` is provided, it is used DIRECTLY — no session resolution.
+      This is the WORKER-SAFE path: write gates run this from inside a session-less
+      DataSource ``write(iterator)`` on a Serverless worker, where inspecting a live
+      session (``_connect_aware_lru_sizing``) would find none and wrongly fall back
+      to the 256 MiB classic cap. The DRIVER captures the connect-aware cap once (in
+      the writer's ``__init__`` / at the ``rst_fromfile`` Column-build point) and
+      passes it here so the correct 64 MiB Serverless cap travels to the worker.
+    - When ``cap_bytes`` is None, the cap is resolved as
+      ``_connect_aware_lru_sizing(spark or _resolve_session_for_cap())[0]``
+      (64 MiB Connect/Serverless, 256 MiB classic, GBX_STREAM_MAX_BYTES override).
     _COG_DRIVER_MAX_BYTES = 10 GiB default (GBX_COG_DRIVER_MAX_BYTES override).
     Connect-safe: reads os.environ + session type only; no .rdd/_jvm/conf.set.
     """
     if size_bytes is None:
         return "stream"
-    _sess = spark if spark is not None else _resolve_session_for_cap()
-    cap = _connect_aware_lru_sizing(_sess)[0]
+    if cap_bytes is not None:
+        cap = cap_bytes
+    else:
+        _sess = spark if spark is not None else _resolve_session_for_cap()
+        cap = _connect_aware_lru_sizing(_sess)[0]
     if size_bytes <= cap:
         return "stream"
     # Over cap: branch on kind.

@@ -160,6 +160,18 @@ class CogGbxWriter(DataSourceWriter):
         self.driver_mode = driver_mode
         self.driver_mode_verbose = driver_mode_verbose
         self.cog_bigtiff = cog_bigtiff
+        # Driver-capture the connect-aware materialize cap. __init__ runs on the
+        # DRIVER (DataSource V2 contract) where a live session is present; the
+        # instance is pickled to workers, so self._cap travels to write(). Resolving
+        # the cap inside write() — which runs per-partition on a session-less
+        # Serverless worker — would fall back to the 256 MiB classic cap and
+        # mis-route a 64-256 MiB source to executor conversion → OOM. Use
+        # getActiveSession() (never getOrCreate): on the driver it returns the real
+        # session; off-driver / in unit tests it returns None → classic 256 MiB, and
+        # GBX_STREAM_MAX_BYTES still overrides.
+        from pyspark.sql import SparkSession
+
+        self._cap = _connect_aware_lru_sizing(SparkSession.getActiveSession())[0]
         if overwrite and os.path.isdir(self.out_dir):
             for stale in glob.glob(os.path.join(self.out_dir, f"*.{ext}")):
                 try:
@@ -207,8 +219,10 @@ class CogGbxWriter(DataSourceWriter):
 
         from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
-        # Compute the executor stream cap once per write() call (cheap: reads env only).
-        _executor_cap_bytes = _connect_aware_lru_sizing(None)[0]
+        # Use the DRIVER-captured cap (see __init__); NEVER resolve it here — write()
+        # runs on a session-less Serverless worker where the connect-aware detection
+        # would wrongly return the 256 MiB classic cap.
+        _executor_cap_bytes = self._cap
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
@@ -237,7 +251,7 @@ class CogGbxWriter(DataSourceWriter):
             except OSError:
                 src_size = None  # unknown size → "stream" (safe default)
 
-            decision = materialize_decision(src_size, "cog_write")
+            decision = materialize_decision(src_size, "cog_write", cap_bytes=self._cap)
             if decision == "error":
                 size_mib = (
                     f"{src_size // (1024 ** 2)} MiB" if src_size else "unknown size"

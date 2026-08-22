@@ -390,19 +390,29 @@ else:
 # on Serverless/Connect the conf may be rejected -- catch and continue (no worse than default).
 try:
     import faulthandler as _fh
-    _fh.enable()
+    _fh.enable()  # driver-side; harmless on all tiers
 except Exception:
     pass
-for _fk in (
-    "spark.python.worker.faulthandler.enabled",
-    "spark.sql.execution.pyspark.udf.faulthandler.enabled",
-    "spark.executorEnv.PYTHONFAULTHANDLER",
-):
-    try:
-        spark.conf.set(_fk, "1" if _fk.endswith("PYTHONFAULTHANDLER") else "true")
-        print(f"faulthandler: set {{_fk}}")
-    except Exception as _e:
-        print(f"faulthandler: {{_fk}} not settable ({{_e}})")
+# The worker-faulthandler confs are NOT in the Serverless config allowlist (only 6 confs
+# are settable there per Databricks docs -- maxPartitionBytes, shuffle.partitions, ansi,
+# session.timeZone, timeParserPolicy, execution.timeout), so setting them on Serverless
+# throws. Attempt on classic only; on Serverless a worker native traceback needs
+# faulthandler enabled inside the worker PROCESS (code), not a session conf.
+if "connect" not in type(spark).__module__:
+    for _fk in (
+        "spark.python.worker.faulthandler.enabled",
+        "spark.sql.execution.pyspark.udf.faulthandler.enabled",
+    ):
+        try:
+            spark.conf.set(_fk, "true")
+            print(f"faulthandler: set {{_fk}}")
+        except Exception as _e:
+            print(f"faulthandler: {{_fk}} not settable ({{_e}})")
+else:
+    print(
+        "faulthandler: worker confs not in the Serverless allowlist; skipping "
+        "(enable via worker-process code if a native traceback is needed)"
+    )
 
 # Tuning: cap bytes-per-partition to reduce rows/task on file/Delta scans (the
 # FILE-column-table reads + read_files legs). Smaller partitions = less memory per

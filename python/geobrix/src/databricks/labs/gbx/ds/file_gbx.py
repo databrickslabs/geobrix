@@ -69,6 +69,7 @@ __all__ = [
     "list_local_files",
     "_fuse_direct_disabled",
     "_resolve_session_for_cap",
+    "materialize_decision",
     # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
@@ -1000,6 +1001,7 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
             # at plan-build. The reader stamps path_file_size into tile metadata; a
             # missing/NULL size falls through to the stream branch. Set
             # GBX_DISABLE_FUSE_DIRECT=1 to force the stream for every read.
+            # NOTE: cap source + threshold semantics shared with materialize_decision().
             _sess = spark if spark is not None else _resolve_session_for_cap()
             cap_bytes = _connect_aware_lru_sizing(_sess)[0]
             whole_file = _tc["window"].isNull()
@@ -1160,6 +1162,34 @@ def _resolve_session_for_cap() -> Optional["SparkSession"]:
         return SparkSession.builder.getOrCreate()
     except Exception:
         return None
+
+
+def materialize_decision(
+    size_bytes: Optional[int], kind: str, spark: Optional["SparkSession"] = None
+) -> str:
+    """Single connect-aware decision: is it safe to materialize this many bytes in RAM here?
+
+    Returns:
+      "stream" — size_bytes <= cap: safe to hold in memory (bulk read / full materialize).
+      "fuse"   — size_bytes  > cap: too big for RAM; the caller must open lazily via FUSE
+                 (reads) or windowed-stream (writes).
+      (Later tasks extend the return set: "error" for explicit materialize=True over cap
+       [kind="ingest"], and "driver" for COG large sources [kind="write"]. This task
+       implements only "stream"/"fuse".)
+
+    kind is one of {"read","write","ingest"} (accepted now for the future branches; this
+    task's logic is size-vs-cap only and does not branch on kind). size_bytes is None →
+    "stream" (safe default; unknown size, matches the read gate's NULL-size behavior).
+
+    Cap = _connect_aware_lru_sizing(spark or _resolve_session_for_cap())[0]
+    (64 MiB Connect/Serverless, 256 MiB classic, GBX_STREAM_MAX_BYTES override).
+    Connect-safe: reads os.environ + session type only; no .rdd/_jvm/conf.set.
+    """
+    if size_bytes is None:
+        return "stream"
+    _sess = spark if spark is not None else _resolve_session_for_cap()
+    cap = _connect_aware_lru_sizing(_sess)[0]
+    return "stream" if size_bytes <= cap else "fuse"
 
 
 def _is_fuse_path(path: str) -> bool:

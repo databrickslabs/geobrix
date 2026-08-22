@@ -322,3 +322,16 @@ def test_layout_sweep_external_mode_na_by_design(spark, tmp_path):
         "na_by_design",
         "error",
     ), f"Expected na_by_design or error for external on local tier, got {rows[0].status!r}"
+
+
+def test_backtick_qualified_quotes_each_part():
+    """The cluster-layout OPTIMIZE must quote each identifier part, NOT the whole
+    dotted name — backticking `cat.sch.tbl` as one identifier resolves to a table
+    of that literal name in the current schema (TABLE_OR_VIEW_NOT_FOUND), which
+    silently skipped OPTIMIZE and left the cluster layout unmaterialized."""
+    from databricks.labs.gbx.bench.readers import _backtick_qualified
+
+    assert _backtick_qualified("cat.sch.tbl") == "`cat`.`sch`.`tbl`"
+    assert _backtick_qualified("tbl") == "`tbl`"
+    # Regression guard: must NOT backtick the whole dotted name.
+    assert _backtick_qualified("a.b.c") != "`a.b.c`"

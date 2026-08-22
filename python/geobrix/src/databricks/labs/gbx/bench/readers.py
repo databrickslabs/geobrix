@@ -8912,6 +8912,15 @@ def run_large_raster_profile(
     return out
 
 
+def _backtick_qualified(name: str) -> str:
+    """Backtick each dot-separated identifier part of a (possibly qualified) table
+    name: ``cat.sch.tbl`` -> ``\\`cat\\`.\\`sch\\`.\\`tbl\\```. Backticking the WHOLE
+    dotted name makes SQL treat it as one identifier in the current schema
+    (TABLE_OR_VIEW_NOT_FOUND for a qualified name) — that bug silently skipped the
+    cluster-layout OPTIMIZE."""
+    return ".".join(f"`{_p}`" for _p in name.split("."))
+
+
 def run_file_write_layout_sweep(
     spark,
     *,
@@ -9008,7 +9017,11 @@ def run_file_write_layout_sweep(
             import dataclasses
 
             try:
-                spark.sql(f"OPTIMIZE `{target}`")
+                # Quote each dot-separated identifier part (NOT the whole dotted
+                # name — see _backtick_qualified). Backticking `catalog.schema.table`
+                # as one identifier -> TABLE_OR_VIEW_NOT_FOUND, so OPTIMIZE silently
+                # skipped and the cluster layout was never materialized (unfair).
+                spark.sql(f"OPTIMIZE {_backtick_qualified(target)}")
                 # Append "+OPTIMIZE" to the note on success.
                 existing_note = row.note or ""
                 row = dataclasses.replace(

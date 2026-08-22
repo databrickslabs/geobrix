@@ -402,9 +402,11 @@ def _should_stream(driver):
     GeoJSON/Shapefile geometry is structural (no rename); GPKG's geometry column
     is renamed per batch to its format default (see ``_write_streaming``).
 
-    OpenFileGDB is excluded: its write goes through the native ``osgeo`` path
-    (pyogrio's bundled GDAL is read-only for it), so it can't use
-    ``write_arrow``; bounding its memory is a separate follow-up.
+    OpenFileGDB is excluded from this function: its write goes through the
+    native ``osgeo`` OGR path (pyogrio's bundled GDAL has a read-only
+    OpenFileGDB driver), so it cannot use ``write_arrow``. Memory is bounded
+    via ``_write_local_osgeo_gdb``, which streams fragments one at a time
+    with OGR transaction batching (committed every ``_GDB_TX_BATCH`` rows).
     """
     return driver in ("GeoJSON", "ESRI Shapefile", "GPKG")
 

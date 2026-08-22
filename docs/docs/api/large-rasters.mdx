@@ -180,6 +180,11 @@ so driver-orchestrated preparation succeeds where a distributed conversion of
 the same file cannot. This is why `prepare_cogs` and the `cog_gbx` `driverMode`
 exist, and why increasing worker memory does not help large-file preparation.
 
+For the full connect-aware memory model that keeps raster **reads and writes**
+within this per-task ceiling — the stream cap, the materialize-vs-virtual
+decision, and the FILE Delta-table fast path — see
+**[Serverless & Memory](../serverless-and-memory)**.
+
 ---
 
 ## Reading prepared COGs

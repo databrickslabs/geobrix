@@ -5,9 +5,9 @@ title: Serverless & Memory
 
 # Serverless & Memory
 
-GeoBrix reads, writes, and processes rasters within a **connect-aware memory budget** so that pipelines run on Databricks Serverless without OOM risk. This page covers the budget thresholds, how tile reads and writes stay within them, the FILE Delta-table fast path, and the edge cases to keep in mind.
+GeoBrix reads, writes, and processes rasters and vectors with defined per-runtime memory limits so that pipelines run on Databricks Serverless without OOM risk. Raster and vector have separate memory stories: rasters are governed by a connect-aware tile cap; vectors are bounded by pushdown filters and the FILE-column table path. This page covers both stories, the FILE Delta-table fast path that benefits both data types, and the edge cases to keep in mind.
 
-## Connect-aware memory cap
+## Connect-aware memory cap (raster tiles)
 
 When GeoBrix opens a raster tile it decides whether to **stream the whole file into memory** or **open it lazily via a local-file reference**. The decision is governed by a per-runtime threshold:
 
@@ -21,9 +21,41 @@ When GeoBrix opens a raster tile it decides whether to **stream the whole file i
 
 The lazy path is a **memory-safety mechanism**, not a performance optimization. For most tile sizes (well under 64 MiB), the streaming path is faster. `GBX_STREAM_MAX_BYTES` is a per-executor environment variable — set it in your cluster's environment variables section or in the job task environment to adjust the threshold for your tile sizes.
 
+This cap governs **raster-tile materialization only**. Vector reads have a different memory profile — see the next section.
+
+## Vector memory profile
+
+Vector reads are not governed by the raster connect-aware cap. The `vector_gbx` reader assigns **one Spark task per source file** and reads the entire file in a single pyogrio pass. For large files this can approach the ~1 GB Serverless per-task memory limit. Three mitigations address this:
+
+**1. Spatial and attribute pushdown.** The `bbox` and `where` options pass filters to pyogrio so only matching features are parsed and materialized:
+
+```python
+df = (spark.read.format("vector_gbx")
+    .option("bbox", "-0.5,51.3,0.1,51.7")   # xmin,ymin,xmax,ymax in the layer CRS
+    .option("where", "population > 100000")
+    .load("/Volumes/…/regions.gpkg"))
+```
+
+Use pushdown whenever you only need a geographic or attribute subset of a large file — it keeps per-task memory well within the Serverless limit.
+
+**2. Staging for random-access formats.** GeoPackage (`.gpkg`) and FileGDB (`.gdb`) rely on seeked I/O. The reader stages these formats to worker-local temp via a sequential copy before opening them, which keeps FUSE reads sequential and lets GDAL seek freely on local disk. The staged copy is cached per (worker process, source path), so multiple partitions of the same file share one copy.
+
+**3. FILE-column vector table.** For a directory of vector files that is read repeatedly, store them as a FILE-column Delta table via `vector_file_write` or the `vector_gbx` writer with `file_mode="external"`. Reading from the Delta table resolves FILE references without per-file FUSE opens and enables the same open-amortization as the raster fast path:
+
+```python
+from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+# Read from a FILE-column vector table (table mode)
+df = vector_file_read(spark, "catalog.schema.roads_table", source_type="table")
+```
+
+**Vector writes.** The commit phase runs on the driver and assembles the output file by streaming one Arrow-IPC fragment at a time — driver RAM is bounded at one batch, not the full dataset — for `geojson_gbx`, `shapefile_gbx`, and `gpkg_gbx`. `geojsonl_gbx` goes further: each Spark partition writes an independent shard directly to the Volume with **no driver merge at all**, so write throughput scales with parallelism. For OpenFileGDB, the driver streams fragments one at a time with OGR transaction batching (100,000 rows per commit), but this path requires the native GDAL Python bindings (`osgeo`) and is therefore only available on classic clusters.
+
+For very large vector output, prefer `geojsonl_gbx` (parallel shards, no driver bottleneck) or a FILE-column vector table. Assembling a single very large GeoJSON or GPKG file still routes all data through the driver's local disk — bounded in RAM but not in time or disk space.
+
 ## FILE Delta-table read: the fast path
 
-The fastest way to read rasters or vectors on Serverless — and on classic clusters — is to read from a **FILE-column Delta table** (a `tilesTable` for rasters, or a table produced by the `file_gbx` writer for vectors). The Delta scan resolves FILE references without per-tile opens.
+The fastest way to read rasters or vectors on Serverless — and on classic clusters — is to read from a **FILE-column Delta table**: a `tilesTable` for rasters, or a table produced by `vector_file_write` (or `vector_gbx` with `file_mode="external"`) for vectors. The Delta scan resolves FILE references without per-file opens.
 
 Measured on 1,000 raster tiles:
 
@@ -34,7 +66,9 @@ Measured on 1,000 raster tiles:
 
 **~16–17× faster on Serverless.** The gap is the per-tile open cost: the Delta-scan path amortizes it across the whole job via Arrow transport; the directory DataSource opens each tile individually on the worker.
 
-### Ingest workflow
+The same open-amortization benefit applies to vector: `vector_file_read(..., source_type="table")` avoids per-file FUSE opens for a FILE-column vector table. Measured vector-table throughput numbers are not yet available; the mechanism is the same as the raster case.
+
+### Ingest workflow (raster)
 
 Ingest once, then read from the Delta table for all downstream jobs:
 
@@ -60,28 +94,35 @@ See [Readers & Writers](../readers-writers#file-gbx) for the full file-access ba
 
 ### Reads
 
-All reader default modes are Serverless-safe:
-
 | Read path | Serverless-safe? | Notes |
 |---|---|---|
-| FILE-column Delta table | Yes | Fastest path; ~1.8–2 s / 1k tiles |
+| **— Raster —** | | |
+| FILE-column raster table | Yes | Fastest path; ~1.8–2 s / 1k tiles |
 | `raster_gbx` directory read | Yes | Size-gated; ~30 s / 1k tiles — prefer Delta-table path |
 | Virtual tiles (default) | Yes | No bytes materialized at the reader stage |
 | Materialized tiles (`virtualTiles=false`) | Yes | Bytes size-gated by the connect-aware cap |
 | `rst_fromfile` (default, virtual) | Yes | No bytes loaded at read time |
 | `rst_fromfile(materialize=True)` | **Caution** — see [below](#rst_fromfile-materialize-true) | Errors if file exceeds cap |
 | `rst_fromcontent` | Yes, with size caveat | Bytes are in a column — [you own their size](#rst_fromcontent-you-own-the-bytes) |
+| **— Vector —** | | |
+| FILE-column vector table (`vector_file_read`, table mode) | Yes | Open-amortized; avoids per-file FUSE opens |
+| `vector_gbx` with `bbox` / `where` pushdown | Yes | Only matching features parsed; recommended for large files |
+| `vector_gbx` single-file read (small–medium) | Yes | One task per file; memory scales with file size |
+| `vector_gbx` single-file read (very large file) | **Caution** — see [below](#large-vector-file-reads) | Can approach the ~1 GB per-task Serverless limit |
 
 ### Writes and ingest
 
-All lightweight raster writers are memory-bounded:
-
 | Writer path | Serverless-safe? | Notes |
 |---|---|---|
+| **— Raster —** | | |
 | `RasterGbxWriter` (raster formats) | Yes | Block-streams large tiles through the write path |
 | COG writer (`cog_gbx`) | Yes | Auto-routes large sources to a driver-side encoder |
-| Vector writers (`vector_gbx`, etc.) | Yes | Fragment-streamed; per-partition peak RAM bounded by `chunkSize` |
 | Large tile with pending warp or clip | **Caution** — see [below](#large-tile-pending-warp-or-clip) | Full materialization before write |
+| **— Vector —** | | |
+| `geojsonl_gbx` (partitioned shards) | Yes | No driver merge; each partition writes independently |
+| `geojson_gbx` / `shapefile_gbx` / `gpkg_gbx` | Yes | Driver commit streams one fragment batch at a time |
+| Very large single-file output (`geojson_gbx`, `gpkg_gbx`) | **Caution** — see [below](#large-vector-file-reads) | All data flows through driver local disk; prefer `geojsonl_gbx` or FILE table |
+| `file_gdb_gbx` (OpenFileGDB write) | No | Requires native GDAL (`osgeo`); classic clusters only |
 
 ## Caveats
 
@@ -98,6 +139,14 @@ All lightweight raster writers are memory-bounded:
 ### Large tile with pending warp or clip {#large-tile-pending-warp-or-clip}
 
 If a tile reaching the writer has a pending warp or clip operation that has not yet been resolved, the writer must fully materialize the tile to apply the transform before writing. A tile over the connect-aware cap in this state will fully materialize, not lazily page. Split such tiles or resolve the warp/clip in an intermediate step before reaching the writer.
+
+### Large vector file reads and writes {#large-vector-file-reads}
+
+The `vector_gbx` reader assigns one Spark task per source file and reads it whole. A single large shapefile, GPKG, or GeoJSON file approaching hundreds of megabytes can push close to the ~1 GB Serverless per-task memory limit.
+
+**For reads:** pass `bbox` and/or `where` options to restrict what is parsed. For GPKG and FileGDB, the reader stages the file to worker-local temp; memory is bounded by the features that match after pushdown. For files you read repeatedly, ingest them into a FILE-column vector table and read from there instead.
+
+**For writes:** `geojsonl_gbx` is the safest choice for large outputs — each Spark partition writes an independent `.geojsonl` shard to the Volume with no driver-side assembly. `geojson_gbx`, `shapefile_gbx`, and `gpkg_gbx` all stream driver-side (bounded RAM), but a single very large output file still requires the full dataset to flow through the driver's local disk. For outputs that will be read back repeatedly, write to a FILE-column vector table via `vector_file_write`.
 
 ## See also
 

@@ -19,6 +19,7 @@ const sidebars = {
     'installation',
     'quick-start',
     'databricks-spatial',
+    'serverless-and-memory',
     'release-notes',
     {
       type: 'category',
@@ -150,7 +151,6 @@ const sidebars = {
         },
       ],
     },
-    'serverless-and-memory',
     {
       type: 'category',
       label: 'Advanced Usage',

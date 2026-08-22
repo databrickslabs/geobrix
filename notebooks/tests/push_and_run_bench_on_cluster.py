@@ -468,6 +468,9 @@ def main() -> int:
     file_filespace = _arg("--file-filespace", "")
     # --gpkg-corpus <path>: GeoPackage bench corpus base dir (staged by stage_gpkg_bench_corpus).
     gpkg_corpus = _arg("--gpkg-corpus", "")
+    # --max-partition-bytes <v>: cap bytes-per-partition (e.g. "32m") to reduce rows/task on
+    # file/Delta scans. Settable on Serverless (unlike AQE). Empty = leave the platform default.
+    max_partition_bytes = _arg("--max-partition-bytes", "")
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
@@ -645,6 +648,8 @@ def main() -> int:
         file_filespace=file_filespace,
         #  --gpkg-corpus: GeoPackage bench corpus base dir.
         gpkg_corpus=gpkg_corpus,
+        #  --max-partition-bytes: cap bytes-per-partition (Serverless-settable) to tune rows/task.
+        max_partition_bytes=max_partition_bytes,
         #  --serverless: use Serverless compute (light-only, no JAR). --env-version N selects
         #  the environment version to pin (default 6 = protobuf-6 / [light-dbr19] regime).
         serverless=serverless,

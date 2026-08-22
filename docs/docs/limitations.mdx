@@ -87,6 +87,17 @@ Databricks Runtime:
 - **Minimum**: DBR 17.1 (recommended/tested: DBR 17.3 LTS or 18 LTS)
 - GeoBrix is designed to work with Databricks product spatial functions (available DBR 17.1+)
 
+### Serverless Spark configuration
+
+On Serverless compute most Spark properties are locked to platform defaults and cannot be
+overridden (for example, adaptive-query-execution toggles are ignored). Serverless does, however,
+accept a **limited set** of Spark configs — including **`spark.sql.files.maxPartitionBytes`**, which
+you can tune down (e.g. `"32m"`) to reduce the rows/bytes per partition on file and Delta scans. This
+is a useful lever for controlling memory per task in decode-heavy pipelines (each partition holds
+fewer files/rows, so each task decodes less at once). See the Databricks docs on
+[configuring Spark properties for Serverless](https://docs.databricks.com/aws/en/spark/conf) for the
+full allowlist.
+
 ## Format Support
 
 - [OGR](./readers/vector) - focus is on named vector readers in GDAL's OGR package.

@@ -403,6 +403,18 @@ for _fk in (
         print(f"faulthandler: set {{_fk}}")
     except Exception as _e:
         print(f"faulthandler: {{_fk}} not settable ({{_e}})")
+
+# Tuning: cap bytes-per-partition to reduce rows/task on file/Delta scans (the
+# FILE-column-table reads + read_files legs). Smaller partitions = less memory per
+# decode task, a mitigation for worker memory pressure. This conf IS settable on
+# Serverless (per Databricks docs), unlike AQE. Empty ('') leaves the platform default.
+MAX_PARTITION_BYTES = {max_partition_bytes!r}
+if MAX_PARTITION_BYTES:
+    try:
+        spark.conf.set("spark.sql.files.maxPartitionBytes", MAX_PARTITION_BYTES)
+        print(f"maxPartitionBytes: set to {{MAX_PARTITION_BYTES}}")
+    except Exception as _e:
+        print(f"maxPartitionBytes: not settable ({{_e}})")
 # Reader-only runs (readers/pmtiles/vector/mvt/pmtiles-agg/tin/grid/fanout/netcdf --*-only) stage
 # their OWN corpus (a reader pool, a vector corpus, synthetic in-memory rows, or -- for netcdf --
 # the {{CORPUS}}/netcdf + {{CORPUS}}/netcdf-swath pools). They do NOT use the function-bench row
@@ -3408,6 +3420,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         spark_warmup=cfg.get("spark_warmup", 0),
         spark_measured=cfg.get("spark_measured", 1),
         partition_size=int(cfg.get("partition_size", 0)),
+        max_partition_bytes=str(cfg.get("max_partition_bytes", "") or ""),
         truncate=cfg.get("truncate_results", False),
         truncate_all=cfg.get("truncate_all", False),
         resume=bool(cfg.get("resume")),

@@ -6,7 +6,7 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 
 **Usage:** `bash scripts/commands/gbx-bench-cluster.sh [options]`
 
-**Options:** `--cluster-id`, `--existing-cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--grouped-file`, `--grouped-file-only`, `--multiwindow-corpus <path>`, `--file-matrix`, `--file-matrix-only`, `--gpkg-chunksize`, `--gpkg-chunksize-only`, `--layout-sweep`, `--layout-sweep-only`, `--layout-scan`, `--layout-scan-only`, `--file-filespace <id>`, `--gpkg-corpus <path>`, `--no-wait`, `--help`.
+**Options:** `--cluster-id`, `--existing-cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--grouped-file`, `--grouped-file-only`, `--multiwindow-corpus <path>`, `--file-matrix`, `--file-matrix-only`, `--gpkg-chunksize`, `--gpkg-chunksize-only`, `--layout-sweep`, `--layout-sweep-only`, `--layout-scan`, `--layout-scan-only`, `--file-filespace <id>`, `--gpkg-corpus <path>`, `--max-partition-bytes <v>`, `--no-wait`, `--help`.
 
 `--existing-cluster-id <id>` attaches the run to a warm all-purpose cluster, skipping the 4-8 min job-cluster startup. Passed through to the Python launcher; equivalent to setting `CLUSTER_ID` in the env file. (`--cluster-id` in the shell command sets the same env var for back-compat.)
 
@@ -29,6 +29,8 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 `--file-filespace <id>` passes the filespace identifier for FILE EXTERNAL/MANAGED table creation (e.g. a TBLPROPERTIES filespace path under a Volume). Default: empty string — managed/external legs yield `na_by_design`.
 
 `--gpkg-corpus <path>` points at the GeoPackage bench corpus base dir (staged by `stage_gpkg_bench_corpus`). Default: `<corpus>/bench-corpus-gpkg`.
+
+`--max-partition-bytes <v>` sets `spark.sql.files.maxPartitionBytes` (e.g. `32m`, `16m`) in the run's preamble to cap bytes-per-partition on file/Delta scans — smaller partitions mean fewer rows per task (less memory per decode task). Unlike AQE, this conf **is settable on Serverless**, so it works on both classic and `--serverless` runs. Default: empty (leave the platform default, 128 MB).
 
 **Examples:**
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id cl1 --functions rst_slope,rst_ndvi`

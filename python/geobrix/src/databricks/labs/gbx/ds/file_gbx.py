@@ -1051,7 +1051,11 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
                         "Non-EPSG reprojection required; degrading to local-file path"
                     )
 
-            col_off, row_off, width, height = window
+            # Resolve window=None → full extent, mirroring open_header() semantics.
+            if window is None:
+                col_off, row_off, width, height = 0, 0, src.width, src.height
+            else:
+                col_off, row_off, width, height = window
             rio_window = Window(col_off, row_off, width, height)
 
             from databricks.labs.gbx.pyrx.core.open_tile import _window_dataset_bytes

@@ -113,24 +113,28 @@ def test_materialize_returns_array_transform_profile(layouts):
     assert profile["width"] == WINDOW[2]
 
 
-def test_open_tile_windowless_virtual_raises_valueerror(tmp_path):
-    """A windowless virtual tile (path, no window) must raise ValueError at the
-    read site — not a bare TypeError from a None unpack."""
+def test_open_tile_windowless_reads_full_extent(tmp_path):
+    """window=None resolves to full extent (0,0,W,H) — identical pixels to explicit window."""
     import rasterio
 
-    # Write a tiny GeoTIFF so the path exists; the guard must fire before open.
+    file_w, file_h = 6, 4
+    data = np.arange(file_w * file_h, dtype="uint8").reshape(file_h, file_w)
     p = str(tmp_path / "src.tif")
     with rasterio.open(
-        p, "w", driver="GTiff", height=4, width=4, count=1, dtype="uint8"
+        p, "w", driver="GTiff", height=file_h, width=file_w, count=1, dtype="uint8"
     ) as ds:
-        import numpy as np
+        ds.write(data[np.newaxis])
 
-        ds.write(np.zeros((1, 4, 4), dtype="uint8"))
+    vt_windowless = VirtualTile(cellid=0, path=p)  # window=None
+    vt_explicit = VirtualTile(cellid=0, path=p, window=(0, 0, file_w, file_h))
 
-    vt = VirtualTile(cellid=0, path=p)  # no window, path_mode=None
-    with pytest.raises(ValueError, match="windowed read"):
-        with ot.open_tile(vt):
-            pass
+    with ot.open_tile(vt_windowless) as ds_wl:
+        pixels_wl = ds_wl.read(1)
+    with ot.open_tile(vt_explicit) as ds_ex:
+        pixels_ex = ds_ex.read(1)
+
+    assert pixels_wl.shape == (file_h, file_w)
+    np.testing.assert_array_equal(pixels_wl, pixels_ex)
 
 
 def test_tile_to_bytes_windowless_virtual_raises_valueerror(tmp_path):

@@ -195,6 +195,27 @@ def test_open_windowed_via_fileref_raises_on_non_seekable(gtiff_bytes):
             pass
 
 
+def test_open_windowed_via_fileref_windowless_full_extent(gtiff_bytes):
+    """window=None resolves to the full source extent — same pixels as explicit (0,0,W,H).
+
+    gtiff_bytes is 4×3 (width=4, height=3); window=None must read all 12 pixels.
+    The 4-tuple path (explicit window) must be byte-identical — confirms no regression.
+    """
+    from databricks.labs.gbx.pyrx._file_ref import open_windowed_via_fileref
+
+    stub_fref = _StubFileRef(gtiff_bytes)
+    pending = (None, None, None, None)
+
+    with open_windowed_via_fileref(stub_fref, (0, 0, 4, 3), pending) as ds_ex:
+        pixels_ex = ds_ex.read(1)
+
+    with open_windowed_via_fileref(stub_fref, None, pending) as ds_wl:
+        pixels_wl = ds_wl.read(1)
+
+    assert pixels_wl.shape == (3, 4), f"Expected (3,4) got {pixels_wl.shape}"
+    np.testing.assert_array_equal(pixels_wl, pixels_ex)
+
+
 # ---------------------------------------------------------------------------
 # Tests for open_tile file_ref integration (Task 3)
 # ---------------------------------------------------------------------------

@@ -317,15 +317,14 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
         # (as_local_file → tile.path) and today's plain tile.path read (file_ref=None).
         local_path = _resolve_local_or_windowed(tile, file_ref, stack)
 
-        if tile.window is None:
-            raise ValueError(
-                "virtual tile has no window; a windowed read or a file_ref-backed"
-                " source is required"
-            )
-        c, r, w, h = tile.window
-        window = Window(c, r, w, h)
         bands, _nodata, pending_srid, _pending_crs_str = pending
         with rasterio.open(local_path) as src:
+            # Resolve window=None → full extent, mirroring open_header() semantics.
+            if tile.window is None:
+                window = Window(0, 0, src.width, src.height)
+            else:
+                c, r, w, h = tile.window
+                window = Window(c, r, w, h)
             src_epsg = src.crs.to_epsg() if src.crs else None
             want = _epsg_of(tile.crs) if tile.crs else None
             # When pending_srid relabels the CRS, use the relabeled EPSG as the

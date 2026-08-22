@@ -1295,6 +1295,10 @@ Create a raster from binary content.
 
 _Constructor — builds a tile from binary content. Example uses Spark's `binaryFile` reader to load bytes, then `rst_fromcontent` to decode them — this is the canonical tier-agnostic pattern (works on any compute including Serverless)._
 
+:::caution Serverless memory — you own the bytes
+`rst_fromcontent` materializes bytes that are **already in a column**. Those bytes are in executor memory before this call; GeoBrix does not guard their size. On Serverless / Spark Connect the connect-aware cap is **64 MiB** per tile — keep individual `content` values at or under that limit. For larger sources, use the virtual-tile raster readers (the default) and let the runtime page bytes lazily. See [Serverless & Memory](../serverless-and-memory#rst_fromcontent-you-own-the-bytes).
+:::
+
 <FunctionExamples
   name="rst_fromcontent"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
@@ -1320,6 +1324,10 @@ Reference a raster on disk as a tile, by path.
 
 :::note Tier differences — virtual vs materialized
 `gbx_rst_fromfile` is a Python UDF (requires `geobrix[light]`; **no Scala/JVM form** — the executor JVM cannot read a UC Volume `/Volumes/...` FUSE path, whose credential is held only by Spark's managed Python worker). The **SQL call is the same 2-argument form in both tiers**, but the tier that registered decides the result: the **lightweight** registration (`pyrx`) returns a **virtual** tile, the **heavyweight** registration (`rasterx`) returns a **materialized** tile (JVM/heavy callers cannot use a virtual path-only tile). Whichever `register()` ran last wins. From **Python**, pass `materialize=True` to force bytes regardless of tier. Without `[light]` the function is not registered and the Python binding raises with guidance.
+:::
+
+:::caution `materialize=True` errors over the Serverless cap
+Calling `rst_fromfile(..., materialize=True)` on a file larger than the connect-aware stream cap (**64 MiB on Serverless / Spark Connect**, 256 MiB on classic) raises a `ValueError`. The error is intentional — silently materializing an oversized tile would OOM the executor. The virtual default (`materialize=False`, which is the lightweight default) is Serverless-safe: pixels are read lazily, size-gated, at each downstream operation. See [Serverless & Memory](../serverless-and-memory#rst_fromfile-materialize-true).
 :::
 
 <FunctionExamples

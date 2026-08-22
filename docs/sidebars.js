@@ -150,6 +150,7 @@ const sidebars = {
         },
       ],
     },
+    'serverless-and-memory',
     {
       type: 'category',
       label: 'Advanced Usage',

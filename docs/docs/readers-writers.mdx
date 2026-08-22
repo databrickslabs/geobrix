@@ -91,9 +91,9 @@ Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall
 | **FILE-column table** | Delta scan of FILE `.uri` (MANAGED) | DBR 13.3+ | **~2 s** | ~2 s | auto when the table is MANAGED |
 | **Directory** | `read_files(format=>'file')` — enumerate + FILE refs + size | DBR 13.3+ | ~10 s / 10k *(enumerate)* | ~same | auto dir default on 13.3+ |
 | **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | ~10 s / 10k *(enumerate)* | ~same | used when `read_files` is unavailable |
-| **Directory** | FUSE walk + **per-tile open** (`raster_gbx` DataSource) | all | **~74 s / 1k** ⚠️ | ~20 s / 1k | fallback tile read (no FILE tier); **~3.7× slower on Serverless** |
+| **Directory** | FUSE walk + **per-tile open** (`raster_gbx` DataSource) | all | **~30 s / 1k** ⚠️ | ~20 s / 1k | fallback tile read (no FILE tier); slower than the Delta-table path on all runtimes |
 
-The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing — the Delta-scan FILE-column-table path (~2 s) beats the DataSource per-tile FUSE open by ~10× on classic and ~41× on Serverless. **On Serverless, prefer reading from a FILE-column table (Delta scan).**
+The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing — the Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic and **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless/Connect, 256 MiB on classic) and a full guide to memory-safe pipelines.
 
 The **no-gating rule**: the auto default (`access="auto"` on readers, `file_mode="auto"` on
 writers) silently downgrades to the best available tier and never errors. Explicitly requesting
@@ -106,10 +106,14 @@ only need to opt in to FILE when you want the governance and lifecycle benefits.
 When a lightweight reader opens a source file it calls `open_for_read(source, access="auto")`.
 The resolver checks the tier and picks a strategy:
 
-- **FILE-capable runtime (DBR 13.3+):** routes to the FILE API. Small tiled/COG files
-  (≤ `GBX_STREAM_MAX_BYTES`, default 256 MiB on classic / 64 MiB on Serverless) open a
-  byte-range **stream**; larger or striped files fall through to `as_local_file()` (a FUSE
-  path backed by the FILE handle). Open dataset handles are held in a per-partition LRU
+- **FILE-capable runtime (DBR 13.3+):** routes to the FILE API. Files at or under
+  `GBX_STREAM_MAX_BYTES` (default **64 MiB on Serverless/Connect**, 256 MiB on classic)
+  open a byte-range **stream** — one round-trip, no FUSE, no local copy, and the fastest
+  path for typical tile sizes. Files over the cap fall through to `as_local_file()` — a
+  lazy local-file reference backed by the FILE handle — which pages bytes from the Volume
+  on demand and is a **memory-safety mechanism, not a performance optimization**. A blanket
+  FUSE-direct path for small files is slower, not faster; the streaming path is preferred
+  whenever the file fits in the cap. Open dataset handles are held in a per-partition LRU
   cache keyed by source path, amortising the open cost across all windows of the same source.
 - **FUSE fallback (OSS / DBR < 13):** resolves to the bare `/Volumes/…` path and uses a
   probe-then-stage strategy — tries random-access directly; falls back to a sequential
@@ -167,4 +171,5 @@ See [`file_gbx` Reader](./readers/file) for enumeration and read-mode details, a
 
 - [Readers Overview](./readers/overview) — every reader, tier differences, output schemas, options.
 - [Writers Overview](./writers/overview) — the column contract, single-file vs sharded writers, per-format details.
+- [Serverless & Memory](./serverless-and-memory) — connect-aware caps, materialize-vs-virtual, memory-safe write patterns, and caveats.
 - [Benchmarking](./api/benchmarking) — tier-vs-tier timing and parity methodology.

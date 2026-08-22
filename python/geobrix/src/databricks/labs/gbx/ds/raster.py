@@ -1039,11 +1039,13 @@ class RasterGbxReader(DataSourceReader):
             # ---------------------------------------------------------------
             if partition.window is None and partition.clip_polygon is None:
                 file_size = os.path.getsize(partition.file_path)
-                ext = os.path.splitext(partition.file_path)[1].lower()
-                fmt = "gtiff" if ext in (".tif", ".tiff") else "gtiff"
+                # Deferred whole-file virtual read: the header is NOT opened here,
+                # so COG cannot be distinguished from plain GeoTIFF (both are .tif)
+                # without a read — report "gtiff". The pixel read opens the file and
+                # rasterio applies COG overviews regardless of this metadata string.
                 meta = {
                     "sourcePath": partition.file_path,
-                    "format": fmt,
+                    "format": "gtiff",
                     "path_file_size": str(file_size),
                 }
                 yield (
@@ -1074,9 +1076,7 @@ class RasterGbxReader(DataSourceReader):
                         "count": str(ds.count),
                         "path_file_size": str(file_size),
                     }
-                    win = (
-                        partition.window
-                    )  # always set for non-whole-file virtual tiles
+                    win = partition.window  # always set for non-whole-file virtual tiles
                 yield (
                     source,
                     _v2_tile_row(

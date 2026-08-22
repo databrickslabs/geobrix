@@ -986,6 +986,11 @@ class RasterGbxReader(DataSourceReader):
 
             pat = _re.compile(self.filter_regex)
             files = [f for f in files if pat.match(f)]
+        # A .vrt is a mosaic INDEX, not a walkable raster member. Reading it during
+        # a directory walk double-counts: the VRT spans the union of the tiles it
+        # indexes, and those tile_*.tif are also walked. A .vrt is honored only
+        # when the load path points directly at it (the .vrt branch in partitions()).
+        files = [f for f in files if not f.lower().endswith(".vrt")]
         return files
 
     def partitions(self) -> Sequence[InputPartition]:

@@ -23,21 +23,46 @@ from __future__ import annotations
 
 import os
 import pickle
+import re
 
 import numpy as np
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
 
+from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.cog_writer import (
     CogCommitMessage,
     CogGbxWriter,
     MosaicOptions,
     _is_all_nodata,
+    _source_discriminator,
     _tile_grid_windows,
     parse_mosaic_options,
 )
 from databricks.labs.gbx.pyrx.core import cog as gbxcog
+
+_TILE_NAME_RE = re.compile(r"^tile_([0-9A-Za-z]+)_(\d+)_(\d+)\.tif$")
+
+
+def _tname(src_path: str, r: int, c: int) -> str:
+    """Expected mini-COG filename for source *src_path* at grid cell (r, c).
+
+    Mirrors CogGbxWriter._write_mosaic naming: the writer applies
+    ``_listing.to_local_path`` to the row path before hashing, so tests must do
+    the same to reproduce the discriminator.
+    """
+    disc = _source_discriminator(_listing.to_local_path(str(src_path)))
+    return f"tile_{disc}_{r}_{c}.tif"
+
+
+def _row_col(tile_path: str) -> tuple:
+    """Parse (row, col) from a tile filename — the final two ``_`` tokens."""
+    name = os.path.basename(tile_path)
+    m = _TILE_NAME_RE.match(name)
+    assert m, f"unexpected tile name: {name}"
+    return int(m.group(2)), int(m.group(3))
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -166,8 +191,12 @@ def test_write_mosaic_tile_naming(tmp_path):
     msg = w.write(iter([{"path": str(src)}]))
 
     names = {os.path.basename(p) for p in msg.paths}
-    expected = {"tile_0_0.tif", "tile_0_1.tif", "tile_1_0.tif", "tile_1_1.tif"}
+    # Tile names carry a per-source discriminator: tile_<disc>_<row>_<col>.tif.
+    expected = {_tname(str(src), r, c) for r in (0, 1) for c in (0, 1)}
     assert names == expected, f"unexpected tile names: {names}"
+    # A single source yields exactly one discriminator across all its tiles.
+    discs = {_TILE_NAME_RE.match(n).group(1) for n in names}
+    assert len(discs) == 1, f"single source must use one discriminator: {discs}"
 
 
 # ---------------------------------------------------------------------------
@@ -185,11 +214,8 @@ def test_write_mosaic_pixel_equality(tmp_path):
 
     with rasterio.open(src_path) as src:
         for tile_path in msg.paths:
-            name = os.path.basename(tile_path)
-            # Parse row/col from tile_<row>_<col>.tif
-            parts = os.path.splitext(name)[0].split("_")
-            assert len(parts) == 3 and parts[0] == "tile", f"unexpected name: {name}"
-            tile_row, tile_col = int(parts[1]), int(parts[2])
+            # Parse row/col from tile_<disc>_<row>_<col>.tif (final two tokens).
+            tile_row, tile_col = _row_col(tile_path)
 
             # Reconstruct the window used for this tile.
             windows = {
@@ -205,7 +231,7 @@ def test_write_mosaic_pixel_equality(tmp_path):
             np.testing.assert_array_equal(
                 actual_data,
                 expected_data,
-                err_msg=f"pixel mismatch in {name}",
+                err_msg=f"pixel mismatch in {os.path.basename(tile_path)}",
             )
 
 
@@ -279,13 +305,13 @@ def test_prune_empty_drops_all_nodata_tile(tmp_path):
     names = {os.path.basename(p) for p in msg.paths}
     # tile_1_1 covers rows 100..120, cols 100..200 → all nodata → pruned.
     assert (
-        "tile_1_1.tif" not in names
+        _tname(src_path, 1, 1) not in names
     ), "all-nodata tile_1_1 should have been pruned by pruneEmpty=True"
     # The other 3 tiles should be present.
-    for expected in ("tile_0_0.tif", "tile_0_1.tif", "tile_1_0.tif"):
+    for r, c in ((0, 0), (0, 1), (1, 0)):
         assert (
-            expected in names
-        ), f"{expected} should be present (has non-nodata pixels)"
+            _tname(src_path, r, c) in names
+        ), f"tile_{r}_{c} should be present (has non-nodata pixels)"
 
 
 def test_prune_empty_false_writes_nodata_tile(tmp_path):
@@ -298,7 +324,7 @@ def test_prune_empty_false_writes_nodata_tile(tmp_path):
 
     names = {os.path.basename(p) for p in msg.paths}
     assert (
-        "tile_1_1.tif" in names
+        _tname(src_path, 1, 1) in names
     ), "all-nodata tile_1_1 should be written when pruneEmpty=False"
 
 
@@ -350,8 +376,9 @@ def test_write_mosaic_with_overlap_produces_larger_tiles(tmp_path):
     # tile_1_0 is corner-bottom-left; tile_0_1 has a left halo (interior edge).
     # For a 200x120 src with tileSize=100: tile_0_1 covers cols 100..200 (right edge).
     # With halo, it expands leftward into cols ~90..200 → wider.
-    dims_no = _get_dims(msg_no.paths, "tile_0_1.tif")
-    dims_halo = _get_dims(msg_halo.paths, "tile_0_1.tif")
+    tile_0_1 = _tname(src_path, 0, 1)
+    dims_no = _get_dims(msg_no.paths, tile_0_1)
+    dims_halo = _get_dims(msg_halo.paths, tile_0_1)
     assert dims_no is not None and dims_halo is not None
     assert (
         dims_halo[0] > dims_no[0] or dims_halo[1] > dims_no[1]
@@ -509,3 +536,177 @@ def test_is_all_nodata_nan():
 def test_is_all_nodata_nan_mixed():
     data = np.array([[[1.0, float("nan")]]], dtype="float32")
     assert not _is_all_nodata(data, float("nan"))
+
+
+# ---------------------------------------------------------------------------
+# 11. FIX 1 — two sources in one write must NOT collide (silent data loss)
+# ---------------------------------------------------------------------------
+
+
+def _write_src_at(path: str, origin_x: float, w: int = 200, h: int = 120) -> None:
+    """Write a striped uint16 GTiff positioned at *origin_x* (distinct extent)."""
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32632",
+        transform=from_origin(origin_x, 5000000.0, 10.0, 10.0),
+    )
+    data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+
+
+def test_write_mosaic_two_sources_no_collision(tmp_path):
+    """Two distinct sources in ONE partition/write must not clobber each other.
+
+    Both sources are 200x120 with tileSize=100 → 4 tiles each.  Without a
+    per-source discriminator the two would write identical tile_<r>_<c>.tif names
+    into the shared out_dir — cog_skip_if_exists would skip the second source's
+    tiles, silently losing its data and leaving a VRT that presents source A as
+    the whole mosaic.  With the discriminator all 8 tiles are distinct.
+    """
+    src_a = str(tmp_path / "a" / "input.tif")
+    src_b = str(tmp_path / "b" / "input.tif")  # same basename, different dir
+    _write_src_at(src_a, origin_x=400000.0)
+    _write_src_at(src_b, origin_x=402000.0)  # spatially to the right of A
+
+    out_dir = str(tmp_path / "out")
+    w = _make_writer(out_dir, mosaic_opts=_default_mosaic_opts(tileSize=100))
+    # One partition, two source rows (coalesce(1) equivalent).
+    msg = w.write(iter([{"path": src_a}, {"path": src_b}]))
+
+    # 8 distinct tiles (4 per source), all on disk — no clobber.
+    assert len(msg.paths) == 8, f"expected 8 tiles (4 per source), got {msg.paths}"
+    assert len(set(msg.paths)) == 8, "tile paths must be unique across sources"
+    for p in msg.paths:
+        assert os.path.exists(p), f"tile missing on disk (clobbered?): {p}"
+
+    # Two distinct discriminators — one per source.
+    discs = {_TILE_NAME_RE.match(os.path.basename(p)).group(1) for p in msg.paths}
+    assert len(discs) == 2, f"expected 2 source discriminators, got {discs}"
+    assert _source_discriminator(_listing.to_local_path(src_a)) in discs
+    assert _source_discriminator(_listing.to_local_path(src_b)) in discs
+
+    # commit() builds a VRT referencing BOTH sources' members.
+    w.commit([msg])
+    vrt = os.path.join(out_dir, "mosaic.vrt")
+    assert os.path.exists(vrt), "commit() must write mosaic.vrt"
+    import xml.etree.ElementTree as ET
+
+    members = {
+        os.path.basename((sf.text or "").strip())
+        for sf in ET.parse(vrt).getroot().iter("SourceFilename")
+    }
+    assert members == {os.path.basename(p) for p in msg.paths}, (
+        "VRT must reference every tile from both sources; "
+        f"vrt={sorted(members)} written={sorted(os.path.basename(p) for p in msg.paths)}"
+    )
+
+    # Round-trip: every referenced member is a valid, readable raster.
+    for name in members:
+        with rasterio.open(os.path.join(out_dir, name)) as ds:
+            assert ds.read().size > 0
+
+
+# ---------------------------------------------------------------------------
+# 12. FIX 3 — tiled/COG source with partial-edge tiles < internal block size
+# ---------------------------------------------------------------------------
+
+
+def _write_tiled_src(path: str, w: int, h: int, block: int = 512) -> None:
+    """Write an internally-tiled GTiff whose profile carries block dims == *block*.
+
+    A COG / tiled source's profile advertises tiled=True + blockxsize/blockysize.
+    When _write_mosaic copies that profile to write an intermediate GTiff for a
+    partial-edge tile smaller than the block, the carried-over block dims are the
+    defect FIX 3 normalizes away.
+    """
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32632",
+        transform=from_origin(400000.0, 5000000.0, 10.0, 10.0),
+        tiled=True,
+        blockxsize=block,
+        blockysize=block,
+    )
+    data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+
+
+def test_write_mosaic_tiled_source_partial_edge_tiles(tmp_path):
+    """A 700x600 tiled(512) source with tileSize=512 → partial-edge tiles < 512.
+
+    Grid: cols 512+188, rows 512+88 → 4 tiles, three with an edge dim < 512.
+    The source profile carries blockxsize/blockysize=512; those must be dropped
+    before writing each partial-edge tile's intermediate GTiff.  All 4 tiles must
+    be written, valid, and pixel-equal to their source windows.
+    """
+    src_path = str(tmp_path / "src" / "tiled.tif")
+    _write_tiled_src(src_path, w=700, h=600, block=512)
+
+    # Precondition: the fixture really carries the conflicting block dims.
+    with rasterio.open(src_path) as ds:
+        assert ds.profile.get("blockxsize") == 512, "fixture must be block-512 tiled"
+
+    out_dir = str(tmp_path / "out")
+    w = _make_writer(out_dir, mosaic_opts=_default_mosaic_opts(tileSize=512))
+    msg = w.write(iter([{"path": src_path}]))
+
+    # 2x2 grid → 4 tiles, all written (no crash on partial-edge blocks).
+    assert len(msg.paths) == 4, f"expected 4 tiles, got {len(msg.paths)}: {msg.paths}"
+
+    windows = {(r, c): win for r, c, win in _tile_grid_windows(700, 600, 512, 0.0)}
+    with rasterio.open(src_path) as src:
+        for tile_path in msg.paths:
+            assert os.path.exists(tile_path)
+            r, c = _row_col(tile_path)
+            expected = src.read(window=windows[(r, c)])
+            with rasterio.open(tile_path) as tds:
+                actual = tds.read()
+            np.testing.assert_array_equal(
+                actual, expected, err_msg=f"pixel mismatch in tile {r},{c}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# 13. FIX 4 — overwrite cleanup must remove a stale mosaic.vrt
+# ---------------------------------------------------------------------------
+
+
+def test_overwrite_removes_stale_vrt(tmp_path):
+    """mode('overwrite') must sweep a stale mosaic.vrt, not just *.tif.
+
+    First write+commit produces tiles + mosaic.vrt.  A second writer over the
+    same out_dir with overwrite=True and writeVrt=False must leave NO stale
+    mosaic.vrt behind (otherwise readers pointed at the dir/vrt see stale members).
+    """
+    src_path = str(tmp_path / "src" / "input.tif")
+    _write_src(src_path, w=200, h=120)
+    out_dir = str(tmp_path / "out")
+
+    # First write: creates tiles + mosaic.vrt.
+    w1 = _make_writer(out_dir, mosaic_opts=_default_mosaic_opts(tileSize=100))
+    w1.commit([w1.write(iter([{"path": src_path}]))])
+    vrt = os.path.join(out_dir, "mosaic.vrt")
+    assert os.path.exists(vrt), "first write must create mosaic.vrt"
+
+    # Second writer with overwrite=True + writeVrt=False: __init__ cleanup must
+    # remove the stale mosaic.vrt.
+    CogGbxWriter(
+        out_dir,
+        _path_schema(),
+        overwrite=True,
+        cog_blocksize=256,
+        mosaic_opts=_default_mosaic_opts(tileSize=100, writeVrt="false"),
+    )
+    assert not os.path.exists(vrt), "overwrite cleanup must remove the stale mosaic.vrt"

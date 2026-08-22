@@ -311,7 +311,8 @@ def test_bbox_filtered_vrt_read(spark, tmp_path):
     )
 
     member_path = rows[0]["tile"]["path"]
-    assert "tile_0_0.tif" in member_path, (
-        f"Expected the returned row to belong to tile_0_0.tif; "
+    # Tile names carry a per-source discriminator: tile_<disc>_<row>_<col>.tif.
+    assert member_path.endswith("_0_0.tif"), (
+        f"Expected the returned row to belong to the (0,0) tile; "
         f"got member_path={member_path!r}"
     )

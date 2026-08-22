@@ -58,9 +58,11 @@ driverMode (``driverMode=true``):
 from __future__ import annotations
 
 import glob
+import hashlib
 import logging
 import math
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
@@ -132,6 +134,39 @@ def _tile_grid_windows(
             exp_h = exp_bottom - exp_row
 
             yield r, c, Window(exp_col, exp_row, exp_w, exp_h)
+
+
+def _source_discriminator(src_path: str) -> str:
+    """Return a short, stable, filesystem-safe discriminator for *src_path*.
+
+    Mosaic tiles from every source in a write land in the same flat ``out_dir``.
+    Naming them ``tile_<row>_<col>.tif`` with no source component means two source
+    rasters in one write (the normal multi-file input, or two partitions sharing
+    ``out_dir``) collide on identical tile names — ``cog_skip_if_exists`` skips one
+    or the other silently overwrites it, losing pixels and leaving a VRT that
+    presents one source as the whole mosaic.
+
+    This discriminator namespaces the tile name
+    (``tile_<disc>_<row>_<col>.tif``):
+
+    - **Stable / deterministic** — the same source path always yields the same
+      discriminator, so an idempotent re-run (``skip_if_exists``) and any partition
+      that reprocesses the same source line up on identical names.
+    - **Distinct per source** — different source paths (even the same basename in
+      different directories) yield different discriminators via the path hash, so
+      distinct sources never collide, even across partitions writing one
+      ``out_dir``.
+    - **Single alnum token** — contains no ``_``, so ``tile_<disc>_<row>_<col>``
+      parses unambiguously (row/col are always the final two ``_``-separated
+      tokens).
+
+    The human-readable stem prefix is a convenience for eyeballing the output
+    directory; correctness rests on the 8-hex sha1 suffix of the full path.
+    """
+    digest = hashlib.sha1(src_path.encode("utf-8")).hexdigest()[:8]
+    stem = os.path.splitext(os.path.basename(src_path))[0]
+    safe = re.sub(r"[^0-9A-Za-z]+", "", stem)[:16]
+    return f"{safe}{digest}" if safe else digest
 
 
 def _is_all_nodata(data, nodata) -> bool:
@@ -652,7 +687,13 @@ class CogGbxWriter(DataSourceWriter):
 
         self._cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
         if overwrite and os.path.isdir(self.out_dir):
-            for stale in glob.glob(os.path.join(self.out_dir, f"*.{ext}")):
+            # Sweep stale outputs. Include the mosaic index (*.vrt): a prior
+            # mosaic write leaves mosaic.vrt behind, and globbing only *.<ext>
+            # would strand it — a reader pointed at the dir/vrt would then see a
+            # stale index referencing tiles this overwrite may not reproduce.
+            stale_paths = glob.glob(os.path.join(self.out_dir, f"*.{ext}"))
+            stale_paths += glob.glob(os.path.join(self.out_dir, "*.vrt"))
+            for stale in stale_paths:
                 try:
                     os.remove(stale)
                 except OSError:
@@ -837,6 +878,10 @@ class CogGbxWriter(DataSourceWriter):
 
         for row in iterator:
             src_path = _listing.to_local_path(str(row["path"]))
+            # Per-source discriminator: namespaces tile names so two source
+            # rasters in one write (or across partitions sharing out_dir) never
+            # collide on identical tile_<row>_<col>.tif names (silent data loss).
+            srcdisc = _source_discriminator(src_path)
 
             with rasterio.open(src_path) as src:
                 src_width, src_height = src.width, src.height
@@ -847,7 +892,7 @@ class CogGbxWriter(DataSourceWriter):
                 for tile_row, tile_col, window in _tile_grid_windows(
                     src_width, src_height, tile_size, overlap_pct
                 ):
-                    out_name = f"tile_{tile_row}_{tile_col}.tif"
+                    out_name = f"tile_{srcdisc}_{tile_row}_{tile_col}.tif"
                     out_path = os.path.join(self.out_dir, out_name)
 
                     if self.cog_skip_if_exists and os.path.exists(out_path):
@@ -910,6 +955,14 @@ class CogGbxWriter(DataSourceWriter):
                     # _window_dataset_bytes / materialize_to_bytes for fidelity:
                     # same driver, height, width, count, transform, compression.
                     profile = src.profile.copy()
+                    # A tiled/COG source carries tiled=True + blockxsize/blockysize
+                    # (e.g. 512) and possibly interleave. A partial-edge tile whose
+                    # dims are smaller than those block dims conflicts when written
+                    # as an intermediate GTiff, so drop the source's block layout and
+                    # let the encoder pick blocks for the actual tile dims (the final
+                    # COG re-tiles via _bytes_to_cog regardless).
+                    for _blk in ("tiled", "blockxsize", "blockysize", "interleave"):
+                        profile.pop(_blk, None)
                     profile.update(
                         driver="GTiff",
                         height=int(window.height),

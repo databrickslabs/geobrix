@@ -32,9 +32,11 @@ from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
 from rasterio.windows import Window
 
+from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.cog_writer import (
     CogCommitMessage,
     CogGbxWriter,
+    _source_discriminator,
     parse_mosaic_options,
 )
 
@@ -304,8 +306,11 @@ def test_vrt_references_only_written_tiles(tmp_path):
     # Normalise: strip to bare filename
     bare_fns = {os.path.basename(fn) if os.path.isabs(fn) else fn for fn in fns}
 
-    # tile_1_1 is all-nodata and should NOT appear
-    assert "tile_1_1.tif" not in bare_fns, "VRT must not reference pruned tile_1_1"
+    # tile_1_1 is all-nodata and should NOT appear (name carries source disc).
+    disc = _source_discriminator(_listing.to_local_path(src))
+    assert (
+        f"tile_{disc}_1_1.tif" not in bare_fns
+    ), "VRT must not reference pruned tile_1_1"
 
     # VRT member count == written tile count
     assert len(fns) == len(

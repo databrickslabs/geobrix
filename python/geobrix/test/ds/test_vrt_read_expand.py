@@ -300,3 +300,76 @@ def test_vrt_no_osgeo_in_raster_py():
     src_text = pathlib.Path(spec.origin).read_text(encoding="utf-8")
     osgeo_imports = re.findall(r"^(?:import|from)\s+osgeo\b.*$", src_text, re.MULTILINE)
     assert not osgeo_imports, f"raster.py must not import osgeo: {osgeo_imports}"
+
+
+# ---------------------------------------------------------------------------
+# 7. FIX 5 — loading the mosaic DIRECTORY must not double-count the VRT + tiles
+# ---------------------------------------------------------------------------
+
+
+def test_dir_load_excludes_vrt(spark, tmp_path):
+    """Loading the mosaic DIRECTORY yields one row per tile — not tiles + the VRT.
+
+    A directory walk that treats mosaic.vrt as a walkable raster reads it as ONE
+    extra whole-mosaic source on top of every tile_*.tif it indexes → double
+    coverage.  The .vrt is an index (honored only when the load path points
+    directly at it), so the directory walk must exclude it.
+    """
+    base_dir = tmp_path / "srcdir"
+    base_dir.mkdir()
+    vrt_path, members = _build_mosaic(base_dir, n_cols=3, n_rows=1)
+    out_dir = os.path.dirname(vrt_path)
+    assert os.path.exists(os.path.join(out_dir, "mosaic.vrt"))
+
+    spark.dataSource.register(RasterGbxDataSource)
+    count = spark.read.format("raster_gbx").load(out_dir).count()
+    assert count == len(members), (
+        f"directory load must yield {len(members)} tile rows (VRT excluded), "
+        f"got {count} — the VRT was double-counted as a walkable member"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 8. FIX 2 — _parse_vrt_members uses the hardened defusedxml parser
+# ---------------------------------------------------------------------------
+
+
+def test_parse_vrt_members_uses_defusedxml(tmp_path):
+    """External VRT parsing must be entity-hardened (defusedxml), not raw stdlib.
+
+    defusedxml is declared in the [light-base] extra so production installs get
+    it; the fallback to stdlib xml.etree exists only for resilience.  A VRT that
+    declares an XML entity must be REJECTED (defusedxml raises) rather than
+    expanded — proof the hardened parser is active.
+    """
+    import defusedxml  # noqa: F401  (must be importable in the light tier)
+    from defusedxml.common import EntitiesForbidden
+
+    from databricks.labs.gbx.ds.raster import _parse_vrt_members
+
+    # Small, bounded entity declaration (not an actual bomb) — enough to trip
+    # defusedxml's entity guard while never risking runaway expansion.
+    bomb = (
+        '<?xml version="1.0"?>\n'
+        "<!DOCTYPE VRTDataset [\n"
+        '  <!ENTITY a "aaaaaaaaaa">\n'
+        "]>\n"
+        '<VRTDataset rasterXSize="1" rasterYSize="1">\n'
+        '  <VRTRasterBand dataType="Byte" band="1">\n'
+        "    <SimpleSource>\n"
+        '      <SourceFilename relativeToVRT="1">&a;.tif</SourceFilename>\n'
+        "    </SimpleSource>\n"
+        "  </VRTRasterBand>\n"
+        "</VRTDataset>\n"
+    )
+    vrt = tmp_path / "bomb.vrt"
+    vrt.write_text(bomb, encoding="utf-8")
+
+    try:
+        _parse_vrt_members(str(vrt))
+    except EntitiesForbidden:
+        return  # hardened parser rejected the entity — expected
+    raise AssertionError(
+        "_parse_vrt_members did not reject an entity-bearing VRT; the vulnerable "
+        "stdlib xml.etree parser is active instead of defusedxml"
+    )

@@ -58,21 +58,33 @@ driverMode (``driverMode=true``):
 from __future__ import annotations
 
 import glob
+import logging
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
 
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import _listing
+from databricks.labs.gbx.ds.file_gbx import (
+    _COG_DRIVER_MAX_BYTES,
+    StageTooLargeError,
+    _connect_aware_lru_sizing,
+    materialize_decision,
+)
+
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
 class CogCommitMessage(WriterCommitMessage):
     paths: List[str]
+    # Source paths deferred to driver-side conversion (auto-routed by size gate).
+    # These are NOT output paths — never remove them on abort().
+    pending_paths: List[str] = field(default_factory=list)
 
 
 def _is_v2_envelope(schema: StructType) -> bool:
@@ -195,8 +207,13 @@ class CogGbxWriter(DataSourceWriter):
 
         from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
+        # Compute the executor stream cap once per write() call (cheap: reads env only).
+        _executor_cap_bytes = _connect_aware_lru_sizing(None)[0]
+
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
+        # Source paths deferred to driver-side conversion by the size gate.
+        pending: List[str] = []
         for row in iterator:
             src_volume = _listing.to_local_path(str(row["path"]))
             # output name: derive from source basename (or name_col if given)
@@ -211,6 +228,42 @@ class CogGbxWriter(DataSourceWriter):
             if self.cog_skip_if_exists and os.path.exists(out_path):
                 written.append(out_path)
                 continue
+
+            # Size gate: check source size before committing to executor conversion.
+            # COG overview-build transient can use 2–3× source RAM on the executor;
+            # a large source blows the ~1 GiB Serverless per-task cap.
+            try:
+                src_size: Optional[int] = os.path.getsize(src_volume)
+            except OSError:
+                src_size = None  # unknown size → "stream" (safe default)
+
+            decision = materialize_decision(src_size, "cog_write")
+            if decision == "error":
+                size_mib = (
+                    f"{src_size // (1024 ** 2)} MiB" if src_size else "unknown size"
+                )
+                raise StageTooLargeError(
+                    f"Source {src_volume!r} ({size_mib}) exceeds the driver "
+                    f"COG-conversion budget ({_COG_DRIVER_MAX_BYTES // (1024 ** 3)} GiB). "
+                    f"Split with sizeInMB= or use a classic cluster."
+                )
+            if decision == "driver":
+                # Auto-route: defer conversion to driver-side (commit() → prepare_cogs).
+                # GDAL COG conversion has a flat ~2 GiB RSS profile on the driver
+                # regardless of source size; this avoids the executor per-task cap.
+                size_mib = f"{src_size // (1024 ** 2)}" if src_size else "?"
+                cap_mib = _executor_cap_bytes // (1024**2)
+                _logger.info(
+                    "cog_gbx: auto-routing %s (%s MiB) to driver-side COG conversion "
+                    "(source exceeds executor cap %d MiB; commit() will run prepare_cogs)",
+                    src_volume,
+                    size_mib,
+                    cap_mib,
+                )
+                pending.append(src_volume)
+                continue
+
+            # "stream": source fits within executor cap — convert on executor (default path).
 
             # Build a NetCDF subdataset URI when requested.
             conv_src = src_volume
@@ -239,7 +292,7 @@ class CogGbxWriter(DataSourceWriter):
                 if os.path.exists(tmp):
                     os.remove(tmp)
             written.append(out_path)
-        return CogCommitMessage(paths=written)
+        return CogCommitMessage(paths=written, pending_paths=pending)
 
     def _out_path_for(self, vt, row) -> str:
         """Output COG path for a v2 tile row (name_col > tile.path > source > cellid)."""
@@ -371,21 +424,30 @@ class CogGbxWriter(DataSourceWriter):
         return CogCommitMessage(paths=written)
 
     def commit(self, messages: List[Optional[WriterCommitMessage]]) -> None:
-        if self.driver_mode:
-            # NOTE: this runs INSIDE the .save() Spark Connect RPC. A long-blocking
-            # commit (large corpus / big files, ~1 GB/min) can have its channel
-            # cancelled → java.nio.channels.CancelledKeyException + a FAILED run.
-            # If you hit that, bypass the writer and call prepare_cogs directly on
-            # the driver (plain Python, no Spark RPC) — see this module's docstring.
-            from databricks.labs.gbx.ds._listing import to_local_path
-            from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+        # NOTE: this runs INSIDE the .save() Spark Connect RPC. A long-blocking
+        # commit (large corpus / big files, ~1 GB/min) can have its channel
+        # cancelled → java.nio.channels.CancelledKeyException + a FAILED run.
+        # If you hit that, bypass the writer and call prepare_cogs directly on
+        # the driver (plain Python, no Spark RPC) — see this module's docstring.
+        from databricks.labs.gbx.ds._listing import to_local_path
+        from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
 
-            all_paths = []
+        if self.driver_mode:
+            # explicit driverMode=True: m.paths holds source paths gathered by write()
+            all_pending = []
             for m in messages:
                 if isinstance(m, CogCommitMessage):
-                    all_paths.extend(to_local_path(p) for p in m.paths)
+                    all_pending.extend(to_local_path(p) for p in m.paths)
+        else:
+            # default mode: m.pending_paths holds sources auto-routed by the size gate
+            all_pending = []
+            for m in messages:
+                if isinstance(m, CogCommitMessage):
+                    all_pending.extend(to_local_path(p) for p in m.pending_paths)
+
+        if all_pending:
             prepare_cogs(
-                all_paths,
+                all_pending,
                 self.out_dir,
                 blocksize=self.cog_blocksize,
                 resampling=self.cog_overview_resampling,

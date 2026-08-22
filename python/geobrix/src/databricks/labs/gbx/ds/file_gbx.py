@@ -54,6 +54,7 @@ __all__ = [
     "GBX_LRU_MAX_BYTES",
     "GBX_STREAM_MAX_BYTES",
     "STREAM_NOMINAL_BYTES",
+    "_COG_DRIVER_MAX_BYTES",
     "_FILE_SUPPORT_CACHE",
     "_connect_aware_lru_sizing",
     "_open_via_file_ref",
@@ -848,6 +849,18 @@ _GBX_LRU_MAX_BYTES = GBX_LRU_MAX_BYTES
 _GBX_STREAM_MAX_BYTES = GBX_STREAM_MAX_BYTES
 _STREAM_NOMINAL_BYTES = STREAM_NOMINAL_BYTES
 
+# Driver-side COG-conversion headroom ceiling (used by materialize_decision kind="cog_write").
+# Sources up to this size are auto-routed to the driver-side path when they exceed the executor
+# cap.  GDAL COG conversion has a FLAT ~2 GiB RSS profile regardless of source size (tested
+# up to 10 GiB sources), so the limit is driven by Spark Connect channel-timeout risk
+# (~1 GB/min throughput → 10 GiB ≈ 10 min, near the channel cancellation boundary) rather
+# than RAM headroom.  Sources beyond this bound are refused with StageTooLargeError; split
+# with sizeInMB= or use a classic cluster (no channel timeout).
+# Override via GBX_COG_DRIVER_MAX_BYTES environment variable.
+_COG_DRIVER_MAX_BYTES = int(
+    os.environ.get("GBX_COG_DRIVER_MAX_BYTES", 10 * 1024**3)  # default: 10 GiB
+)
+
 
 # =============================================================================
 # FILE capability detection (from pyrx/_file_ref.py)
@@ -1173,20 +1186,29 @@ def materialize_decision(
       "stream" — size_bytes <= cap: safe to hold in memory (bulk read / full materialize).
       "fuse"   — size_bytes  > cap AND kind in {"read","write"}: too big for RAM; caller
                  must open lazily via FUSE (reads) or windowed-stream (writes).
-      "error"  — size_bytes  > cap AND kind == "ingest": explicit materialize=True was
-                 requested but the file is too big for the Serverless task cap; the caller
-                 must raise StageTooLargeError with an actionable message.  This prevents
-                 silent OOM when a user passes rst_fromfile(path, materialize=True) with a
-                 multi-hundred-MiB source on Serverless.
+      "driver" — size_bytes  > cap AND kind == "cog_write" AND size_bytes <=
+                 _COG_DRIVER_MAX_BYTES: auto-route to the driver-side COG conversion path.
+                 GDAL COG conversion has a flat ~2 GiB RSS profile regardless of source
+                 size; the driver (not the executor) can safely run it.  Caller must defer
+                 to CogGbxWriter's driver-side path (commit() → prepare_cogs), which is
+                 invoked automatically — no user opt-in required.
+      "error"  — size_bytes  > cap AND kind == "ingest": explicit materialize=True guard —
+                 fail fast.  Prevents silent OOM when a user passes rst_fromfile(path,
+                 materialize=True) with a multi-hundred-MiB source on Serverless.
+               — size_bytes  > _COG_DRIVER_MAX_BYTES AND kind == "cog_write": source
+                 exceeds driver headroom; split with sizeInMB= or use a classic cluster.
 
-    kind is one of {"read","write","ingest"}:
+    kind is one of {"read","write","ingest","cog_write"}:
     - "read" / "write": over-cap → "fuse" (lazy open, no bytes in RAM).
     - "ingest": over-cap → "error" (explicit materialize guard — fail fast).
+    - "cog_write": over-cap but <= _COG_DRIVER_MAX_BYTES → "driver" (auto driver-side COG);
+                   over _COG_DRIVER_MAX_BYTES → "error" (beyond driver headroom).
     size_bytes is None → "stream" (safe default; unknown size, matches the read gate's
     NULL-size behavior), regardless of kind.
 
     Cap = _connect_aware_lru_sizing(spark or _resolve_session_for_cap())[0]
     (64 MiB Connect/Serverless, 256 MiB classic, GBX_STREAM_MAX_BYTES override).
+    _COG_DRIVER_MAX_BYTES = 10 GiB default (GBX_COG_DRIVER_MAX_BYTES override).
     Connect-safe: reads os.environ + session type only; no .rdd/_jvm/conf.set.
     """
     if size_bytes is None:
@@ -1197,6 +1219,10 @@ def materialize_decision(
         return "stream"
     # Over cap: branch on kind.
     if kind == "ingest":
+        return "error"
+    if kind == "cog_write":
+        if size_bytes <= _COG_DRIVER_MAX_BYTES:
+            return "driver"
         return "error"
     return "fuse"
 

@@ -71,6 +71,7 @@ __all__ = [
     "_fuse_direct_disabled",
     "_resolve_session_for_cap",
     "materialize_decision",
+    "report_detected_cap",
     # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
@@ -1225,6 +1226,26 @@ def materialize_decision(
             return "driver"
         return "error"
     return "fuse"
+
+
+def report_detected_cap(spark: Optional["SparkSession"] = None) -> int:
+    """Return the connect-aware stream cap (in bytes) that materialize_decision uses.
+
+    For the Serverless validation to assert the cap is 64 MiB on env v6 (the
+    linchpin — a mis-detect silently uses the 256 MiB classic cap → OOM).
+
+    Returns:
+        The stream cap in bytes:
+        - 64 MiB (67,108,864) on Spark Connect / Serverless.
+        - 256 MiB (268,435,456) on classic Spark (no Connect session).
+        - ``GBX_STREAM_MAX_BYTES`` override if set (wins in both modes).
+
+    Args:
+        spark: Optional SparkSession. If None, resolved via
+               ``_resolve_session_for_cap()`` (same as ``materialize_decision``).
+    """
+    _sess = spark if spark is not None else _resolve_session_for_cap()
+    return _connect_aware_lru_sizing(_sess)[0]
 
 
 def _is_fuse_path(path: str) -> bool:

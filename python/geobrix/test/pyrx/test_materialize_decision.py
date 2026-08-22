@@ -14,7 +14,7 @@ Covers:
 
 import pytest
 
-from databricks.labs.gbx.ds.file_gbx import materialize_decision
+from databricks.labs.gbx.ds.file_gbx import materialize_decision, report_detected_cap
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -159,3 +159,49 @@ class TestReadWriteStillFuse:
     @pytest.mark.parametrize("kind", ["read", "write"])
     def test_none_is_stream(self, kind):
         assert materialize_decision(None, kind=kind) == "stream"
+
+
+# ---------------------------------------------------------------------------
+# F. report_detected_cap — returns the connect-aware cap used by materialize_decision
+# ---------------------------------------------------------------------------
+
+
+class TestReportDetectedCap:
+    """report_detected_cap returns the same cap that materialize_decision uses.
+
+    Without a real Spark Connect session (no Serverless in unit tests), the
+    classic 256 MiB cap applies.  GBX_STREAM_MAX_BYTES override must win.
+    """
+
+    def test_returns_int(self):
+        cap = report_detected_cap(spark=None)
+        assert isinstance(cap, int)
+
+    def test_default_classic_cap_is_256mib(self):
+        # Without a Connect session, the cap must be the classic 256 MiB.
+        cap = report_detected_cap(spark=None)
+        assert cap == _256MiB, (
+            f"Expected classic cap 256 MiB ({_256MiB:,} bytes), got {cap:,}. "
+            "If this runs on Serverless (Connect session present), the expected value "
+            "is 64 MiB; this test targets the non-Connect path."
+        )
+
+    def test_env_override_wins(self, monkeypatch):
+        # GBX_STREAM_MAX_BYTES overrides the cap regardless of session type.
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1234567")
+        cap = report_detected_cap(spark=None)
+        assert cap == 1234567
+
+    def test_env_override_64mib(self, monkeypatch):
+        # Simulate the Connect/Serverless cap via env override.
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", str(_64MiB))
+        cap = report_detected_cap(spark=None)
+        assert cap == _64MiB
+
+    def test_consistent_with_materialize_decision_boundary(self, monkeypatch):
+        # report_detected_cap returns the EXACT threshold used by materialize_decision:
+        # at cap → "stream"; cap+1 → "fuse".
+        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "99999")
+        cap = report_detected_cap(spark=None)
+        assert materialize_decision(cap, kind="read") == "stream"
+        assert materialize_decision(cap + 1, kind="read") == "fuse"

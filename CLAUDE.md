@@ -109,6 +109,7 @@ Only **integer indices ±1..±6** (1=100km, 2=10km, 3=1km, 4=100m, 5=10m, 6=1m; 
 
 ### GDAL resource management
 
+- **Serverless-safe materialize policy (REQUIRED):** any new code that reads a whole file or tile into executor RAM (a materialize) MUST route through `materialize_decision` in `ds/file_gbx.py` — never a raw unbounded `.read()` or `materialize_to_bytes` without it (Serverless per-task RAM ~1 GB; a mis-sized read silently OOMs).
 - **Prefer `rst_fromcontent` with `binaryFile` reader** over `rst_fromfile` when you already have bytes — avoids temp-file races on executors.
 - `GetNoDataValue` requires an output array (returns void otherwise).
 - `GetStatistics` only works on the MDArray, **not on `Band` directly**.

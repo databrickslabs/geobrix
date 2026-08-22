@@ -382,6 +382,27 @@ else:
         )
     except Exception as _e:
         print(f"AQE: config readback unavailable: {{_e}}")
+
+# Diagnostic: best-effort enable the Python-worker faulthandler so a NATIVE worker crash
+# (segfault in GDAL/rasterio/pyogrio) dumps a C-level traceback to the executor stderr
+# instead of the opaque "Python worker exited unexpectedly (crashed)". Driver-side enable
+# is harmless; the two spark confs are what install the handler in the WORKER. Guarded:
+# on Serverless/Connect the conf may be rejected -- catch and continue (no worse than default).
+try:
+    import faulthandler as _fh
+    _fh.enable()
+except Exception:
+    pass
+for _fk in (
+    "spark.python.worker.faulthandler.enabled",
+    "spark.sql.execution.pyspark.udf.faulthandler.enabled",
+    "spark.executorEnv.PYTHONFAULTHANDLER",
+):
+    try:
+        spark.conf.set(_fk, "1" if _fk.endswith("PYTHONFAULTHANDLER") else "true")
+        print(f"faulthandler: set {{_fk}}")
+    except Exception as _e:
+        print(f"faulthandler: {{_fk}} not settable ({{_e}})")
 # Reader-only runs (readers/pmtiles/vector/mvt/pmtiles-agg/tin/grid/fanout/netcdf --*-only) stage
 # their OWN corpus (a reader pool, a vector corpus, synthetic in-memory rows, or -- for netcdf --
 # the {{CORPUS}}/netcdf + {{CORPUS}}/netcdf-swath pools). They do NOT use the function-bench row

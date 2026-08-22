@@ -166,12 +166,13 @@ class CogGbxWriter(DataSourceWriter):
         # the cap inside write() — which runs per-partition on a session-less
         # Serverless worker — would fall back to the 256 MiB classic cap and
         # mis-route a 64-256 MiB source to executor conversion → OOM. Use
-        # getActiveSession() (never getOrCreate): on the driver it returns the real
-        # session; off-driver / in unit tests it returns None → classic 256 MiB, and
-        # GBX_STREAM_MAX_BYTES still overrides.
-        from pyspark.sql import SparkSession
+        # _resolve_session_for_cap() (getActiveSession → getOrCreate fallback) so
+        # that threading contexts where getActiveSession() returns None still resolve
+        # to the live Connect session. Mirrors file_ref_arg / rst_fromfile's driver
+        # capture (parity with those read-gate surfaces).
+        from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
 
-        self._cap = _connect_aware_lru_sizing(SparkSession.getActiveSession())[0]
+        self._cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
         if overwrite and os.path.isdir(self.out_dir):
             for stale in glob.glob(os.path.join(self.out_dir, f"*.{ext}")):
                 try:

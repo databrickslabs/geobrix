@@ -21,7 +21,7 @@ GeoBrix is [supported on DBR 17.3 LTS, 18 LTS, and — for the lightweight tier 
 
 - **[Virtual tiles defer pixel I/O](#virtual-vs-materialized)** — metadata-only operations (set-CRS, set-SRID, nodata, band-select) run **1.5–12× faster** on virtual tiles and complete without reading pixels. Chain deferred edits before a terminal step to pay pixel I/O cost **once at the end**.
 - **[Grouping amortizes open cost](../api/performance#virtual-tile-read-performance)** — windowed COG reads from the same source open once per partition (grouped executor). With `ORDER BY path` or repartitioning, byte-range stream reads are **10–290× faster** than FUSE per window; without amortization, per-tile opens grow prohibitive with file size.
-- **[FILE-on ≈ FILE-off on dedicated clusters](#file-capability-cog-multiwindow)** — FILE is governed file access, not a per-tile read optimization. Grouping (open amortization) is the performance lever. Serverless FILE support coming soon.
+- **[FILE-on ≈ FILE-off on dedicated clusters](#file-capability-cog-multiwindow)** — FILE is governed file access, not a per-tile read optimization. Grouping (open amortization) is the performance lever. Serverless supports FILE-column-table reads (verified on environment v6, ~2 s per 1,000 tiles); the directory `raster_gbx` DataSource path is slower there — see [capability tiers](../readers-writers#capability-tiers).
 - **[Band math: 60–130× lightweight win](#pure-core)** — spectral indices run 60–130× faster on the lightweight tier (NumPy in-process vs. heavyweight subprocess `gdal_calc` per call). This is the single largest advantage and sustains at scale.
 - **[Lightweight at parity for aggregators and geometry](#results)** — `st_asmvt` MVT encoding (~6% gap), `pmtiles_agg` archive folding (~7% gap), and quadbin/BNG grid math (±20% variance) all run within or very near parity on a cluster, with decoded output matching exactly.
 
@@ -213,6 +213,8 @@ init script). At scale the read still parallelizes across the cluster (~23 ms/ti
 spread over the workers).
 
 ### Reader plan-time listing
+
+For a comparison of the full read paths — Delta-scan FILE-column-table (~2 s), directory enumeration (~10 s/10k files), and DataSource per-tile FUSE open (~20 s classic / ~74 s Serverless per 1k tiles) — see the [capability tiers & read-options matrix](../readers-writers#capability-tiers). The fast Serverless path is reading from a FILE-column table (Delta scan).
 
 Before any tile is read, the reader **enumerates the source directory** to determine tile windows. The default listing is fast — a stat-free walk that plans ~10k files in ~1.5 s on a UC Volume — and it runs once at plan time even when `virtualTiles=true` (only the per-file `rasterio.open` is skipped by virtual-tile planning; the directory walk still happens).
 

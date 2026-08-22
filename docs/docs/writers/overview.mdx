@@ -198,6 +198,20 @@ register(spark, only=["raster_gbx", "geojson_gbx"])
 An unrecognized format raises `ValueError`.
 :::
 
+:::tip On Serverless, write to a FILE-column table for fast reads
+On Serverless, prefer writing raster or vector output to a **FILE-column Delta table** (use
+`file_mode="external"` or `file_mode="managed"` on the writer). Once written, reads via
+`tilesTable` (raster) or `vector_file_read(table)` (vector) use the Delta-scan path — measured
+at **~2 s** per 1,000 tiles on both Serverless and classic — instead of the per-tile FUSE opens
+that make the directory DataSource path **~3.7× slower on Serverless**.
+
+Per-tile FILE writes themselves are not the fast path; the benefit is on the read side once the
+table exists. For large-dataset write throughput on Serverless, `geojsonl_gbx` (sharded) and
+`gpkg_gbx` scale horizontally without single-node assembly.
+
+See the full [capability tiers & read-options matrix](../readers-writers#capability-tiers).
+:::
+
 ### Lightweight writers in detail
 
 | Writer | Format Name | Description |

@@ -42,6 +42,20 @@ register(spark, only=["raster_gbx", "gtiff_gbx"])
 An unrecognized format raises `ValueError`.
 :::
 
+:::tip On Serverless, read from a FILE-column table
+The **Delta-scan FILE-column-table read path** is fast and runtime-independent: a `tilesTable` (raster)
+or `vector_file_read(table)` (vector) scans the Delta table and resolves FILE references without
+per-tile FUSE opens — measured at **~2 s** for 1,000 raster tiles or 100k vector features on both
+Serverless and classic clusters.
+
+The `raster_gbx` **directory DataSource path**, by contrast, incurs a per-tile FUSE header open and is
+**~3.7× slower on Serverless** (~74 s vs. ~20 s per 1,000 tiles). When running on Serverless, write your
+rasters or vectors to a FILE-column table first, then read from that table rather than the directory
+directly.
+
+See the full [capability tiers & read-options matrix](../readers-writers#capability-tiers).
+:::
+
 ### Available Readers
 
 | Reader | Format Name | Description |

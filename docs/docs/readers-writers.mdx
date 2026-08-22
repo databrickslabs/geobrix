@@ -81,6 +81,20 @@ and writers use their own GDAL/OGR access paths.
 | `list_files` | DBR 18 LTS + | `list_files(…)` — metadata + FILE refs, directory listing only |
 | `fuse` | All runtimes (OSS / DBR < 13) | `os.walk` + FUSE mount — always available; no FILE column |
 
+### Read-options matrix
+
+Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall-clock.
+
+| Source | Read mechanism | Runtime | Serverless | Classic | Default / when |
+|---|---|---|---|---|---|
+| **FILE-column table** *(recommended on Serverless)* | Delta scan of `path` (EXTERNAL) | any | **~2 s** | ~2 s | default for a table source (`vector_file_read(table)`, raster `tilesTable`) |
+| **FILE-column table** | Delta scan of FILE `.uri` (MANAGED) | DBR 13.3+ | **~2 s** | ~2 s | auto when the table is MANAGED |
+| **Directory** | `read_files(format=>'file')` — enumerate + FILE refs + size | DBR 13.3+ | ~10 s / 10k *(enumerate)* | ~same | auto dir default on 13.3+ |
+| **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | ~10 s / 10k *(enumerate)* | ~same | used when `read_files` is unavailable |
+| **Directory** | FUSE walk + **per-tile open** (`raster_gbx` DataSource) | all | **~74 s / 1k** ⚠️ | ~20 s / 1k | fallback tile read (no FILE tier); **~3.7× slower on Serverless** |
+
+The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing — the Delta-scan FILE-column-table path (~2 s) beats the DataSource per-tile FUSE open by ~10× on classic and ~41× on Serverless. **On Serverless, prefer reading from a FILE-column table (Delta scan).**
+
 The **no-gating rule**: the auto default (`access="auto"` on readers, `file_mode="auto"` on
 writers) silently downgrades to the best available tier and never errors. Explicitly requesting
 `"managed"` or `"external"` on a FUSE-only runtime raises a clear, actionable error

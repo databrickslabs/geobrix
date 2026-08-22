@@ -173,6 +173,16 @@ if DISABLE_FILE:
     os.environ["GBX_DISABLE_FILE"] = "1"
     print("GBX_DISABLE_FILE=1 — FILE type disabled for this leg")
 
+# --disable-fuse-direct: set GBX_DISABLE_FUSE_DIRECT=1 so whole-file /Volumes tiles take the
+# FileRef byte-range stream instead of the scoped FUSE-direct default. This is the stream
+# baseline leg of the FUSE-direct A/B (default run = FUSE-direct; this run = stream). The env
+# var is read fresh per file_ref_arg call (not memoized), so placement is not import-order
+# sensitive; kept beside DISABLE_FILE for clarity.
+DISABLE_FUSE_DIRECT = {disable_fuse_direct!r}
+if DISABLE_FUSE_DIRECT:
+    os.environ["GBX_DISABLE_FUSE_DIRECT"] = "1"
+    print("GBX_DISABLE_FUSE_DIRECT=1 — scoped FUSE-direct disabled; using FileRef stream")
+
 # DBR ships databricks/__init__.py that pre-sets databricks.__path__ to specific
 # system directories, excluding the %pip virtual-env site-packages where
 # geobrix just landed. Extend the path before any geobrix imports so that
@@ -3470,6 +3480,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         netcdf_writer_only=bool(cfg.get("netcdf_writer_only")),
         input_tile=str(cfg.get("input_tile", "materialized")),
         disable_file=bool(cfg.get("disable_file", False)),
+        disable_fuse_direct=bool(cfg.get("disable_fuse_direct", False)),
         benchmark_grouped_file=bool(cfg.get("benchmark_grouped_file")),
         grouped_file_only=bool(cfg.get("grouped_file_only")),
         multiwindow_corpus=str(cfg.get("multiwindow_corpus", "") or ""),

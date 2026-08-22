@@ -431,6 +431,11 @@ def main() -> int:
     # fall back to plain-path I/O (FILE type bypassed). Intended for the FILE-off A/B leg.
     # Only meaningful when --input-tile virtual; silently a no-op for materialized inputs.
     disable_file = "--disable-file" in sys.argv
+    # --disable-fuse-direct: set GBX_DISABLE_FUSE_DIRECT=1 in the notebook so whole-file
+    # /Volumes tiles take the FileRef byte-range stream instead of the scoped FUSE-direct
+    # default. This is the stream-baseline leg of the FUSE-direct A/B (run once without the
+    # flag = FUSE-direct default, once with it = stream, and compare).
+    disable_fuse_direct = "--disable-fuse-direct" in sys.argv
     # --grouped-file: also run the grouped FILE-amortization benchmark (rst_clip_grouped +
     #   pixel-op _grouped fns) over a MULTIWINDOW COG corpus, across three tile modes
     #   (materialized / virtual+FILE-off / virtual+FILE-on). This is the leg that actually
@@ -620,6 +625,8 @@ def main() -> int:
         input_tile=input_tile,
         #  --disable-file: set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg).
         disable_file=disable_file,
+        #  --disable-fuse-direct: set GBX_DISABLE_FUSE_DIRECT=1 (FUSE-direct stream-baseline A/B leg).
+        disable_fuse_direct=disable_fuse_direct,
         #  --grouped-file: also run the grouped FILE-amortization benchmark (multiwindow COG,
         #  3 tile modes). --grouped-file-only: ONLY that leg. --multiwindow-corpus: its corpus dir.
         benchmark_grouped_file=benchmark_grouped_file,

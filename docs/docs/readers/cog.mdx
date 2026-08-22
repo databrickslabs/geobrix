@@ -121,7 +121,7 @@ Downstream `rst_*` functions consume either identically.
 
 ## Reading a VRT mosaic
 
-When the load path points **directly at a `mosaic.vrt`** (written by the
+When the load path points **directly at a `mosaic.vrt`** (can be written by the
 [`cog_gbx` writer's mosaic mode](../writers/cog#vrt-mosaic-mode)), the reader
 parses the VRT XML, enumerates its member paths, and emits **one virtual tile row
 per member mini-COG** — each row a whole-file reference (`raster=NULL`, `path`

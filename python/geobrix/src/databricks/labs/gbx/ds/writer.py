@@ -197,9 +197,13 @@ class RasterGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        from databricks.labs.gbx.ds.file_gbx import materialize_decision
         from databricks.labs.gbx.pyrx.core.open_tile import (
+            _read_size_key,
             _to_virtual_tile,
+            _windowed_materialize_bytes,
             materialize_to_bytes,
+            open_header,
         )
 
         os.makedirs(self.path, exist_ok=True)
@@ -211,7 +215,35 @@ class RasterGbxWriter(DataSourceWriter):
             # needs raster_bytes + metadata + cellid, unchanged from before.
             vt = _to_virtual_tile(row["tile"])
             if vt.is_virtual():
-                raster_bytes = materialize_to_bytes(vt).raster
+                # Size-gate: route large virtual tiles through a block-streaming
+                # write that never holds the full pixel array in RAM — essential
+                # under the ~1 GiB Serverless per-task cap.
+                #
+                # Size source priority:
+                #   1. path_file_size (on-disk size stamped by the reader — preferred).
+                #   2. Decoded estimate from the tile header (no pixel read).
+                #   3. None → materialize_decision returns "stream" (safe default).
+                _meta = dict(vt.metadata or {})
+                _size = _read_size_key(_meta, "path_file_size")
+                if _size is None:
+                    # Fall back to decoded estimate from the tile header.
+                    try:
+                        import numpy as _np
+
+                        with open_header(vt) as _h:
+                            _size = (
+                                _h.count
+                                * _h.width
+                                * _h.height
+                                * int(_np.dtype(_h.dtypes[0]).itemsize)
+                            )
+                    except Exception:
+                        _size = None  # unknown size → "stream" (safe default)
+                _decision = materialize_decision(_size, "write")
+                if _decision == "fuse":
+                    raster_bytes = _windowed_materialize_bytes(vt)
+                else:
+                    raster_bytes = materialize_to_bytes(vt).raster
             else:
                 raster_bytes = bytes(vt.raster)
             cellid = vt.cellid

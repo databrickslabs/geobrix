@@ -700,6 +700,122 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     )
 
 
+def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
+    """Block-streaming equivalent of ``materialize_to_bytes(tile).raster``.
+
+    Opens the source file lazily and writes the output GTiff block-by-block,
+    so the full pixel array is never held in RAM.  Returns encoded GTiff bytes
+    that are **pixel-array-equal and profile-equal** to ``materialize_to_bytes``
+    for the common (no-warp, no-clip) case.
+
+    Profile building exactly mirrors ``_window_dataset_bytes`` / ``materialize_to_bytes``:
+    - Same driver, height, width, count, transform.
+    - Same nodata ensure/preserve+dtype-fit logic.
+    - Same CRS relabel (pending_crs supersedes pending_srid).
+    - Same compression authority (``_comp.creation_opts``, "auto", full decoded_bytes).
+
+    **Fallback for warp / clip:**  Reprojection and clipping require full-window
+    context that cannot be assembled block-by-block safely.  These cases delegate
+    to ``materialize_to_bytes(tile).raster``.  Tests exercise the no-warp / no-clip
+    path only and assert ``materialize_to_bytes`` is NOT called there.
+    """
+    with ExitStack() as stack:
+        pending = _parse_pending(tile.metadata)
+        bands, nodata, srid, crs_str = pending
+
+        # Resolve the local path — same as open_tile's local-path branch.
+        local_path = _resolve_local_or_windowed(tile, None, stack)
+
+        with rasterio.open(local_path) as src:
+            # Resolve window → same semantics as open_tile.
+            if tile.window is None:
+                window = Window(0, 0, src.width, src.height)
+            else:
+                c, r, w, h = tile.window
+                window = Window(c, r, w, h)
+
+            # Detect whether reprojection is needed.  Warp and clip cannot be
+            # done block-by-block (they need full-window context), so fall back.
+            src_epsg = src.crs.to_epsg() if src.crs else None
+            want = _epsg_of(tile.crs) if tile.crs else None
+            effective_src_epsg = srid if srid is not None else src_epsg
+            needs_warp = (want is not None and want != effective_src_epsg) or (
+                tile.crs is not None and want is None
+            )
+            needs_clip = tile.clip_polygon is not None
+
+            if needs_warp or needs_clip:
+                # Warp / clip require full-window context; delegate to the
+                # standard materializer.  This branch is not exercised by the
+                # size-gate test suite (test tiles are no-warp / no-clip).
+                return materialize_to_bytes(tile).raster
+
+            # --- Block-streaming path: no warp, no clip ---
+            indexes = bands if bands else None
+            count = len(bands) if bands else src.count
+
+            # Build the exact profile that _window_dataset_bytes / materialize_to_bytes
+            # would produce.
+            profile = src.profile.copy()
+            profile.update(
+                driver="GTiff",
+                height=int(window.height),
+                width=int(window.width),
+                count=count,
+                transform=src.window_transform(window),
+            )
+
+            # Nodata: same ensure/preserve + dtype-fit logic as _window_dataset_bytes.
+            if nodata is not None:
+                if src.nodata is not None:
+                    # Source already carries nodata → preserve it.
+                    profile["nodata"] = src.nodata
+                else:
+                    out_dtype_nd = profile.get("dtype", src.dtypes[0])
+                    if _nodata_fits_dtype(nodata, out_dtype_nd):
+                        profile["nodata"] = nodata
+
+            # CRS relabel: pending_crs (full string) supersedes pending_srid.
+            if crs_str is not None:
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                profile["crs"] = resolve_crs(crs_str)
+            elif srid is not None:
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                profile["crs"] = resolve_crs(srid)
+
+            # Compression: same authority as materialize_to_bytes (full decoded size).
+            out_dtype = profile.get("dtype", src.dtypes[0])
+            decoded_bytes = (
+                count
+                * int(window.width)
+                * int(window.height)
+                * np.dtype(out_dtype).itemsize
+            )
+            profile.update(
+                _comp.creation_opts(
+                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+                )
+            )
+
+            # Write block-by-block — at most one output block in RAM at a time.
+            with MemoryFile() as mf:
+                with mf.open(**profile) as dst:
+                    for _, block_window in dst.block_windows(1):
+                        # Translate the output-local (0-based) block_window to
+                        # source-file coordinates (offset by the tile window origin).
+                        src_block = Window(
+                            col_off=int(block_window.col_off) + int(window.col_off),
+                            row_off=int(block_window.row_off) + int(window.row_off),
+                            width=int(block_window.width),
+                            height=int(block_window.height),
+                        )
+                        data = src.read(window=src_block, indexes=indexes)
+                        dst.write(data, window=block_window)
+                return mf.read()
+
+
 def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
     """Return GTiff bytes for a tile, avoiding the double-encode of materialize_to_bytes.
 

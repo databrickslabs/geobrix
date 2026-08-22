@@ -96,6 +96,12 @@ light-base = [
     # release floats/breaks on Serverless env v5 (Py 3.12), same discipline as
     # the rio-tiler / mapbox-vector-tile pins above.
     "netcdf4>=1.6,<2",
+    # Entity-hardened XML parsing for external-origin GDAL .vrt mosaic indexes
+    # (raster_gbx VRT expansion). The stdlib xml.etree parser is vulnerable to
+    # XXE / billion-laughs on an untrusted .vrt; defusedxml is the safe parser
+    # _parse_vrt_members prefers. Dep-free, pure Python. Floor pinned; <1
+    # future-proofs (no 1.x exists today).
+    "defusedxml>=0.7,<1",
 ]
 # Runtime deps for the lightweight pure-Python/PySpark APIs (no JAR) — the umbrella
 # extra covering all light tiers (raster today; vector/grid as they land). Install

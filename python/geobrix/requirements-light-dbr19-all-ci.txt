@@ -469,6 +469,10 @@ cycler==0.12.1 \
     --hash=sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30 \
     --hash=sha256:88bb128f02ba341da8ef447245a9e138fae777f6a23943da4540077d3601eb1c
     # via matplotlib
+defusedxml==0.7.1 \
+    --hash=sha256:1bb3032db185915b62d7c6209c5a8792be6a32ab2fedacc84e01b52c51aa3e69 \
+    --hash=sha256:a352e7e428770286cc899e2542b6cdaedb2b4953ff269a210103ec58f6198a61
+    # via geobrix
 earthaccess==0.18.0 \
     --hash=sha256:5733316a7a524b8bbed3d551ddf2b3fd5c624e302a2acd123547a65ef34627cf \
     --hash=sha256:888bff5a2f206ece0269a8ead0841d0432fff5b1b4564f6da37ac1a7c73f8195

@@ -36,6 +36,11 @@ pyarrow==19.0.1
 rasterio==1.5.0
 shapely==2.1.2
 
+# --- entity-hardened XML parsing for external GDAL .vrt mosaic indexes ---
+# (raster_gbx VRT expansion; guards untrusted .vrt against XXE / billion-laughs).
+# Dep-free, pure Python. Matches the [light-base] pyproject floor + dev container.
+defusedxml==0.7.1
+
 # --- band math: focal filters / convolution (scipy.ndimage) + map-algebra (numexpr) ---
 # scipy pinned to the DBR 17.3 LTS installed version. numexpr is NOT in DBR's
 # library set, so it is pinned independently (safe math-expression evaluator for

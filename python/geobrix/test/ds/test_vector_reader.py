@@ -233,6 +233,32 @@ def test_vector_gbx_access_fuse_reads_fuse(tmp_path):
     assert sorted(rows["id"]) == [1, 2]
 
 
+def test_members_generic_read_excludes_shapefile_sidecars(tmp_path):
+    """A generic (no-driver) directory read must open only the primary vector
+    file(s) and skip shapefile sidecars.
+
+    Regression: a streamed Shapefile write produces roads.shp plus .shx/.dbf/
+    .prj/.cpg sidecars in the same directory. Reading the directory back with
+    no driverName previously enumerated every file (extensions=None), handing
+    the .cpg to pyogrio, which rejects it ('not recognized as being in a
+    supported file format'). _members() must filter to recognized primary
+    extensions so only roads.shp is returned.
+    """
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    d = tmp_path / "streamed_shp"
+    d.mkdir()
+    for ext in (".shp", ".shx", ".dbf", ".prj", ".cpg"):
+        (d / f"roads{ext}").write_bytes(b"")
+    # An unrelated non-geo file must also be excluded.
+    (d / "readme.txt").write_text("notes")
+
+    rdr = VectorGbxReader({"path": str(d)})  # no driverName -> generic
+    members = rdr._members()
+
+    assert members == [str(d / "roads.shp")], members
+
+
 def test_vector_staging_amortized_once_per_source(tmp_path):
     """Multiple partitions targeting the same source file stage it only once.
 

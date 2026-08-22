@@ -682,10 +682,23 @@ class VectorGbxReader(DataSourceReader):
         from databricks.labs.gbx.ds.file_gbx import list_local_files
 
         exts: Tuple[str, ...] = self._EXT_FOR_DRIVER.get(self.driver) or ()
-        try:
-            members = list_local_files(
-                self.path, recursive=True, extensions=exts or None
+        if not exts:
+            # Generic (no-driver) directory read: filter to the union of every
+            # driver's PRIMARY extensions plus the module-recognized geo
+            # extensions. This picks up any primary vector file while excluding
+            # shapefile sidecars (.cpg/.shx/.dbf/.prj) — which appear in no
+            # driver's list — so a generic read of a shapefile bundle directory
+            # opens only the .shp and never hands a .cpg to pyogrio (which
+            # rejects it as an unsupported format). Without this filter the
+            # recursive enumeration returns every sidecar and the read fails.
+            exts = tuple(
+                sorted(
+                    {e for group in self._EXT_FOR_DRIVER.values() for e in group}
+                    | set(_RECOGNIZED_EXTS)
+                )
             )
+        try:
+            members = list_local_files(self.path, recursive=True, extensions=exts)
         except FileNotFoundError:
             return [self.path]
         return members or [self.path]

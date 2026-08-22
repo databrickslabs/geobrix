@@ -23,6 +23,13 @@ This makes `cog_gbx` the natural read path after COG preparation with the
 3. **Read** — clip to any AOI with `cog_gbx` + `clipPolygons`, pulling only the
    required tiles and overview levels.
 
+`cog_gbx` also reads a **VRT mosaic**: point it at a `mosaic.vrt` index (written
+by the [`cog_gbx` writer's mosaic mode](../writers/cog#vrt-mosaic-mode)) and the
+reader expands the index into one virtual tile per member mini-COG, so `rst_*`
+functions process the whole mosaic per-tile. See
+[Reading a VRT mosaic](#reading-a-vrt-mosaic) below and the
+[VRT Mosaics](../api/vrt-mosaic) reference.
+
 :::note Lightweight only
 `cog_gbx` is a pure-Python lightweight DataSource (no JAR). Register it with
 `register(spark)` before use.
@@ -111,6 +118,34 @@ Downstream `rst_*` functions consume either identically.
 
 <CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
   source="docs/tests/python/readers/cog_gbx_examples.py" />
+
+## Reading a VRT mosaic
+
+When the load path points **directly at a `mosaic.vrt`** (written by the
+[`cog_gbx` writer's mosaic mode](../writers/cog#vrt-mosaic-mode)), the reader
+parses the VRT XML, enumerates its member paths, and emits **one virtual tile row
+per member mini-COG** — each row a whole-file reference (`raster=NULL`, `path`
+set to the member, `window=NULL`). All downstream `rst_*` functions then run
+per-tile, exactly as for a directory of flat COGs:
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+
+# One virtual tile per member mini-COG
+df = spark.read.format("cog_gbx").load("/Volumes/.../mosaic/mosaic.vrt")
+```
+
+**Options that apply to a VRT load:**
+
+| Option | Effect on a VRT load |
+|--------|----------------------|
+| _`.vrt` path recognition_ | Pointing the load at a `mosaic.vrt` triggers member expansion (one row per tile). Pointing at the **containing directory** instead walks the directory for raster files and skips `.vrt` indexes, so the tiles are read directly. Both yield one row per tile; the VRT path is the canonical way to load a mosaic. |
+| `clipPolygons` + `clipCrs` | Restrict the expansion to only the members whose extent intersects the area of interest — non-intersecting mini-COGs are skipped without being opened. `clipCrs` supplies the CRS for a polygon lacking an embedded SRID. |
+| `virtualTiles` | Applies as elsewhere (default `"true"`). Members are emitted as bytes-free virtual tiles; set `"false"` to materialize member bytes into each row. |
+
+Full detail — including `mint_vrt` for on-demand transient VRTs — is on the
+[VRT Mosaics](../api/vrt-mosaic) page.
 
 ## Next steps
 

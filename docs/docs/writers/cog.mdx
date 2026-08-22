@@ -30,6 +30,13 @@ the driver. For the concepts behind COG preparation — striped vs. tiled layout
 overviews, BigTIFF, and the memory model — see
 [Large Rasters](../api/large-rasters).
 
+`cog_gbx` also writes **VRT mosaics**: instead of one master COG per source, it
+can tile each source into bounded mini-COGs and emit a portable `mosaic.vrt`
+index over them — so a source too large to hold in a single COG (or in per-task
+memory) is split into pieces every `rst_*` function can process independently.
+See [VRT mosaic mode](#vrt-mosaic-mode) below for the writer options, and the
+[VRT Mosaics](../api/vrt-mosaic) reference for the full pattern.
+
 :::note Lightweight only
 `cog_gbx` is a pure-Python lightweight DataSource (no JAR). It uses GDAL's
 `driver="COG"` creation path internally, which produces spec-compliant COGs
@@ -150,26 +157,52 @@ no such connection, and it is idempotent so re-running resumes cleanly. See
 ## VRT mosaic mode
 
 For sources too large to process as a single master COG — or when you want a
-spatially indexed, portable tile set — use **mosaic mode**. Pass `mosaic=true`
-and `gridSystem=none`; the writer tiles each source into bounded mini-COGs and
-builds a `mosaic.vrt` index in the output directory. Pointing `raster_gbx` at
-the VRT expands it back into one virtual tile per member, so all `rst_*`
-functions run per-tile unchanged.
+spatially indexed, portable tile set — use **mosaic mode**. Pass `vrtMosaic=true`;
+the writer tiles each source into bounded mini-COGs and builds a `mosaic.vrt`
+index in the output directory. Pointing `raster_gbx` (or `cog_gbx`) at the VRT
+expands it back into one virtual tile per member, so all `rst_*` functions run
+per-tile unchanged. The tile grid defaults to `gridSystem="none"` (native pixel
+tiling), so `vrtMosaic="true"` alone is enough.
 
 ```python
 (
     sources
     .write.format("cog_gbx")
     .option("vrtMosaic", "true")
-    .option("gridSystem", "none")
-    .option("tileSize", "1024")
+    .option("tileSize", "1024")   # optional; defaults to 1024
     .mode("overwrite")
     .save(output_dir)
 )
 ```
 
-See [VRT Mosaics](../api/vrt-mosaic) for the full option reference, `mint_vrt`
-for on-demand transient VRTs, and spatial filtering of VRT loads.
+### Mosaic-mode options
+
+These options apply when `vrtMosaic="true"`. All the COG encoding options above
+(`cogBlockSize`, `cogOverviewResampling`, `compress`, `compressLevel`,
+`predictor`, `cogBigTiff`, `cogSkipIfExists`) pass through to each mini-COG.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `vrtMosaic` | — | Set `"true"` to write a VRT mosaic instead of one master COG per source. (Supplying `gridSystem` also enters mosaic mode; one of the two must be present.) |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling) is the default and the only supported value today — you rarely need to set it. Grid-aligned systems (quadbin, BNG, H3) are planned for a future release. |
+| `tileSize` | `"1024"` | Tile edge length in pixels (square tiles). The last row and column are clipped to the source boundary. Valid only with `gridSystem="none"`. |
+| `overlapPercent` | `"0"` | Tile-edge halo as a percent of `tileSize` (e.g. `5` adds `ceil(tileSize·5/100)` px on each side, clamped to source bounds). Valid only with `gridSystem="none"`. |
+| `mergeStrategy` | `"none"` | How spatially overlapping tiles from different sources blend: `none` (last-write wins), `min`, `max`, `avg`, `first`, `last`. |
+| `pruneEmpty` | `"true"` | Skip tiles whose pixels are entirely NoData — saves storage and reader work on sparse sources. |
+| `writeVrt` | `"true"` | Emit `mosaic.vrt` alongside the tiles. `"false"` writes only the mini-COGs (build the index later with `mint_vrt`). |
+| `vrtPaths` | `"relative"` | Tile paths inside the VRT: `"relative"` (bare filenames — the directory is portable if tiles stay together) or `"absolute"` (works from any location). |
+
+:::note Disallowed combinations raise a clear error
+`driverMode=true` cannot combine with mosaic mode (mosaic writes per-tile
+mini-COGs on executors; `driverMode` produces a single driver-side COG). The
+DGGS-only options (`gridMinResolution`, `gridMaxResolution`,
+`gridStepResolution`) are rejected for `gridSystem="none"`, and `tileSize` /
+`overlapPercent` are rejected for any grid-aligned system.
+:::
+
+See [VRT Mosaics](../api/vrt-mosaic) for the full pattern — `mint_vrt` for
+on-demand transient VRTs, reading a mosaic back, and spatial filtering of VRT
+loads.
 
 ## When to use `cog_gbx` writer vs `gtiff_gbx` writer with `cog=true`
 

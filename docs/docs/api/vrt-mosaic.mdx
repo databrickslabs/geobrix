@@ -27,10 +27,11 @@ processing:
 
 ## Prepare: write a VRT mosaic
 
-Pass `vrtMosaic=true` and `gridSystem=none` to `cog_gbx` to enter mosaic mode.
-The writer reads each source file window-by-window (one tile at a time — the
-source is never fully materialised in RAM), writes one mini-COG per tile, and
-then builds `mosaic.vrt` in the output directory.
+Pass `vrtMosaic=true` to `cog_gbx` to enter mosaic mode. The writer reads each
+source file window-by-window (one tile at a time — the source is never fully
+materialised in RAM), writes one mini-COG per tile, and then builds `mosaic.vrt`
+in the output directory. The tile grid defaults to `gridSystem="none"` (native
+pixel tiling), so you normally set only `vrtMosaic` and, optionally, `tileSize`.
 
 ```python
 from databricks.labs.gbx.ds.register import register
@@ -42,9 +43,8 @@ sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw
 (
     sources
     .write.format("cog_gbx")
-    .option("vrtMosaic", "true")
-    .option("gridSystem", "none")   # native pixel tiling — required
-    .option("tileSize", "1024")     # tile edge in pixels (default 1024)
+    .option("vrtMosaic", "true")   # activate mosaic mode
+    .option("tileSize", "1024")    # tile edge in pixels (default 1024)
     .mode("overwrite")
     .save("/Volumes/catalog/schema/volume/mosaic/")
 )
@@ -70,8 +70,8 @@ tile names, and a re-run produces the same names for the same sources
 
 | Option | Default | Description |
 |---|---|---|
-| `vrtMosaic` | — | Set `"true"` to activate VRT-mosaic mode. Either `vrtMosaic` or `gridSystem` must be present. |
-| `gridSystem` | — | Tile grid: `"none"` (native pixel tiling — the only supported value). Grid-aligned systems (quadbin, BNG, H3) are planned and will be added in a future release. |
+| `vrtMosaic` | — | Set `"true"` to activate VRT-mosaic mode. (Supplying `gridSystem` also activates it; one of the two must be present.) |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling) is the default and the only supported value today — you rarely need to set it. Grid-aligned systems (quadbin, BNG, H3) are planned for a future release. |
 | `tileSize` | `"1024"` | Tile edge length in pixels. Tiles are square. The last row and column are clipped to the source boundary. |
 | `overlapPercent` | `"0"` | Tile-edge halo as a percentage of `tileSize`. A value of `5` expands each tile's read window by `ceil(tileSize * 5 / 100)` pixels on every side, clamped to the source bounds. Default 0 — non-overlapping grid. |
 | `mergeStrategy` | `"none"` | How overlapping tiles are blended: `none` (last-write wins), `min`, `max`, `avg`, `first`, or `last`. Relevant only when tiles from different sources overlap spatially. |

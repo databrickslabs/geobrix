@@ -125,11 +125,41 @@ with rasterio.open(vrt_path) as vrt_ds:
 ```
 
 Pass an explicit `out` path to write the VRT to a fixed location instead of a
-temp directory:
+temp directory. Choose the location by **who needs to open the `.vrt` file, and
+for how long** — its member tiles are always referenced by absolute path, so
+they must be reachable from wherever the VRT is opened:
 
 ```python
+# Driver-local, transient — a one-shot windowed read in this same process.
+# /tmp is visible only to the driver and is gone when the driver restarts.
 vrt_path = mint_vrt(tile_paths, out="/tmp/query_mosaic.vrt")
+
+# Shared and durable — reopenable later, and readable by workers, another
+# notebook, or an external GDAL tool (QGIS, gdalinfo, rio-tiler). The tiles it
+# references must also live on the Volume so the absolute paths resolve there.
+vrt_path = mint_vrt(tile_paths, out="/Volumes/catalog/schema/vol/mosaic/query.vrt")
 ```
+
+:::note Where a minted VRT is reachable
+A minted VRT is usable at a given place only if **both** the `.vrt` file and its
+absolute member paths resolve there.
+
+- **No `out` (temp dir) or a `/tmp` path** — driver-local and ephemeral. This is
+  the primary use of `mint_vrt`: build a VRT over a dynamic tile subset, open it
+  with rasterio **in the same driver/notebook process** for a windowed read, then
+  discard it. It is invisible to workers and to later sessions, and you are
+  responsible for deleting the temp file when you are done with it.
+- **A `/Volumes/...` path (FUSE)** — shared across the driver, workers, and
+  external clients, and it persists. Use it when the index must outlive the
+  process or be read from somewhere else. Because `mint_vrt` bakes **absolute**
+  member paths, the tiles themselves must also be on the Volume.
+
+If you instead want a **portable, movable** index co-located with its tiles — one
+where you can copy or move the whole directory — prefer the writer's persisted
+`mosaic.vrt` (`writeVrt=true`), which uses **relative** paths by default. A
+minted VRT is the tool for a *dynamic subset* (pinned or ephemeral); the persisted
+mosaic is the tool for the *whole tile set*.
+:::
 
 `mint_vrt` is Connect-safe — pure Python + rasterio, no Spark session, no
 `_jvm`, no `osgeo`. It can be called from a notebook driver cell or from
@@ -140,7 +170,7 @@ any Python process.
 | Parameter | Required | Description |
 |---|---|---|
 | `tile_paths` | Yes | Non-empty list of absolute paths to COG tiles. All tiles must share the same CRS, pixel size, band count, and dtype. |
-| `out` | No | Optional destination path for the VRT. When omitted, the VRT is placed in a private temp directory. |
+| `out` | No | Optional destination path for the VRT. When omitted, the VRT goes to a private temp directory (driver-local, transient). Put it on a Volume (`/Volumes/...`) if it must be reopened later or read from workers or other clients — see the reachability note above. |
 
 **Returns:** absolute path (`str`) to the written VRT file.
 

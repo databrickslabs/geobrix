@@ -1,0 +1,259 @@
+---
+sidebar_position: 4.5
+sidebar_label: VRT Mosaics
+title: VRT Mosaics
+---
+
+# VRT Mosaics
+
+A **VRT mosaic** is a directory of bounded mini-COG tiles plus a lightweight
+GDAL VRT index (`mosaic.vrt`) that describes how they fit together. The index is
+a portable, spatially-aware XML file — a lens over the tile set that can be
+opened by any GDAL-based tool without knowing where the tiles came from. On the
+reading side, pointing a GeoBrix reader at `mosaic.vrt` expands it back into one
+virtual tile per member, so all `rst_*` functions work per-tile unchanged.
+
+This complements the [File Column](../readers/file) table and
+[Volume](../api/large-rasters) modes as a storage form for distributed raster
+processing:
+
+| Form | What lives on disk | Best for |
+|---|---|---|
+| Single master COG | One large `.tif` per source | Windowed reads of one file at a time |
+| VRT mosaic | Directory of mini-COGs + `mosaic.vrt` | Splitting sources that exceed per-task memory, portability across GDAL tools |
+| FILE-column Delta table | FILE references in a Delta table | Governed, lifecycle-managed, long-term storage |
+
+---
+
+## Prepare: write a VRT mosaic
+
+Pass `mosaic=true` and `gridSystem=none` to `cog_gbx` to enter mosaic mode.
+The writer reads each source file window-by-window (one tile at a time — the
+source is never fully materialised in RAM), writes one mini-COG per tile, and
+then builds `mosaic.vrt` in the output directory.
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+
+# file_gbx gives one path-reference row per source file
+sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw/")
+
+(
+    sources
+    .write.format("cog_gbx")
+    .option("mosaic", "true")
+    .option("gridSystem", "none")   # native pixel tiling — required
+    .option("tileSize", "1024")     # tile edge in pixels (default 1024)
+    .mode("overwrite")
+    .save("/Volumes/catalog/schema/volume/mosaic/")
+)
+```
+
+After the write, the output directory contains:
+
+```
+mosaic/
+  tile_<discriminator>_0_0.tif   # mini-COG, row 0 col 0
+  tile_<discriminator>_0_1.tif   # mini-COG, row 0 col 1
+  ...
+  mosaic.vrt                     # VRT index referencing all tiles
+```
+
+The `<discriminator>` is a stable, source-namespaced token
+(up to 16 alphanum characters of the source basename + 8 hex characters of a
+SHA-1 hash of the source path). Two sources in the same write never collide on
+tile names, and a re-run produces the same names for the same sources
+(`cogSkipIfExists=true` by default, so idempotent resumption is free).
+
+### Options
+
+| Option | Default | Description |
+|---|---|---|
+| `mosaic` | — | Set `"true"` to activate mosaic mode. Either `mosaic` or `gridSystem` must be present. |
+| `gridSystem` | — | Tile grid: `"none"` (native pixel tiling — the only supported value). Grid-aligned systems (quadbin, BNG, H3) are planned and will be added in a future release. |
+| `tileSize` | `"1024"` | Tile edge length in pixels. Tiles are square. The last row and column are clipped to the source boundary. |
+| `overlapPercent` | `"0"` | Tile-edge halo as a percentage of `tileSize`. A value of `5` expands each tile's read window by `ceil(tileSize * 5 / 100)` pixels on every side, clamped to the source bounds. Default 0 — non-overlapping grid. |
+| `mergeStrategy` | `"none"` | How overlapping tiles are blended: `none` (last-write wins), `min`, `max`, `avg`, `first`, or `last`. Relevant only when tiles from different sources overlap spatially. |
+| `pruneEmpty` | `"true"` | Skip tiles whose pixels are entirely NoData. Saves storage and reader work for sparse sources. |
+| `writeVrt` | `"true"` | Emit `mosaic.vrt` alongside the tiles. Set `"false"` if you only need the tiles and will build the index separately with [`mint_vrt`](#mint-on-demand-vrt). |
+| `vrtPaths` | `"relative"` | How tile paths are written inside the VRT. `"relative"` (default) — bare filenames, VRT is portable as long as tiles stay in the same directory. `"absolute"` — full paths, VRT works from any location. |
+
+**Mutually exclusive constraints:**
+
+- `driverMode=true` and mosaic mode cannot be combined — mosaic mode writes
+  per-tile mini-COGs on executors; `driverMode` produces a single driver-side COG.
+  Use one or the other.
+- `tileSize` and `overlapPercent` are only valid with `gridSystem="none"`.
+  DGGS-aligned options (`gridMinResolution`, `gridMaxResolution`,
+  `gridStepResolution`) are reserved for future grid systems and are rejected for
+  `gridSystem="none"`.
+
+Tile-encoding options (`cogBlockSize`, `cogOverviewResampling`, `compress`,
+`compressLevel`, `predictor`, `cogBigTiff`, `cogSkipIfExists`) are passed
+through to each mini-COG. See the [COG Writer](../writers/cog#options) for the
+full encoding option reference.
+
+---
+
+## Mint: on-demand VRT
+
+`mint_vrt` builds a transient VRT over an arbitrary list of tile paths without
+writing an index file alongside the tiles. The VRT is placed in a temporary
+directory with absolute `SourceFilename` paths so rasterio can resolve each
+member regardless of working directory.
+
+```python
+from databricks.labs.gbx.ds._mosaic import mint_vrt
+
+# Build a transient VRT over an explicit tile list
+tile_paths = [
+    "/Volumes/catalog/schema/vol/mosaic/tile_abc_0_0.tif",
+    "/Volumes/catalog/schema/vol/mosaic/tile_abc_0_1.tif",
+    "/Volumes/catalog/schema/vol/mosaic/tile_abc_1_0.tif",
+]
+vrt_path = mint_vrt(tile_paths)
+
+# Open the VRT with rasterio for a windowed read across the mosaic
+import rasterio
+from rasterio.windows import Window
+
+viewport = Window(col_off=400, row_off=200, width=600, height=400)
+with rasterio.open(vrt_path) as vrt_ds:
+    data = vrt_ds.read(window=viewport)
+    # Only the tiles that intersect the viewport are read
+```
+
+Pass an explicit `out` path to write the VRT to a fixed location instead of a
+temp directory:
+
+```python
+vrt_path = mint_vrt(tile_paths, out="/tmp/query_mosaic.vrt")
+```
+
+`mint_vrt` is Connect-safe — pure Python + rasterio, no Spark session, no
+`_jvm`, no `osgeo`. It can be called from a notebook driver cell or from
+any Python process.
+
+**Parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `tile_paths` | Yes | Non-empty list of absolute paths to COG tiles. All tiles must share the same CRS, pixel size, band count, and dtype. |
+| `out` | No | Optional destination path for the VRT. When omitted, the VRT is placed in a private temp directory. |
+
+**Returns:** absolute path (`str`) to the written VRT file.
+
+---
+
+## Read: point a reader at the VRT
+
+Point `raster_gbx` (or `cog_gbx`) at `mosaic.vrt` and the reader parses the
+VRT XML, enumerates member paths, and emits **one virtual tile row per member**:
+
+```python
+from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx.pyrx.functions import rst_avg
+from pyspark.sql.functions import col
+
+register(spark)
+
+# Load the VRT: one whole-file virtual tile per member mini-COG
+df = spark.read.format("raster_gbx").load("/Volumes/catalog/schema/vol/mosaic/mosaic.vrt")
+
+# Apply rst_* per tile — exactly as you would for a directory of flat files
+result = df.select(
+    col("tile.path").alias("member"),
+    rst_avg(col("tile")).alias("avg"),
+)
+```
+
+Each row is a whole-file virtual tile (`raster=NULL`, `path` set to the member
+file path, `window=NULL`). All downstream `rst_*` functions operate on the tile
+bytes read lazily from the member path on demand — no pixel data is loaded before
+the operation actually needs it.
+
+### Directory vs. VRT load
+
+When the load path points **directly at `mosaic.vrt`** the reader expands the
+VRT into one row per member. When the load path points at the **containing
+directory** the reader walks the directory for raster files and excludes
+`.vrt` files — they are indexes, not raster members, and including them would
+double-count the mosaic. Both patterns produce one row per tile, but the VRT
+path is the canonical way to load a mosaic.
+
+### Spatial filtering
+
+Pass `clipPolygons` to restrict the expansion to only the members that intersect
+a given area of interest. Only the intersecting mini-COGs contribute rows; the
+rest are skipped without being opened:
+
+```python
+# Polygon in the CRS of the source raster
+aoi_wkt = "POLYGON ((400000 4999000, 401000 4999000, 401000 5000000, 400000 5000000, 400000 4999000))"
+
+df_clipped = (
+    spark.read.format("raster_gbx")
+    .option("clipPolygons", aoi_wkt)
+    .option("clipCrs", "EPSG:32632")
+    .load("/Volumes/catalog/schema/vol/mosaic/mosaic.vrt")
+)
+```
+
+---
+
+## Serverless-safe by construction
+
+Mosaic mode reads each tile window independently — the source is opened once
+per executor task, and each tile is read as a bounded pixel array
+(`tileSize × tileSize × bands × itemsize`). The source is never pulled fully
+into memory. At the default `tileSize=1024`, a single-band `uint16` tile is
+approximately 2 MB — well within the Serverless per-task budget regardless of
+how large the source raster is.
+
+`mint_vrt` and `_parse_vrt_members` (the VRT parser inside the reader) are pure
+Python — no GDAL Python bindings (`osgeo`), no native extension — so they work
+identically on Serverless and on classic compute.
+
+See [Serverless & Memory](../serverless-and-memory) for the full per-task memory
+model and guidance on routing large files.
+
+---
+
+## What a VRT mosaic is good for
+
+- **Distributed processing of large rasters** — a single source file too large
+  to process whole is split into bounded mini-COGs; `rst_*` functions then run
+  per-tile across the cluster.
+- **Windowed locality** — a windowed read via `mint_vrt` or `rasterio.open(vrt)`
+  touches only the mini-COGs whose spatial extent intersects the requested
+  viewport. GDAL resolves the intersection from the VRT XML header without
+  opening any tile that falls outside the window.
+- **Portable GDAL artifact** — `mosaic.vrt` is a standard GDAL VRT file readable
+  by QGIS, gdalinfo, rio-tiler, and any GDAL 2+ tool. With `vrtPaths="relative"`
+  (the default), the whole directory (tiles + VRT) can be copied or moved and
+  the index stays valid.
+- **Expandable to rows for distributed work** — pointing any GeoBrix reader at
+  the VRT turns a static directory of tiles into a partitioned Spark DataFrame in
+  one line, feeding `rst_*` pipelines without any manual enumeration.
+
+---
+
+## Upcoming
+
+Grid-aligned mosaics — where tiles are aligned to a discrete global grid
+(quadbin, BNG, or H3 cells) and each tile carries a cell identifier for spatial
+joins and data unification — are planned. In-notebook windowed rendering of a
+VRT mosaic is also on the roadmap. Options for these modes (`gridSystem`,
+`gridMinResolution`, `gridMaxResolution`, `gridStepResolution`) are accepted by
+the parser now but raise a clear error until the support lands.
+
+---
+
+## See also
+
+- [Large Rasters](./large-rasters) — COG preparation, the memory model, and when to split a large source into a mosaic
+- [Virtual Tiles](./virtual-tiles) — how VRT expansion fits into the virtual/materialized tile lifecycle
+- [COG Writer (`cog_gbx`)](../writers/cog) — full option reference for the COG preparation writer
+- [COG Reader (`cog_gbx`)](../readers/cog) — windowed, bbox-clipped reads from prepared COGs
+- [Serverless & Memory](../serverless-and-memory) — Serverless per-task memory model and safe write patterns

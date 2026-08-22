@@ -147,6 +147,30 @@ no such connection, and it is idempotent so re-running resumes cleanly. See
 [Large Rasters → Writing COGs](../api/large-rasters#writing-cogs-and-why).
 :::
 
+## VRT mosaic mode
+
+For sources too large to process as a single master COG — or when you want a
+spatially indexed, portable tile set — use **mosaic mode**. Pass `mosaic=true`
+and `gridSystem=none`; the writer tiles each source into bounded mini-COGs and
+builds a `mosaic.vrt` index in the output directory. Pointing `raster_gbx` at
+the VRT expands it back into one virtual tile per member, so all `rst_*`
+functions run per-tile unchanged.
+
+```python
+(
+    sources
+    .write.format("cog_gbx")
+    .option("mosaic", "true")
+    .option("gridSystem", "none")
+    .option("tileSize", "1024")
+    .mode("overwrite")
+    .save(output_dir)
+)
+```
+
+See [VRT Mosaics](../api/vrt-mosaic) for the full option reference, `mint_vrt`
+for on-demand transient VRTs, and spatial filtering of VRT loads.
+
 ## When to use `cog_gbx` writer vs `gtiff_gbx` writer with `cog=true`
 
 | | `cog_gbx` writer | `gtiff_gbx` with `cog=true` |
@@ -162,6 +186,7 @@ files on disk that need preparation before distributed reading, use `cog_gbx`.
 ## Next steps
 
 - [Large Rasters](../api/large-rasters) — formats, BigTIFF, the memory model, and `prepare_cogs`
+- [VRT Mosaics](../api/vrt-mosaic) — tile a large source into bounded mini-COGs + a portable VRT index
 - [File Lister](../readers/file) — list source files before preparation
 - [COG Reader](../readers/cog) — windowed read from prepared COGs
 - [Raster Reader](../readers/raster) — decode rasters into the `(source, tile)` schema

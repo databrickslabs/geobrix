@@ -213,6 +213,7 @@ benchmarks, see [FILE vs FUSE: large-COG results](../api/benchmarking#file-capab
 ## See also
 
 - [Virtual Tiles](./virtual-tiles) — the reading model and virtual↔materialized lifecycle over prepared COGs
+- [VRT Mosaics](./vrt-mosaic) — decompose a large source into bounded mini-COGs + a portable VRT index (a 308 MB raster becomes ~130 mini-COGs of ~4 MB each, Serverless-safe)
 - [COG writer (`cog_gbx`)](../writers/cog) — the DataFrame-write entry point for preparation, including `driverMode`
 - [COG reader (`cog_gbx`)](../readers/cog) — windowed, bbox-clipped reads from prepared COGs
 - [File lister (`file_gbx`)](../readers/file) — enumerate source files (paths only) to feed preparation

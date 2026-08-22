@@ -119,6 +119,7 @@ const sidebars = {
             'api/rasterio-distributed',
             'api/large-rasters',
             'api/virtual-tiles',
+            'api/vrt-mosaic',
             'api/materialized-compression',
             'api/h3-raster-tessellation',
             'api/raster-sampling',

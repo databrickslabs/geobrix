@@ -67,7 +67,7 @@ __all__ = [
     "StageTooLargeError",
     "_accept_basename",
     "list_local_files",
-    "_fuse_volumes_preferred",
+    "_fuse_direct_disabled",
     # FILE-column table helpers (moved from pyrx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
@@ -948,15 +948,21 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
 
     Serverless-safe: no .rdd / _jvm / _jsc / sparkContext / conf.set.
 
-    FUSE optimisation (Approach B, 2026-08-22):
-    When ``GBX_PREFER_FUSE_VOLUMES=1`` is set (Spark Connect / Serverless) and
-    FILE is otherwise supported, the per-row ``try_to_file`` mint is skipped for
-    FUSE-accessible paths (``/Volumes/...``, ``/dbfs/...``) because the worker
-    will open those tiles via FUSE-direct (~5 ms) rather than the FILE stream
-    (~525 ms).  Remote paths (``s3://``, ``abfss://``, ``gs://``) still receive
-    a full FileRef so the byte-range stream path is preserved for them.
-    FILE-column-table tiles are minted by the table scan, not by this function,
-    so their behavior is unaffected.
+    Scoped FUSE-direct (DEFAULT, Approach B):
+    For a whole-file virtual tile (``tile.window IS NULL``) whose path is
+    FUSE-accessible (``/Volumes/...``, ``/dbfs/...``), the per-row
+    ``try_to_file`` mint is skipped — the worker opens the file via
+    ``rasterio.open(path)`` (FUSE-direct, ~5 ms) rather than
+    ``FileRef.open()`` (byte-range stream, ~525 ms on Serverless env v6).
+    WINDOWED tiles (``tile.window IS NOT NULL``) always receive a FileRef so
+    consecutive same-source opens amortize across the partition (one expensive
+    open shared across all windows). Remote paths (``s3://``, ``abfss://``,
+    ``gs://``) and MANAGED-non-FUSE paths keep the FileRef for the governed
+    byte-range stream. FILE governance and lifecycle are unaffected — this only
+    changes HOW a resolved FUSE file is opened.
+    Set ``GBX_DISABLE_FUSE_DIRECT=1`` to force the byte-range stream for every
+    read (a kill-switch for regression isolation or environments where
+    FUSE-direct misbehaves).
     """
     # NOTE: on a FILE-enabled session the first call to file_supported() triggers
     # a synchronous feature-detect query (memoized once per session) — so building
@@ -971,14 +977,22 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
         # A bare str does not support ["path"] subscript — coerce to Column first.
         _tc = F.col(tile_col) if isinstance(tile_col, str) else tile_col
         path_col = _tc["path"]
-        if _fuse_volumes_preferred():
-            # Approach B: skip the per-tile try_to_file mint for FUSE-accessible
-            # paths (/Volumes, /dbfs) — workers will open these via FUSE-direct.
-            # Remote paths (s3://, abfss://, gs://) still get a FileRef so their
-            # byte-range stream path is preserved.  The CASE WHEN is evaluated
-            # per row in the Spark plan (no session required on workers).
-            fuse_cond = path_col.startswith("/Volumes") | path_col.startswith("/dbfs")
-            return F.when(fuse_cond, F.lit(None)).otherwise(
+        if not _fuse_direct_disabled():
+            # Scoped FUSE-direct (DEFAULT): a WHOLE-FILE virtual tile (window IS
+            # NULL) whose path is FUSE-accessible (/Volumes, /dbfs) skips the
+            # try_to_file mint AND the byte-range stream — the worker opens the
+            # file directly via rasterio.open (~5 ms) instead of FileRef.open()
+            # (~525 ms on Serverless env v6). NULL here means the UDF receives
+            # file_ref=None and takes open_tile's FUSE-direct local-path branch.
+            # WINDOWED tiles (split/striped: window IS NOT NULL) keep the FileRef
+            # so consecutive same-source opens amortize across the group; remote
+            # paths (s3://, abfss://, gs://) and MANAGED-non-FUSE paths keep the
+            # FileRef for the governed byte-range stream. FILE governance/lifecycle
+            # is unaffected — this only changes HOW a resolved file is opened.
+            # Set GBX_DISABLE_FUSE_DIRECT=1 to force the stream for every read.
+            whole_file = _tc["window"].isNull()
+            fuse_path = path_col.startswith("/Volumes") | path_col.startswith("/dbfs")
+            return F.when(whole_file & fuse_path, F.lit(None)).otherwise(
                 F.call_function("try_to_file", path_col)
             )
         return F.call_function("try_to_file", path_col)
@@ -1100,21 +1114,20 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
 # =============================================================================
 
 
-def _fuse_volumes_preferred() -> bool:
-    """Return True when FUSE-direct reads should be preferred for /Volumes paths.
+def _fuse_direct_disabled() -> bool:
+    """Return True when the scoped FUSE-direct fast path is force-disabled.
 
-    On Spark Connect / Serverless, FUSE-direct (``rasterio.open("/Volumes/...")``)
-    is ~100× faster than the byte-range FILE stream (``FileRef.open()``) per
-    Approach-B benchmarks (Serverless env v6, 2026-08-22):
-      FUSE-direct open ~5 ms  <<  FILE stream open ~525 ms
+    Scoped FUSE-direct is the DEFAULT: a whole-file virtual tile resolved to a
+    /Volumes (FUSE) path opens ~100x faster via rasterio.open than via the
+    FileRef byte-range stream on Serverless (env v6: ~5 ms vs ~525 ms/open).
+    Set ``GBX_DISABLE_FUSE_DIRECT=1`` (a kill-switch) to force the FileRef
+    stream for every read — e.g. to isolate a regression or run in an
+    environment where FUSE-direct misbehaves. Classic behavior is unchanged
+    either way (no /Volumes FUSE mount → the predicate never fires).
 
-    Gating: set ``GBX_PREFER_FUSE_VOLUMES=1`` in the cluster / worker environment
-    (e.g. via cluster advanced settings or a notebook ``%env``) to activate the
-    optimised path.  Classic behavior is unchanged when the env var is absent.
-
-    Worker-safe: no SparkSession dependency — evaluated from ``os.environ`` only.
+    Worker-safe: reads os.environ only (no SparkSession).
     """
-    return os.environ.get("GBX_PREFER_FUSE_VOLUMES") == "1"
+    return os.environ.get("GBX_DISABLE_FUSE_DIRECT") == "1"
 
 
 def _is_fuse_path(path: str) -> bool:

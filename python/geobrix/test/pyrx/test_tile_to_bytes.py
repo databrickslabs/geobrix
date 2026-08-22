@@ -201,3 +201,40 @@ def test_mapalgebra_bytes_virtual_matches_materialized(tmp_path):
         assert np.allclose(
             ov.read(1), om.read(1), atol=1e-5
         ), "mapalgebra_bytes virtual != materialized"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: window=None deferred whole-file virtual tile
+# ---------------------------------------------------------------------------
+
+
+def test_tile_to_bytes_window_none_full_extent(tmp_path):
+    """_tile_to_bytes on a window=None virtual tile reads the full file extent.
+
+    A whole-file virtual tile emitted by the deferred read() path carries
+    window=None; _tile_to_bytes must resolve that to the full source extent
+    (mirrors the open_tile() fix from Task 1) rather than raising ValueError.
+    """
+    path = _write_src(tmp_path, "wn.tif", w=W, h=H)
+
+    # Deferred whole-file virtual tile (Task 2: read() emits window=None)
+    vt_none = VirtualTile(cellid=0, path=path, window=None)
+
+    # Explicit full-extent tile (reference for byte-identical comparison)
+    vt_full = VirtualTile(cellid=0, path=path, window=(0, 0, W, H))
+
+    result = ot._tile_to_bytes(vt_none)
+    ref = ot._tile_to_bytes(vt_full)
+
+    assert result is not None, "_tile_to_bytes(window=None) must not return None"
+
+    # Pixels must be identical to the explicit full-extent read.
+    assert np.array_equal(
+        _pixels(result), _pixels(ref)
+    ), "window=None pixels must equal full-extent pixels"
+
+    # Georeference must match.
+    crs_n, tr_n, w_n, h_n = _meta(result)
+    crs_r, tr_r, w_r, h_r = _meta(ref)
+    assert w_n == W and h_n == H, f"expected {W}×{H}, got {w_n}×{h_n}"
+    assert crs_n == crs_r and tr_n == tr_r, "georeference must match full-extent"

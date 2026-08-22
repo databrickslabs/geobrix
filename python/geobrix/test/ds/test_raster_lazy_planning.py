@@ -126,9 +126,16 @@ def test_plan_partitions_tilesize_still_reads_header_at_plan(tmp_path, monkeypat
 # ---------------------------------------------------------------------------
 
 
-def test_read_fills_lazy_window_via_spark(tmp_path, spark):
-    """Virtual passthrough read via Spark → tile.window matches actual raster dims."""
+def test_read_defers_window_via_spark(tmp_path, spark):
+    """Virtual passthrough read via Spark → tile.window is None (deferred, Task 2).
+
+    Task 2 deferred the rasterio.open even further: read() now emits window=None
+    for whole-file virtual tiles instead of filling in the concrete dims eagerly.
+    The window is resolved lazily at the first pixel op (open_tile / open_windowed_via_fileref).
+    """
     from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
     _write_sample(tmp_path / "raster.tif", width=4, height=3)
 
@@ -143,16 +150,26 @@ def test_read_fills_lazy_window_via_spark(tmp_path, spark):
     assert len(rows) == 1
     tile = rows[0]["tile"]
     assert tile["raster"] is None, "Virtual tile must have no raster bytes"
-    assert tile["window"] is not None, "read() must fill the lazy window"
-    assert tile["window"]["col_off"] == 0
-    assert tile["window"]["row_off"] == 0
-    assert tile["window"]["width"] == 4
-    assert tile["window"]["height"] == 3
+    # Task 2: window stays None (deferred) — resolved lazily by open_tile
+    assert (
+        tile["window"] is None
+    ), "whole-file virtual tile must have deferred window=None"
+    assert tile["metadata"]["sourcePath"] is not None
+    assert "path_file_size" in tile["metadata"]
+
+    # Verify the round-trip: open_tile resolves window=None → full extent correctly
+    vt = VirtualTile.from_row(tile)
+    with ot.open_tile(vt) as ds:
+        assert (
+            ds.width == 4 and ds.height == 3
+        ), "open_tile must resolve to full source dims"
 
 
 def test_read_lazy_window_three_files(tmp_path, spark):
-    """Three files: each emitted virtual tile has the correct per-file window."""
+    """Three files: each emitted virtual tile is deferred (window=None) and round-trips."""
     from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
     sizes = [(4, 3), (8, 6), (2, 2)]
     for i, (w, h) in enumerate(sizes):
@@ -171,5 +188,10 @@ def test_read_lazy_window_three_files(tmp_path, spark):
     for i, (w, h) in enumerate(sizes):
         key = str(tmp_path / f"raster_{i}.tif")
         tile = by_path[key]
-        assert tile["window"]["width"] == w, f"width mismatch for raster_{i}.tif"
-        assert tile["window"]["height"] == h, f"height mismatch for raster_{i}.tif"
+        # Task 2: window is deferred (None) — dims must NOT come from the tile row
+        assert tile["window"] is None, f"raster_{i}.tif: window must be deferred"
+        # Round-trip via open_tile resolves the full extent correctly
+        vt = VirtualTile.from_row(tile)
+        with ot.open_tile(vt) as ds:
+            assert ds.width == w, f"width mismatch for raster_{i}.tif"
+            assert ds.height == h, f"height mismatch for raster_{i}.tif"

@@ -726,17 +726,17 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
     with ExitStack() as stack:
         pending = _parse_pending(vt.metadata)
         local_path = _resolve_local_or_windowed(vt, None, stack)
-
-        if vt.window is None:
-            raise ValueError(
-                "virtual tile has no window; a windowed read or a file_ref-backed"
-                " source is required"
-            )
-        c, r, w, h = vt.window
-        window = Window(c, r, w, h)
         _, _, pending_srid, _ = pending
 
         with rasterio.open(local_path) as src:
+            # Resolve window=None → full extent, mirroring open_tile() semantics.
+            # A deferred whole-file virtual tile (Task 2) carries window=None;
+            # materialising it must produce the same bytes as an explicit full window.
+            if vt.window is None:
+                window = Window(0, 0, src.width, src.height)
+            else:
+                c, r, w, h = vt.window
+                window = Window(c, r, w, h)
             src_epsg = src.crs.to_epsg() if src.crs else None
             want = _epsg_of(vt.crs) if vt.crs else None
             effective_src_epsg = pending_srid if pending_srid is not None else src_epsg

@@ -137,22 +137,35 @@ def test_open_tile_windowless_reads_full_extent(tmp_path):
     np.testing.assert_array_equal(pixels_wl, pixels_ex)
 
 
-def test_tile_to_bytes_windowless_virtual_raises_valueerror(tmp_path):
-    """_tile_to_bytes must raise the same descriptive ValueError for a windowless
-    virtual tile."""
+def test_tile_to_bytes_windowless_virtual_reads_full_extent(tmp_path):
+    """_tile_to_bytes on a window=None virtual tile reads the full file extent.
+
+    Task 2 changed the behavior: window=None is now resolved to the full source
+    extent rather than raising ValueError.  A deferred whole-file virtual tile
+    (emitted by read() without an eager header open) must materialise correctly.
+    """
+    import numpy as np
     import rasterio
 
     p = str(tmp_path / "src.tif")
+    data = np.arange(16, dtype="uint8").reshape(4, 4)
     with rasterio.open(
         p, "w", driver="GTiff", height=4, width=4, count=1, dtype="uint8"
     ) as ds:
-        import numpy as np
+        ds.write(data, 1)
 
-        ds.write(np.zeros((1, 4, 4), dtype="uint8"))
-
-    vt = VirtualTile(cellid=0, path=p)  # no window
-    with pytest.raises(ValueError, match="windowed read"):
-        ot._tile_to_bytes(vt)
+    vt = VirtualTile(cellid=0, path=p)  # no window — whole-file deferred
+    result = ot._tile_to_bytes(vt)
+    assert result is not None, "_tile_to_bytes(window=None) must not return None"
+    # Pixels must match the full source
+    with rasterio.open(p) as src:
+        expected = src.read(1)
+    with rasterio.io.MemoryFile(result) as mf:
+        with mf.open() as ds:
+            got = ds.read(1)
+    np.testing.assert_array_equal(
+        got, expected, err_msg="window=None must read full extent"
+    )
 
 
 # ---------------------------------------------------------------------------

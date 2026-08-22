@@ -1022,37 +1022,73 @@ class RasterGbxReader(DataSourceReader):
         # warp).  For virtual tiles the source CRS is implicit in the path.
         # ------------------------------------------------------------------
         if getattr(partition, "emit_virtual", False):
-            # Get file size for path_file_size metadata (enables sized-aware scheduling).
-            file_size = os.path.getsize(partition.file_path)
-            with rasterio.open(partition.file_path) as ds:
+            # ---------------------------------------------------------------
+            # Whole-file virtual tile (window=None, no clip): DEFER the
+            # rasterio.open.  The per-tile FUSE header open is the dominant
+            # Serverless cost (~74s/1k tiles); deferring it removes ~1000 FUSE
+            # opens from the DataSource read path.
+            #
+            # os.path.getsize is kept: it is a single cheap metadata stat
+            # (not a file open) and is required for path_file_size so the
+            # LRU size-aware scheduler (grouped_exec.py / file_gbx.py) still
+            # receives source size without a separate per-tile call.
+            #
+            # width/height/count/driver are OMITTED from metadata: they are
+            # resolved lazily at the first pixel op via the FILE-stream +
+            # per-partition LRU (open_windowed_via_fileref / open_tile).
+            # ---------------------------------------------------------------
+            if partition.window is None and partition.clip_polygon is None:
+                file_size = os.path.getsize(partition.file_path)
+                ext = os.path.splitext(partition.file_path)[1].lower()
+                fmt = "gtiff" if ext in (".tif", ".tiff") else "gtiff"
                 meta = {
                     "sourcePath": partition.file_path,
-                    "driver": ds.driver,
-                    "format": ("cog" if ds.driver == "COG" else "gtiff"),
-                    "width": str(ds.width),
-                    "height": str(ds.height),
-                    "count": str(ds.count),
-                    "path_file_size": str(file_size),  # virtual tile source size
+                    "format": fmt,
+                    "path_file_size": str(file_size),
                 }
-                # Lazy window (Approach 3): window=None at plan → resolve here
-                # from the actual raster dims. Pre-planned windows are used as-is.
-                win = (
-                    (0, 0, ds.width, ds.height)
-                    if partition.window is None
-                    else partition.window
+                yield (
+                    source,
+                    _v2_tile_row(
+                        _encode.CELLID_FRESH,
+                        None,
+                        path=partition.file_path,
+                        window=None,  # deferred: open_tile resolves to full extent
+                        metadata=meta,
+                        clip_polygon=None,
+                        clip_crs=None,
+                    ),
                 )
-            yield (
-                source,
-                _v2_tile_row(
-                    _encode.CELLID_FRESH,
-                    None,
-                    path=partition.file_path,
-                    window=win,
-                    metadata=meta,
-                    clip_polygon=partition.clip_polygon,
-                    clip_crs=partition.clip_crs,
-                ),
-            )
+            else:
+                # Non-whole-file virtual tile (clip-envelope window, explicit
+                # window, or tile_size window): keep the header open.
+                # window is already set by the planner; dims are needed for
+                # metadata and to confirm the window fits the source extent.
+                file_size = os.path.getsize(partition.file_path)
+                with rasterio.open(partition.file_path) as ds:
+                    meta = {
+                        "sourcePath": partition.file_path,
+                        "driver": ds.driver,
+                        "format": ("cog" if ds.driver == "COG" else "gtiff"),
+                        "width": str(ds.width),
+                        "height": str(ds.height),
+                        "count": str(ds.count),
+                        "path_file_size": str(file_size),
+                    }
+                    win = (
+                        partition.window
+                    )  # always set for non-whole-file virtual tiles
+                yield (
+                    source,
+                    _v2_tile_row(
+                        _encode.CELLID_FRESH,
+                        None,
+                        path=partition.file_path,
+                        window=win,
+                        metadata=meta,
+                        clip_polygon=partition.clip_polygon,
+                        clip_crs=partition.clip_crs,
+                    ),
+                )
             return
 
         # ------------------------------------------------------------------

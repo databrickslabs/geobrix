@@ -107,13 +107,25 @@ def test_read_directory_one_partition_per_file(spark, tmp_path):
     assert df.count() == 3
 
 
-def test_corrupt_file_fails_fast(spark, tmp_path):
+def test_corrupt_file_fails_fast_materialized(spark, tmp_path):
+    """A corrupt file raises at collect() time when using materialised tiles.
+
+    Task 2 note: with virtualTiles=true (the default), read() now defers the
+    rasterio.open for whole-file virtual tiles, so a corrupt file only raises
+    when the tile is materialized by a downstream pixel op (not at collect()
+    time).  This test uses virtualTiles=false to preserve "fails fast" coverage
+    for the materialized path, which is unchanged.
+    """
     import pytest
 
     bad = tmp_path / "bad.tif"
     bad.write_bytes(b"not a raster")
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").load(str(bad))
+    df = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")  # materialized: header opened in read()
+        .load(str(bad))
+    )
     with pytest.raises(Exception):
         df.collect()
 

@@ -835,6 +835,68 @@ def _partitions_from_tile_rows(
     return result
 
 
+def _parse_vrt_members(vrt_path: str) -> list:
+    """Parse a GDAL VRT XML and return deduplicated absolute member file paths.
+
+    Handles both ``relativeToVRT="1"`` (path is relative to the VRT's directory)
+    and absolute paths (``relativeToVRT="0"`` or attribute absent).
+
+    Multi-band VRTs reference the same tile once per ``VRTRasterBand`` — the
+    resulting duplicates are removed while preserving first-occurrence order.
+
+    Connect-safe: pure Python / stdlib I/O; no Spark session, no ``_jvm``.
+    No ``osgeo`` required — parses VRT XML directly.
+
+    Parameters
+    ----------
+    vrt_path:
+        Path to the ``.vrt`` file (local, FUSE Volume, or ``dbfs:`` URI).
+
+    Returns
+    -------
+    list of str
+        Ordered, deduplicated absolute paths of all ``SourceFilename`` members.
+
+    Raises
+    ------
+    ValueError
+        When the VRT contains no ``SourceFilename`` elements.
+    """
+    # Prefer defusedxml for external-origin XML (guards against XXE / XML bombs).
+    # Fall back to stdlib when defusedxml is not installed.
+    try:
+        import defusedxml.ElementTree as _ET
+    except ImportError:
+        import xml.etree.ElementTree as _ET  # type: ignore[no-redef]
+
+    local_vrt = _listing.to_local_path(vrt_path)
+    tree = _ET.parse(local_vrt)
+    vrt_dir = os.path.dirname(os.path.abspath(local_vrt))
+
+    seen: set = set()
+    paths: list = []
+    for sf in tree.getroot().iter("SourceFilename"):
+        text = (sf.text or "").strip()
+        if not text:
+            continue
+        rel = sf.get("relativeToVRT", "0")
+        if rel == "1":
+            abs_path = os.path.normpath(os.path.join(vrt_dir, text))
+        elif os.path.isabs(text):
+            abs_path = text
+        else:
+            abs_path = os.path.abspath(text)
+        if abs_path not in seen:
+            seen.add(abs_path)
+            paths.append(abs_path)
+
+    if not paths:
+        raise ValueError(
+            f"raster_gbx: VRT at {vrt_path!r} contains no SourceFilename members"
+        )
+    return paths
+
+
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
         self.path = options.get("path")
@@ -960,6 +1022,43 @@ class RasterGbxReader(DataSourceReader):
             if self.skip_ordering:
                 return parts
             return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
+
+        # VRT expansion: when the path is a .vrt file, parse the VRT XML to
+        # enumerate member paths instead of walking a directory.  Each member
+        # is treated as an independent whole-file source — one _TilePartition
+        # per member (the existing whole-file virtual-tile path handles the
+        # actual emission in read()).  This is the payoff of the mini-COG
+        # mosaic write: the reader expands the VRT back into per-member tile
+        # rows so all downstream rst_* ops work unchanged.
+        #
+        # Primary load convention: point at the .vrt directly.
+        #   spark.read.format("raster_gbx").load("/mosaic/mosaic.vrt")
+        # Directory walk (unmodified, .vrt files included as rasterio sources)
+        # remains available when the user points at the containing directory.
+        #
+        # Connect-safe: _parse_vrt_members() does pure Python / stdlib I/O with
+        # no Spark session, no _jvm, no .rdd access.
+        if self.path.lower().endswith(".vrt"):
+            member_paths = _parse_vrt_members(self.path)
+            result: list = []
+            for member_path in member_paths:
+                result.extend(
+                    _plan_partitions_for_file(
+                        file_path=member_path,
+                        budget_bytes=resolved_budget,
+                        clip_polygons=self.clip_polygons,
+                        clip_crs=self.clip_crs,
+                        windows=self.windows,
+                        tile_size=self.tile_size,
+                        overlap_percent=self.overlap_percent,
+                        emit_virtual=self.emit_virtual,
+                    )
+                )
+            if self.skip_ordering:
+                return result
+            return sorted(
+                result, key=lambda p: (p.file_path is None, p.file_path or "")
+            )
 
         # Default path: walk self.path and plan partitions per file.
         # Layout convention (T8): sort the final list by file_path so tiles

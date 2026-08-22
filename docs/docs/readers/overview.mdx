@@ -42,26 +42,6 @@ register(spark, only=["raster_gbx", "gtiff_gbx"])
 An unrecognized format raises `ValueError`.
 :::
 
-:::note `.limit()` and filters are not pushed into the reader — use the function layer for a bounded scan
-The lightweight DataSource readers **enumerate the entire source at planning time**, regardless of a
-downstream `.limit(N)`, `WHERE`, or column projection. Spark 4.0.0's Python DataSource API exposes no
-limit/filter **pushdown** hook, so `spark.read.format("raster_gbx").load(dir).limit(10)` still lists —
-and plans a partition for — *every* file under `dir`, then discards all but 10 rows afterward. The
-listing is a fast, stat-free directory walk, so this is cheap for typical directories; on a very large
-directory, every file is still planned.
-
-When you want the limit (or a filter) honored **during planning**, use the function layer instead:
-
-- **`gbx_file_read(spark, dir).limit(N)`** — on a FILE-capable runtime this reads through the native
-  `read_files` table function, which pushes `.limit()` and predicate/column filters, so only the needed
-  files are enumerated.
-- **`rst_fromfile("path")`** — a per-row function returning virtual tiles, so
-  `gbx_file_read(dir).limit(N).select(..., rst_fromfile("path"))` decodes only the N selected rows and
-  reads no pixels until a downstream op forces it.
-
-See **[GBX Common Functions](../common-functions)**.
-:::
-
 ### Available Readers
 
 | Reader | Format Name | Description |
@@ -81,6 +61,26 @@ See **[GBX Common Functions](../common-functions)**.
 
 See the [Raster Reader](./raster) page for full raster usage/options, and the vector
 reader pages for the OGR `(geom_0, geom_0_srid, geom_0_srid_proj, …attributes)` schema.
+
+:::note `.limit()` and filters are not pushed into the reader — use the function layer for a bounded scan
+The lightweight DataSource readers **enumerate the entire source at planning time**, regardless of a
+downstream `.limit(N)`, `WHERE`, or column projection. Spark 4.0.0's Python DataSource API exposes no
+limit/filter **pushdown** hook, so `spark.read.format("raster_gbx").load(dir).limit(10)` still lists —
+and plans a partition for — *every* file under `dir`, then discards all but 10 rows afterward. The
+listing is a fast, stat-free directory walk, so this is cheap for typical directories; on a very large
+directory, every file is still planned.
+
+When you want the limit (or a filter) honored **during planning**, use the function layer instead:
+
+- **`gbx_file_read(spark, dir).limit(N)`** — on a FILE-capable runtime this reads through the native
+  `read_files` table function, which pushes `.limit()` and predicate/column filters, so only the needed
+  files are enumerated.
+- **`rst_fromfile("path")`** — a per-row function returning virtual tiles, so
+  `gbx_file_read(dir).limit(N).select(..., rst_fromfile("path"))` decodes only the N selected rows and
+  reads no pixels until a downstream op forces it.
+
+See **[GBX Common Functions](../common-functions)**.
+:::
 
 ### FILE-column-table reads {#file-column-table-reads}
 

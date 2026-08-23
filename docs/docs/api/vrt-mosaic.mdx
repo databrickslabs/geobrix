@@ -63,8 +63,8 @@ tile names, and a re-run produces the same names for the same sources
 | Option | Default | Description |
 |---|---|---|
 | `vrtMosaic` | — | Set `"true"` to activate VRT-mosaic mode. (Supplying `gridSystem` also activates it; one of the two must be present.) |
-| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default) or `"quadbin"` (cell-aligned quadbin grid, reprojected to EPSG:3857). BNG and H3 are planned for a future release. |
-| `gridResolution` | — | Quadbin resolution in the range `0`–`20`. Required when `gridSystem="quadbin"`; invalid with `gridSystem="none"`. |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to EPSG:3857), or `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326, hex-clipped). BNG is planned. |
+| `gridResolution` | — | Grid resolution. Required when `gridSystem="quadbin"` or `gridSystem="h3"`; invalid with `gridSystem="none"`. Quadbin: range `0`–`20`. H3: range `0`–`15`. |
 | `tileSize` | `"1024"` | Tile edge length in pixels. Tiles are square. The last row and column are clipped to the source boundary. |
 | `overlapPercent` | `"0"` | Tile-edge halo as a percentage of `tileSize`. A value of `5` expands each tile's read window by `ceil(tileSize * 5 / 100)` pixels on every side, clamped to the source bounds. Default 0 — non-overlapping grid. |
 | `mergeStrategy` | `"none"` | How overlapping tiles are blended: `none` (last-write wins), `min`, `max`, `avg`, `first`, or `last`. Relevant only when tiles from different sources overlap spatially. |
@@ -115,6 +115,42 @@ These fields are absent on native (`gridSystem="none"`) tiles.
 
 :::note
 `tileSize` and `overlapPercent` are not valid with `gridSystem="quadbin"`.
+Set only `gridSystem` and `gridResolution`.
+:::
+
+---
+
+### H3 (unification) mosaic
+
+When `gridSystem="h3"`, the writer reprojects each source to EPSG:4326 and
+writes one mini-COG per overlapping h3 cell at the requested resolution. Each
+cell's pixels are clipped to its hexagon boundary — pixels outside the hexagonal
+footprint become NoData. This aligns the raster output to the h3 grid and makes
+the `cellid` field a plain equi-join key for unifying with any other h3-indexed
+dataset (gridded analytics, coverage tables, weather measurements, and similar).
+
+<CodeFromTest code={vrtExamples} language="python" functionName="VRT_H3"
+  source="docs/tests/python/readers/vrt_mosaic_examples.py"
+  testFile="docs/tests/python/readers/test_vrt_mosaic_examples.py" />
+
+Cell tiles are named `cell_<discriminator>_<h3index>.tif` and the VRT index is
+written as `mosaic.vrt` alongside them. The `<discriminator>` is the same stable
+source-namespaced token used in native and quadbin modes, so two sources in the
+same write never collide.
+
+When `raster_gbx` expands the VRT, each row's `tile.metadata` carries:
+
+- `tile.metadata["cellid"]` — the h3 cell id (h3index string)
+- `tile.metadata["gridSystem"]` — `"h3"`
+
+The `cellid` value is the canonical h3index string — compatible with
+`h3.str_to_int` / `h3.int_to_str` and with h3-indexed tables written by any
+other workflow. Join the expanded mosaic rows to a tabular h3-indexed DataFrame
+on `cellid` to unify raster pixel statistics with non-raster data sharing the
+same grid.
+
+:::note
+`tileSize` and `overlapPercent` are not valid with `gridSystem="h3"`.
 Set only `gridSystem` and `gridResolution`.
 :::
 
@@ -265,12 +301,11 @@ model and guidance on routing large files.
 
 ## Upcoming
 
-BNG and H3 grid-aligned mosaics are planned for a future release — tiles aligned
-to those grid cells and tagged with a cell identifier for spatial joins and data
-unification. In-notebook windowed rendering of a VRT mosaic is also on the
-roadmap. Pyramid options (`gridMinResolution`, `gridMaxResolution`,
-`gridStepResolution`) are accepted by the parser but raise a clear error until
-their grid-system support lands.
+BNG grid-aligned mosaics are planned — tiles aligned to BNG cells and tagged
+with a cell identifier for spatial joins and data unification. In-notebook
+windowed rendering of a VRT mosaic is also on the roadmap. Pyramid options
+(`gridMinResolution`, `gridMaxResolution`, `gridStepResolution`) are accepted
+by the parser but raise a clear error until their grid-system support lands.
 
 ---
 

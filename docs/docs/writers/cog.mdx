@@ -170,8 +170,9 @@ independent choices:
 
 - **Tile grid (`gridSystem`)** — how tiles are aligned on disk and (for DGGS
   grids) tagged with a cell identifier. `"none"` (native pixel tiling, the
-  default) or `"quadbin"` (cell-aligned to the quadbin grid, reprojected to
-  EPSG:3857). BNG and H3 are planned.
+  default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to
+  EPSG:3857), or `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326,
+  hex-clipped). BNG is planned.
 - **VRT index (`writeVrt`)** — whether to emit a `mosaic.vrt` index alongside
   the tiles. Defaults to `"true"`. Set `"false"` to write tiles only (build the
   index later with `mint_vrt`, or enumerate tiles directly).
@@ -199,8 +200,8 @@ These options apply when `vrtMosaic="true"`. All the COG encoding options above
 | Option | Default | Description |
 |--------|---------|-------------|
 | `vrtMosaic` | — | Set `"true"` to activate mosaic mode. (Supplying `gridSystem` also activates it; one of the two must be present.) |
-| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default) or `"quadbin"` (cell-aligned quadbin grid, reprojected to EPSG:3857). BNG and H3 are planned. |
-| `gridResolution` | — | Quadbin resolution in the range `0`–`20`. Required when `gridSystem="quadbin"`; invalid with `gridSystem="none"`. |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to EPSG:3857), or `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326, hex-clipped). BNG is planned. |
+| `gridResolution` | — | Grid resolution. Required when `gridSystem="quadbin"` or `gridSystem="h3"`; invalid with `gridSystem="none"`. Quadbin: range `0`–`20`. H3: range `0`–`15`. |
 | `tileSize` | `"1024"` | Tile edge length in pixels (square tiles). The last row and column are clipped to the source boundary. Valid only with `gridSystem="none"`. |
 | `overlapPercent` | `"0"` | Tile-edge halo as a percent of `tileSize` (e.g. `5` adds `ceil(tileSize·5/100)` px on each side, clamped to source bounds). Valid only with `gridSystem="none"`. |
 | `mergeStrategy` | `"none"` | How spatially overlapping tiles from different sources blend: `none` (last-write wins), `min`, `max`, `avg`, `first`, `last`. |

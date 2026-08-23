@@ -81,6 +81,40 @@ result = df.select(
     col("tile.metadata")["gridSystem"].alias("gridSystem"),
 )"""
 
+VRT_H3 = r"""from databricks.labs.gbx.ds.register import register
+from pyspark.sql.functions import col
+
+register(spark)
+
+# Write an h3 mosaic: each source is reprojected to EPSG:4326, clipped to
+# the hexagon boundary, and tagged with its h3 cell id (GBX_CELLID).
+sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw/")
+(
+    sources
+    .write.format("cog_gbx")
+    .option("gridSystem", "h3")      # cell-aligned to the h3 grid
+    .option("gridResolution", "6")   # h3 resolution 0-15
+    .mode("overwrite")
+    .save("/Volumes/catalog/schema/volume/mosaic_h3/")
+)
+
+# Read back: one virtual tile per h3 cell
+df = spark.read.format("raster_gbx").load(
+    "/Volumes/catalog/schema/volume/mosaic_h3/mosaic.vrt"
+)
+
+# tile.metadata carries the h3 cell id and grid system tag
+raster_cells = df.select(
+    col("tile.path").alias("member"),
+    col("tile.metadata")["cellid"].alias("cellid"),
+    col("tile.metadata")["gridSystem"].alias("gridSystem"),
+)
+
+# Equi-join: any h3-indexed analytics table joins on cellid —
+# the cellid is a plain string key, compatible with h3.str_to_int and similar.
+analytics = spark.table("catalog.schema.h3_metrics")  # h3-indexed DataFrame
+result = raster_cells.join(analytics, on="cellid", how="inner")"""
+
 VRT_MINT = r"""from databricks.labs.gbx.ds._mosaic import mint_vrt
 
 # Build a transient VRT over an explicit tile list
@@ -249,6 +283,89 @@ def vrt_quadbin_mosaic(spark, src_path=None):
             )
             assert row["grid_system"] == "quadbin", (
                 f"gridSystem must be 'quadbin' in tile.metadata, got {row['grid_system']!r}"
+            )
+
+    return True
+
+
+def vrt_h3_mosaic(spark, src_path=None):
+    """cog_gbx h3 mode writes cell-aligned mini-COGs in EPSG:4326 tagged with h3 cell id."""
+    import rasterio
+    from pyspark.sql.functions import col
+
+    _register(spark)
+    src = src_path or SAMPLE_RASTER_SINGLE
+
+    with tempfile.TemporaryDirectory() as out_dir:
+        # h3 resolution 6 produces a small number of cells over the NYC sample.
+        (
+            spark.read.format("file_gbx")
+            .load(src)
+            .write.format("cog_gbx")
+            .option("gridSystem", "h3")
+            .option("gridResolution", "6")
+            .mode("overwrite")
+            .save(out_dir)
+        )
+
+        mosaic_vrt = os.path.join(out_dir, "mosaic.vrt")
+        assert os.path.exists(mosaic_vrt), "h3 mosaic mode must write mosaic.vrt"
+
+        cell_tiles = sorted(
+            os.path.join(out_dir, f)
+            for f in os.listdir(out_dir)
+            if f.startswith("cell_") and f.lower().endswith(".tif")
+        )
+        assert len(cell_tiles) >= 1, (
+            f"h3 mosaic must produce at least one cell mini-COG, got {len(cell_tiles)}"
+        )
+
+        # Each cell is reprojected to EPSG:4326.
+        with rasterio.open(cell_tiles[0]) as ds:
+            assert ds.crs.to_epsg() == 4326, (
+                f"h3 cell must be in EPSG:4326, got {ds.crs}"
+            )
+
+        # raster_gbx expands the VRT into one virtual tile row per h3 cell.
+        df = spark.read.format("raster_gbx").load(mosaic_vrt)
+        assert df.count() == len(cell_tiles), (df.count(), len(cell_tiles))
+
+        # tile.metadata carries cellid (h3index string) and gridSystem.
+        rows = df.select(
+            col("tile.path").alias("path"),
+            col("tile.metadata")["cellid"].alias("cellid"),
+            col("tile.metadata")["gridSystem"].alias("grid_system"),
+        ).collect()
+
+        for row in rows:
+            assert row["cellid"] is not None, (
+                "cellid must be set in tile.metadata for h3 cells"
+            )
+            assert row["grid_system"] == "h3", (
+                f"gridSystem must be 'h3' in tile.metadata, got {row['grid_system']!r}"
+            )
+
+        # Equi-join: a synthetic h3-indexed DataFrame joins to raster cells on cellid.
+        # Each raster cell gets a matching row in the analytics table; the join on
+        # cellid demonstrates unification of raster and tabular data by h3 cell id.
+        cellids = [row["cellid"] for row in rows]
+        analytics = spark.createDataFrame(
+            [(cid, float(i)) for i, cid in enumerate(cellids)],
+            ["cellid", "value"],
+        )
+        raster_cells = df.select(
+            col("tile.path").alias("member"),
+            col("tile.metadata")["cellid"].alias("cellid"),
+            col("tile.metadata")["gridSystem"].alias("gridSystem"),
+        )
+        result = raster_cells.join(analytics, on="cellid", how="inner")
+        result_rows = result.collect()
+        assert len(result_rows) >= 1, (
+            "equi-join on cellid must produce at least one row"
+        )
+        for r in result_rows:
+            assert r["gridSystem"] == "h3", (
+                f"joined row must carry gridSystem='h3', got {r['gridSystem']!r}"
             )
 
     return True

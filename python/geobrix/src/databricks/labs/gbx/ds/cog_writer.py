@@ -959,6 +959,8 @@ class CogGbxWriter(DataSourceWriter):
         """
         if self.mosaic_opts.grid_system == "quadbin":
             return self._write_mosaic_quadbin(iterator)
+        if self.mosaic_opts.grid_system == "h3":
+            return self._write_mosaic_h3(iterator)
         import numpy as np
         import rasterio
         from rasterio.io import MemoryFile
@@ -1277,6 +1279,220 @@ class CogGbxWriter(DataSourceWriter):
                             dst_ds.update_tags(
                                 GBX_CELLID=str(cell.cellid),
                                 GBX_GRIDSYSTEM="quadbin",
+                            )
+                        window_bytes = mf.read()
+
+                    self._bytes_to_cog(window_bytes, out_path)
+                    written.append(out_path)
+
+        return CogCommitMessage(paths=written)
+
+    def _write_mosaic_h3(self, iterator: Iterator) -> WriterCommitMessage:
+        """h3 mosaic-mode write: one mini-COG per overlapping h3 cell.
+
+        For each source path row:
+        1. Compute source bounds in EPSG:4326.
+        2. Enumerate h3 cells via h3_cells_for_bounds.
+        3. Per cell:
+           a. Determine destination grid (CRS=EPSG:4326) from the cell's bbox at
+              the source's native GSD in EPSG:4326 degrees.
+           b. Find intersecting source window; read only those pixels.
+           c. Reproject with Resampling.nearest (pixel statistics must not interpolate).
+           d. Derive an out_nodata sentinel unconditionally:
+              - src.nodata if set; else np.nan for float dtypes; else dtype max for int.
+           e. Rasterize the hex boundary via rasterio.features.geometry_mask; set pixels
+              outside the hexagon to out_nodata ALWAYS (never gated on src_nodata).
+           f. Route decoded size through materialize_decision (cap guard).
+           g. Skip if all-nodata (pruneEmpty).
+           h. Write a mini-COG tagged GBX_CELLID=<h3index> + GBX_GRIDSYSTEM="h3".
+
+        Output: <out_dir>/cell_<disc>_<h3index>.tif
+        """
+        import h3
+        import numpy as np
+        import rasterio
+        from rasterio.crs import CRS
+        from rasterio.features import geometry_mask
+        from rasterio.io import MemoryFile
+        from rasterio.transform import from_bounds as transform_from_bounds
+        from rasterio.warp import (
+            Resampling,
+            calculate_default_transform,
+            reproject,
+            transform_bounds,
+        )
+        from rasterio.windows import Window
+
+        from databricks.labs.gbx.ds._h3_grid import h3_cells_for_bounds
+        from databricks.labs.gbx.pyrx.core import compression as _comp
+
+        opts = self.mosaic_opts
+        prune_empty = opts.prune_empty
+        dst_crs = CRS.from_epsg(4326)
+
+        os.makedirs(self.out_dir, exist_ok=True)
+        written: List[str] = []
+
+        for row in iterator:
+            src_path = _listing.to_local_path(str(row["path"]))
+            srcdisc = _source_discriminator(src_path)
+
+            with rasterio.open(src_path) as src:
+                count = src.count
+                out_dtype = src.dtypes[0]
+                src_nodata = src.nodata
+                src_full_window = Window(0, 0, src.width, src.height)
+
+                # Ruling A: derive out_nodata unconditionally — h3 output MUST
+                # always carry a nodata value so the hex-clip contract is honoured
+                # even when the source has none.
+                if src_nodata is not None:
+                    out_nodata = src_nodata
+                elif np.issubdtype(np.dtype(out_dtype), np.floating):
+                    out_nodata = float("nan")
+                else:
+                    out_nodata = int(np.iinfo(out_dtype).max)
+
+                # Source bounds in EPSG:4326 for cell enumeration.
+                bounds_4326 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+
+                # Native pixel size in EPSG:4326 degrees — used to size all
+                # destination grids consistently (one transform per source).
+                native_tf, _, _ = calculate_default_transform(
+                    src.crs, dst_crs, src.width, src.height, *src.bounds
+                )
+                native_px = abs(native_tf.a)  # degrees/pixel in EPSG:4326
+
+                cells = h3_cells_for_bounds(bounds_4326, opts.grid_resolution)
+
+                for cell in cells:
+                    out_name = f"cell_{srcdisc}_{cell.cellid}.tif"
+                    out_path = os.path.join(self.out_dir, out_name)
+
+                    if self.cog_skip_if_exists and os.path.exists(out_path):
+                        written.append(out_path)
+                        continue
+
+                    # ── Destination grid (cell-bbox-aligned, EPSG:4326) ──────
+                    cell_w = max(1, int(round((cell.east - cell.west) / native_px)))
+                    cell_h = max(1, int(round((cell.north - cell.south) / native_px)))
+                    dst_transform = transform_from_bounds(
+                        cell.west, cell.south, cell.east, cell.north, cell_w, cell_h
+                    )
+
+                    # ── Decoded size for cap gate ────────────────────────────
+                    decoded_size = (
+                        count * cell_w * cell_h * np.dtype(out_dtype).itemsize
+                    )
+
+                    # ── Serverless cap gate — matches shipped quadbin contract ─
+                    # (Ruling B: copy exact signature + token values from
+                    # _write_mosaic_quadbin; "driver" logs and proceeds, only
+                    # "error" raises.)
+                    decision = materialize_decision(
+                        decoded_size, "cog_write", cap_bytes=self._cap
+                    )
+                    if decision == "error":
+                        size_mib = decoded_size // (1024 ** 2)
+                        raise StageTooLargeError(
+                            f"h3 cell {cell.cellid!r} at gridResolution="
+                            f"{opts.grid_resolution} decodes to {size_mib} MiB, "
+                            f"over the per-task memory cap; use a finer gridResolution."
+                        )
+                    if decision == "driver":
+                        # Cannot defer per-cell reprojection to the driver path.
+                        # Log and proceed — executor can still handle this (rare).
+                        _logger.info(
+                            "cog_gbx h3: cell %s decoded size %d bytes exceeds "
+                            "executor cap %d bytes; proceeding on executor (rare path)",
+                            cell.cellid,
+                            decoded_size,
+                            self._cap,
+                        )
+
+                    # ── Find source window overlapping this cell ─────────────
+                    try:
+                        src_bounds = transform_bounds(
+                            dst_crs,
+                            src.crs,
+                            cell.west,
+                            cell.south,
+                            cell.east,
+                            cell.north,
+                        )
+                        src_win = src.window(*src_bounds)
+                        src_win = src_win.intersection(src_full_window)
+                    except Exception:
+                        continue  # degenerate geometry — skip cell
+
+                    if src_win.width <= 0 or src_win.height <= 0:
+                        continue  # cell does not overlap source
+
+                    # ── Reproject source window → cell's EPSG:4326 bbox ─────
+                    src_data = src.read(window=src_win)
+                    src_win_transform = src.window_transform(src_win)
+
+                    dst_data = np.full(
+                        (count, cell_h, cell_w), out_nodata, dtype=out_dtype
+                    )
+                    reproject(
+                        source=src_data,
+                        destination=dst_data,
+                        src_transform=src_win_transform,
+                        src_crs=src.crs,
+                        dst_transform=dst_transform,
+                        dst_crs=dst_crs,
+                        resampling=Resampling.nearest,
+                        src_nodata=src_nodata,
+                        dst_nodata=out_nodata,
+                    )
+
+                    # ── Hex-clip: ALWAYS set pixels outside the hexagon to
+                    # out_nodata (unconditional — Ruling A).
+                    # h3.cell_to_boundary returns [(lat, lon), ...]; swap to
+                    # (lon, lat) for rasterio (geographic CRS: x=lon, y=lat).
+                    boundary = h3.cell_to_boundary(cell.cellid)
+                    hex_coords = [(lon, lat) for lat, lon in boundary]
+                    # Close the ring (geometry_mask requires a closed polygon).
+                    hex_geojson = {
+                        "type": "Polygon",
+                        "coordinates": [hex_coords + [hex_coords[0]]],
+                    }
+                    outside_mask = geometry_mask(
+                        [hex_geojson],
+                        transform=dst_transform,
+                        out_shape=(cell_h, cell_w),
+                        invert=False,  # True = outside polygon
+                    )
+                    for b in range(count):
+                        dst_data[b][outside_mask] = out_nodata
+
+                    # ── pruneEmpty ───────────────────────────────────────────
+                    if prune_empty and _is_all_nodata(dst_data, out_nodata):
+                        continue
+
+                    # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
+                    profile = {
+                        "driver": "GTiff",
+                        "height": cell_h,
+                        "width": cell_w,
+                        "count": count,
+                        "dtype": out_dtype,
+                        "crs": dst_crs,
+                        "transform": dst_transform,
+                        "nodata": out_nodata,  # always set (Ruling A)
+                    }
+                    profile.update(
+                        _comp.creation_opts(
+                            out_dtype, decoded_bytes=decoded_size, compress="auto"
+                        )
+                    )
+                    with MemoryFile() as mf:
+                        with mf.open(**profile) as dst_ds:
+                            dst_ds.write(dst_data)
+                            dst_ds.update_tags(
+                                GBX_CELLID=cell.cellid,
+                                GBX_GRIDSYSTEM="h3",
                             )
                         window_bytes = mf.read()
 

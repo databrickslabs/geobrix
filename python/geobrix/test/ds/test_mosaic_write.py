@@ -1,4 +1,4 @@
-"""Mosaic-mode write tests: Phase A (native tiling) + Task 3 (quadbin tiling).
+"""Mosaic-mode write tests: Phase A (native tiling) + quadbin/h3 tiling.
 
 Tests the mosaic-mode write path in CogGbxWriter.  Pure Python (no Spark, no JAR).
 
@@ -13,10 +13,19 @@ Coverage:
     7. Single-COG mode regression (mosaic_opts=None, existing path unchanged).
     8. Multiple source rows produce correctly-named tiles per source.
 
-  Task 3 (quadbin per-cell reproject):
+  Quadbin (per-cell reproject):
     14. gridSystem=quadbin → N≥2 mini-COGs, each in EPSG:3857, each tagged
         GBX_CELLID and GBX_GRIDSYSTEM=quadbin.
     15. Cell pixel values match a reference rasterio.warp.reproject (allclose).
+
+  H3 (per-cell reproject + hex-clip):
+    16. gridSystem=h3 → ≥1 mini-COGs, each in EPSG:4326, each tagged
+        GBX_CELLID (valid h3index at the requested resolution) and GBX_GRIDSYSTEM=h3.
+    17. Pixels outside the hexagon boundary are set to nodata; interior pixels
+        are non-nodata.  Nodata is always present even when the source had none
+        (derived sentinel — Ruling A).
+    18. Interior pixels match a reference rasterio.warp.reproject (allclose, not
+        byte-equal since nearest resampling and windowed source may vary slightly).
 
 Run (in Docker):
     bash scripts/commands/gbx-test-python.sh \
@@ -26,6 +35,7 @@ Run (in Docker):
 
 from __future__ import annotations
 
+import math
 import os
 import pickle
 import re
@@ -858,4 +868,256 @@ def test_quadbin_cell_reproject_correctness(tmp_path, small_source_raster):
             f"Quadbin cell pixel values diverge from reference reproject: "
             f"{tile_path}"
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fixtures / helpers shared by h3 tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _write_src_fn():
+    """Return a callable that writes a small EPSG:32632 source raster.
+
+    The default source has NO nodata value — exercises Ruling A (derived nodata).
+    Signature matches _write_src(path) with default args: 200×120 uint16, nodata=None.
+    """
+    return _write_src
+
+
+def _write_mosaic_for_test(
+    src_path: str, out_dir: str, opts: MosaicOptions
+) -> None:
+    """Test helper: drive _write_mosaic_h3 directly, bypassing Spark.
+
+    Wraps _make_writer + write() in the same pattern as the quadbin tests.
+    Lives in the test module per Ruling D — NOT in production cog_writer.py.
+    """
+    os.makedirs(out_dir, exist_ok=True)
+    w = _make_writer(out_dir, mosaic_opts=opts)
+    w.write(iter([{"path": src_path}]))
+
+
+# ---------------------------------------------------------------------------
+# 16. h3 write: tagged, EPSG:4326 mini-COGs
+# ---------------------------------------------------------------------------
+
+
+def test_h3_write_produces_tagged_4326_minicogs(tmp_path, _write_src_fn):
+    """h3 mosaic write must produce >=1 mini-COGs in EPSG:4326 with GBX_CELLID tags."""
+    import glob
+
+    src_path = str(tmp_path / "src_h3" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_h3")
+    _write_src_fn(src_path)
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "5"}
+    )
+    _write_mosaic_for_test(src_path, out_dir, opts)
+
+    tifs = sorted(glob.glob(os.path.join(out_dir, "cell_*.tif")))
+    assert len(tifs) >= 1, "expected at least one h3 cell mini-COG"
+
+    for t in tifs:
+        with rasterio.open(t) as ds:
+            assert ds.crs.to_epsg() == 4326, f"expected EPSG:4326, got {ds.crs}"
+            tags = ds.tags()
+            assert "GBX_CELLID" in tags, f"GBX_CELLID missing in {t}"
+            assert tags.get("GBX_GRIDSYSTEM") == "h3", (
+                f"GBX_GRIDSYSTEM expected 'h3', got {tags.get('GBX_GRIDSYSTEM')!r}"
+            )
+            # cellid is a valid h3 string at the requested resolution
+            import h3 as _h3
+
+            assert _h3.get_resolution(tags["GBX_CELLID"]) == 5
+
+
+# ---------------------------------------------------------------------------
+# 17. h3 hex-clip: outside-hex pixels are nodata; interior pixels are not
+#     (exercises Ruling A: source has NO declared nodata → derived sentinel)
+# ---------------------------------------------------------------------------
+
+
+def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
+    """Pixels outside the hexagon must be nodata; interior pixels non-nodata.
+
+    The source is created WITHOUT a nodata value (Ruling A test case): the writer
+    must still hex-clip by deriving a sentinel nodata (dtype max for uint16 = 65535).
+    The output file must carry nodata even though the source did not.
+    """
+    import glob
+
+    import h3 as _h3
+    from rasterio.features import geometry_mask as _geometry_mask
+
+    src_path = str(tmp_path / "src_h3_clip" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_h3_clip")
+    _write_src_fn(src_path)  # nodata=None source (Ruling A case)
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "5"}
+    )
+    _write_mosaic_for_test(src_path, out_dir, opts)
+
+    tifs = sorted(glob.glob(os.path.join(out_dir, "cell_*.tif")))
+    assert tifs, "no mini-COGs produced"
+
+    # Take the first cell and verify hex-clip correctness.
+    with rasterio.open(tifs[0]) as ds:
+        tags = ds.tags()
+        cellid_str = tags["GBX_CELLID"]
+        data = ds.read(1)
+        nodata = ds.nodata
+
+    # Ruling A: output must always carry a nodata value even for a nodata-less source.
+    assert nodata is not None, (
+        "h3 output must carry a nodata value even when the source had none (Ruling A)"
+    )
+
+    # Build the hex polygon from cell_to_boundary [(lat, lon) -> (lon, lat)].
+    boundary = _h3.cell_to_boundary(cellid_str)
+    hex_coords = [(lon, lat) for lat, lon in boundary]
+    hex_geojson = {
+        "type": "Polygon",
+        "coordinates": [hex_coords + [hex_coords[0]]],
+    }
+
+    with rasterio.open(tifs[0]) as ds:
+        outside_mask = _geometry_mask(
+            [hex_geojson],
+            transform=ds.transform,
+            out_shape=data.shape,
+            invert=False,
+        )
+
+    # Every pixel outside the hex must equal nodata.
+    outside_vals = data[outside_mask]
+    if outside_vals.size > 0:
+        if isinstance(nodata, float) and math.isnan(nodata):
+            assert np.all(np.isnan(outside_vals)), (
+                f"outside-hex pixels must be NaN nodata, got: {outside_vals[:5]}"
+            )
+        else:
+            np.testing.assert_array_equal(
+                outside_vals,
+                nodata,
+                err_msg=f"outside-hex pixels must equal nodata={nodata}",
+            )
+
+    # At least some interior pixels must be non-nodata.
+    interior_vals = data[~outside_mask]
+    assert interior_vals.size > 0, "no interior pixels found"
+    if isinstance(nodata, float) and math.isnan(nodata):
+        assert np.any(~np.isnan(interior_vals)), "all interior pixels are NaN nodata"
+    else:
+        assert np.any(interior_vals != nodata), (
+            f"all interior pixels equal nodata={nodata}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 18. h3 reproject correctness: interior pixels match a reference warp
+# ---------------------------------------------------------------------------
+
+
+def test_h3_cell_reproject_matches_reference(tmp_path, _write_src_fn):
+    """h3 cell interior pixels match a reference rasterio.warp.reproject.
+
+    Uses the same source, source window, and destination transform as the
+    implementation.  Resampling.nearest means values are exact copies of the
+    nearest source pixel — assert_allclose with rtol=1e-5 confirms the
+    reprojection itself is correct, not just pixel-equal bytes.
+    """
+    import glob
+
+    import h3 as _h3
+    from rasterio.crs import CRS
+    from rasterio.features import geometry_mask as _geometry_mask
+    from rasterio.warp import reproject as _reproject
+    from rasterio.warp import transform_bounds
+
+    src_path = str(tmp_path / "src_ref" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_ref")
+    _write_src_fn(src_path)
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "5"}
+    )
+    _write_mosaic_for_test(src_path, out_dir, opts)
+
+    tifs = sorted(glob.glob(os.path.join(out_dir, "cell_*.tif")))
+    assert tifs, "no h3 mini-COGs produced"
+
+    # Check the first cell only (deterministic).
+    with rasterio.open(tifs[0]) as cell_ds:
+        written_data = cell_ds.read(1).astype(np.float64)
+        cell_transform = cell_ds.transform
+        cell_w, cell_h = cell_ds.width, cell_ds.height
+        dst_crs = cell_ds.crs
+        cell_nodata = cell_ds.nodata
+        cellid_str = cell_ds.tags()["GBX_CELLID"]
+        cell_bounds = cell_ds.bounds
+
+    with rasterio.open(src_path) as src:
+        src_crs = src.crs
+        src_nodata = src.nodata
+        # Replicate the implementation's windowed approach.
+        src_bounds_in_src_crs = transform_bounds(
+            CRS.from_epsg(4326),
+            src.crs,
+            cell_bounds.left,
+            cell_bounds.bottom,
+            cell_bounds.right,
+            cell_bounds.top,
+        )
+        src_win = src.window(*src_bounds_in_src_crs)
+        src_win = src_win.intersection(
+            rasterio.windows.Window(0, 0, src.width, src.height)
+        )
+        src_data = src.read(window=src_win)
+        src_win_transform = src.window_transform(src_win)
+
+    # Build reference with the same nodata the implementation uses.
+    ref_nodata = cell_nodata  # already derived by the impl
+    ref_fill = (
+        float("nan")
+        if (isinstance(ref_nodata, float) and math.isnan(ref_nodata))
+        else float(ref_nodata or 0)
+    )
+    ref_data = np.full((cell_h, cell_w), ref_fill, dtype=np.float64)
+    _reproject(
+        source=src_data,
+        destination=ref_data[np.newaxis],
+        src_transform=src_win_transform,
+        src_crs=src_crs,
+        dst_transform=cell_transform,
+        dst_crs=dst_crs,
+        resampling=Resampling.nearest,
+        src_nodata=src_nodata,
+        dst_nodata=ref_nodata,
+    )
+
+    # Interior mask (inside hex polygon).
+    boundary = _h3.cell_to_boundary(cellid_str)
+    hex_coords = [(lon, lat) for lat, lon in boundary]
+    hex_geojson = {
+        "type": "Polygon",
+        "coordinates": [hex_coords + [hex_coords[0]]],
+    }
+    interior = ~_geometry_mask(
+        [hex_geojson],
+        transform=cell_transform,
+        out_shape=(cell_h, cell_w),
+        invert=False,
+    )
+
+    # Interior pixels must match reference within tolerance.
+    np.testing.assert_allclose(
+        written_data[interior],
+        ref_data[interior],
+        rtol=1e-5,
+        atol=1.0,
+        err_msg="h3 cell interior pixels must match reference rasterio.warp.reproject",
     )

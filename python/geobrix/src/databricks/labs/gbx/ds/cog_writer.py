@@ -1185,23 +1185,12 @@ class CogGbxWriter(DataSourceWriter):
                     decision = materialize_decision(
                         decoded_size, "cog_write", cap_bytes=self._cap
                     )
-                    if decision == "error":
+                    if decision in ("error", "driver"):
                         size_mib = decoded_size // (1024**2)
                         raise StageTooLargeError(
-                            f"Quadbin cell {cell.cellid} decoded size {size_mib} MiB "
-                            f"exceeds the COG-conversion budget. "
-                            f"Use a coarser resolution or a classic cluster."
-                        )
-                    if decision == "driver":
-                        # Cannot defer reprojection to the driver path (it expects
-                        # whole-file paths, not per-cell warps).  Log and proceed —
-                        # the executor can still handle this at the driver cap (rare).
-                        _logger.info(
-                            "cog_gbx quadbin: cell %d decoded size %d bytes exceeds "
-                            "executor cap %d bytes; proceeding on executor (rare path)",
-                            cell.cellid,
-                            decoded_size,
-                            self._cap,
+                            f"quadbin cell {cell.cellid} at gridResolution="
+                            f"{opts.grid_resolution} decodes to {size_mib} MiB, "
+                            f"over the per-task memory cap; use a finer gridResolution."
                         )
 
                     # ── Find source window that overlaps this cell ────────────
@@ -1385,29 +1374,19 @@ class CogGbxWriter(DataSourceWriter):
                         count * cell_w * cell_h * np.dtype(out_dtype).itemsize
                     )
 
-                    # ── Serverless cap gate — matches shipped quadbin contract ─
-                    # (Ruling B: copy exact signature + token values from
-                    # _write_mosaic_quadbin; "driver" logs and proceeds, only
-                    # "error" raises.)
+                    # ── Serverless cap gate ──────────────────────────────────
+                    # Both "error" and "driver" raise: per-cell reprojection
+                    # cannot be deferred to the driver path, and proceeding on
+                    # executor risks Serverless OOM.  Use a finer gridResolution.
                     decision = materialize_decision(
                         decoded_size, "cog_write", cap_bytes=self._cap
                     )
-                    if decision == "error":
-                        size_mib = decoded_size // (1024 ** 2)
+                    if decision in ("error", "driver"):
+                        size_mib = decoded_size // (1024**2)
                         raise StageTooLargeError(
                             f"h3 cell {cell.cellid!r} at gridResolution="
                             f"{opts.grid_resolution} decodes to {size_mib} MiB, "
                             f"over the per-task memory cap; use a finer gridResolution."
-                        )
-                    if decision == "driver":
-                        # Cannot defer per-cell reprojection to the driver path.
-                        # Log and proceed — executor can still handle this (rare).
-                        _logger.info(
-                            "cog_gbx h3: cell %s decoded size %d bytes exceeds "
-                            "executor cap %d bytes; proceeding on executor (rare path)",
-                            cell.cellid,
-                            decoded_size,
-                            self._cap,
                         )
 
                     # ── Find source window overlapping this cell ─────────────

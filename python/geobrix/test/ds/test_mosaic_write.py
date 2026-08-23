@@ -1121,3 +1121,61 @@ def test_h3_cell_reproject_matches_reference(tmp_path, _write_src_fn):
         atol=1.0,
         err_msg="h3 cell interior pixels must match reference rasterio.warp.reproject",
     )
+
+
+# ---------------------------------------------------------------------------
+# 19. Coarse-resolution hard-error guard (h3 + quadbin retrofit)
+# ---------------------------------------------------------------------------
+
+
+def test_h3_coarse_res_cap_raises(tmp_path, _write_src_fn, monkeypatch):
+    """A cell whose decoded size exceeds the Serverless cap must raise with gridResolution in message."""
+    import databricks.labs.gbx.ds.cog_writer as _cw
+
+    # Patch the cap in cog_writer's namespace to 1 byte so every cell exceeds it.
+    # Must patch cog_writer._connect_aware_lru_sizing (the locally-imported name),
+    # not file_gbx._connect_aware_lru_sizing — cog_writer uses a direct binding.
+    monkeypatch.setattr(_cw, "_connect_aware_lru_sizing", lambda *a, **kw: (1, "patched"))
+
+    src_path = str(tmp_path / "src_cap_h3" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_cap_h3")
+    _write_src_fn(src_path)
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "5"}
+    )
+    with pytest.raises(Exception, match="gridResolution"):
+        _write_mosaic_for_test(src_path, out_dir, opts)
+
+
+def test_quadbin_coarse_res_cap_raises(tmp_path, _write_src_fn, monkeypatch):
+    """Quadbin cap guard must also raise with gridResolution in the message (retrofit)."""
+    import databricks.labs.gbx.ds.cog_writer as _cw
+
+    monkeypatch.setattr(_cw, "_connect_aware_lru_sizing", lambda *a, **kw: (1, "patched"))
+
+    src_path = str(tmp_path / "src_cap_qb" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_cap_qb")
+    _write_src_fn(src_path)
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "quadbin", "gridResolution": "12"}
+    )
+    with pytest.raises(Exception, match="gridResolution"):
+        _write_mosaic_for_test(src_path, out_dir, opts)
+
+
+def test_h3_normal_resolution_proceeds(tmp_path, _write_src_fn):
+    """A cell within cap must produce mini-COGs without raising."""
+    import glob
+
+    src_path = str(tmp_path / "src_ok_h3" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_ok_h3")
+    _write_src_fn(src_path)
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "5"}
+    )
+    _write_mosaic_for_test(src_path, out_dir, opts)
+    tifs = glob.glob(os.path.join(out_dir, "cell_*.tif"))
+    assert len(tifs) >= 1

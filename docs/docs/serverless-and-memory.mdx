@@ -88,7 +88,7 @@ df = spark.read.format("raster_gbx").load("/Volumes/…/rasters/")
 tiles = spark.read.format("delta").load("/Volumes/…/tiles_table/")
 ```
 
-See [Readers & Writers](../readers-writers#file-gbx) for the full file-access base, FILE modes, and layout options.
+See [Readers & Writers](./readers-writers#file-gbx) for the full file-access base, FILE modes, and layout options.
 
 ## What is Serverless-safe
 
@@ -150,7 +150,7 @@ The `vector_gbx` reader assigns one Spark task per source file and reads it whol
 
 ## See also
 
-- [Readers & Writers](../readers-writers) — capability tiers, read-options matrix, file-access base
+- [Readers & Writers](./readers-writers) — capability tiers, read-options matrix, file-access base
 - [Virtual Tiles](./api/virtual-tiles) — how virtual tiles defer pixel I/O
 - [Performance](./api/performance) — open amortization, grouping patterns
 - [Benchmarking](./api/benchmarking) — measured tier-vs-tier and FILE-capability results

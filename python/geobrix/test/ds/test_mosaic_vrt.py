@@ -384,3 +384,162 @@ def test_vrt_multiband_nodata_on_every_band(tmp_path):
         nd = band.find("NoDataValue")
         assert nd is not None, f"band {band.get('band')} missing NoDataValue"
         assert float(nd.text) == 0.0, f"band {band.get('band')} nodata != 0.0"
+
+
+# ---------------------------------------------------------------------------
+# Task 4: quadbin mosaic VRT (EPSG:3857)
+# ---------------------------------------------------------------------------
+# These tests mirror the Phase-A VRT tests but drive the quadbin path:
+# gridSystem='quadbin', gridResolution=12.  Source raster is in EPSG:32630
+# (UTM 30N, London area) — 200×200 px at 100 m → 20 km×20 km.  At quadbin
+# resolution 12 cells are ~6–10 km wide here, so ≥2 non-empty mini-COGs are
+# produced and the VRT covers a multi-cell 3857 mosaic.
+
+
+def _write_qb_src(path: str) -> None:
+    """200×200, 100 m pixels, EPSG:32630, deterministic uint16 data."""
+    from rasterio.transform import from_origin as _from_origin
+
+    w, h = 200, 200
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32630",
+        transform=_from_origin(500000.0, 5700000.0, 100.0, 100.0),
+    )
+    data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+
+
+def _run_quadbin_mosaic(src_path: str, out_dir: str, **extra_opts) -> CogCommitMessage:
+    """write() + commit() for quadbin mode at resolution 12."""
+    opts = parse_mosaic_options(
+        {
+            "gridSystem": "quadbin",
+            "gridResolution": "12",
+            **extra_opts,
+        }
+    )
+    writer = CogGbxWriter(
+        str(out_dir),
+        _path_schema(),
+        overwrite=True,
+        cog_blocksize=256,
+        mosaic_opts=opts,
+    )
+    msg = writer.write(iter([{"path": src_path}]))
+    writer.commit([msg])
+    return msg
+
+
+# ---------------------------------------------------------------------------
+# T4-1. VRT exists after a quadbin write+commit
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_vrt_file_created(tmp_path):
+    """After write+commit in quadbin mode, mosaic.vrt exists in out_dir."""
+    src = str(tmp_path / "src_qb" / "input.tif")
+    _write_qb_src(src)
+    _run_quadbin_mosaic(src, str(tmp_path / "out"))
+    assert os.path.exists(str(tmp_path / "out" / "mosaic.vrt"))
+
+
+# ---------------------------------------------------------------------------
+# T4-2. VRT references exactly the written quadbin members
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_vrt_references_written_members(tmp_path):
+    """VRT SourceFilename set == written cell_*.tif files (no extras, no missing)."""
+    src = str(tmp_path / "src_qb" / "input.tif")
+    _write_qb_src(src)
+    msg = _run_quadbin_mosaic(src, str(tmp_path / "out"))
+    vrt_path = str(tmp_path / "out" / "mosaic.vrt")
+
+    assert len(msg.paths) >= 2, f"expected ≥2 quadbin mini-COGs, got {len(msg.paths)}"
+
+    fns = _source_filenames(vrt_path)
+    bare_fns = {os.path.basename(fn) if os.path.isabs(fn) else fn for fn in fns}
+    written_bare = {os.path.basename(p) for p in msg.paths}
+
+    assert bare_fns == written_bare, (
+        f"VRT member set mismatch: VRT={bare_fns}, written={written_bare}"
+    )
+    # All names should start with 'cell_'
+    non_cell = [fn for fn in bare_fns if not fn.startswith("cell_")]
+    assert not non_cell, f"VRT references non-cell_* files: {non_cell}"
+
+
+# ---------------------------------------------------------------------------
+# T4-3. VRT opens with CRS EPSG:3857
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_vrt_crs_is_3857(tmp_path):
+    """rasterio.open(mosaic.vrt).crs.to_epsg() == 3857 for a quadbin mosaic."""
+    src = str(tmp_path / "src_qb" / "input.tif")
+    _write_qb_src(src)
+    _run_quadbin_mosaic(src, str(tmp_path / "out"))
+    vrt_path = str(tmp_path / "out" / "mosaic.vrt")
+
+    with rasterio.open(vrt_path) as vrt:
+        assert vrt.crs.to_epsg() == 3857, (
+            f"quadbin VRT CRS must be EPSG:3857; got {vrt.crs!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# T4-4. Windowed read from quadbin VRT is non-trivial (members loaded)
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_vrt_windowed_read_returns_data(tmp_path):
+    """A windowed read from the quadbin VRT returns non-zero pixels.
+
+    Checks that at least one intersecting member was read (the window spans
+    the centre of the mosaic where data is dense).
+    """
+    src = str(tmp_path / "src_qb" / "input.tif")
+    _write_qb_src(src)
+    _run_quadbin_mosaic(src, str(tmp_path / "out"))
+    vrt_path = str(tmp_path / "out" / "mosaic.vrt")
+
+    with rasterio.open(vrt_path) as vrt:
+        # Read a modest central window; cells near the centre of the 20 km box
+        # carry valid data, so at least some pixels must be non-zero.
+        vrt_w, vrt_h = vrt.width, vrt.height
+        win = Window(
+            vrt_w // 4,
+            vrt_h // 4,
+            max(1, vrt_w // 2),
+            max(1, vrt_h // 2),
+        )
+        data = vrt.read(window=win)
+
+    assert data.shape[0] == 1, "expected 1-band read"
+    assert np.any(data > 0), (
+        "windowed read returned all-zero; expected at least one non-zero pixel "
+        "from the quadbin members"
+    )
+
+
+# ---------------------------------------------------------------------------
+# T4-5. write_vrt=False → no VRT produced for quadbin path either
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_write_vrt_false_no_vrt(tmp_path):
+    """writeVrt=false suppresses VRT creation in quadbin mode too."""
+    src = str(tmp_path / "src_qb" / "input.tif")
+    _write_qb_src(src)
+    _run_quadbin_mosaic(src, str(tmp_path / "out"), writeVrt="false")
+    vrt_path = str(tmp_path / "out" / "mosaic.vrt")
+    assert not os.path.exists(vrt_path), (
+        f"mosaic.vrt unexpectedly created despite writeVrt=false: {vrt_path}"
+    )

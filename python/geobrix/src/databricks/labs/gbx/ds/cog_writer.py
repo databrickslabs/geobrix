@@ -280,7 +280,7 @@ def _build_mosaic_vrt(
                     "crs": ds.crs,
                     "dtypes": ds.dtypes,  # tuple, one per band
                     "count": ds.count,
-                    "nodata": ds.nodata,
+                    "nodatavals": ds.nodatavals,  # tuple, one per band (None where unset)
                 }
             )
 
@@ -296,7 +296,7 @@ def _build_mosaic_vrt(
     crs = ref["crs"]
     count = ref["count"]
     dtypes = ref["dtypes"]
-    nodata = ref["nodata"]
+    nodatavals = ref["nodatavals"]
 
     mosaic_left = min(m["transform"].c for m in metas)
     mosaic_top = max(m["transform"].f for m in metas)
@@ -336,8 +336,15 @@ def _build_mosaic_vrt(
         band_el = ET.SubElement(
             root, "VRTRasterBand", {"dataType": dtype_name, "band": str(band_idx)}
         )
-        if nodata is not None:
-            ET.SubElement(band_el, "NoDataValue").text = repr(float(nodata))
+        # Per-band NoData: rasterio's ``nodatavals`` is a tuple with one entry
+        # per band (None where unset), so differing per-band nodata is honored.
+        # Behavior-identical to the old single ``nodata`` for the common uniform
+        # case. (rasterio's high-level API cannot WRITE differing per-band nodata
+        # without osgeo, which the light tier forbids, so only uniform nodata is
+        # unit-tested.)
+        band_nodata = nodatavals[band_idx - 1]
+        if band_nodata is not None:
+            ET.SubElement(band_el, "NoDataValue").text = repr(float(band_nodata))
 
         for meta in metas:
             t = meta["transform"]

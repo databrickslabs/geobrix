@@ -364,3 +364,23 @@ def test_vrt_multiband_source(tmp_path):
     for band in bands:
         sources = list(band.iter("SimpleSource"))
         assert sources, f"VRTRasterBand band={band.get('band')} has no SimpleSource"
+
+
+def test_vrt_multiband_nodata_on_every_band(tmp_path):
+    """A multi-band source carrying nodata writes NoDataValue on EVERY VRT band.
+
+    Guards the per-band nodatavals path in _build_mosaic_vrt. (rasterio's
+    high-level API can only set a uniform dataset nodata, so differing per-band
+    nodata is honored in code but cannot be constructed here without osgeo.)"""
+    src = str(tmp_path / "src" / "mb_nd.tif")
+    _write_src(src, w=200, h=120, count=3, nodata=0.0)
+    _run_mosaic(src, str(tmp_path / "out"), tileSize=100)
+    vrt_path = str(tmp_path / "out" / "mosaic.vrt")
+
+    tree = ET.parse(vrt_path)
+    bands = [el for el in tree.getroot() if el.tag == "VRTRasterBand"]
+    assert len(bands) == 3
+    for band in bands:
+        nd = band.find("NoDataValue")
+        assert nd is not None, f"band {band.get('band')} missing NoDataValue"
+        assert float(nd.text) == 0.0, f"band {band.get('band')} nodata != 0.0"

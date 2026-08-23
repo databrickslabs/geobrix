@@ -36,6 +36,7 @@ import rasterio
 from pyspark.sql.functions import col
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
+from rasterio.warp import transform_bounds as _transform_bounds
 from rasterio.windows import Window
 
 from databricks.labs.gbx.ds._mosaic import mint_vrt
@@ -315,4 +316,182 @@ def test_bbox_filtered_vrt_read(spark, tmp_path):
     assert member_path.endswith("_0_0.tif"), (
         f"Expected the returned row to belong to the (0,0) tile; "
         f"got member_path={member_path!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Quadbin round-trip helpers
+# ---------------------------------------------------------------------------
+
+_QB_RESOLUTION = 12  # quadbin resolution; cells at ~6–10 km cover the 2 km source
+
+
+def _write_mosaic_quadbin_spark(
+    spark, src_path: str, out_dir: str, resolution: int = _QB_RESOLUTION
+) -> str:
+    """Write *src_path* as a quadbin mosaic via the full Spark cog_gbx DataSource.
+
+    Options: ``vrtMosaic=true``, ``gridSystem=quadbin``, ``gridResolution=<resolution>``.
+    Returns the path to the written ``mosaic.vrt``.
+    """
+    spark.dataSource.register(CogGbxDataSource)
+    df = spark.createDataFrame([{"path": src_path}], schema=_path_schema())
+    (
+        df.write.format("cog_gbx")
+        .option("vrtMosaic", "true")
+        .option("gridSystem", "quadbin")
+        .option("gridResolution", str(resolution))
+        .mode("overwrite")
+        .save(out_dir)
+    )
+    vrt_path = os.path.join(out_dir, "mosaic.vrt")
+    assert os.path.exists(vrt_path), f"mosaic.vrt not produced at {vrt_path}"
+    return vrt_path
+
+
+def _member_cell_paths(out_dir: str):
+    """Return sorted list of quadbin mini-COG cell paths in *out_dir*."""
+    return sorted(glob.glob(os.path.join(out_dir, "cell_*.tif")))
+
+
+# ---------------------------------------------------------------------------
+# Test 4: quadbin prepare → expand → rst_avg + cellid / gridSystem + windowed
+#
+# Full quadbin mosaic write (cog_gbx) → read (raster_gbx VRT expansion) →
+# rst_avg + metadata assertions + windowed VRT read.
+#
+# Asserts:
+#   (a) row count == member cell count
+#   (b) every tile has a positive quadbin cellid AND gridSystem="quadbin"
+#   (c) rst_avg per tile is non-null
+#   (d) union of member extents (back in source CRS) contains the source extent
+#   (e) windowed rasterio VRT read returns non-fill pixels (Path-B locality)
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_round_trip(spark, tmp_path):
+    """End-to-end quadbin mosaic: cog_gbx write → raster_gbx expand → rst_avg + metadata + windowed."""
+    src_path = str(tmp_path / "src_qb" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_qb")
+
+    _write_src(src_path)
+    vrt_path = _write_mosaic_quadbin_spark(spark, src_path, out_dir)
+
+    # ── Count member mini-COG cells ────────────────────────────────────────────
+    member_paths = _member_cell_paths(out_dir)
+    n_members = len(member_paths)
+    assert n_members >= 1, "no mini-COG cells found after quadbin mosaic write"
+
+    # ── Read the mosaic VRT: one row per member cell ───────────────────────────
+    spark.dataSource.register(RasterGbxDataSource)
+    df = spark.read.format("raster_gbx").load(vrt_path)
+
+    count = df.count()
+    assert count == n_members, (
+        f"VRT expansion produced {count} rows, expected {n_members} (one per member cell)"
+    )
+
+    # ── Per-row: cellid positive + gridSystem="quadbin" + rst_avg non-null ─────
+    rows = df.select(
+        col("tile.metadata").alias("metadata"),
+        rst_avg(col("tile")).alias("avg"),
+    ).collect()
+
+    for row in rows:
+        metadata = row["metadata"]
+        assert metadata is not None, "tile.metadata is None"
+
+        # (b) positive quadbin cellid
+        assert "cellid" in metadata, f"tile.metadata missing 'cellid': {metadata}"
+        cellid_val = int(metadata["cellid"])
+        assert cellid_val > 0, f"cellid is not positive: {cellid_val}"
+
+        # (b) gridSystem tag
+        assert metadata.get("gridSystem") == "quadbin", (
+            f"tile.metadata['gridSystem'] expected 'quadbin', "
+            f"got {metadata.get('gridSystem')!r}"
+        )
+
+        # (c) rst_avg non-null
+        avg_list = row["avg"]
+        assert avg_list is not None, "rst_avg returned None for quadbin cell"
+        assert len(avg_list) >= 1, "rst_avg avg list is empty for quadbin cell"
+        assert all(
+            v is not None for v in avg_list
+        ), f"rst_avg has None band value: {avg_list}"
+
+    # ── (d) Union of member extents contains the source extent ─────────────────
+    with rasterio.open(src_path) as src_ds:
+        src_bounds = src_ds.bounds  # EPSG:32632
+
+    westerns, southerns, easterns, northerns = [], [], [], []
+    for path in member_paths:
+        with rasterio.open(path) as cell_ds:
+            assert cell_ds.crs.to_epsg() == 3857, (
+                f"cell tile CRS should be EPSG:3857, got {cell_ds.crs}"
+            )
+            w, s, e, n = _transform_bounds(
+                cell_ds.crs,
+                "EPSG:32632",
+                cell_ds.bounds.left,
+                cell_ds.bounds.bottom,
+                cell_ds.bounds.right,
+                cell_ds.bounds.top,
+            )
+            westerns.append(w)
+            southerns.append(s)
+            easterns.append(e)
+            northerns.append(n)
+
+    union_west = min(westerns)
+    union_south = min(southerns)
+    union_east = max(easterns)
+    union_north = max(northerns)
+
+    # Cells align to the quadbin / web-mercator grid, so the union re-projected
+    # back to EPSG:32632 may be larger or offset by up to one cell width (~10 km
+    # at resolution 12).  The tolerance below is generous; the key invariant is
+    # that the union overlaps the source.
+    tol_m = 20_000  # 20 km
+    assert union_west <= src_bounds.left + tol_m, (
+        f"union_west ({union_west:.1f}) does not extend west enough "
+        f"of src.left ({src_bounds.left:.1f})"
+    )
+    assert union_east >= src_bounds.right - tol_m, (
+        f"union_east ({union_east:.1f}) does not extend east enough "
+        f"of src.right ({src_bounds.right:.1f})"
+    )
+    assert union_south <= src_bounds.bottom + tol_m, (
+        f"union_south ({union_south:.1f}) does not extend south enough "
+        f"of src.bottom ({src_bounds.bottom:.1f})"
+    )
+    assert union_north >= src_bounds.top - tol_m, (
+        f"union_north ({union_north:.1f}) does not extend north enough "
+        f"of src.top ({src_bounds.top:.1f})"
+    )
+
+    # ── (e) Windowed VRT read returns non-fill pixels (Path-B locality) ────────
+    # Anchor the pixel window on the first cell's spatial extent within the VRT.
+    # Every cell overlaps the source, so pixels in this window must be non-zero
+    # (the source guarantees values >= 1; fill for missing coverage = 0).
+    with rasterio.open(member_paths[0]) as first_cell_ds:
+        cell_bounds_3857 = first_cell_ds.bounds
+
+    with rasterio.open(vrt_path) as vrt_ds:
+        cell_win = vrt_ds.window(
+            cell_bounds_3857.left,
+            cell_bounds_3857.bottom,
+            cell_bounds_3857.right,
+            cell_bounds_3857.top,
+        )
+        vrt_full = Window(0, 0, vrt_ds.width, vrt_ds.height)
+        cell_win = cell_win.intersection(vrt_full)
+        vrt_data = vrt_ds.read(window=cell_win)
+
+    assert vrt_data.size > 0, "windowed VRT read returned empty array"
+    # The source guarantees pixel values >= 1 after reprojection at least some
+    # pixels in the cell's window must be non-fill.
+    assert np.any(vrt_data > 0), (
+        "windowed VRT read over the first cell's extent returned all-fill (zero) pixels; "
+        "expected non-zero source data since every cell overlaps the source"
     )

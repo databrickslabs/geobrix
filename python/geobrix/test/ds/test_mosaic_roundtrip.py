@@ -495,3 +495,64 @@ def test_quadbin_round_trip(spark, tmp_path):
         "windowed VRT read over the first cell's extent returned all-fill (zero) pixels; "
         "expected non-zero source data since every cell overlaps the source"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 5: quadbin mosaic — virtualTiles=false surfaces cellid + gridSystem
+#
+# Regression guard for the materialized-emit path in RasterGbxReader.read():
+# when virtualTiles=false, the reader encodes tiles to bytes rather than
+# emitting virtual paths.  Prior to the fix the three materialized branches
+# (passthrough, clip, and windowed/whole-image encode) did not propagate
+# vrt_tags, so tile.metadata had no cellid or gridSystem.
+#
+# Asserts:
+#   (a) every materialized tile has a positive quadbin cellid
+#   (b) every materialized tile has gridSystem="quadbin"
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_materialized_vrt_cellid(spark, tmp_path):
+    """virtualTiles=false must surface cellid/gridSystem on every materialized tile."""
+    src_path = str(tmp_path / "src_qb_mat" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_qb_mat")
+
+    _write_src(src_path)
+    vrt_path = _write_mosaic_quadbin_spark(spark, src_path, out_dir)
+
+    member_paths = _member_cell_paths(out_dir)
+    n_members = len(member_paths)
+    assert n_members >= 1, "no mini-COG cells found after quadbin mosaic write"
+
+    # ── Read with virtualTiles=false: forces materialized encode path ──────────
+    spark.dataSource.register(RasterGbxDataSource)
+    df = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(vrt_path)
+    )
+
+    rows = df.select(col("tile.metadata").alias("metadata")).collect()
+    assert len(rows) >= n_members, (
+        f"virtualTiles=false read returned {len(rows)} rows, expected >= {n_members}"
+    )
+
+    for i, row in enumerate(rows):
+        metadata = row["metadata"]
+        assert metadata is not None, f"row {i}: tile.metadata is None"
+
+        # (a) positive quadbin cellid must be present on materialized tiles
+        assert "cellid" in metadata, (
+            f"row {i}: tile.metadata missing 'cellid' on virtualTiles=false path; "
+            f"got keys: {list(metadata.keys())}"
+        )
+        cellid_val = int(metadata["cellid"])
+        assert cellid_val > 0, (
+            f"row {i}: cellid is not positive: {cellid_val}"
+        )
+
+        # (b) gridSystem tag must be "quadbin"
+        assert metadata.get("gridSystem") == "quadbin", (
+            f"row {i}: tile.metadata['gridSystem'] expected 'quadbin', "
+            f"got {metadata.get('gridSystem')!r}"
+        )

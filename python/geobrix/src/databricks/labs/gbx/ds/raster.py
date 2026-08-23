@@ -1283,6 +1283,11 @@ class RasterGbxReader(DataSourceReader):
                 return  # all-nodata / non-overlap -> skip (no tile)
             # Add tile_size metadata (materialized raster byte length).
             meta["tile_byte_size"] = str(len(clipped))
+            # Propagate VRT member tags (cellid, gridSystem) when present.
+            # Native reads have no vrt_tags, so getattr returns None — no-op.
+            _vrt_tags = getattr(partition, "vrt_tags", None)
+            if _vrt_tags:
+                meta.update(_vrt_tags)
             yield (
                 source,
                 _v2_tile_row(
@@ -1318,6 +1323,11 @@ class RasterGbxReader(DataSourceReader):
             )
             # Add tile_size metadata (materialized raster byte length).
             meta["tile_byte_size"] = str(len(raster_bytes))
+            # Propagate VRT member tags (cellid, gridSystem) when present.
+            # Native reads have no vrt_tags, so getattr returns None — no-op.
+            _vrt_tags = getattr(partition, "vrt_tags", None)
+            if _vrt_tags:
+                meta.update(_vrt_tags)
             yield (
                 source,
                 _v2_tile_row(
@@ -1352,6 +1362,11 @@ class RasterGbxReader(DataSourceReader):
                 )
         # Add tile_size metadata (materialized raster byte length).
         meta["tile_byte_size"] = str(len(raster_bytes))
+        # Propagate VRT member tags (cellid, gridSystem) when present.
+        # Native reads have no vrt_tags, so getattr returns None — no-op.
+        _vrt_tags = getattr(partition, "vrt_tags", None)
+        if _vrt_tags:
+            meta.update(_vrt_tags)
         yield (
             source,
             _v2_tile_row(

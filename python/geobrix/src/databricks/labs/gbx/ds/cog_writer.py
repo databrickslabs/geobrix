@@ -1139,6 +1139,11 @@ class CogGbxWriter(DataSourceWriter):
                         continue
 
                     # ── Destination grid (cell-aligned, EPSG:3857) ───────────
+                    # Both dimensions use the same native_px: calculate_default_transform
+                    # yields square pixels, quadbin cells in EPSG:3857 are square, and
+                    # dst_transform is rebuilt from cell bounds — so one pixel size is
+                    # correct for both axes.  Do NOT substitute native_tf.e for height:
+                    # native_tf.e is negative (south-pointing) and would produce cell_h <= 0.
                     cell_w = max(1, int(round((cell.east - cell.west) / native_px)))
                     cell_h = max(1, int(round((cell.north - cell.south) / native_px)))
                     dst_transform = transform_from_bounds(

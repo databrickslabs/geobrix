@@ -747,9 +747,7 @@ def plot_file(
 
 def _mosaic_grid_system(vrt_path):
     """Read GBX_GRIDSYSTEM from the first VRT member ('h3'/'quadbin'/'bng'), or None."""
-    import rasterio
-
-    from databricks.labs.gbx.ds.raster import _parse_vrt_members
+    from databricks.labs.gbx.ds.raster import _parse_vrt_members, _read_gbx_member_tags
 
     try:
         members = _parse_vrt_members(vrt_path)
@@ -757,20 +755,15 @@ def _mosaic_grid_system(vrt_path):
         return None
     if not members:
         return None
-    try:
-        with rasterio.open(members[0]) as ds:
-            return ds.tags().get("GBX_GRIDSYSTEM")
-    except Exception:
-        return None
+    return _read_gbx_member_tags(members[0]).get("gridSystem")
 
 
 def _overlay_h3_cells(ax, vrt_path, crs):
     """Draw each member's h3 cell boundary (from GBX_CELLID) as an outline."""
     import h3
-    import rasterio
     from matplotlib.patches import Polygon as MplPolygon
 
-    from databricks.labs.gbx.ds.raster import _parse_vrt_members
+    from databricks.labs.gbx.ds.raster import _parse_vrt_members, _read_gbx_member_tags
 
     reproj = None
     if crs is not None and crs.to_epsg() != 4326:
@@ -779,11 +772,7 @@ def _overlay_h3_cells(ax, vrt_path, crs):
         reproj = get_transformer("EPSG:4326", crs)
 
     for member in _parse_vrt_members(vrt_path):
-        try:
-            with rasterio.open(member) as ds:
-                cellid = ds.tags().get("GBX_CELLID")
-        except Exception:
-            cellid = None
+        cellid = _read_gbx_member_tags(member).get("cellid")
         if not cellid:
             continue
         boundary = h3.cell_to_boundary(cellid)  # [(lat, lon), ...]
@@ -861,6 +850,7 @@ def plot_mosaic(
 
     Returns None (matches ``plot_raster``/``plot_file``).
     """
+    _validate_emphasis(emphasis)
     import matplotlib.pyplot as plt
     import rasterio
 
@@ -878,9 +868,16 @@ def plot_mosaic(
                 src_crs = resolve_crs(bbox_crs)
                 if src_crs != dst:
                     tr = get_transformer(src_crs, dst)
-                    (minx, maxx), (miny, maxy) = tr.transform(
-                        [minx, maxx], [miny, maxy]
+                    left, bottom, right, top = tr.transform_bounds(
+                        minx, miny, maxx, maxy
                     )
+                    if all(np.isfinite(v) for v in (left, bottom, right, top)):
+                        minx, miny, maxx, maxy = left, bottom, right, top
+                    else:
+                        # Pathological global box: fall back to 2-corner transform
+                        (minx, maxx), (miny, maxy) = tr.transform(
+                            [minx, maxx], [miny, maxy]
+                        )
             win = from_bounds(minx, miny, maxx, maxy, transform=src.transform)
             full = Window(col_off=0, row_off=0, width=src.width, height=src.height)
             try:
@@ -895,7 +892,7 @@ def plot_mosaic(
             src, max_pixels, window=window, resampling=resampling
         )
         nodata = src.nodata
-        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        _, ax = plt.subplots(figsize=(fig_w, fig_h))
         _render(
             data,
             transform,
@@ -911,7 +908,10 @@ def plot_mosaic(
             stretch=stretch,
             fill=fill,
         )
-        grid_system = _mosaic_grid_system(vrt_path)
+        if show_cells or debug_mode >= 2:
+            grid_system = _mosaic_grid_system(vrt_path)
+        else:
+            grid_system = None
         if show_cells:
             if grid_system != "h3":
                 raise ValueError(

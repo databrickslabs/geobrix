@@ -235,3 +235,36 @@ def test_plot_mosaic_show_cells_non_h3_raises(tmp_path):
     vrt = _build_native_mosaic(tmp_path)  # no grid tags
     with pytest.raises(ValueError):
         plot_mosaic(vrt, show_cells=True, debug_mode=0)
+
+
+def test_plot_mosaic_bbox_crs_finite_guard_fallback(tmp_path):
+    """When transform_bounds returns inf the 2-corner fallback still renders."""
+    from unittest.mock import patch
+
+    from pyproj import Transformer
+
+    plt.close("all")
+    vrt = _build_native_mosaic(tmp_path)
+    from databricks.labs.gbx.core.crs import get_transformer
+
+    tr = get_transformer("EPSG:4326", "EPSG:3857")
+    x0, y0 = tr.transform(10.0, 34.0)
+    x1, y1 = tr.transform(42.0, 50.0)
+    inf = float("inf")
+    with patch.object(
+        Transformer, "transform_bounds", return_value=(inf, inf, inf, inf)
+    ):
+        plot_mosaic(
+            vrt,
+            bbox=(x0, y0, x1, y1),
+            bbox_crs="EPSG:3857",
+            max_pixels=256,
+            debug_mode=0,
+        )
+    assert len(plt.get_fignums()) == 1
+
+
+def test_plot_mosaic_bad_emphasis_raises():
+    """plot_mosaic raises ValueError immediately for an invalid emphasis."""
+    with pytest.raises(ValueError, match="emphasis"):
+        plot_mosaic("no-such.vrt", emphasis="vivid")

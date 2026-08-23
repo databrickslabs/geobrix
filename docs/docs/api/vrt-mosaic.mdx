@@ -63,7 +63,8 @@ tile names, and a re-run produces the same names for the same sources
 | Option | Default | Description |
 |---|---|---|
 | `vrtMosaic` | — | Set `"true"` to activate VRT-mosaic mode. (Supplying `gridSystem` also activates it; one of the two must be present.) |
-| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling) is the default and the only supported value today — you rarely need to set it. Grid-aligned systems (quadbin, BNG, H3) are planned for a future release. |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default) or `"quadbin"` (cell-aligned quadbin grid, reprojected to EPSG:3857). BNG and H3 are planned for a future release. |
+| `gridResolution` | — | Quadbin resolution in the range `0`–`20`. Required when `gridSystem="quadbin"`; invalid with `gridSystem="none"`. |
 | `tileSize` | `"1024"` | Tile edge length in pixels. Tiles are square. The last row and column are clipped to the source boundary. |
 | `overlapPercent` | `"0"` | Tile-edge halo as a percentage of `tileSize`. A value of `5` expands each tile's read window by `ceil(tileSize * 5 / 100)` pixels on every side, clamped to the source bounds. Default 0 — non-overlapping grid. |
 | `mergeStrategy` | `"none"` | How overlapping tiles are blended: `none` (last-write wins), `min`, `max`, `avg`, `first`, or `last`. Relevant only when tiles from different sources overlap spatially. |
@@ -85,6 +86,37 @@ Tile-encoding options (`cogBlockSize`, `cogOverviewResampling`, `compress`,
 `compressLevel`, `predictor`, `cogBigTiff`, `cogSkipIfExists`) are passed
 through to each mini-COG. See the [COG Writer](../writers/cog#options) for the
 full encoding option reference.
+
+---
+
+### Quadbin (map-render) mosaic
+
+When `gridSystem="quadbin"`, the writer reprojects each source to EPSG:3857 and
+writes one mini-COG per overlapping quadbin cell at the requested resolution.
+Tiles are aligned to the quadbin grid, making the output directly compatible
+with XYZ/quadkey map rendering pipelines and spatial join workflows that operate
+on quadbin cell identifiers.
+
+<CodeFromTest code={vrtExamples} language="python" functionName="VRT_QUADBIN"
+  source="docs/tests/python/readers/vrt_mosaic_examples.py"
+  testFile="docs/tests/python/readers/test_vrt_mosaic_examples.py" />
+
+Cell tiles are named `cell_<discriminator>_<cellid>.tif` and the VRT index is
+written as `mosaic.vrt` alongside them. The `<discriminator>` is the same stable
+source-namespaced token used in native mode, so two sources in the same write
+never collide.
+
+When `raster_gbx` expands the VRT, each row's `tile.metadata` carries:
+
+- `tile.metadata["cellid"]` — the quadbin cell id (string)
+- `tile.metadata["gridSystem"]` — `"quadbin"`
+
+These fields are absent on native (`gridSystem="none"`) tiles.
+
+:::note
+`tileSize` and `overlapPercent` are not valid with `gridSystem="quadbin"`.
+Set only `gridSystem` and `gridResolution`.
+:::
 
 ---
 
@@ -233,12 +265,12 @@ model and guidance on routing large files.
 
 ## Upcoming
 
-Grid-aligned mosaics — where tiles are aligned to a discrete global grid
-(quadbin, BNG, or H3 cells) and each tile carries a cell identifier for spatial
-joins and data unification — are planned. In-notebook windowed rendering of a
-VRT mosaic is also on the roadmap. Options for these modes (`gridSystem`,
-`gridMinResolution`, `gridMaxResolution`, `gridStepResolution`) are accepted by
-the parser now but raise a clear error until the support lands.
+BNG and H3 grid-aligned mosaics are planned for a future release — tiles aligned
+to those grid cells and tagged with a cell identifier for spatial joins and data
+unification. In-notebook windowed rendering of a VRT mosaic is also on the
+roadmap. Pyramid options (`gridMinResolution`, `gridMaxResolution`,
+`gridStepResolution`) are accepted by the parser but raise a clear error until
+their grid-system support lands.
 
 ---
 

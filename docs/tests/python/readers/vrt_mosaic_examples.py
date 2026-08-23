@@ -52,6 +52,35 @@ result = df.select(
     rst_avg(col("tile")).alias("avg"),
 )"""
 
+VRT_QUADBIN = r"""from databricks.labs.gbx.ds.register import register
+from pyspark.sql.functions import col
+
+register(spark)
+
+# Write a quadbin mosaic: each source is reprojected to EPSG:3857 and split
+# into one mini-COG per overlapping quadbin cell at the chosen resolution.
+sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw/")
+(
+    sources
+    .write.format("cog_gbx")
+    .option("gridSystem", "quadbin")   # cell-aligned to the quadbin grid
+    .option("gridResolution", "7")     # quadbin resolution 0–20
+    .mode("overwrite")
+    .save("/Volumes/catalog/schema/volume/mosaic_qb/")
+)
+
+# Read back: one virtual tile per quadbin cell
+df = spark.read.format("raster_gbx").load(
+    "/Volumes/catalog/schema/volume/mosaic_qb/mosaic.vrt"
+)
+
+# tile.metadata carries the quadbin cell id and grid system tag
+result = df.select(
+    col("tile.path").alias("member"),
+    col("tile.metadata")["cellid"].alias("cellid"),
+    col("tile.metadata")["gridSystem"].alias("gridSystem"),
+)"""
+
 VRT_MINT = r"""from databricks.labs.gbx.ds._mosaic import mint_vrt
 
 # Build a transient VRT over an explicit tile list
@@ -163,6 +192,66 @@ def vrt_read_expand(spark, src_path=None):
             assert row["member"] is not None, "member path must be set on a virtual tile"
             assert row["avg"] is not None, f"rst_avg returned null for {row['member']}"
     return df
+
+
+def vrt_quadbin_mosaic(spark, src_path=None):
+    """cog_gbx quadbin mode writes cell-aligned mini-COGs in EPSG:3857 tagged with cell id."""
+    import rasterio
+    from pyspark.sql.functions import col
+
+    _register(spark)
+    src = src_path or SAMPLE_RASTER_SINGLE
+
+    with tempfile.TemporaryDirectory() as out_dir:
+        # quadbin resolution 7 produces a small number of cells over the NYC sample.
+        (
+            spark.read.format("file_gbx")
+            .load(src)
+            .write.format("cog_gbx")
+            .option("gridSystem", "quadbin")
+            .option("gridResolution", "7")
+            .mode("overwrite")
+            .save(out_dir)
+        )
+
+        mosaic_vrt = os.path.join(out_dir, "mosaic.vrt")
+        assert os.path.exists(mosaic_vrt), "quadbin mosaic mode must write mosaic.vrt"
+
+        cell_tiles = sorted(
+            os.path.join(out_dir, f)
+            for f in os.listdir(out_dir)
+            if f.startswith("cell_") and f.lower().endswith(".tif")
+        )
+        assert len(cell_tiles) >= 1, (
+            f"quadbin mosaic must produce at least one cell mini-COG, got {len(cell_tiles)}"
+        )
+
+        # Each cell is reprojected to EPSG:3857.
+        with rasterio.open(cell_tiles[0]) as ds:
+            assert ds.crs.to_epsg() == 3857, (
+                f"quadbin cell must be in EPSG:3857, got {ds.crs}"
+            )
+
+        # raster_gbx expands the VRT into one virtual tile row per quadbin cell.
+        df = spark.read.format("raster_gbx").load(mosaic_vrt)
+        assert df.count() == len(cell_tiles), (df.count(), len(cell_tiles))
+
+        # tile.metadata carries cellid (quadbin cell id as string) and gridSystem.
+        rows = df.select(
+            col("tile.path").alias("path"),
+            col("tile.metadata")["cellid"].alias("cellid"),
+            col("tile.metadata")["gridSystem"].alias("grid_system"),
+        ).collect()
+
+        for row in rows:
+            assert row["cellid"] is not None, (
+                "cellid must be set in tile.metadata for quadbin cells"
+            )
+            assert row["grid_system"] == "quadbin", (
+                f"gridSystem must be 'quadbin' in tile.metadata, got {row['grid_system']!r}"
+            )
+
+    return True
 
 
 def vrt_mint_windowed(spark, src_path=None):

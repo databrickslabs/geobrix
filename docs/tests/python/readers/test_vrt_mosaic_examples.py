@@ -19,6 +19,11 @@ def test_vrt_read_expand(spark):
     ex.vrt_read_expand(spark)
 
 
+def test_vrt_quadbin_mosaic(spark):
+    """cog_gbx quadbin mode writes cell mini-COGs in EPSG:3857 with cellid metadata."""
+    ex.vrt_quadbin_mosaic(spark)
+
+
 def test_vrt_mint_windowed(spark):
     """mint_vrt builds a transient VRT for a windowed rasterio read across members."""
     ex.vrt_mint_windowed(spark)

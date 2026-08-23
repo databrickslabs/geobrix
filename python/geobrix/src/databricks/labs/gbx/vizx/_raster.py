@@ -77,8 +77,12 @@ def _read_windowed(src, max_pixels, window=None, resampling="bilinear"):
     if scale > 1:
         out_h = max(1, int(win_h // scale))
         out_w = max(1, int(win_w // scale))
-        data = src.read(out_shape=(src.count, out_h, out_w), window=window,
-                        resampling=resamp, masked=True)
+        data = src.read(
+            out_shape=(src.count, out_h, out_w),
+            window=window,
+            resampling=resamp,
+            masked=True,
+        )
         transform = base_transform * base_transform.scale(win_w / out_w, win_h / out_h)
     else:
         data = src.read(window=window, masked=True)
@@ -741,9 +745,70 @@ def plot_file(
         )
 
 
+def _mosaic_grid_system(vrt_path):
+    """Read GBX_GRIDSYSTEM from the first VRT member ('h3'/'quadbin'/'bng'), or None."""
+    import rasterio
+
+    from databricks.labs.gbx.ds.raster import _parse_vrt_members
+
+    try:
+        members = _parse_vrt_members(vrt_path)
+    except Exception:
+        return None
+    if not members:
+        return None
+    try:
+        with rasterio.open(members[0]) as ds:
+            return ds.tags().get("GBX_GRIDSYSTEM")
+    except Exception:
+        return None
+
+
+def _overlay_h3_cells(ax, vrt_path, crs):
+    """Draw each member's h3 cell boundary (from GBX_CELLID) as an outline."""
+    import h3
+    import rasterio
+    from matplotlib.patches import Polygon as MplPolygon
+
+    from databricks.labs.gbx.ds.raster import _parse_vrt_members
+
+    reproj = None
+    if crs is not None and crs.to_epsg() != 4326:
+        from databricks.labs.gbx.core.crs import get_transformer
+
+        reproj = get_transformer("EPSG:4326", crs)
+
+    for member in _parse_vrt_members(vrt_path):
+        try:
+            with rasterio.open(member) as ds:
+                cellid = ds.tags().get("GBX_CELLID")
+        except Exception:
+            cellid = None
+        if not cellid:
+            continue
+        boundary = h3.cell_to_boundary(cellid)  # [(lat, lon), ...]
+        lons = [pt[1] for pt in boundary]
+        lats = [pt[0] for pt in boundary]
+        # skip antimeridian-wrapping cells rather than draw a spurious polygon
+        if max(lons) - min(lons) > 180.0:
+            continue
+        if reproj is not None:
+            lons, lats = reproj.transform(lons, lats)
+        ax.add_patch(
+            MplPolygon(
+                list(zip(lons, lats)),
+                closed=True,
+                fill=False,
+                edgecolor="white",
+                linewidth=0.6,
+            )
+        )
+
+
 def _resolve_vrt_path(vrt):
     """Return a `.vrt` path from a direct path or a directory containing one."""
     import glob
+
     p = str(vrt)
     if os.path.isdir(p):
         hits = sorted(glob.glob(os.path.join(p, "*.vrt")))
@@ -751,7 +816,8 @@ def _resolve_vrt_path(vrt):
             raise ValueError(f"plot_mosaic: no .vrt found in directory {p}")
         if len(hits) > 1:
             raise ValueError(
-                f"plot_mosaic: {len(hits)} .vrt files in {p}; pass one explicitly")
+                f"plot_mosaic: {len(hits)} .vrt files in {p}; pass one explicitly"
+            )
         return hits[0]
     return p
 
@@ -803,15 +869,18 @@ def plot_mosaic(
         window = None
         if bbox is not None:
             from rasterio.windows import Window, from_bounds
+
             minx, miny, maxx, maxy = bbox
             if bbox_crs is not None:
                 from databricks.labs.gbx.core.crs import get_transformer, resolve_crs
+
                 dst = src.crs
                 src_crs = resolve_crs(bbox_crs)
                 if src_crs != dst:
                     tr = get_transformer(src_crs, dst)
                     (minx, maxx), (miny, maxy) = tr.transform(
-                        [minx, maxx], [miny, maxy])
+                        [minx, maxx], [miny, maxy]
+                    )
             win = from_bounds(minx, miny, maxx, maxy, transform=src.transform)
             full = Window(col_off=0, row_off=0, width=src.width, height=src.height)
             try:
@@ -820,9 +889,11 @@ def plot_mosaic(
                 window = None
             if window is None or window.width < 1 or window.height < 1:
                 raise ValueError(
-                    f"plot_mosaic: bbox {bbox} does not intersect the mosaic")
-        data, transform, scale = _read_windowed(src, max_pixels, window=window,
-                                                 resampling=resampling)
+                    f"plot_mosaic: bbox {bbox} does not intersect the mosaic"
+                )
+        data, transform, scale = _read_windowed(
+            src, max_pixels, window=window, resampling=resampling
+        )
         nodata = src.nodata
         fig, ax = plt.subplots(figsize=(fig_w, fig_h))
         _render(
@@ -840,5 +911,20 @@ def plot_mosaic(
             stretch=stretch,
             fill=fill,
         )
-        # Task 3 adds gridSystem discovery + show_cells overlay here.
+        grid_system = _mosaic_grid_system(vrt_path)
+        if show_cells:
+            if grid_system != "h3":
+                raise ValueError(
+                    "show_cells is only supported for h3 mosaics; this mosaic "
+                    f"is gridSystem={grid_system}"
+                )
+            _overlay_h3_cells(ax, vrt_path, src.crs)
+        if debug_mode >= 2:
+            from databricks.labs.gbx.core.crs import crs_to_canonical
+
+            print(
+                f"[plot_mosaic] gridSystem={grid_system} "
+                f"crs={crs_to_canonical(src.crs)} out_shape={data.shape} "
+                f"scale={scale:.3f}"
+            )
     return None

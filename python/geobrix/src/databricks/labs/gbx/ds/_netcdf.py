@@ -7,8 +7,11 @@ unsupported), derives an affine+CRS for grids, and flattens point/swath data to
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Dict, Iterator, List, Optional, Tuple
+
+_logger = logging.getLogger(__name__)
 
 GRID = "grid"  # class 1/2 -> raster
 POINTS = "points"  # CF discrete sampling geometries -> vector
@@ -164,9 +167,24 @@ def array_2d(ds, variable: str) -> "object":
     import numpy as np
 
     da = _decoded_or_raw(ds, variable)
-    # Squeeze any leading dims (e.g. time): take the first index until 2-D.
+    # Squeeze any leading dims (e.g. time / level): take the first index until 2-D.
+    # A leading dim of size > 1 means only its FIRST slice is read and the rest are
+    # silently dropped — warn so the data loss is visible. Per-slice fan-out (one
+    # tile per time/level, or a multi-band stack) is a planned feature.
     while da.ndim > 2:
-        da = da.isel({da.dims[0]: 0})
+        drop_dim = da.dims[0]
+        drop_size = int(da.sizes[drop_dim])
+        if drop_size > 1:
+            _logger.warning(
+                "netcdf_gbx: variable %r has leading dimension %r of size %d; "
+                "reading only index 0 and dropping the other %d slice(s). "
+                "Per-slice fan-out is not yet supported.",
+                variable,
+                drop_dim,
+                drop_size,
+                drop_size - 1,
+            )
+        da = da.isel({drop_dim: 0})
     lat, _ = _find_lat_lon(ds)
     latdim = lat.dims[0]
     # Ensure north-up: descending latitude along the lat dimension.

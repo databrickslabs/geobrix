@@ -1,5 +1,7 @@
 """Unit tests for CF NetCDF helpers (no Spark)."""
 
+import logging
+
 import numpy as np
 import pytest
 from netCDF4 import Dataset
@@ -88,6 +90,51 @@ def test_array_2d_is_north_up(tmp_path):
     with _netcdf.open_dataset(p, None) as ds:
         arr = _netcdf.array_2d(ds, "ch4")
     np.testing.assert_allclose(arr, np.arange(12, dtype="float32").reshape(3, 4))
+
+
+def _write_grid_with_time(path, ntime=3):
+    """Regular grid with a leading time dim of size ntime; slice t is all-t."""
+    with Dataset(path, "w") as ds:
+        ds.createDimension("time", ntime)
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        v = ds.createVariable("ch4", "f4", ("time", "lat", "lon"), fill_value=-9999.0)
+        v[:] = np.stack([np.full((3, 4), t, dtype="float32") for t in range(ntime)])
+
+
+def test_array_2d_warns_and_reads_first_slice_on_multi_time(tmp_path, caplog):
+    """A leading time dim > 1 → array_2d reads slice 0 (unchanged) AND warns."""
+    p = str(tmp_path / "time.nc")
+    _write_grid_with_time(p, ntime=3)
+    with _netcdf.open_dataset(p, None) as ds:
+        with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.ds._netcdf"):
+            arr = _netcdf.array_2d(ds, "ch4")
+    # Behavior unchanged: only the first time slice (all zeros) is read.
+    np.testing.assert_allclose(arr, np.zeros((3, 4), dtype="float32"))
+    # The silent drop is now surfaced: a warning names the dim and its size.
+    msgs = [r.getMessage() for r in caplog.records]
+    assert any(
+        "time" in m and "size 3" in m for m in msgs
+    ), f"expected a dropped-dimension warning naming time/size 3; got {msgs}"
+
+
+def test_array_2d_no_warn_on_singleton_leading_dim(tmp_path, caplog):
+    """A size-1 leading dim (e.g. S5P time=1) is squeezed silently — no warning."""
+    p = str(tmp_path / "time1.nc")
+    _write_grid_with_time(p, ntime=1)
+    with _netcdf.open_dataset(p, None) as ds:
+        with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.ds._netcdf"):
+            arr = _netcdf.array_2d(ds, "ch4")
+    np.testing.assert_allclose(arr, np.zeros((3, 4), dtype="float32"))
+    assert not [
+        r for r in caplog.records if "leading dimension" in r.getMessage()
+    ], "a size-1 leading dim should not warn"
 
 
 def test_point_arrays_flatten(tmp_path):

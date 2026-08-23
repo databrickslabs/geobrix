@@ -257,3 +257,75 @@ def test_unrecognised_grid_system_raises():
     """gridSystem with an unrecognised value → ValueError."""
     with pytest.raises(ValueError, match="gridSystem"):
         _parse(gridSystem="hexbin")
+
+
+# ── quadbin acceptance (Phase B) ─────────────────────────────────────────────
+
+
+def test_quadbin_requires_grid_resolution():
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    with pytest.raises(ValueError, match="gridResolution"):
+        parse_mosaic_options({"vrtMosaic": "true", "gridSystem": "quadbin"})
+
+
+def test_quadbin_accepts_grid_resolution():
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    o = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "quadbin", "gridResolution": "12"}
+    )
+    assert o.grid_system == "quadbin" and o.grid_resolution == 12
+
+
+def test_quadbin_rejects_native_only_options():
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    for bad in ({"tileSize": "512"}, {"overlapPercent": "5"}):
+        with pytest.raises(ValueError, match="only valid with gridSystem='none'"):
+            parse_mosaic_options(
+                {
+                    "vrtMosaic": "true",
+                    "gridSystem": "quadbin",
+                    "gridResolution": "12",
+                    **bad,
+                }
+            )
+
+
+def test_quadbin_downsamplefactor_errors():
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    with pytest.raises(ValueError, match="downsampleFactor.*quadbin"):
+        parse_mosaic_options(
+            {
+                "vrtMosaic": "true",
+                "gridSystem": "quadbin",
+                "gridResolution": "12",
+                "downsampleFactor": "2",
+            }
+        )
+
+
+def test_quadbin_pyramid_options_deferred():
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    with pytest.raises(ValueError, match="resolution pyramid not yet"):
+        parse_mosaic_options(
+            {
+                "vrtMosaic": "true",
+                "gridSystem": "quadbin",
+                "gridResolution": "12",
+                "gridMinResolution": "5",
+            }
+        )
+
+
+def test_bng_h3_still_phase_c():
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    for gs in ("bng", "h3"):
+        with pytest.raises(ValueError, match="Phase C|not yet"):
+            parse_mosaic_options(
+                {"vrtMosaic": "true", "gridSystem": gs, "gridResolution": "5"}
+            )

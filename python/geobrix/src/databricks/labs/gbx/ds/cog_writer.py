@@ -435,6 +435,7 @@ class MosaicOptions:
     prune_empty: bool = True
     write_vrt: bool = True
     vrt_paths: str = "relative"
+    grid_resolution: Optional[int] = None
     grid_min_resolution: Optional[int] = None
     grid_max_resolution: Optional[int] = None
     grid_step_resolution: Optional[int] = None
@@ -448,6 +449,55 @@ def _parse_bool(value, default: bool) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).lower() not in ("false", "0", "no", "")
+
+
+def _parse_grid_resolution(grid_system: str, opts: Dict[str, object]) -> Optional[int]:
+    """Parse and validate ``gridResolution`` from *opts*.
+
+    - Required for ``gridSystem='quadbin'``; raises if absent.
+    - Must be absent for ``gridSystem='none'``; raises if present.
+    """
+    grid_res_raw = opts.get("gridResolution")
+    if grid_system == "quadbin":
+        if grid_res_raw is None:
+            raise ValueError(
+                "gridResolution is required when gridSystem='quadbin'; "
+                "supply an integer resolution level."
+            )
+        return int(grid_res_raw)
+    if grid_res_raw is not None:
+        raise ValueError(
+            "gridResolution is only valid with a DGGS gridSystem "
+            f"(quadbin, bng, h3); got gridSystem={grid_system!r}"
+        )
+    return None
+
+
+def _check_quadbin_incompatible_opts(
+    grid_system: str,
+    opts: Dict[str, object],
+    grid_min: Optional[int],
+    grid_max: Optional[int],
+    grid_step: Optional[int],
+) -> None:
+    """Raise ``ValueError`` for options that are not yet supported with quadbin."""
+    if grid_system != "quadbin":
+        return
+    if opts.get("downsampleFactor") is not None:
+        raise ValueError(
+            "downsampleFactor is not supported with gridSystem='quadbin'; "
+            "quadbin mosaic uses cell-based resolution, not pixel downsampling."
+        )
+    for _name, _val in (
+        ("gridMinResolution", grid_min),
+        ("gridMaxResolution", grid_max),
+        ("gridStepResolution", grid_step),
+    ):
+        if _val is not None:
+            raise ValueError(
+                f"{_name}: DGGS resolution pyramid not yet implemented "
+                f"(deferred to a follow-on release)."
+            )
 
 
 def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
@@ -494,15 +544,17 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
             f"must be one of {sorted(_VALID_GRID_SYSTEMS)}"
         )
 
-    # Phase A restriction: only native tiling (gridSystem='none') is supported.
-    # DGGS systems are reserved for a future release.
-    if grid_system in _DGGS_SYSTEMS:
+    # quadbin is supported; bng/h3 are deferred to a later release.
+    if grid_system in _DGGS_SYSTEMS and grid_system != "quadbin":
         raise ValueError(
-            f"gridSystem={grid_system!r} is not supported in this release; "
-            f"only gridSystem='none' (native tiling) is available."
+            f"gridSystem={grid_system!r} is not yet supported; "
+            f"available values: 'none', 'quadbin'."
         )
 
-    is_dggs = grid_system in _DGGS_SYSTEMS  # always False in Phase A; kept for clarity
+    is_dggs = grid_system in _DGGS_SYSTEMS
+
+    # ── gridResolution (required for quadbin; invalid for 'none') ────────────
+    grid_resolution: Optional[int] = _parse_grid_resolution(grid_system, opts)
 
     # ── driverMode contradiction ─────────────────────────────────────────────
     # driverMode produces a single driver-side COG; mosaic mode produces many
@@ -579,6 +631,9 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
                 f"(quadbin, bng, h3); got gridSystem={grid_system!r}"
             )
 
+    # Resolution pyramid + downsampleFactor are deferred for quadbin.
+    _check_quadbin_incompatible_opts(grid_system, opts, grid_min, grid_max, grid_step)
+
     return MosaicOptions(
         grid_system=grid_system,
         tile_size=tile_size,
@@ -587,6 +642,7 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
         prune_empty=prune_empty,
         write_vrt=write_vrt,
         vrt_paths=vrt_paths,
+        grid_resolution=grid_resolution,
         grid_min_resolution=grid_min,
         grid_max_resolution=grid_max,
         grid_step_resolution=grid_step,

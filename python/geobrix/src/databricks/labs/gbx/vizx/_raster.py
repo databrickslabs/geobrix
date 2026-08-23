@@ -63,7 +63,6 @@ def _read_windowed(src, max_pixels, window=None, resampling="bilinear"):
     internal overview when present, else block-streams a decimated read of the
     base level, so a single-zoom-level tile still renders memory-safely.
     """
-    import rasterio
     from rasterio.enums import Resampling
 
     resamp = getattr(Resampling, resampling)
@@ -801,7 +800,27 @@ def plot_mosaic(
 
     vrt_path = _resolve_vrt_path(vrt)
     with rasterio.open(vrt_path) as src:
-        window = None  # Task 2 computes this from bbox/bbox_crs
+        window = None
+        if bbox is not None:
+            from rasterio.windows import Window, from_bounds
+            minx, miny, maxx, maxy = bbox
+            if bbox_crs is not None:
+                from databricks.labs.gbx.core.crs import get_transformer, resolve_crs
+                dst = src.crs
+                src_crs = resolve_crs(bbox_crs)
+                if src_crs != dst:
+                    tr = get_transformer(src_crs, dst)
+                    (minx, maxx), (miny, maxy) = tr.transform(
+                        [minx, maxx], [miny, maxy])
+            win = from_bounds(minx, miny, maxx, maxy, transform=src.transform)
+            full = Window(col_off=0, row_off=0, width=src.width, height=src.height)
+            try:
+                window = win.intersection(full)
+            except rasterio.errors.WindowError:
+                window = None
+            if window is None or window.width < 1 or window.height < 1:
+                raise ValueError(
+                    f"plot_mosaic: bbox {bbox} does not intersect the mosaic")
         data, transform, scale = _read_windowed(src, max_pixels, window=window,
                                                  resampling=resampling)
         nodata = src.nodata

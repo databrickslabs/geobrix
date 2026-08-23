@@ -107,3 +107,32 @@ def test_plot_mosaic_accepts_directory(tmp_path):
     _build_native_mosaic(tmp_path)
     plot_mosaic(str(tmp_path), debug_mode=0)  # dir containing exactly one .vrt
     assert len(plt.get_fignums()) == 1
+
+
+def test_plot_mosaic_bbox_narrows_extent(tmp_path):
+    plt.close("all")
+    vrt = _build_native_mosaic(tmp_path)  # full extent x: 10..74, y: 18..50
+    plot_mosaic(vrt, bbox=(10.0, 34.0, 42.0, 50.0), max_pixels=256, debug_mode=0)
+    ax = plt.gcf().axes[0]
+    x0, x1 = ax.get_xlim()
+    assert x1 - x0 < 40.0  # narrower than the full 64-degree width
+
+
+def test_plot_mosaic_bbox_non_intersecting_raises(tmp_path):
+    plt.close("all")
+    vrt = _build_native_mosaic(tmp_path)
+    with pytest.raises(ValueError):
+        plot_mosaic(vrt, bbox=(200.0, 80.0, 210.0, 85.0), debug_mode=0)
+
+
+def test_plot_mosaic_bbox_crs_reprojects(tmp_path):
+    """A bbox given in EPSG:3857 must reproject to the 4326 mosaic and render."""
+    plt.close("all")
+    vrt = _build_native_mosaic(tmp_path)
+    from databricks.labs.gbx.core.crs import get_transformer
+    tr = get_transformer("EPSG:4326", "EPSG:3857")
+    x0, y0 = tr.transform(10.0, 34.0)
+    x1, y1 = tr.transform(42.0, 50.0)
+    plot_mosaic(vrt, bbox=(x0, y0, x1, y1), bbox_crs="EPSG:3857",
+                max_pixels=256, debug_mode=0)
+    assert len(plt.get_fignums()) == 1

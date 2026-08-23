@@ -1,17 +1,22 @@
-"""Task 2 (SDD — Phase A native mini-COG mosaic): _write_mosaic implementation tests.
+"""Mosaic-mode write tests: Phase A (native tiling) + Task 3 (quadbin tiling).
 
-Tests the mosaic-mode write path added to CogGbxWriter in Task 2.  Pure Python
-(no Spark, no JAR).
+Tests the mosaic-mode write path in CogGbxWriter.  Pure Python (no Spark, no JAR).
 
 Coverage:
-  1. Non-overlapping tile grid covers the full source extent.
-  2. Each tile's pixels are pixel-equal to the corresponding source region.
-  3. Each mini-COG is a valid COG (internally-tiled).
-  4. pruneEmpty=True drops all-nodata edge tiles.
-  5. overlapPercent>0 produces halo-expanded tile extents.
-  6. MosaicOptions pickle round-trip (dataclass survives serialization to worker).
-  7. Single-COG mode regression (mosaic_opts=None, existing path unchanged).
-  8. Multiple source rows produce correctly-named tiles per source.
+  Phase A (native pixel tiling):
+    1. Non-overlapping tile grid covers the full source extent.
+    2. Each tile's pixels are pixel-equal to the corresponding source region.
+    3. Each mini-COG is a valid COG (internally-tiled).
+    4. pruneEmpty=True drops all-nodata edge tiles.
+    5. overlapPercent>0 produces halo-expanded tile extents.
+    6. MosaicOptions pickle round-trip (dataclass survives serialization to worker).
+    7. Single-COG mode regression (mosaic_opts=None, existing path unchanged).
+    8. Multiple source rows produce correctly-named tiles per source.
+
+  Task 3 (quadbin per-cell reproject):
+    14. gridSystem=quadbin → N≥2 mini-COGs, each in EPSG:3857, each tagged
+        GBX_CELLID and GBX_GRIDSYSTEM=quadbin.
+    15. Cell pixel values match a reference rasterio.warp.reproject (allclose).
 
 Run (in Docker):
     bash scripts/commands/gbx-test-python.sh \
@@ -26,9 +31,12 @@ import pickle
 import re
 
 import numpy as np
+import pytest
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
+from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.transform import from_origin
+from rasterio.warp import Resampling, reproject
 
 from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.cog_writer import (
@@ -710,3 +718,149 @@ def test_overwrite_removes_stale_vrt(tmp_path):
         mosaic_opts=_default_mosaic_opts(tileSize=100, writeVrt="false"),
     )
     assert not os.path.exists(vrt), "overwrite cleanup must remove the stale mosaic.vrt"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures shared by quadbin tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def small_source_raster(tmp_path):
+    """200×200 raster, 100 m pixels, EPSG:32630 (UTM 30N, London area).
+
+    Covers 20 km × 20 km centred near the EPSG:32630 central meridian.
+    At quadbin resolution 12, cells are ~6–10 km wide at this latitude, so
+    the raster spans several cells and produces at least 2 non-empty mini-COGs.
+    """
+    path = str(tmp_path / "src_qb" / "source_qb.tif")
+    w, h = 200, 200
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32630",
+        transform=from_origin(500000.0, 5700000.0, 100.0, 100.0),
+    )
+    data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 14. Quadbin write: tagged, EPSG:3857 mini-COGs
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_write_produces_tagged_3857_minicogs(tmp_path, small_source_raster):
+    """gridSystem=quadbin → ≥2 mini-COGs, each in EPSG:3857, with GBX_CELLID and GBX_GRIDSYSTEM tags."""
+    import glob
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "quadbin", "gridResolution": "12"}
+    )
+    out_dir = str(tmp_path / "qb")
+    w = _make_writer(out_dir, mosaic_opts=opts)
+    msg = w.write(iter([{"path": small_source_raster}]))
+
+    tifs = [p for p in msg.paths if p.endswith(".tif")]
+    assert len(tifs) >= 2, f"expected ≥2 quadbin mini-COGs, got {len(tifs)}"
+
+    for t in tifs:
+        assert os.path.exists(t), f"mini-COG not on disk: {t}"
+        assert os.path.basename(t).startswith(
+            "cell_"
+        ), f"quadbin tiles must use cell_* naming: {t}"
+        with rasterio.open(t) as ds:
+            # CRS must be EPSG:3857
+            assert ds.crs.to_epsg() == 3857, (
+                f"{os.path.basename(t)}: expected EPSG:3857, got {ds.crs}"
+            )
+            tags = ds.tags()
+            # GBX_CELLID must be present and parseable as a positive int
+            assert "GBX_CELLID" in tags, (
+                f"{os.path.basename(t)}: missing GBX_CELLID tag; got {tags}"
+            )
+            cellid = int(tags["GBX_CELLID"])
+            assert cellid > 0, f"GBX_CELLID must be a positive int; got {cellid}"
+            # GBX_GRIDSYSTEM must be "quadbin"
+            assert tags.get("GBX_GRIDSYSTEM") == "quadbin", (
+                f"{os.path.basename(t)}: expected GBX_GRIDSYSTEM=quadbin; got {tags}"
+            )
+
+    # The tagged cellid from each tile's filename must match its GBX_CELLID tag.
+    _CELL_NAME_RE = re.compile(r"^cell_[0-9A-Za-z]+_(\d+)\.tif$")
+    for t in tifs:
+        m = _CELL_NAME_RE.match(os.path.basename(t))
+        assert m, f"unexpected cell tile name: {os.path.basename(t)}"
+        name_cellid = int(m.group(1))
+        with rasterio.open(t) as ds:
+            tag_cellid = int(ds.tags()["GBX_CELLID"])
+        assert name_cellid == tag_cellid, (
+            f"filename cellid {name_cellid} != GBX_CELLID tag {tag_cellid} in {t}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# 15. Quadbin correctness: pixel values match reference rasterio.warp.reproject
+# ---------------------------------------------------------------------------
+
+
+def test_quadbin_cell_reproject_correctness(tmp_path, small_source_raster):
+    """A single quadbin cell's pixels match a reference rasterio.warp.reproject.
+
+    The reference uses the same source, transform, and destination grid as the
+    implementation.  Because Resampling.average re-samples the source pixels,
+    values are NOT byte-identical to the source — hence allclose, not equal.
+    """
+    from rasterio.crs import CRS
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "quadbin", "gridResolution": "12"}
+    )
+    out_dir = str(tmp_path / "qb_corr")
+    w = _make_writer(out_dir, mosaic_opts=opts)
+    msg = w.write(iter([{"path": small_source_raster}]))
+
+    tifs = [p for p in msg.paths if p.endswith(".tif")]
+    assert tifs, "no quadbin tiles produced"
+
+    # Pick the first tile for the correctness check.
+    tile_path = tifs[0]
+    with rasterio.open(tile_path) as tile_ds:
+        actual_data = tile_ds.read()
+        dst_transform = tile_ds.transform
+        dst_crs = tile_ds.crs
+        dst_h, dst_w = tile_ds.height, tile_ds.width
+        count = tile_ds.count
+
+    # Build a reference reproject directly from the source (full-source input).
+    with rasterio.open(small_source_raster) as src:
+        ref_data = np.zeros((count, dst_h, dst_w), dtype=src.dtypes[0])
+        reproject(
+            source=rasterio.band(src, list(range(1, count + 1))),
+            destination=ref_data,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=dst_transform,
+            dst_crs=dst_crs,
+            resampling=Resampling.average,
+            src_nodata=src.nodata,
+            dst_nodata=src.nodata,
+        )
+
+    # Values must be close (resampled, not byte-equal to the source).
+    np.testing.assert_allclose(
+        actual_data.astype(float),
+        ref_data.astype(float),
+        rtol=1e-4,
+        atol=1.0,
+        err_msg=(
+            f"Quadbin cell pixel values diverge from reference reproject: "
+            f"{tile_path}"
+        ),
+    )

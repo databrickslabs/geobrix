@@ -321,12 +321,14 @@ def test_tile_schema_documentation(spark):
     assert "raster" in schema.dataType.simpleString()
     assert "metadata" in schema.dataType.simpleString()
 
-    # The tile is the v2 8-field struct (shared by both tiers).
+    # The tile is the v2 9-field struct (shared by both tiers): the 8 v2 fields
+    # plus path_mode, the FILE storage mode (null / 'external' / 'managed').
     fields = {fld.name: fld for fld in schema.dataType.fields}
     assert set(fields) == {
         "cellid",
         "raster",
         "path",
+        "path_mode",
         "window",
         "clip_polygon",
         "clip_crs",
@@ -342,6 +344,9 @@ def test_tile_schema_documentation(spark):
 
     # path: StringType (source path for a virtual tile)
     assert fields["path"].dataType.simpleString() == "string"
+
+    # path_mode: StringType — FILE storage mode (null / 'external' / 'managed')
+    assert fields["path_mode"].dataType.simpleString() == "string"
 
     # window: struct of four ints
     assert "col_off" in fields["window"].dataType.simpleString()

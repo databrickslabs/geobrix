@@ -1,0 +1,24 @@
+"""Executes the VRT-mosaic doc examples against real sample data (Docker)."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import vrt_mosaic_examples as ex  # noqa: E402
+
+
+def test_vrt_prepare(spark):
+    """cog_gbx vrtMosaic mode writes mini-COGs and a mosaic.vrt covering the source."""
+    ex.vrt_prepare(spark)
+
+
+def test_vrt_read_expand(spark):
+    """raster_gbx expands mosaic.vrt into one virtual tile row per member."""
+    ex.vrt_read_expand(spark)
+
+
+def test_vrt_mint_windowed(spark):
+    """mint_vrt builds a transient VRT for a windowed rasterio read across members."""
+    ex.vrt_mint_windowed(spark)

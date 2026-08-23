@@ -4,6 +4,9 @@ sidebar_label: VRT Mosaics
 title: VRT Mosaics
 ---
 
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import vrtExamples from '!!raw-loader!../../tests/python/readers/vrt_mosaic_examples.py';
+
 # VRT Mosaics
 
 A **VRT mosaic** is a directory of COGs, or bounded mini-COG tiles, plus a lightweight
@@ -35,22 +38,9 @@ materialised in RAM), writes one mini-COG per tile, and then builds `mosaic.vrt`
 in the output directory. The tile grid defaults to `gridSystem="none"` (native
 pixel tiling), so you normally set only `vrtMosaic` and, optionally, `tileSize`.
 
-```python
-from databricks.labs.gbx.ds.register import register
-register(spark)
-
-# file_gbx gives one path-reference row per source file
-sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw/")
-
-(
-    sources
-    .write.format("cog_gbx")
-    .option("vrtMosaic", "true")   # activate mosaic mode
-    .option("tileSize", "1024")    # tile edge in pixels (default 1024)
-    .mode("overwrite")
-    .save("/Volumes/catalog/schema/volume/mosaic/")
-)
-```
+<CodeFromTest code={vrtExamples} language="python" functionName="VRT_PREPARE"
+  source="docs/tests/python/readers/vrt_mosaic_examples.py"
+  testFile="docs/tests/python/readers/test_vrt_mosaic_examples.py" />
 
 After the write, the output directory contains:
 
@@ -105,26 +95,9 @@ writing an index file alongside the tiles. The VRT is placed in a temporary
 directory with absolute `SourceFilename` paths so rasterio can resolve each
 member regardless of working directory.
 
-```python
-from databricks.labs.gbx.ds._mosaic import mint_vrt
-
-# Build a transient VRT over an explicit tile list
-tile_paths = [
-    "/Volumes/catalog/schema/vol/mosaic/tile_abc_0_0.tif",
-    "/Volumes/catalog/schema/vol/mosaic/tile_abc_0_1.tif",
-    "/Volumes/catalog/schema/vol/mosaic/tile_abc_1_0.tif",
-]
-vrt_path = mint_vrt(tile_paths)
-
-# Open the VRT with rasterio for a windowed read across the mosaic
-import rasterio
-from rasterio.windows import Window
-
-viewport = Window(col_off=400, row_off=200, width=600, height=400)
-with rasterio.open(vrt_path) as vrt_ds:
-    data = vrt_ds.read(window=viewport)
-    # Only the tiles that intersect the viewport are read
-```
+<CodeFromTest code={vrtExamples} language="python" functionName="VRT_MINT"
+  source="docs/tests/python/readers/vrt_mosaic_examples.py"
+  testFile="docs/tests/python/readers/test_vrt_mosaic_examples.py" />
 
 Pass an explicit `out` path to write the VRT to a fixed location instead of a
 temp directory. Choose the location by **who needs to open the `.vrt` file, and
@@ -183,22 +156,9 @@ any Python process.
 Point `raster_gbx` (or `cog_gbx`) at `mosaic.vrt` and the reader parses the
 VRT XML, enumerates member paths, and emits **one virtual tile row per member**:
 
-```python
-from databricks.labs.gbx.ds.register import register
-from databricks.labs.gbx.pyrx.functions import rst_avg
-from pyspark.sql.functions import col
-
-register(spark)
-
-# Load the VRT: one whole-file virtual tile per member mini-COG
-df = spark.read.format("raster_gbx").load("/Volumes/catalog/schema/vol/mosaic/mosaic.vrt")
-
-# Apply rst_* per tile — exactly as you would for a directory of flat files
-result = df.select(
-    col("tile.path").alias("member"),
-    rst_avg(col("tile")).alias("avg"),
-)
-```
+<CodeFromTest code={vrtExamples} language="python" functionName="VRT_READ_EXPAND"
+  source="docs/tests/python/readers/vrt_mosaic_examples.py"
+  testFile="docs/tests/python/readers/test_vrt_mosaic_examples.py" />
 
 Each row is a whole-file virtual tile (`raster=NULL`, `path` set to the member
 file path, `window=NULL`). All downstream `rst_*` functions operate on the tile

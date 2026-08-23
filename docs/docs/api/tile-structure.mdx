@@ -144,10 +144,10 @@ Created by `rst_h3_tessellate`:
 <CodeFromTest code={tileStructureExamples} functionName="tessellated_tiles" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="tessellated_tiles_output" />
 
 **Characteristics:**
-- `cellid` contains H3 cell ID
-- Raster clipped to cell bounds
-- Enables spatial joins and grid-based processing
-- Metadata includes `RASTERX_CELL_ID` key
+- `cellid` contains the grid cell id (H3, quadbin, or BNG depending on the tessellate function used)
+- `tile.metadata["gridSystem"]` names the DGGS: `"h3"`, `"quadbin"`, or `"bng"`
+- Raster is clipped to the cell's bounds
+- Enables equi-joins with any DGGS-indexed table via `cellid` + `gridSystem` for unambiguous matching
 
 ---
 

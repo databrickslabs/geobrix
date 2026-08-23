@@ -305,7 +305,7 @@ def tessellated_tiles(spark):
     df.select(
         f.col("tile.cellid"),      # H3 cell ID (e.g., 604189641255419903)
         f.col("tile.raster"),      # binary data (clipped to cell)
-        f.col("tile.metadata")     # {driver: "GTiff", RASTERX_CELL_ID: "604...", ...}
+        f.col("tile.metadata")     # {driver: "GTiff", gridSystem: "h3", width: "...", ...}
     ).show()
     return df
 

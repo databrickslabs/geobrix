@@ -111,7 +111,7 @@ If you expect downstream processing by tools without ZSTD support, use `compress
 The following table shows popular codec combinations (none, LZW, DEFLATE, and ZSTD at levels 9–16+predictor) across realistic tile sizes and data types. The benchmark ran on macOS arm64 with GDAL 3.12 and rasterio 1.5. Sizes 256 MiB–1 GiB are extrapolated and pending Serverless validation.
 
 | Size | Codec | Dtype | Ratio | Write (ms) | Read (ms) | Peak RSS (MiB) |
-|---|---|---|---|---|---|
+|---|---|---|---|---|---|---|
 | 1 MiB | none | float32 | 0.99× | 8 | 0.5 | 14 |
 | 1 MiB | DEFLATE z6 + p3 | float32 | 1.17× | 25 | 5.0 | 14 |
 | 1 MiB | ZSTD L9 + p3 | float32 | 1.17× | 18 | 1.8 | 24 |

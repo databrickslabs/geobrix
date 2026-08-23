@@ -1,4 +1,4 @@
-"""Task 5 (SDD — Phase A native mini-COG mosaic): VRT expansion in the reader.
+"""Task 5 (SDD — Phase A/B native mini-COG mosaic): VRT expansion in the reader.
 
 Tests that raster_gbx (and cog_gbx) detect a .vrt path at load time, parse the
 VRT XML to enumerate member mini-COG paths, and emit one whole-file virtual tile
@@ -13,6 +13,11 @@ Coverage:
   4. A minted VRT (absolute SourceFilename paths, from mint_vrt) also expands correctly.
   5. cog_gbx reads the same .vrt → same row count (write→read round-trip).
   6. No osgeo import in raster.py (light-tier compliance).
+  7. Loading the mosaic DIRECTORY must not double-count the VRT + tiles.
+  8. _parse_vrt_members uses the hardened defusedxml parser.
+  9. Quadbin mosaic.vrt expansion surfaces cellid + gridSystem in tile.metadata.
+  10. Native (gridSystem="none") mosaic rows have NO cellid/gridSystem in metadata.
+  11. cog_gbx load of a quadbin mosaic.vrt also surfaces cellid in tile.metadata.
 
 Run (in Docker):
     bash scripts/commands/gbx-test-python.sh \\
@@ -373,3 +378,144 @@ def test_parse_vrt_members_uses_defusedxml(tmp_path):
         "_parse_vrt_members did not reject an entity-bearing VRT; the vulnerable "
         "stdlib xml.etree parser is active instead of defusedxml"
     )
+
+
+# ---------------------------------------------------------------------------
+# 9-11. Quadbin VRT expansion surfaces cellid + gridSystem in tile.metadata
+#       (Task 5 — Phase B quadbin mini-COG mosaic reader)
+# ---------------------------------------------------------------------------
+
+
+def _write_qb_src(path: str) -> None:
+    """200×200, 100 m pixels, EPSG:32630 (London area UTM 30N).
+
+    Spans ≥ 2 quadbin resolution-12 cells (cells are ~6–10 km wide here).
+    """
+    w, h = 200, 200
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32630",
+        transform=from_origin(500000.0, 5700000.0, 100.0, 100.0),
+    )
+    data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
+    data[data == 0] = 1
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+
+
+def _build_quadbin_mosaic_for_t5(base_dir: pathlib.Path):
+    """Build a quadbin mini-COG mosaic; return (vrt_path, member_paths).
+
+    Uses gridSystem='quadbin', gridResolution=12 so ≥2 cells are produced and
+    each written mini-COG carries GBX_CELLID + GBX_GRIDSYSTEM tags.
+    """
+    from pyspark.sql.types import StringType, StructField, StructType
+
+    src = str(base_dir / "src.tif")
+    _write_qb_src(src)
+
+    out_dir = str(base_dir.parent / (base_dir.name + "_out"))
+    os.makedirs(out_dir, exist_ok=True)
+
+    schema = StructType([StructField("path", StringType(), False)])
+    opts = parse_mosaic_options({"gridSystem": "quadbin", "gridResolution": "12"})
+    writer = CogGbxWriter(out_dir, schema, overwrite=True, cog_blocksize=256, mosaic_opts=opts)
+    msg = writer.write(iter([{"path": src}]))
+    writer.commit([msg])
+
+    vrt_path = os.path.join(out_dir, "mosaic.vrt")
+    assert os.path.exists(vrt_path), f"mosaic.vrt not created at {vrt_path}"
+    assert len(msg.paths) >= 2, f"expected ≥2 quadbin mini-COGs, got {len(msg.paths)}"
+    return vrt_path, msg.paths
+
+
+def test_vrt_quadbin_cellid_in_metadata(spark, tmp_path):
+    """Expanding a quadbin mosaic.vrt surfaces cellid and gridSystem in tile.metadata.
+
+    Each member was written with GBX_CELLID and GBX_GRIDSYSTEM='quadbin' COG tags
+    (Task 3).  The VRT expansion must read those tags and propagate them into the
+    virtual tile row's metadata dict so downstream ops can dispatch by cell.
+    """
+    base_dir = tmp_path / "t9_qb"
+    base_dir.mkdir()
+    vrt_path, members = _build_quadbin_mosaic_for_t5(base_dir)
+
+    spark.dataSource.register(RasterGbxDataSource)
+    rows = spark.read.format("raster_gbx").load(vrt_path).collect()
+
+    assert len(rows) == len(members), (
+        f"Expected {len(members)} rows (one per member), got {len(rows)}"
+    )
+    for row in rows:
+        meta = row["tile"]["metadata"]
+        assert "cellid" in meta, (
+            f"tile.metadata missing 'cellid'; got keys: {list(meta.keys())}"
+        )
+        assert "gridSystem" in meta, (
+            f"tile.metadata missing 'gridSystem'; got keys: {list(meta.keys())}"
+        )
+        assert meta["gridSystem"] == "quadbin", (
+            f"expected gridSystem='quadbin', got {meta['gridSystem']!r}"
+        )
+        cellid_val = int(meta["cellid"])
+        assert cellid_val > 0, (
+            f"cellid must be a positive int; got {meta['cellid']!r}"
+        )
+
+
+def test_vrt_native_no_cellid(spark, tmp_path):
+    """Native (gridSystem='none') mosaic.vrt rows have no cellid/gridSystem in metadata.
+
+    Native mini-COG members carry no GBX_CELLID tag, so the reader must emit
+    tile rows without those keys rather than propagating absent/null values.
+    """
+    base_dir = tmp_path / "t10_native"
+    base_dir.mkdir()
+    # _build_mosaic uses gridSystem="none" → no GBX_CELLID tag on members
+    vrt_path, _members = _build_mosaic(base_dir, n_cols=2, n_rows=1)
+
+    spark.dataSource.register(RasterGbxDataSource)
+    rows = spark.read.format("raster_gbx").load(vrt_path).collect()
+
+    for row in rows:
+        meta = row["tile"]["metadata"]
+        assert "cellid" not in meta, (
+            f"native tile must not have 'cellid' in metadata; got {meta}"
+        )
+        assert "gridSystem" not in meta, (
+            f"native tile must not have 'gridSystem' in metadata; got {meta}"
+        )
+
+
+def test_vrt_cog_gbx_quadbin_cellid(spark, tmp_path):
+    """cog_gbx.load(quadbin mosaic.vrt) inherits VRT-member cellid in tile.metadata.
+
+    cog_gbx extends RasterGbxReader, so the same VRT-expansion path runs and
+    the same GBX tag propagation applies.
+    """
+    base_dir = tmp_path / "t11_cog"
+    base_dir.mkdir()
+    vrt_path, members = _build_quadbin_mosaic_for_t5(base_dir)
+
+    spark.dataSource.register(CogGbxDataSource)
+    rows = spark.read.format("cog_gbx").load(vrt_path).collect()
+
+    assert len(rows) == len(members), (
+        f"cog_gbx: expected {len(members)} rows, got {len(rows)}"
+    )
+    for row in rows:
+        meta = row["tile"]["metadata"]
+        assert "cellid" in meta, (
+            f"cog_gbx tile.metadata missing 'cellid'; got keys: {list(meta.keys())}"
+        )
+        assert "gridSystem" in meta, (
+            f"cog_gbx tile.metadata missing 'gridSystem'; got keys: {list(meta.keys())}"
+        )
+        assert meta["gridSystem"] == "quadbin", (
+            f"cog_gbx expected gridSystem='quadbin', got {meta['gridSystem']!r}"
+        )

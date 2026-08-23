@@ -266,6 +266,12 @@ class _TilePartition(InputPartition):
         "budget_bytes",
         "size_mib",
         "tile_format",
+        # VRT member metadata tags (GBX_CELLID → "cellid", GBX_GRIDSYSTEM →
+        # "gridSystem") read from the member header during VRT expansion.  None
+        # for non-VRT partitions; empty dict for VRT members with no GBX tags
+        # (native tiles).  A non-empty dict is merged into tile.metadata in
+        # read() so downstream ops can dispatch by cell without re-opening.
+        "vrt_tags",
     )
 
     def __init__(
@@ -301,6 +307,7 @@ class _TilePartition(InputPartition):
         self.budget_bytes = budget_bytes
         self.size_mib = size_mib
         self.tile_format = tile_format
+        self.vrt_tags: Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -897,6 +904,37 @@ def _parse_vrt_members(vrt_path: str) -> list:
     return paths
 
 
+def _read_gbx_member_tags(member_path: str) -> dict:
+    """Read GBX metadata tags from a mini-COG member header.
+
+    Opens the file header cheaply (no pixel read) via rasterio and extracts
+    ``GBX_CELLID`` and ``GBX_GRIDSYSTEM`` when present, mapping them to the
+    canonical tile-metadata keys ``cellid`` and ``gridSystem``.
+
+    Returns an empty dict for untagged files (native tiles) and on any error
+    (graceful degradation so a stale/missing member does not abort planning).
+
+    Called once per VRT member at partitions() time on the driver.  The cost is
+    one rasterio.open + one GDAL metadata call per member (header read only,
+    no pixel I/O).
+
+    Connect-safe: pure rasterio, no Spark session, no ``_jvm``.
+    """
+    import rasterio
+
+    tags_out: dict = {}
+    try:
+        with rasterio.open(member_path) as ds:
+            raw = ds.tags()
+            if "GBX_CELLID" in raw:
+                tags_out["cellid"] = raw["GBX_CELLID"]
+            if "GBX_GRIDSYSTEM" in raw:
+                tags_out["gridSystem"] = raw["GBX_GRIDSYSTEM"]
+    except Exception:
+        pass  # unreadable or non-rasterio member → no tags (safe default)
+    return tags_out
+
+
 class RasterGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
         self.path = options.get("path")
@@ -1047,18 +1085,24 @@ class RasterGbxReader(DataSourceReader):
             member_paths = _parse_vrt_members(self.path)
             result: list = []
             for member_path in member_paths:
-                result.extend(
-                    _plan_partitions_for_file(
-                        file_path=member_path,
-                        budget_bytes=resolved_budget,
-                        clip_polygons=self.clip_polygons,
-                        clip_crs=self.clip_crs,
-                        windows=self.windows,
-                        tile_size=self.tile_size,
-                        overlap_percent=self.overlap_percent,
-                        emit_virtual=self.emit_virtual,
-                    )
+                # Read GBX_CELLID / GBX_GRIDSYSTEM from the member header.
+                # One cheap rasterio.open per member at plan time; no pixel I/O.
+                # Returns {} for native (untagged) members → no metadata set.
+                member_tags = _read_gbx_member_tags(member_path)
+                parts = _plan_partitions_for_file(
+                    file_path=member_path,
+                    budget_bytes=resolved_budget,
+                    clip_polygons=self.clip_polygons,
+                    clip_crs=self.clip_crs,
+                    windows=self.windows,
+                    tile_size=self.tile_size,
+                    overlap_percent=self.overlap_percent,
+                    emit_virtual=self.emit_virtual,
                 )
+                if member_tags:
+                    for p in parts:
+                        p.vrt_tags = member_tags
+                result.extend(parts)
             if self.skip_ordering:
                 return result
             return sorted(
@@ -1152,6 +1196,12 @@ class RasterGbxReader(DataSourceReader):
                     "format": "gtiff",
                     "path_file_size": str(file_size),
                 }
+                # Propagate VRT member tags (cellid, gridSystem) when present.
+                # Set by partitions() for quadbin mini-COG members; absent for
+                # native tiles and for partitions built outside the VRT branch.
+                _vrt_tags = getattr(partition, "vrt_tags", None)
+                if _vrt_tags:
+                    meta.update(_vrt_tags)
                 yield (
                     source,
                     _v2_tile_row(
@@ -1183,6 +1233,10 @@ class RasterGbxReader(DataSourceReader):
                     win = (
                         partition.window
                     )  # always set for non-whole-file virtual tiles
+                # Propagate VRT member tags when present (mirrors the whole-file path).
+                _vrt_tags = getattr(partition, "vrt_tags", None)
+                if _vrt_tags:
+                    meta.update(_vrt_tags)
                 yield (
                     source,
                     _v2_tile_row(

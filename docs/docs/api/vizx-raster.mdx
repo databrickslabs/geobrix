@@ -55,6 +55,44 @@ plot_file("/Volumes/main/geobrix_samples/geobrix-examples/nyc/dem.tif")
 plot_file("/Volumes/main/my_schema/my_vol/sentinel_stack.tif", composite="depth")
 ```
 
+### `plot_mosaic`
+
+```python
+plot_mosaic(vrt, *, bbox=None, bbox_crs=None, max_pixels=2000, resampling="bilinear",
+            show_cells=False, fig_w=10, fig_h=10, composite="auto", bands=None,
+            stretch="perband", fill=None, emphasis="blend", debug_mode=1) -> None
+```
+
+Render a VRT mini-COG mosaic (produced by the `cog_gbx` writer with `vrtMosaic=true`) as a single georeferenced image. `vrt` may be a path to a `.vrt` file or a directory containing exactly one `.vrt` — the directory form is the natural result of a `cog_gbx` write. All remaining parameters (`composite`, `bands`, `stretch`, `fill`, `emphasis`) behave identically to [`plot_raster`](#plot_raster) and [`plot_file`](#plot_file). Returns `None`.
+
+:::note `max_pixels` is a read ceiling, not an upsampling floor
+GDAL selects each member's internal overview tier (or block-streams a single decimated read of the base level) so that the decoded pixel count never exceeds `max_pixels` on either axis. This bounds **peak RAM to `max_pixels²` regardless of mosaic size** — a 10,000-cell mosaic costs no more memory than a 4-cell one. It never upsamples: zooming into a viewport backed by an 800-pixel COG yields at most 800 real pixels even with `max_pixels=2000`. An overview-free COG (e.g. written by the DGGS writer without `--overviews`) still renders via on-the-fly decimation — you always get *something*, never a blank plot.
+:::
+
+**`bbox` and `bbox_crs`** — pass an optional `(minx, miny, maxx, maxy)` viewport to zoom into a sub-region. Coordinates are interpreted in `bbox_crs` if supplied, or in the mosaic's own CRS otherwise. `bbox_crs` accepts any CRS form recognised by GeoBrix: an integer SRID (`4326`), an authority string (`"EPSG:4326"`, `"ESRI:54008"`), a WKT string, or a PROJ4 string. A `ValueError` is raised if the bbox does not intersect the mosaic.
+
+**`show_cells`** — h3 mosaics only: set `show_cells=True` to overlay the hex-cell boundary of each member tile as a white outline. Raises `ValueError` for non-h3 mosaics (`gridSystem != "h3"`).
+
+```python
+from databricks.labs.gbx.vizx import plot_mosaic
+
+# Render a full h3 mosaic from its output directory.
+# The directory contains mosaic.vrt and the per-cell mini-COGs.
+plot_mosaic(
+    "/Volumes/main/geobrix_samples/my_schema/h3_mosaic/",
+    show_cells=True,
+    max_pixels=1024,
+)
+
+# Viewport zoom: show only the Manhattan area using WGS84 bbox.
+plot_mosaic(
+    "/Volumes/main/geobrix_samples/my_schema/h3_mosaic/mosaic.vrt",
+    bbox=(-74.02, 40.70, -73.93, 40.78),
+    bbox_crs="EPSG:4326",
+    max_pixels=2000,
+)
+```
+
 ### `plot_mask_layers`
 
 ```python

@@ -54,6 +54,39 @@ def _decimated_read(src, max_pixels):
     return data, transform, scale
 
 
+def _read_windowed(src, max_pixels, window=None, resampling="bilinear"):
+    """Decimated, masked read of `src`, optionally restricted to `window`.
+
+    Like ``_decimated_read`` but (a) accepts a rasterio Window (None = whole
+    dataset) and (b) a resampling method name. Returns (data, transform, scale).
+    Peak RAM is bounded by the output buffer, not the source: GDAL reads from an
+    internal overview when present, else block-streams a decimated read of the
+    base level, so a single-zoom-level tile still renders memory-safely.
+    """
+    import rasterio
+    from rasterio.enums import Resampling
+
+    resamp = getattr(Resampling, resampling)
+    if window is None:
+        win_w, win_h = src.width, src.height
+        base_transform = src.transform
+    else:
+        win_w, win_h = int(round(window.width)), int(round(window.height))
+        base_transform = src.window_transform(window)
+
+    scale = max(win_w, win_h) / max_pixels
+    if scale > 1:
+        out_h = max(1, int(win_h // scale))
+        out_w = max(1, int(win_w // scale))
+        data = src.read(out_shape=(src.count, out_h, out_w), window=window,
+                        resampling=resamp, masked=True)
+        transform = base_transform * base_transform.scale(win_w / out_w, win_h / out_h)
+    else:
+        data = src.read(window=window, masked=True)
+        transform = base_transform
+    return data, transform, scale
+
+
 def _needs_percentile_stretch(data):
     """True when data is integer-typed with a max above matplotlib's RGB int 255."""
     if not np.issubdtype(data.dtype, np.integer):
@@ -707,3 +740,86 @@ def plot_file(
             stretch=stretch,
             fill=fill,
         )
+
+
+def _resolve_vrt_path(vrt):
+    """Return a `.vrt` path from a direct path or a directory containing one."""
+    import glob
+    p = str(vrt)
+    if os.path.isdir(p):
+        hits = sorted(glob.glob(os.path.join(p, "*.vrt")))
+        if len(hits) == 0:
+            raise ValueError(f"plot_mosaic: no .vrt found in directory {p}")
+        if len(hits) > 1:
+            raise ValueError(
+                f"plot_mosaic: {len(hits)} .vrt files in {p}; pass one explicitly")
+        return hits[0]
+    return p
+
+
+def plot_mosaic(
+    vrt,
+    *,
+    bbox=None,
+    bbox_crs=None,
+    max_pixels=2000,
+    resampling="bilinear",
+    show_cells=False,
+    fig_w=10,
+    fig_h=10,
+    composite="auto",
+    bands=None,
+    stretch="perband",
+    fill=None,
+    emphasis="blend",
+    debug_mode=1,
+):
+    """Render a VRT mini-COG mosaic memory-safely (light tier).
+
+    Opens the ``.vrt`` once and does a single decimated, windowed, masked read;
+    GDAL selects each member's internal overview (or block-streams a decimated
+    read of a single base level), so peak RAM is bounded by ``max_pixels`` — NOT
+    the mosaic size. ``max_pixels`` is a READ CEILING, not a floor: it never
+    upsamples beyond a tile's stored resolution.
+
+    Args:
+        vrt: path to a ``.vrt``, or a directory containing exactly one ``.vrt``.
+        bbox: optional (minx, miny, maxx, maxy) viewport; in ``bbox_crs`` if
+            given, else the mosaic's own CRS.
+        bbox_crs: CRS of ``bbox`` — int SRID / "EPSG:x" / "ESRI:x" / WKT / PROJ4;
+            None means the mosaic CRS.
+        max_pixels: target render size (memory-safe read ceiling).
+        resampling: on-the-fly downsample method ("bilinear" default; "nearest"
+            for categorical rasters).
+        show_cells: h3 only — overlay hex-cell outlines from member cellids.
+        (remaining args mirror ``plot_raster``.)
+
+    Returns None (matches ``plot_raster``/``plot_file``).
+    """
+    import matplotlib.pyplot as plt
+    import rasterio
+
+    vrt_path = _resolve_vrt_path(vrt)
+    with rasterio.open(vrt_path) as src:
+        window = None  # Task 2 computes this from bbox/bbox_crs
+        data, transform, scale = _read_windowed(src, max_pixels, window=window,
+                                                 resampling=resampling)
+        nodata = src.nodata
+        fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+        _render(
+            data,
+            transform,
+            title=f"Mosaic: {os.path.basename(vrt_path)}",
+            fig_w=fig_w,
+            fig_h=fig_h,
+            scale=scale,
+            composite=composite,
+            nodata=nodata,
+            emphasis=emphasis,
+            ax=ax,
+            bands=bands,
+            stretch=stretch,
+            fill=fill,
+        )
+        # Task 3 adds gridSystem discovery + show_cells overlay here.
+    return None

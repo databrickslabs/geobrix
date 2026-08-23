@@ -24,11 +24,11 @@ This makes `cog_gbx` the natural read path after COG preparation with the
    required tiles and overview levels.
 
 `cog_gbx` also reads a **VRT mosaic**: point it at a `mosaic.vrt` index (written
-by the [`cog_gbx` writer's mosaic mode](../writers/cog#vrt-mosaic-mode)) and the
+by the [`cog_gbx` writer's mosaic mode](../writers/cog#mosaic-mode)) and the
 reader expands the index into one virtual tile per member mini-COG, so `rst_*`
 functions process the whole mosaic per-tile. See
 [Reading a VRT mosaic](#reading-a-vrt-mosaic) below and the
-[VRT Mosaics](../api/vrt-mosaic) reference.
+[VRT & Mosaics](../api/vrt-mosaic) reference.
 
 :::note Lightweight only
 `cog_gbx` is a pure-Python lightweight DataSource (no JAR). Register it with
@@ -122,7 +122,7 @@ Downstream `rst_*` functions consume either identically.
 ## Reading a VRT mosaic
 
 When the load path points **directly at a `mosaic.vrt`** (can be written by the
-[`cog_gbx` writer's mosaic mode](../writers/cog#vrt-mosaic-mode)), the reader
+[`cog_gbx` writer's mosaic mode](../writers/cog#mosaic-mode)), the reader
 parses the VRT XML, enumerates its member paths, and emits **one virtual tile row
 per member mini-COG** — each row a whole-file reference (`raster=NULL`, `path`
 set to the member, `window=NULL`). All downstream `rst_*` functions then run
@@ -145,13 +145,13 @@ df = spark.read.format("cog_gbx").load("/Volumes/.../mosaic/mosaic.vrt")
 | `virtualTiles` | Applies as elsewhere (default `"true"`). Members are emitted as bytes-free virtual tiles; set `"false"` to materialize member bytes into each row. |
 
 Full detail — including `mint_vrt` for on-demand transient VRTs — is on the
-[VRT Mosaics](../api/vrt-mosaic) page.
+[VRT & Mosaics](../api/vrt-mosaic) page.
 
 ## Next steps
 
 - [File Lister](./file) — list source files before preparation
 - [COG Writer](../writers/cog) — prepare master COGs from source rasters
-- [VRT Mosaics](../api/vrt-mosaic) — load a `mosaic.vrt` to expand a tile directory into virtual tile rows
+- [VRT & Mosaics](../api/vrt-mosaic) — load a `mosaic.vrt` to expand a tile directory into virtual tile rows
 - [Raster Functions](../api/raster-functions) — process the clipped tiles
 
 ## Common functions: used vs excluded

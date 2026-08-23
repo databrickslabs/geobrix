@@ -278,10 +278,19 @@ Written rasters are standard GDAL-compatible files:
 </TabItem>
 </Tabs>
 
+:::tip Splitting source files into a tile grid?
+This writer takes an already-loaded tile DataFrame (`(source, tile)` schema).
+If you have **source files on disk** that you want to split into a grid of
+mini-COGs — native pixel tiling or quadbin cell-aligned — use `cog_gbx` instead:
+it reads raw files, tiles them, and optionally emits a `mosaic.vrt` index.
+See the [COG Writer](./cog#mosaic-mode) and [VRT & Mosaics](../api/vrt-mosaic).
+:::
+
 ## Next Steps
 
 - [GDAL Reader](../readers/raster) — The corresponding read path.
 - [Raster Functions](../api/raster-functions) — Transforms to run before the write.
+- [COG Writer](./cog) — Prepare source files into COGs; mosaic mode for large sources, native or quadbin tile grid.
 
 ## Common functions: used vs excluded
 

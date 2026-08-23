@@ -424,7 +424,9 @@ def _build_quadbin_mosaic_for_t5(base_dir: pathlib.Path):
 
     schema = StructType([StructField("path", StringType(), False)])
     opts = parse_mosaic_options({"gridSystem": "quadbin", "gridResolution": "12"})
-    writer = CogGbxWriter(out_dir, schema, overwrite=True, cog_blocksize=256, mosaic_opts=opts)
+    writer = CogGbxWriter(
+        out_dir, schema, overwrite=True, cog_blocksize=256, mosaic_opts=opts
+    )
     msg = writer.write(iter([{"path": src}]))
     writer.commit([msg])
 
@@ -448,24 +450,22 @@ def test_vrt_quadbin_cellid_in_metadata(spark, tmp_path):
     spark.dataSource.register(RasterGbxDataSource)
     rows = spark.read.format("raster_gbx").load(vrt_path).collect()
 
-    assert len(rows) == len(members), (
-        f"Expected {len(members)} rows (one per member), got {len(rows)}"
-    )
+    assert len(rows) == len(
+        members
+    ), f"Expected {len(members)} rows (one per member), got {len(rows)}"
     for row in rows:
         meta = row["tile"]["metadata"]
-        assert "cellid" in meta, (
-            f"tile.metadata missing 'cellid'; got keys: {list(meta.keys())}"
-        )
-        assert "gridSystem" in meta, (
-            f"tile.metadata missing 'gridSystem'; got keys: {list(meta.keys())}"
-        )
-        assert meta["gridSystem"] == "quadbin", (
-            f"expected gridSystem='quadbin', got {meta['gridSystem']!r}"
-        )
+        assert (
+            "cellid" in meta
+        ), f"tile.metadata missing 'cellid'; got keys: {list(meta.keys())}"
+        assert (
+            "gridSystem" in meta
+        ), f"tile.metadata missing 'gridSystem'; got keys: {list(meta.keys())}"
+        assert (
+            meta["gridSystem"] == "quadbin"
+        ), f"expected gridSystem='quadbin', got {meta['gridSystem']!r}"
         cellid_val = int(meta["cellid"])
-        assert cellid_val > 0, (
-            f"cellid must be a positive int; got {meta['cellid']!r}"
-        )
+        assert cellid_val > 0, f"cellid must be a positive int; got {meta['cellid']!r}"
 
 
 def test_vrt_native_no_cellid(spark, tmp_path):
@@ -484,12 +484,12 @@ def test_vrt_native_no_cellid(spark, tmp_path):
 
     for row in rows:
         meta = row["tile"]["metadata"]
-        assert "cellid" not in meta, (
-            f"native tile must not have 'cellid' in metadata; got {meta}"
-        )
-        assert "gridSystem" not in meta, (
-            f"native tile must not have 'gridSystem' in metadata; got {meta}"
-        )
+        assert (
+            "cellid" not in meta
+        ), f"native tile must not have 'cellid' in metadata; got {meta}"
+        assert (
+            "gridSystem" not in meta
+        ), f"native tile must not have 'gridSystem' in metadata; got {meta}"
 
 
 def test_vrt_cog_gbx_quadbin_cellid(spark, tmp_path):
@@ -505,17 +505,17 @@ def test_vrt_cog_gbx_quadbin_cellid(spark, tmp_path):
     spark.dataSource.register(CogGbxDataSource)
     rows = spark.read.format("cog_gbx").load(vrt_path).collect()
 
-    assert len(rows) == len(members), (
-        f"cog_gbx: expected {len(members)} rows, got {len(rows)}"
-    )
+    assert len(rows) == len(
+        members
+    ), f"cog_gbx: expected {len(members)} rows, got {len(rows)}"
     for row in rows:
         meta = row["tile"]["metadata"]
-        assert "cellid" in meta, (
-            f"cog_gbx tile.metadata missing 'cellid'; got keys: {list(meta.keys())}"
-        )
-        assert "gridSystem" in meta, (
-            f"cog_gbx tile.metadata missing 'gridSystem'; got keys: {list(meta.keys())}"
-        )
-        assert meta["gridSystem"] == "quadbin", (
-            f"cog_gbx expected gridSystem='quadbin', got {meta['gridSystem']!r}"
-        )
+        assert (
+            "cellid" in meta
+        ), f"cog_gbx tile.metadata missing 'cellid'; got keys: {list(meta.keys())}"
+        assert (
+            "gridSystem" in meta
+        ), f"cog_gbx tile.metadata missing 'gridSystem'; got keys: {list(meta.keys())}"
+        assert (
+            meta["gridSystem"] == "quadbin"
+        ), f"cog_gbx expected gridSystem='quadbin', got {meta['gridSystem']!r}"

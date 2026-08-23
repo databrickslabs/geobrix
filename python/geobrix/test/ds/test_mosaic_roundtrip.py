@@ -387,9 +387,9 @@ def test_quadbin_round_trip(spark, tmp_path):
     df = spark.read.format("raster_gbx").load(vrt_path)
 
     count = df.count()
-    assert count == n_members, (
-        f"VRT expansion produced {count} rows, expected {n_members} (one per member cell)"
-    )
+    assert (
+        count == n_members
+    ), f"VRT expansion produced {count} rows, expected {n_members} (one per member cell)"
 
     # ── Per-row: cellid positive + gridSystem="quadbin" + rst_avg non-null ─────
     rows = df.select(
@@ -427,9 +427,9 @@ def test_quadbin_round_trip(spark, tmp_path):
     westerns, southerns, easterns, northerns = [], [], [], []
     for path in member_paths:
         with rasterio.open(path) as cell_ds:
-            assert cell_ds.crs.to_epsg() == 3857, (
-                f"cell tile CRS should be EPSG:3857, got {cell_ds.crs}"
-            )
+            assert (
+                cell_ds.crs.to_epsg() == 3857
+            ), f"cell tile CRS should be EPSG:3857, got {cell_ds.crs}"
             w, s, e, n = _transform_bounds(
                 cell_ds.crs,
                 "EPSG:32632",
@@ -526,16 +526,12 @@ def test_quadbin_materialized_vrt_cellid(spark, tmp_path):
 
     # ── Read with virtualTiles=false: forces materialized encode path ──────────
     spark.dataSource.register(RasterGbxDataSource)
-    df = (
-        spark.read.format("raster_gbx")
-        .option("virtualTiles", "false")
-        .load(vrt_path)
-    )
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(vrt_path)
 
     rows = df.select(col("tile.metadata").alias("metadata")).collect()
-    assert len(rows) >= n_members, (
-        f"virtualTiles=false read returned {len(rows)} rows, expected >= {n_members}"
-    )
+    assert (
+        len(rows) >= n_members
+    ), f"virtualTiles=false read returned {len(rows)} rows, expected >= {n_members}"
 
     for i, row in enumerate(rows):
         metadata = row["metadata"]
@@ -547,9 +543,7 @@ def test_quadbin_materialized_vrt_cellid(spark, tmp_path):
             f"got keys: {list(metadata.keys())}"
         )
         cellid_val = int(metadata["cellid"])
-        assert cellid_val > 0, (
-            f"row {i}: cellid is not positive: {cellid_val}"
-        )
+        assert cellid_val > 0, f"row {i}: cellid is not positive: {cellid_val}"
 
         # (b) gridSystem tag must be "quadbin"
         assert metadata.get("gridSystem") == "quadbin", (

@@ -468,9 +468,9 @@ def test_quadbin_vrt_references_written_members(tmp_path):
     bare_fns = {os.path.basename(fn) if os.path.isabs(fn) else fn for fn in fns}
     written_bare = {os.path.basename(p) for p in msg.paths}
 
-    assert bare_fns == written_bare, (
-        f"VRT member set mismatch: VRT={bare_fns}, written={written_bare}"
-    )
+    assert (
+        bare_fns == written_bare
+    ), f"VRT member set mismatch: VRT={bare_fns}, written={written_bare}"
     # All names should start with 'cell_'
     non_cell = [fn for fn in bare_fns if not fn.startswith("cell_")]
     assert not non_cell, f"VRT references non-cell_* files: {non_cell}"
@@ -489,9 +489,9 @@ def test_quadbin_vrt_crs_is_3857(tmp_path):
     vrt_path = str(tmp_path / "out" / "mosaic.vrt")
 
     with rasterio.open(vrt_path) as vrt:
-        assert vrt.crs.to_epsg() == 3857, (
-            f"quadbin VRT CRS must be EPSG:3857; got {vrt.crs!r}"
-        )
+        assert (
+            vrt.crs.to_epsg() == 3857
+        ), f"quadbin VRT CRS must be EPSG:3857; got {vrt.crs!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +540,6 @@ def test_quadbin_write_vrt_false_no_vrt(tmp_path):
     _write_qb_src(src)
     _run_quadbin_mosaic(src, str(tmp_path / "out"), writeVrt="false")
     vrt_path = str(tmp_path / "out" / "mosaic.vrt")
-    assert not os.path.exists(vrt_path), (
-        f"mosaic.vrt unexpectedly created despite writeVrt=false: {vrt_path}"
-    )
+    assert not os.path.exists(
+        vrt_path
+    ), f"mosaic.vrt unexpectedly created despite writeVrt=false: {vrt_path}"

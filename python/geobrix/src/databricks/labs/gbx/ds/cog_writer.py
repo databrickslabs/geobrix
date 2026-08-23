@@ -1181,8 +1181,12 @@ class CogGbxWriter(DataSourceWriter):
                     # pixels (never the full source — per-cell-window contract).
                     try:
                         src_bounds = transform_bounds(
-                            dst_crs, src.crs,
-                            cell.west, cell.south, cell.east, cell.north,
+                            dst_crs,
+                            src.crs,
+                            cell.west,
+                            cell.south,
+                            cell.east,
+                            cell.north,
                         )
                         src_win = src.window(*src_bounds)
                         src_win = src_win.intersection(src_full_window)
@@ -1199,11 +1203,11 @@ class CogGbxWriter(DataSourceWriter):
                     fill = (
                         src_nodata
                         if src_nodata is not None
-                        else (0 if np.issubdtype(np.dtype(out_dtype), np.integer) else 0.0)
+                        else (
+                            0 if np.issubdtype(np.dtype(out_dtype), np.integer) else 0.0
+                        )
                     )
-                    dst_data = np.full(
-                        (count, cell_h, cell_w), fill, dtype=out_dtype
-                    )
+                    dst_data = np.full((count, cell_h, cell_w), fill, dtype=out_dtype)
                     reproject(
                         source=src_data,
                         destination=dst_data,

@@ -34,7 +34,6 @@ import numpy as np
 import pytest
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
-from rasterio.transform import from_bounds as transform_from_bounds
 from rasterio.transform import from_origin
 from rasterio.warp import Resampling, reproject
 
@@ -758,8 +757,6 @@ def small_source_raster(tmp_path):
 
 def test_quadbin_write_produces_tagged_3857_minicogs(tmp_path, small_source_raster):
     """gridSystem=quadbin → ≥2 mini-COGs, each in EPSG:3857, with GBX_CELLID and GBX_GRIDSYSTEM tags."""
-    import glob
-
     opts = parse_mosaic_options(
         {"vrtMosaic": "true", "gridSystem": "quadbin", "gridResolution": "12"}
     )
@@ -777,20 +774,20 @@ def test_quadbin_write_produces_tagged_3857_minicogs(tmp_path, small_source_rast
         ), f"quadbin tiles must use cell_* naming: {t}"
         with rasterio.open(t) as ds:
             # CRS must be EPSG:3857
-            assert ds.crs.to_epsg() == 3857, (
-                f"{os.path.basename(t)}: expected EPSG:3857, got {ds.crs}"
-            )
+            assert (
+                ds.crs.to_epsg() == 3857
+            ), f"{os.path.basename(t)}: expected EPSG:3857, got {ds.crs}"
             tags = ds.tags()
             # GBX_CELLID must be present and parseable as a positive int
-            assert "GBX_CELLID" in tags, (
-                f"{os.path.basename(t)}: missing GBX_CELLID tag; got {tags}"
-            )
+            assert (
+                "GBX_CELLID" in tags
+            ), f"{os.path.basename(t)}: missing GBX_CELLID tag; got {tags}"
             cellid = int(tags["GBX_CELLID"])
             assert cellid > 0, f"GBX_CELLID must be a positive int; got {cellid}"
             # GBX_GRIDSYSTEM must be "quadbin"
-            assert tags.get("GBX_GRIDSYSTEM") == "quadbin", (
-                f"{os.path.basename(t)}: expected GBX_GRIDSYSTEM=quadbin; got {tags}"
-            )
+            assert (
+                tags.get("GBX_GRIDSYSTEM") == "quadbin"
+            ), f"{os.path.basename(t)}: expected GBX_GRIDSYSTEM=quadbin; got {tags}"
 
     # The tagged cellid from each tile's filename must match its GBX_CELLID tag.
     _CELL_NAME_RE = re.compile(r"^cell_[0-9A-Za-z]+_(\d+)\.tif$")
@@ -800,9 +797,9 @@ def test_quadbin_write_produces_tagged_3857_minicogs(tmp_path, small_source_rast
         name_cellid = int(m.group(1))
         with rasterio.open(t) as ds:
             tag_cellid = int(ds.tags()["GBX_CELLID"])
-        assert name_cellid == tag_cellid, (
-            f"filename cellid {name_cellid} != GBX_CELLID tag {tag_cellid} in {t}"
-        )
+        assert (
+            name_cellid == tag_cellid
+        ), f"filename cellid {name_cellid} != GBX_CELLID tag {tag_cellid} in {t}"
 
 
 # ---------------------------------------------------------------------------
@@ -817,8 +814,6 @@ def test_quadbin_cell_reproject_correctness(tmp_path, small_source_raster):
     implementation.  Because Resampling.average re-samples the source pixels,
     values are NOT byte-identical to the source — hence allclose, not equal.
     """
-    from rasterio.crs import CRS
-
     opts = parse_mosaic_options(
         {"vrtMosaic": "true", "gridSystem": "quadbin", "gridResolution": "12"}
     )

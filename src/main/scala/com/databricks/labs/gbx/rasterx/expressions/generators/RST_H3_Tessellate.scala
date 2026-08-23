@@ -52,7 +52,8 @@ case class RST_H3_Tessellate(
               RST_ExpressionUtil.addCleanupListener(iter)
               iter
                   .map { case (newCell, resDs, resMtd) =>
-                      val tile = RasterSerializationUtil.tileToRow((newCell, resDs, resMtd), rasterType, exprConf.hConf)
+                      val augMtd = resMtd + ("gridSystem" -> "h3")
+                      val tile = RasterSerializationUtil.tileToRow((newCell, resDs, augMtd), rasterType, exprConf.hConf)
                       RasterDriver.releaseDataset(resDs)
                       InternalRow.fromSeq(Seq(tile)) // Row wrapping in generator
                   }

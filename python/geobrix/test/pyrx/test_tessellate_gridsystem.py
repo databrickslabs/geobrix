@@ -4,20 +4,25 @@ Mirrors the test_tessellate_bng.py::test_spark_struct_no_rasterx_cell_id_in_meta
 Spark-UDTF pattern. Each UDTF is driven through a real PySpark session (local[2], no JAR)
 to exercise the actual yielded struct row including the metadata map.
 """
+
 import numpy as np
-import pytest
 import rasterio
 from rasterio.io import MemoryFile
-from rasterio.transform import from_origin
 
 
 def _small_4326_bytes(size=32, origin=(-0.12, 51.52), res_deg=0.01):
     """Return GTiff bytes: small EPSG:4326 raster over London."""
     data = np.arange(size * size, dtype="float32").reshape(size, size)
     prof = dict(
-        driver="GTiff", height=size, width=size, count=1, dtype="float32",
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="float32",
         crs="EPSG:4326",
-        transform=rasterio.transform.from_origin(origin[0], origin[1], res_deg, res_deg),
+        transform=rasterio.transform.from_origin(
+            origin[0], origin[1], res_deg, res_deg
+        ),
         nodata=-9999.0,
     )
     with MemoryFile() as mf:
@@ -30,7 +35,11 @@ def _small_27700_bytes(size=8, origin=(530000.0, 182000.0), res_m=1000.0):
     """Return GTiff bytes: small EPSG:27700 raster over London (BNG easting/northing)."""
     data = np.arange(size * size, dtype="float32").reshape(size, size)
     prof = dict(
-        driver="GTiff", height=size, width=size, count=1, dtype="float32",
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="float32",
         crs="EPSG:27700",
         transform=rasterio.transform.from_origin(origin[0], origin[1], res_m, res_m),
         nodata=-9999.0,
@@ -92,9 +101,9 @@ def test_h3_tessellate_centroid_tile_carries_gridsystem_h3(spark):
     assert rows, "rst_h3_tessellate centroid must yield >=1 tile"
     for row in rows:
         metadata = dict(row["metadata"]) if row["metadata"] else {}
-        assert metadata.get("gridSystem") == "h3", (
-            f"h3 tessellate centroid tile must have gridSystem='h3'; got {metadata.get('gridSystem')!r}"
-        )
+        assert (
+            metadata.get("gridSystem") == "h3"
+        ), f"h3 tessellate centroid tile must have gridSystem='h3'; got {metadata.get('gridSystem')!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -122,9 +131,9 @@ def test_quadbin_tessellate_tile_carries_gridsystem_quadbin(spark):
     assert rows, "rst_quadbin_tessellate must yield >=1 tile"
     for row in rows:
         metadata = dict(row["metadata"]) if row["metadata"] else {}
-        assert metadata.get("gridSystem") == "quadbin", (
-            f"quadbin tessellate tile must have gridSystem='quadbin'; got {metadata.get('gridSystem')!r}"
-        )
+        assert (
+            metadata.get("gridSystem") == "quadbin"
+        ), f"quadbin tessellate tile must have gridSystem='quadbin'; got {metadata.get('gridSystem')!r}"
 
 
 def test_quadbin_tessellate_centroid_tile_carries_gridsystem_quadbin(spark):
@@ -147,9 +156,9 @@ def test_quadbin_tessellate_centroid_tile_carries_gridsystem_quadbin(spark):
     assert rows, "rst_quadbin_tessellate centroid must yield >=1 tile"
     for row in rows:
         metadata = dict(row["metadata"]) if row["metadata"] else {}
-        assert metadata.get("gridSystem") == "quadbin", (
-            f"quadbin tessellate centroid tile must have gridSystem='quadbin'; got {metadata.get('gridSystem')!r}"
-        )
+        assert (
+            metadata.get("gridSystem") == "quadbin"
+        ), f"quadbin tessellate centroid tile must have gridSystem='quadbin'; got {metadata.get('gridSystem')!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +186,9 @@ def test_bng_tessellate_tile_carries_gridsystem_bng(spark):
     assert rows, "rst_bng_tessellate must yield >=1 tile"
     for row in rows:
         metadata = dict(row["metadata"]) if row["metadata"] else {}
-        assert metadata.get("gridSystem") == "bng", (
-            f"bng tessellate tile must have gridSystem='bng'; got {metadata.get('gridSystem')!r}"
-        )
+        assert (
+            metadata.get("gridSystem") == "bng"
+        ), f"bng tessellate tile must have gridSystem='bng'; got {metadata.get('gridSystem')!r}"
 
 
 def test_bng_tessellate_centroid_tile_carries_gridsystem_bng(spark):
@@ -202,9 +211,9 @@ def test_bng_tessellate_centroid_tile_carries_gridsystem_bng(spark):
     assert rows, "rst_bng_tessellate centroid must yield >=1 tile"
     for row in rows:
         metadata = dict(row["metadata"]) if row["metadata"] else {}
-        assert metadata.get("gridSystem") == "bng", (
-            f"bng tessellate centroid tile must have gridSystem='bng'; got {metadata.get('gridSystem')!r}"
-        )
+        assert (
+            metadata.get("gridSystem") == "bng"
+        ), f"bng tessellate centroid tile must have gridSystem='bng'; got {metadata.get('gridSystem')!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -218,6 +227,7 @@ def test_build_tile_rasterize_agg_path_no_gridsystem():
     _as_tile_udf caller at functions.py:6730 stays unchanged after the retrofit.
     """
     from databricks.labs.gbx.pyrx import _serde
+
     from .conftest import make_geotiff_bytes
 
     tile = _serde.build_tile(make_geotiff_bytes(), "GTiff", 0)

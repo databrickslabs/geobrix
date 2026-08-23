@@ -625,15 +625,17 @@ def test_h3_round_trip(spark, tmp_path):
         # cellid is a valid h3 string at the correct resolution
         assert "cellid" in metadata, f"tile.metadata missing 'cellid': {metadata}"
         cellid_str = metadata["cellid"]
-        assert isinstance(cellid_str, str), f"cellid must be a string, got {type(cellid_str)}"
+        assert isinstance(
+            cellid_str, str
+        ), f"cellid must be a string, got {type(cellid_str)}"
         assert _h3.get_resolution(cellid_str) == _H3_RESOLUTION, (
             f"cellid {cellid_str!r} has resolution {_h3.get_resolution(cellid_str)}, "
             f"expected {_H3_RESOLUTION}"
         )
         # Round-trip: str_to_int → int_to_str must reproduce the same cellid
-        assert _h3.int_to_str(_h3.str_to_int(cellid_str)) == cellid_str, (
-            f"cellid does not round-trip through str_to_int/int_to_str: {cellid_str!r}"
-        )
+        assert (
+            _h3.int_to_str(_h3.str_to_int(cellid_str)) == cellid_str
+        ), f"cellid does not round-trip through str_to_int/int_to_str: {cellid_str!r}"
 
         # gridSystem tag
         assert metadata.get("gridSystem") == "h3", (
@@ -645,14 +647,16 @@ def test_h3_round_trip(spark, tmp_path):
         avg_list = row["avg"]
         assert avg_list is not None, "rst_avg returned None for h3 cell"
         assert len(avg_list) >= 1, "rst_avg avg list is empty"
-        assert all(v is not None for v in avg_list), f"rst_avg has None band: {avg_list}"
+        assert all(
+            v is not None for v in avg_list
+        ), f"rst_avg has None band: {avg_list}"
 
     # ── Member CRS must be EPSG:4326 ──────────────────────────────────────────
     for path in member_paths:
         with rasterio.open(path) as cell_ds:
-            assert cell_ds.crs.to_epsg() == 4326, (
-                f"h3 cell tile must be EPSG:4326, got {cell_ds.crs}"
-            )
+            assert (
+                cell_ds.crs.to_epsg() == 4326
+            ), f"h3 cell tile must be EPSG:4326, got {cell_ds.crs}"
 
 
 # ---------------------------------------------------------------------------
@@ -678,9 +682,9 @@ def test_h3_materialized_vrt_cellid(spark, tmp_path):
     df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(vrt_path)
 
     rows = df.select(col("tile.metadata").alias("metadata")).collect()
-    assert len(rows) >= n_members, (
-        f"virtualTiles=false returned {len(rows)} rows, expected >= {n_members}"
-    )
+    assert (
+        len(rows) >= n_members
+    ), f"virtualTiles=false returned {len(rows)} rows, expected >= {n_members}"
 
     for i, row in enumerate(rows):
         metadata = row["metadata"]
@@ -692,9 +696,9 @@ def test_h3_materialized_vrt_cellid(spark, tmp_path):
         )
         cellid_str = metadata["cellid"]
         # Must be a valid h3 string
-        assert _h3.get_resolution(cellid_str) == _H3_RESOLUTION, (
-            f"row {i}: cellid resolution mismatch: {cellid_str!r}"
-        )
+        assert (
+            _h3.get_resolution(cellid_str) == _H3_RESOLUTION
+        ), f"row {i}: cellid resolution mismatch: {cellid_str!r}"
 
         assert metadata.get("gridSystem") == "h3", (
             f"row {i}: tile.metadata['gridSystem'] expected 'h3', "

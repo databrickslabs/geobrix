@@ -886,9 +886,7 @@ def _write_src_fn():
     return _write_src
 
 
-def _write_mosaic_for_test(
-    src_path: str, out_dir: str, opts: MosaicOptions
-) -> None:
+def _write_mosaic_for_test(src_path: str, out_dir: str, opts: MosaicOptions) -> None:
     """Test helper: drive _write_mosaic_h3 directly, bypassing Spark.
 
     Wraps _make_writer + write() in the same pattern as the quadbin tests.
@@ -925,9 +923,9 @@ def test_h3_write_produces_tagged_4326_minicogs(tmp_path, _write_src_fn):
             assert ds.crs.to_epsg() == 4326, f"expected EPSG:4326, got {ds.crs}"
             tags = ds.tags()
             assert "GBX_CELLID" in tags, f"GBX_CELLID missing in {t}"
-            assert tags.get("GBX_GRIDSYSTEM") == "h3", (
-                f"GBX_GRIDSYSTEM expected 'h3', got {tags.get('GBX_GRIDSYSTEM')!r}"
-            )
+            assert (
+                tags.get("GBX_GRIDSYSTEM") == "h3"
+            ), f"GBX_GRIDSYSTEM expected 'h3', got {tags.get('GBX_GRIDSYSTEM')!r}"
             # cellid is a valid h3 string at the requested resolution
             import h3 as _h3
 
@@ -972,9 +970,9 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
         nodata = ds.nodata
 
     # Ruling A: output must always carry a nodata value even for a nodata-less source.
-    assert nodata is not None, (
-        "h3 output must carry a nodata value even when the source had none (Ruling A)"
-    )
+    assert (
+        nodata is not None
+    ), "h3 output must carry a nodata value even when the source had none (Ruling A)"
 
     # Build the hex polygon from cell_to_boundary [(lat, lon) -> (lon, lat)].
     boundary = _h3.cell_to_boundary(cellid_str)
@@ -996,9 +994,9 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
     outside_vals = data[outside_mask]
     if outside_vals.size > 0:
         if isinstance(nodata, float) and math.isnan(nodata):
-            assert np.all(np.isnan(outside_vals)), (
-                f"outside-hex pixels must be NaN nodata, got: {outside_vals[:5]}"
-            )
+            assert np.all(
+                np.isnan(outside_vals)
+            ), f"outside-hex pixels must be NaN nodata, got: {outside_vals[:5]}"
         else:
             np.testing.assert_array_equal(
                 outside_vals,
@@ -1012,9 +1010,9 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
     if isinstance(nodata, float) and math.isnan(nodata):
         assert np.any(~np.isnan(interior_vals)), "all interior pixels are NaN nodata"
     else:
-        assert np.any(interior_vals != nodata), (
-            f"all interior pixels equal nodata={nodata}"
-        )
+        assert np.any(
+            interior_vals != nodata
+        ), f"all interior pixels equal nodata={nodata}"
 
 
 # ---------------------------------------------------------------------------
@@ -1135,7 +1133,9 @@ def test_h3_coarse_res_cap_raises(tmp_path, _write_src_fn, monkeypatch):
     # Patch the cap in cog_writer's namespace to 1 byte so every cell exceeds it.
     # Must patch cog_writer._connect_aware_lru_sizing (the locally-imported name),
     # not file_gbx._connect_aware_lru_sizing — cog_writer uses a direct binding.
-    monkeypatch.setattr(_cw, "_connect_aware_lru_sizing", lambda *a, **kw: (1, "patched"))
+    monkeypatch.setattr(
+        _cw, "_connect_aware_lru_sizing", lambda *a, **kw: (1, "patched")
+    )
 
     src_path = str(tmp_path / "src_cap_h3" / "input.tif")
     out_dir = str(tmp_path / "mosaic_cap_h3")
@@ -1152,7 +1152,9 @@ def test_quadbin_coarse_res_cap_raises(tmp_path, _write_src_fn, monkeypatch):
     """Quadbin cap guard must also raise with gridResolution in the message (retrofit)."""
     import databricks.labs.gbx.ds.cog_writer as _cw
 
-    monkeypatch.setattr(_cw, "_connect_aware_lru_sizing", lambda *a, **kw: (1, "patched"))
+    monkeypatch.setattr(
+        _cw, "_connect_aware_lru_sizing", lambda *a, **kw: (1, "patched")
+    )
 
     src_path = str(tmp_path / "src_cap_qb" / "input.tif")
     out_dir = str(tmp_path / "mosaic_cap_qb")

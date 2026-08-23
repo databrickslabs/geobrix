@@ -4419,7 +4419,9 @@ class _RstQuadbinTessellateUDTF:
                 ):
                     if raster is None:  # defensive: never emit a null-raster tile row
                         continue
-                    yield _serde.build_tile(raster, "GTiff", cellid, grid_system="quadbin")
+                    yield _serde.build_tile(
+                        raster, "GTiff", cellid, grid_system="quadbin"
+                    )
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_Quadbin_Tessellate: {e}")
             return
@@ -4461,7 +4463,9 @@ class _RstBngTessellateUDTF:
                 ):
                     if raster is None:  # defensive: never emit a null-raster tile row
                         continue
-                    out = _serde.build_tile(raster, "GTiff", _bng.parse(cellid_str), grid_system="bng")
+                    out = _serde.build_tile(
+                        raster, "GTiff", _bng.parse(cellid_str), grid_system="bng"
+                    )
                     yield out
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_BNG_Tessellate: {e}")

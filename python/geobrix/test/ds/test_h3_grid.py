@@ -1,4 +1,5 @@
 """Unit tests for ds/_h3_grid.py — pure h3 cell-grid computation."""
+
 import h3
 import pytest
 

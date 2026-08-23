@@ -2422,3 +2422,33 @@ def test_gbx_file_read_table_carries_real_size_and_order(spark):
     assert all(
         f is None for f in files
     ), f"Expected file=NULL for all rows; got {files}"
+
+
+# ---------------------------------------------------------------------------
+# PathLike inputs to the string-path helpers (regression: FileRef.as_local_file()
+# returns a pathlib.Path; _is_fuse_path did str.startswith and crashed on it,
+# which surfaced as rst_numbands=None on a FILE-referenced tile while rst_summary
+# worked via a different route).
+# ---------------------------------------------------------------------------
+
+
+def test_is_fuse_path_accepts_pathlib():
+    """_is_fuse_path handles both str and pathlib.Path (os.PathLike)."""
+    from pathlib import Path
+
+    assert file_gbx._is_fuse_path(Path("/Volumes/c/s/v/a.tif")) is True
+    assert file_gbx._is_fuse_path(Path("/dbfs/x/y.tif")) is True
+    assert file_gbx._is_fuse_path(Path("/tmp/local.tif")) is False
+    # still correct for plain strings
+    assert file_gbx._is_fuse_path("/Volumes/c/s/v/a.tif") is True
+    assert file_gbx._is_fuse_path("/tmp/local.tif") is False
+
+
+def test_stage_local_if_needed_accepts_pathlib_local(tmp_path):
+    """A local pathlib.Path passes through and is normalised to a str path."""
+    p = tmp_path / "f.tif"
+    p.write_bytes(b"stub")
+    local, is_temp = file_gbx._stage_local_if_needed(p)  # PosixPath in
+    assert is_temp is False
+    assert isinstance(local, str), "local_path must be a str, not a Path"
+    assert local == str(p)

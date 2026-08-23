@@ -1263,14 +1263,20 @@ def report_detected_cap(spark: Optional["SparkSession"] = None) -> int:
     return _connect_aware_lru_sizing(_sess)[0]
 
 
-def _is_fuse_path(path: str) -> bool:
+def _is_fuse_path(path) -> bool:
     """Return True if *path* lives under a Databricks FUSE mount.
 
     Checks the /Volumes (UC Volume) and /dbfs (legacy DBFS) prefixes.
     Extracted so tests can monkeypatch the detection without resorting to
     real /Volumes paths on the developer's machine.
+
+    Accepts a str or any ``os.PathLike`` — ``FileRef.as_local_file()`` returns
+    a ``pathlib.Path``, so coerce via ``os.fspath`` before ``str.startswith``
+    (a ``Path`` has no ``.startswith``, which otherwise breaks the FILE-tier
+    header-accessor path — e.g. ``rst_numbands`` returned ``None`` on a
+    FILE-referenced tile while ``rst_summary`` worked via a different route).
     """
-    return path.startswith("/Volumes") or path.startswith("/dbfs")
+    return os.fspath(path).startswith(("/Volumes", "/dbfs"))
 
 
 def _probe_direct_open(path: str) -> None:
@@ -1327,7 +1333,13 @@ def _stage_local_if_needed(path: str) -> tuple[str, bool]:
 
     The return contract ``(local_path, is_temp)`` is unchanged; callers
     (``open_tile`` / ``_uf_*`` tile-read paths) are unaffected.
+
+    *path* may be a str or an ``os.PathLike`` (``FileRef.as_local_file()``
+    returns a ``pathlib.Path``); it is normalised to str so the returned
+    ``local_path`` is always a str and the FUSE-prefix check never trips
+    ``str.startswith`` on a ``Path``.
     """
+    path = os.fspath(path)
     if not _is_fuse_path(path):
         return path, False
 

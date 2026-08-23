@@ -168,12 +168,6 @@ def test_quadbin_raises_not_supported():
         _parse(gridSystem="quadbin")
 
 
-def test_h3_raises_not_supported():
-    """gridSystem='h3' → ValueError (not supported in this release)."""
-    with pytest.raises(ValueError, match="h3"):
-        _parse(gridSystem="h3")
-
-
 def test_bng_raises_not_supported():
     """gridSystem='bng' → ValueError (not supported in this release)."""
     with pytest.raises(ValueError, match="bng"):
@@ -321,11 +315,80 @@ def test_quadbin_pyramid_options_deferred():
         )
 
 
-def test_bng_h3_still_phase_c():
+def test_bng_still_phase_c():
     from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
 
-    for gs in ("bng", "h3"):
-        with pytest.raises(ValueError, match="Phase C|not yet"):
-            parse_mosaic_options(
-                {"vrtMosaic": "true", "gridSystem": gs, "gridResolution": "5"}
-            )
+    with pytest.raises(ValueError, match="not yet"):
+        parse_mosaic_options(
+            {"vrtMosaic": "true", "gridSystem": "bng", "gridResolution": "5"}
+        )
+
+
+# ── h3 acceptance (Task 2) ───────────────────────────────────────────────────
+
+
+def test_h3_requires_grid_resolution():
+    import pytest
+
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    with pytest.raises(ValueError, match="gridResolution"):
+        parse_mosaic_options({"vrtMosaic": "true", "gridSystem": "h3"})
+
+
+def test_h3_accepts_grid_resolution():
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    o = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "7"}
+    )
+    assert o.grid_system == "h3"
+    assert o.grid_resolution == 7
+
+
+def test_h3_rejects_native_only_options():
+    import pytest
+
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    base = {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "7"}
+    for bad in ({"tileSize": "512"}, {"overlapPercent": "5"}):
+        with pytest.raises(ValueError, match="only valid with gridSystem='none'"):
+            parse_mosaic_options({**base, **bad})
+
+
+def test_h3_allows_downsample_factor():
+    """Unlike quadbin, h3 ALLOWS downsampleFactor."""
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    # Should NOT raise — downsampleFactor is allowed with h3.
+    o = parse_mosaic_options(
+        {
+            "vrtMosaic": "true",
+            "gridSystem": "h3",
+            "gridResolution": "7",
+            "downsampleFactor": "2",
+        }
+    )
+    assert o.grid_system == "h3"
+
+
+def test_h3_pyramid_options_deferred():
+    import pytest
+
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    base = {"vrtMosaic": "true", "gridSystem": "h3", "gridResolution": "7"}
+    with pytest.raises(ValueError, match="resolution pyramid not yet"):
+        parse_mosaic_options({**base, "gridMinResolution": "5"})
+
+
+def test_bng_still_not_supported():
+    import pytest
+
+    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
+
+    with pytest.raises(ValueError, match="not yet supported"):
+        parse_mosaic_options(
+            {"vrtMosaic": "true", "gridSystem": "bng", "gridResolution": "3"}
+        )

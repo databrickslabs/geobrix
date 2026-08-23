@@ -458,10 +458,10 @@ def _parse_grid_resolution(grid_system: str, opts: Dict[str, object]) -> Optiona
     - Must be absent for ``gridSystem='none'``; raises if present.
     """
     grid_res_raw = opts.get("gridResolution")
-    if grid_system == "quadbin":
+    if grid_system in ("quadbin", "h3"):
         if grid_res_raw is None:
             raise ValueError(
-                "gridResolution is required when gridSystem='quadbin'; "
+                f"gridResolution is required when gridSystem={grid_system!r}; "
                 "supply an integer resolution level."
             )
         return int(grid_res_raw)
@@ -488,6 +488,31 @@ def _check_quadbin_incompatible_opts(
             "downsampleFactor is not supported with gridSystem='quadbin'; "
             "quadbin mosaic uses cell-based resolution, not pixel downsampling."
         )
+    for _name, _val in (
+        ("gridMinResolution", grid_min),
+        ("gridMaxResolution", grid_max),
+        ("gridStepResolution", grid_step),
+    ):
+        if _val is not None:
+            raise ValueError(
+                f"{_name}: DGGS resolution pyramid not yet implemented "
+                f"(deferred to a follow-on release)."
+            )
+
+
+def _check_h3_incompatible_opts(
+    grid_system: str,
+    grid_min: Optional[int],
+    grid_max: Optional[int],
+    grid_step: Optional[int],
+) -> None:
+    """Raise ValueError for options that are not supported with h3.
+
+    Unlike quadbin, h3 ALLOWS downsampleFactor (documented in spec).
+    Only the resolution pyramid options are deferred.
+    """
+    if grid_system != "h3":
+        return
     for _name, _val in (
         ("gridMinResolution", grid_min),
         ("gridMaxResolution", grid_max),
@@ -544,11 +569,11 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
             f"must be one of {sorted(_VALID_GRID_SYSTEMS)}"
         )
 
-    # quadbin is supported; bng/h3 are deferred to a later release.
-    if grid_system in _DGGS_SYSTEMS and grid_system != "quadbin":
+    # quadbin and h3 are supported; bng is deferred to a later release.
+    if grid_system in _DGGS_SYSTEMS and grid_system not in ("quadbin", "h3"):
         raise ValueError(
             f"gridSystem={grid_system!r} is not yet supported; "
-            f"available values: 'none', 'quadbin'."
+            f"available values: 'none', 'quadbin', 'h3'."
         )
 
     is_dggs = grid_system in _DGGS_SYSTEMS
@@ -633,6 +658,7 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
 
     # Resolution pyramid + downsampleFactor are deferred for quadbin.
     _check_quadbin_incompatible_opts(grid_system, opts, grid_min, grid_max, grid_step)
+    _check_h3_incompatible_opts(grid_system, grid_min, grid_max, grid_step)
 
     return MosaicOptions(
         grid_system=grid_system,

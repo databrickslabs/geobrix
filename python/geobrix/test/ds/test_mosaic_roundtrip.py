@@ -550,3 +550,153 @@ def test_quadbin_materialized_vrt_cellid(spark, tmp_path):
             f"row {i}: tile.metadata['gridSystem'] expected 'quadbin', "
             f"got {metadata.get('gridSystem')!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# H3 round-trip helpers
+# ---------------------------------------------------------------------------
+
+_H3_RESOLUTION = 5  # h3 resolution; cells at ~89 km edge cover the 2 km source
+
+
+def _write_mosaic_h3_spark(
+    spark, src_path: str, out_dir: str, resolution: int = _H3_RESOLUTION
+) -> str:
+    """Write *src_path* as an h3 mosaic via the full Spark cog_gbx DataSource."""
+    spark.dataSource.register(CogGbxDataSource)
+    df = spark.createDataFrame([{"path": src_path}], schema=_path_schema())
+    (
+        df.write.format("cog_gbx")
+        .option("vrtMosaic", "true")
+        .option("gridSystem", "h3")
+        .option("gridResolution", str(resolution))
+        .mode("overwrite")
+        .save(out_dir)
+    )
+    vrt_path = os.path.join(out_dir, "mosaic.vrt")
+    assert os.path.exists(vrt_path), f"mosaic.vrt not produced at {vrt_path}"
+    return vrt_path
+
+
+def _member_h3_cell_paths(out_dir: str):
+    """Return sorted list of h3 mini-COG cell paths in *out_dir*."""
+    return sorted(glob.glob(os.path.join(out_dir, "cell_*.tif")))
+
+
+# ---------------------------------------------------------------------------
+# Test 6: h3 prepare → expand → rst_avg + cellid / gridSystem
+# ---------------------------------------------------------------------------
+
+
+def test_h3_round_trip(spark, tmp_path):
+    """End-to-end h3 mosaic: cog_gbx write → raster_gbx expand → metadata + rst_avg."""
+    import h3 as _h3
+
+    src_path = str(tmp_path / "src_h3" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_h3")
+
+    _write_src(src_path)
+    vrt_path = _write_mosaic_h3_spark(spark, src_path, out_dir)
+
+    # ── Count member cells ────────────────────────────────────────────────────
+    member_paths = _member_h3_cell_paths(out_dir)
+    n_members = len(member_paths)
+    assert n_members >= 1, "no h3 mini-COG cells found after mosaic write"
+
+    # ── Read the mosaic VRT: one row per member cell ───────────────────────────
+    spark.dataSource.register(RasterGbxDataSource)
+    df = spark.read.format("raster_gbx").load(vrt_path)
+
+    count = df.count()
+    assert (
+        count == n_members
+    ), f"VRT expansion produced {count} rows, expected {n_members}"
+
+    # ── Per-row: valid h3 cellid string + gridSystem="h3" + rst_avg non-null ──
+    rows = df.select(
+        col("tile.metadata").alias("metadata"),
+        rst_avg(col("tile")).alias("avg"),
+    ).collect()
+
+    for row in rows:
+        metadata = row["metadata"]
+        assert metadata is not None, "tile.metadata is None"
+
+        # cellid is a valid h3 string at the correct resolution
+        assert "cellid" in metadata, f"tile.metadata missing 'cellid': {metadata}"
+        cellid_str = metadata["cellid"]
+        assert isinstance(cellid_str, str), f"cellid must be a string, got {type(cellid_str)}"
+        assert _h3.get_resolution(cellid_str) == _H3_RESOLUTION, (
+            f"cellid {cellid_str!r} has resolution {_h3.get_resolution(cellid_str)}, "
+            f"expected {_H3_RESOLUTION}"
+        )
+        # Round-trip: str_to_int → int_to_str must reproduce the same cellid
+        assert _h3.int_to_str(_h3.str_to_int(cellid_str)) == cellid_str, (
+            f"cellid does not round-trip through str_to_int/int_to_str: {cellid_str!r}"
+        )
+
+        # gridSystem tag
+        assert metadata.get("gridSystem") == "h3", (
+            f"tile.metadata['gridSystem'] expected 'h3', "
+            f"got {metadata.get('gridSystem')!r}"
+        )
+
+        # rst_avg non-null
+        avg_list = row["avg"]
+        assert avg_list is not None, "rst_avg returned None for h3 cell"
+        assert len(avg_list) >= 1, "rst_avg avg list is empty"
+        assert all(v is not None for v in avg_list), f"rst_avg has None band: {avg_list}"
+
+    # ── Member CRS must be EPSG:4326 ──────────────────────────────────────────
+    for path in member_paths:
+        with rasterio.open(path) as cell_ds:
+            assert cell_ds.crs.to_epsg() == 4326, (
+                f"h3 cell tile must be EPSG:4326, got {cell_ds.crs}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Test 7: h3 mosaic — virtualTiles=false surfaces cellid + gridSystem
+# ---------------------------------------------------------------------------
+
+
+def test_h3_materialized_vrt_cellid(spark, tmp_path):
+    """virtualTiles=false must surface cellid/gridSystem on materialized h3 tiles."""
+    import h3 as _h3
+
+    src_path = str(tmp_path / "src_h3_mat" / "input.tif")
+    out_dir = str(tmp_path / "mosaic_h3_mat")
+
+    _write_src(src_path)
+    vrt_path = _write_mosaic_h3_spark(spark, src_path, out_dir)
+
+    member_paths = _member_h3_cell_paths(out_dir)
+    n_members = len(member_paths)
+    assert n_members >= 1, "no h3 mini-COG cells found"
+
+    spark.dataSource.register(RasterGbxDataSource)
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(vrt_path)
+
+    rows = df.select(col("tile.metadata").alias("metadata")).collect()
+    assert len(rows) >= n_members, (
+        f"virtualTiles=false returned {len(rows)} rows, expected >= {n_members}"
+    )
+
+    for i, row in enumerate(rows):
+        metadata = row["metadata"]
+        assert metadata is not None, f"row {i}: tile.metadata is None"
+
+        assert "cellid" in metadata, (
+            f"row {i}: tile.metadata missing 'cellid' on virtualTiles=false path; "
+            f"got keys: {list(metadata.keys())}"
+        )
+        cellid_str = metadata["cellid"]
+        # Must be a valid h3 string
+        assert _h3.get_resolution(cellid_str) == _H3_RESOLUTION, (
+            f"row {i}: cellid resolution mismatch: {cellid_str!r}"
+        )
+
+        assert metadata.get("gridSystem") == "h3", (
+            f"row {i}: tile.metadata['gridSystem'] expected 'h3', "
+            f"got {metadata.get('gridSystem')!r}"
+        )

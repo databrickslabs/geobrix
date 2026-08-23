@@ -10,6 +10,7 @@ bash scripts/commands/gbx-docs-build.sh [OPTIONS]
 
 ## Options
 
+- `--strict` - Fail (exit non-zero) if Docusaurus reports **broken links**. Use for a green validation gate (pre-push / CI). Default is **permissive**: `onBrokenLinks='warn'` means broken links are reported but the build still exits 0, so the routine build + dev-server-restart flow isn't blocked by a stray broken link. Under `--strict` the dev server is still restarted (port 3000 is never left down); only the exit code fails.
 - `--no-restart` - Do not restart the dev server after building (it is still stopped first if running)
 - `--log <path>` - Write output to log file (filename → `test-logs/<name>`)
 - `--help` - Display help message
@@ -23,11 +24,14 @@ bash scripts/commands/gbx-docs-build.sh [OPTIONS]
 ## Examples
 
 ```bash
-# Verify docs compile; a running dev server is stopped, built, and restarted
+# Verify docs compile; a running dev server is stopped, built, and restarted (permissive)
 bash scripts/commands/gbx-docs-build.sh
 
-# CI-style check without bringing a dev server back up
-bash scripts/commands/gbx-docs-build.sh --no-restart
+# Strict validation gate — fail on any broken link (e.g. before a push)
+bash scripts/commands/gbx-docs-build.sh --strict
+
+# CI-style strict check without bringing a dev server back up
+bash scripts/commands/gbx-docs-build.sh --strict --no-restart
 ```
 
 ## Notes

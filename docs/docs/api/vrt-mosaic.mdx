@@ -13,6 +13,8 @@ opened by any GDAL-based tool without knowing where the tiles came from. On the
 reading side, pointing a GeoBrix reader at `mosaic.vrt` expands it back into one
 virtual tile per member, so all `rst_*` functions work per-tile unchanged.
 
+![GeoBrix VRT mosaic flow — a single large raster too big to hold as one COG or in per-task memory is split by the cog_gbx writer in mosaic mode into a grid of bounded mini-COGs, each read window-by-window so the source is never fully materialised in RAM; the tiles are described by a lightweight, portable mosaic.vrt index — a GDAL lens that the writer can persist with relative paths or mint_vrt can build on demand with absolute paths, and that opens in any GDAL tool such as QGIS, gdalinfo, or rio-tiler with no GeoBrix needed; a GeoBrix reader pointed at the VRT then expands it back into one bytes-free virtual tile per member, so rst_* functions run per-tile distributed across the cluster and a windowed read touches only the tiles intersecting the viewport](../../../resources/images/diagrams/rasterx/vrt-mosaic.png)
+
 This complements the [File Column](../readers/file) table and
 [Volume](../api/large-rasters) modes as a storage form for distributed raster
 processing:

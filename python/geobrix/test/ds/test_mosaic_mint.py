@@ -227,3 +227,46 @@ def test_mint_vrt_no_osgeo():
     # Reject any actual import of osgeo (allow doc-string mentions like "no osgeo").
     osgeo_imports = re.findall(r"^(?:import|from)\s+osgeo\b.*$", src_text, re.MULTILINE)
     assert not osgeo_imports, f"_mosaic.py must not import osgeo: {osgeo_imports}"
+
+
+# ---------------------------------------------------------------------------
+# 7. minted_vrt context-manager cleans up its temp dir on exit
+# ---------------------------------------------------------------------------
+
+
+def test_minted_vrt_contextmanager_cleans_up(tmp_path):
+    """minted_vrt yields a working VRT, then removes its temp dir on exit —
+    leaving the member tiles intact."""
+    from databricks.labs.gbx.ds._mosaic import minted_vrt
+
+    tiles = _write_tile_grid(tmp_path, n_cols=2, n_rows=1)
+
+    with minted_vrt(tiles) as vrt_path:
+        assert os.path.exists(vrt_path), "VRT should exist inside the block"
+        tmp_dir = os.path.dirname(vrt_path)
+        assert os.path.isdir(tmp_dir)
+        with rasterio.open(vrt_path) as ds:
+            assert ds.count == 1
+            assert ds.width == _TILE_W * 2  # two adjacent columns
+
+    # After the block: transient VRT + its temp dir are gone; tiles untouched.
+    assert not os.path.exists(vrt_path), "VRT temp file should be cleaned up"
+    assert not os.path.exists(tmp_dir), "temp dir should be removed"
+    for t in tiles:
+        assert os.path.exists(t), "member tiles must NOT be removed by cleanup"
+
+
+def test_minted_vrt_cleans_up_on_exception(tmp_path):
+    """The temp dir is removed even when the with-body raises."""
+    from databricks.labs.gbx.ds._mosaic import minted_vrt
+
+    tiles = _write_tile_grid(tmp_path, n_cols=2, n_rows=1)
+    tmp_dir = None
+    try:
+        with minted_vrt(tiles) as vrt_path:
+            tmp_dir = os.path.dirname(vrt_path)
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+    assert tmp_dir is not None, "with-block should have entered"
+    assert not os.path.exists(tmp_dir), "temp dir must be removed on exception too"

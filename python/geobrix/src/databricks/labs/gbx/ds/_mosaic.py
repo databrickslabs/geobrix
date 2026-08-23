@@ -24,11 +24,12 @@ import logging
 import os
 import shutil
 import tempfile
-from typing import List, Optional
+from contextlib import contextmanager
+from typing import Iterator, List, Optional
 
 from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
 
-__all__ = ["mint_vrt"]
+__all__ = ["mint_vrt", "minted_vrt"]
 
 _logger = logging.getLogger(__name__)
 
@@ -90,3 +91,43 @@ def mint_vrt(tile_paths: List[str], out: Optional[str] = None) -> str:
         "mint_vrt: wrote %d-tile transient VRT to %s", len(abs_paths), vrt_path
     )
     return vrt_path
+
+
+@contextmanager
+def minted_vrt(tile_paths: List[str]) -> Iterator[str]:
+    """Context-manager form of :func:`mint_vrt` that cleans up the temp VRT.
+
+    Builds a transient VRT over *tile_paths* in a private temp directory
+    (absolute member paths), yields its path for the duration of the ``with``
+    block, and removes the temp directory (and the ``.vrt`` in it) on exit —
+    including when the block raises. Member tiles are referenced by absolute
+    path and are NOT copied into the temp dir, so cleanup never touches them.
+
+    Use this for the common driver-side pattern of minting a VRT, opening it
+    with rasterio for a windowed read, and discarding it::
+
+        with minted_vrt(tile_paths) as vrt_path:
+            with rasterio.open(vrt_path) as ds:
+                data = ds.read(window=viewport)
+
+    For a VRT that must PERSIST — reopened later, or read from workers or an
+    external GDAL tool — call :func:`mint_vrt` with an explicit ``out`` on a
+    Volume instead (see the VRT Mosaics docs for the reachability rules).
+
+    Parameters
+    ----------
+    tile_paths:
+        Non-empty list of absolute paths to COG tiles (same constraints as
+        :func:`mint_vrt`).
+
+    Yields
+    ------
+    str
+        Absolute path to the transient VRT, valid only inside the ``with``.
+    """
+    vrt_path = mint_vrt(tile_paths)
+    tmp_dir = os.path.dirname(vrt_path)
+    try:
+        yield vrt_path
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)

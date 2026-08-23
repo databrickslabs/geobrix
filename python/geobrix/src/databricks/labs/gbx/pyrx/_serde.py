@@ -19,7 +19,7 @@ always ``V2_TILE_SCHEMA`` (enforced by G1, test_v2_tile_output_invariant.py).
 """
 
 from contextlib import contextmanager
-from typing import Dict, Iterator
+from typing import Dict, Iterator, Optional
 
 from pyspark.sql.types import (
     BinaryType,
@@ -67,7 +67,9 @@ def build_error_tile(last_error: str, cellid: int = -1) -> Dict:
     }
 
 
-def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:
+def build_tile(
+    raster_bytes: bytes, driver: str, cellid: int = 0, grid_system: Optional[str] = None
+) -> Dict:
     """Construct a **v2-materialized** tile struct dict from raster BINARY content.
 
     Opens the raster to record driver/width/height/count in ``metadata`` and
@@ -75,6 +77,11 @@ def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:
     provenance field (``path``/``window``/``clip_polygon``/``clip_crs``/``crs``/
     ``path_mode``) NULL — the canonical materialized tile. Nothing in the light
     tier emits the legacy 3-field struct anymore.
+
+    When *grid_system* is not None, ``metadata["gridSystem"]`` is set to the
+    given string so consumers can disambiguate the DGGS a ``cellid`` belongs to.
+    The tessellate UDTFs pass ``"h3"``, ``"quadbin"``, or ``"bng"``; other callers
+    (e.g. rasterize_agg) omit it, leaving the key absent.
     """
     raster = bytes(raster_bytes)
     with open_tile(raster) as ds:
@@ -84,4 +91,6 @@ def build_tile(raster_bytes: bytes, driver: str, cellid: int = 0) -> Dict:
             "height": str(ds.height),
             "count": str(ds.count),
         }
+    if grid_system is not None:
+        meta["gridSystem"] = grid_system
     return VirtualTile(cellid=int(cellid), raster=raster, metadata=meta).to_row()

@@ -147,13 +147,6 @@ df = spark.read.format("cog_gbx").load("/Volumes/.../mosaic/mosaic.vrt")
 Full detail — including `mint_vrt` for on-demand transient VRTs — is on the
 [VRT & Mosaics](../api/vrt-mosaic) page.
 
-## Next steps
-
-- [File Lister](./file) — list source files before preparation
-- [COG Writer](../writers/cog) — prepare master COGs from source rasters
-- [VRT & Mosaics](../api/vrt-mosaic) — load a `mosaic.vrt` to expand a tile directory into virtual tile rows
-- [Raster Functions](../api/raster-functions) — process the clipped tiles
-
 ## Common functions: used vs excluded
 
 See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
@@ -168,3 +161,10 @@ primitives. The table below shows which are active in this reader and which are 
 :::note Shared file-access layer
 Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::
+
+## Next steps
+
+- [File Lister](./file) — list source files before preparation
+- [COG Writer](../writers/cog) — prepare master COGs from source rasters
+- [VRT & Mosaics](../api/vrt-mosaic) — load a `mosaic.vrt` to expand a tile directory into virtual tile rows
+- [Raster Functions](../api/raster-functions) — process the clipped tiles

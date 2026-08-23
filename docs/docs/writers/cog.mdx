@@ -62,7 +62,12 @@ root
 Alternatively, supply any DataFrame with at minimum a `path` string column and
 set `nameCol="path"` to use the basename of the path as the output filename.
 
-## Options
+## COG Options
+
+These options control per-file COG encoding. For VRT-mosaic mode
+(`vrtMosaic` / `gridSystem`), see [Mosaic-mode options](#mosaic-mode-options)
+below — mosaic mode has its own tile-grid and index options in addition to
+these encoding options.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -227,14 +232,6 @@ For a tile DataFrame produced by a raster reader, use
 `df.write.format("gtiff_gbx").option("cog", "true").save(...)`. For source
 files on disk that need preparation before distributed reading, use `cog_gbx`.
 
-## Next steps
-
-- [Large Rasters](../api/large-rasters) — formats, BigTIFF, the memory model, and `prepare_cogs`
-- [VRT & Mosaics](../api/vrt-mosaic) — tile a large source into bounded mini-COGs; native or quadbin grid; optional VRT index
-- [File Lister](../readers/file) — list source files before preparation
-- [COG Reader](../readers/cog) — windowed read from prepared COGs
-- [Raster Reader](../readers/raster) — decode rasters into the `(source, tile)` schema
-
 ## Common functions: used vs excluded
 
 See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
@@ -249,3 +246,11 @@ primitives. The table below shows which are active in this writer and which are 
 :::note Shared file-access layer
 Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::
+
+## Next steps
+
+- [Large Rasters](../api/large-rasters) — formats, BigTIFF, the memory model, and `prepare_cogs`
+- [VRT & Mosaics](../api/vrt-mosaic) — tile a large source into bounded mini-COGs; native or quadbin grid; optional VRT index
+- [File Lister](../readers/file) — list source files before preparation
+- [COG Reader](../readers/cog) — windowed read from prepared COGs
+- [Raster Reader](../readers/raster) — decode rasters into the `(source, tile)` schema

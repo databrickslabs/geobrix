@@ -219,6 +219,9 @@ def _import_notebook(
     stem = local_path.stem  # filename without .ipynb
     ws_path = f"{ws_dir.rstrip('/')}/{stem}"
 
+    # Ensure the target workspace folder exists — import_ raises ResourceDoesNotExist
+    # if the parent folder is absent (mkdirs is idempotent, creates parents).
+    w.workspace.mkdirs(ws_dir.rstrip("/"))
     w.workspace.import_(
         path=ws_path,
         format=ImportFormat.JUPYTER,

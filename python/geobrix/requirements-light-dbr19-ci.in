@@ -87,6 +87,10 @@ netcdf4==1.7.2
 # match requirements-dev-container.in. ---
 requests==2.32.3
 tenacity==9.1.4
+# Cap idna to the dogfood serverless env-v6 base (3.11): uncapped it floats to the
+# latest (3.19) and shadows the base, firing the "core package changed: idna" notice.
+# Mirrors the [light_dbr19] pyproject pin (idna<3.12) and [light]'s idna<3.8.
+idna<3.12
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
 # Runtime-only for the real EMIT path; unit tests inject a fake. Keep in lockstep
 # with the [stac] pyproject extra + requirements-dev-container.in.

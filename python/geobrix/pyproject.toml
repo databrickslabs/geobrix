@@ -152,9 +152,10 @@ light = [
 # Classic DBR 19 variant: grpcio-status on DBR 19 requires protobuf>=6.31.1,
 # which conflicts with the <2.2 cap on mapbox-vector-tile (2.2.0 requires
 # protobuf>=6.31.1). Dropping that cap is the SOLE structurally necessary
-# change from [light]. The idna cap removal and rio-tiler relaxation are
-# OPTIONAL cleanliness changes; they are gated on on-cluster validation
-# (Task 6 — on-cluster smoke test) confirming they do not regress DBR 19 imports. Spec §7.
+# change from [light]. The rio-tiler relaxation is an OPTIONAL cleanliness
+# change validated on-cluster. NOTE: idna is CAPPED here (idna<3.12, see below) —
+# not removed — to keep the dogfood serverless env-v6 base idna (3.11) and silence
+# the "core package changed: idna" notice (light_dbr19 also runs on serverless v6).
 light_dbr19 = [
     "geobrix[light-base]",
     # --- Classic DBR 19 runtime-sensitive pins ---
@@ -165,9 +166,14 @@ light_dbr19 = [
     # to <9.3 here if validation fails (conservative fallback, OQ2).
     "rio-tiler>=9.0,<9.4",
     "httpcore>=1.0.9",          # DBR 19 ships >=1.0.9; floor harmless
-    # OPTIONAL: idna cap dropped (cleanliness). DBR 19 manages its own idna;
-    # the Serverless notebook-change warning does not apply on classic compute.
-    # Gated on Task 6 confirming idna>=3.8 does not cause import errors on DBR 19.
+    # idna cap: keep the dogfood serverless env-v6 base idna (3.11). idna is an
+    # unbounded transitive dep (requests/anyio/httpx); uncapped, pip floats it to
+    # the latest (3.19), which shadows the env base and fires the "a core package
+    # changed: idna" notebook notice on dogfood serverless. Nothing needs the newer
+    # idna, so cap it (mirrors [light]'s idna<3.8 for env v5). Confirmed 2026-08-23:
+    # light_dbr19 runs on dogfood SERVERLESS env v6, not only classic — the notice
+    # DOES apply there. idna 3.x is API-stable so this is cosmetic (silences the notice).
+    "idna<3.12",
     # REQUIRED: Drop <2.2 cap — protobuf>=6.31.1 is expected/required on DBR 19.
     # This is the SOLE structurally necessary delta from [light].
     "mapbox-vector-tile>=2.2",

@@ -3,6 +3,9 @@ sidebar_position: 5
 title: Coordinate Reference Systems
 ---
 
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import crsGridCode from '!!raw-loader!../../tests/python/api/crs_grid_registration.py';
+
 # Coordinate Reference Systems
 
 A **coordinate reference system (CRS)** ties a raster's or geometry's coordinates to a place on Earth. GeoBrix supports CRS handling **across all three packages** — RasterX, GridX, and VectorX — and across **both raster execution tiers** (lightweight `pyrx` and heavyweight `rasterx`). This page explains the two ways GeoBrix names a CRS — the integer **SRID** and the **CRS string** — when to use each, and how a non-EPSG CRS (an ESRI code, WKT, or PROJ4 definition) survives a full read → operate → write round trip.
@@ -144,8 +147,76 @@ If a transformation's grid file is not found, PROJ falls back to a **lower-accur
 :::
 
 :::note Serverless / no-egress
-`PROJ_NETWORK=ON` needs outbound network access to the PROJ CDN, which is typically unavailable on Serverless. There, stage the grid files you need to a location PROJ searches instead of relying on the CDN. A GeoBrix-standardized way to reference **customer-supplied** grid files (staging to a Volume and extending the PROJ search path across both tiers) is a planned follow-up; today you can prepend your own directory to `PROJ_DATA` in the cluster/executor environment (e.g. `PROJ_DATA=/Volumes/<catalog>/<schema>/proj-grids:/databricks/native/proj-data`).
+`PROJ_NETWORK=ON` needs outbound network access to the PROJ CDN, which is typically unavailable on Serverless. There, stage the grid files you need to a Volume and use `gbx.register_proj_grids` to point PROJ at them — see [Registering custom grid files](#registering-custom-grid-files) below.
 :::
+
+## Registering custom grid files
+
+When your workflow depends on a datum-grid transform — OSGB36↔ETRS89 via OSTN15, NAD27↔NAD83 via NADCON, a national geoid grid, or any CRS whose WKT or PROJ4 string references a grid file — you can stage the grid files to a Unity Catalog Volume and register the directory with GeoBrix once at session start. After that, every CRS-handling function across all packages and on both tiers finds the files automatically on the PROJ search path.
+
+### Stage your grid files to a Volume
+
+Unity Catalog Volumes are FUSE-mounted at the same path on every driver and worker node, so a file staged once is available everywhere without copying:
+
+```bash
+# Example: copy your grid files to a Volume using the Databricks CLI
+databricks fs cp OSTN15_NTv2_OSGBtoETRS.gsb \
+    dbfs:/Volumes/<catalog>/<schema>/proj-grids/OSTN15_NTv2_OSGBtoETRS.gsb
+```
+
+GeoBrix recognizes files ending in `.gsb` (NTv2), `.tif` (PROJ geoid/deformation), `.gtx`, or `.gsa`.
+
+### Call register_proj_grids once at session start
+
+```python
+import databricks.labs.gbx as gbx
+from databricks.labs.gbx.pyrx import functions as rx   # or pyvx, pygx, etc.
+
+# Call once, before running any CRS transform:
+gbx.register_proj_grids(spark, "/Volumes/<catalog>/<schema>/proj-grids")
+rx.register(spark)
+```
+
+After this call, every CRS-handling function — `rst_transformcrs`, `st_transformcrs`, grid-aggregation reprojection, and all raster-reader clipping — finds your grid files on its PROJ search path, on every worker, on both the lightweight and heavyweight tiers.
+
+You can also pass a list of directories, or accumulate directories across multiple calls:
+
+```python
+gbx.register_proj_grids(spark, [
+    "/Volumes/<catalog>/<schema>/proj-grids",
+    "/Volumes/<catalog>/<schema>/extra-grids",
+])
+```
+
+Directories are searched in registration order. Earlier-registered directories have higher PROJ search priority. To reset and start over, pass `replace=True`:
+
+```python
+gbx.register_proj_grids(spark, "/Volumes/<catalog>/<schema>/proj-grids", replace=True)
+```
+
+### Session-start contract
+
+`register_proj_grids` must be called **before** any transform that needs the grid. Transforms defined and run after the call see the grids on every worker — including workers that scale up later, because the directory list is embedded in the UDF closures (lightweight tier) and in each query plan (heavyweight tier). Transforms already planned before the call do not pick up new directories retroactively.
+
+:::warning Mitigates silent accuracy loss
+If a grid file is not found, PROJ falls back to a lower-accuracy transform and continues without raising — the reprojection "works" but can be off by metres. `register_proj_grids` warns loudly when a directory does not exist or contains no recognizable grid file, so accuracy problems surface at registration time rather than silently at transform time.
+:::
+
+### Example
+
+The following example calls `register_proj_grids` and then runs `st_transformcrs` through a CRS that references a datum grid. The grid is applied and the shift appears in the output — proving the file was found on the search path:
+
+<CodeFromTest
+  code={crsGridCode}
+  functionName="register_custom_grids_example"
+  language="python"
+  source="docs/tests/python/api/crs_grid_registration.py"
+  testFile="docs/tests/python/api/test_crs_grid_registration.py"
+/>
+
+### Relation to PROJ_NETWORK / the CDN
+
+`PROJ_NETWORK=ON` auto-downloads missing grids from the online PROJ CDN — convenient when you have outbound network access and do not want to manage grid files yourself. Volume-staged grids with `register_proj_grids` are the complementary path for Serverless compute and air-gapped environments where network egress is unavailable. The two approaches are independent: you can use either, or both at once.
 
 ## RasterX
 

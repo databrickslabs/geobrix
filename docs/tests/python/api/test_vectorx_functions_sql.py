@@ -53,7 +53,16 @@ def vectorx_registered(spark):
 
     vx.register(spark)
     legacy_vx.register(spark)
-    pyvx.register(spark, only=["gbx_st_shiftlongitude", "gbx_st_wrapx", "gbx_st_split"])
+    pyvx.register(
+        spark,
+        only=[
+            "gbx_st_shiftlongitude",
+            "gbx_st_wrapx",
+            "gbx_st_split",
+            "gbx_st_makevalid",
+            "gbx_st_explainvalidity",
+        ],
+    )
     create_setup_views_vectorx_heavy(spark)
     yield spark
 
@@ -322,6 +331,61 @@ def test_st_split_sql_example(vectorx_registered):
         f"Expected GeometryCollection, got {gc.geom_type}"
     )
     assert len(gc.geoms) == 2, f"Expected 2 pieces from antimeridian split, got {len(gc.geoms)}"
+
+
+# ---------------------------------------------------------------------------
+# Geometry validity family — st_makevalid, st_explainvalidity
+# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
+# Both tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# directly via parse_geom, so no ST_AsBinary wrapper is needed.
+# ---------------------------------------------------------------------------
+
+
+def test_st_makevalid_sql_example(vectorx_registered):
+    """Run the ``gbx_st_makevalid`` SQL example; assert non-null BINARY output.
+
+    Input: bowtie self-intersecting polygon (POLYGON((0 0,1 1,1 0,0 1,0 0))).
+    The linework-level repair should produce a valid geometry (non-null WKB bytes).
+    """
+    import json  # noqa: PLC0415
+
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_makevalid_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["clean"] is not None, "st_makevalid should return non-null WKB bytes"
+    assert isinstance(
+        row["clean"], (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(row['clean'])}"
+    assert len(row["clean"]) > 0, "WKB bytes should be non-empty"
+    # Round-trip: parse the WKB and confirm the repaired geometry is valid.
+    from shapely import is_valid  # noqa: PLC0415
+
+    repaired = wkb_loads(bytes(row["clean"]))
+    assert is_valid(repaired), (
+        f"st_makevalid output should be valid, got geom_type={repaired.geom_type}"
+    )
+
+
+def test_st_explainvalidity_sql_example(vectorx_registered):
+    """Run the ``gbx_st_explainvalidity`` SQL example; assert well-formed JSON with expected fields.
+
+    Input: bowtie self-intersecting polygon (POLYGON((0 0,1 1,1 0,0 1,0 0))).
+    Expected: JSON with valid=false, code=10 (self-intersection), non-null location.
+    """
+    import json  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_explainvalidity_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["detail"] is not None, "st_explainvalidity should return non-null JSON string"
+    assert isinstance(row["detail"], str), f"Expected str, got {type(row['detail'])}"
+    d = json.loads(row["detail"])
+    assert d["valid"] is False, "bowtie polygon should be invalid"
+    assert d["code"] == 10, f"self-intersection should map to code 10, got {d['code']}"
+    assert d["location"] is not None, "GEOS should embed location for self-intersection"
+    assert d["location"].startswith("POINT("), f"location should be POINT WKT, got {d['location']!r}"
 
 
 def test_antimeridian_pattern_sql_example(vectorx_registered):

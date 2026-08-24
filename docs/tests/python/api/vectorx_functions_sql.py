@@ -373,3 +373,65 @@ antimeridian_pattern_sql_example_output = """
 +--------------------+
 ... (WKT — two polygons, one on each side of the 180° antimeridian)
 """
+
+
+# ---------------------------------------------------------------------------
+# Geometry validity family — st_makevalid, st_explainvalidity
+# Light-only (pyvx tier). These functions are pure-Python UDFs — they have
+# no heavyweight Scala equivalent and no JAR dependency.
+# Input: inline WKT string (accepted by pyvx parse_geom via gbx UDFs).
+# Output: BINARY (st_makevalid) / STRING/JSON (st_explainvalidity).
+# NOTE: examples use only gbx_st_* functions — no product ST_* (ST_IsValid,
+# ST_GeomFromText) because the doc-test Spark session is vanilla Spark 4.0.0
+# with no DBR spatial built-ins. Product-gated conditional patterns are shown
+# in the docs prose as illustrative real-cluster usage (precedent: this page's
+# antimeridian section keeps ST_Dump / ST_GeomFromWKB in prose, not executed).
+# ---------------------------------------------------------------------------
+
+
+def st_makevalid_sql_example():
+    """Repair an invalid geometry to OGC-SFS validity (SQL, light pyvx tier).
+
+    A self-intersecting bowtie polygon — ``POLYGON((0 0,1 1,1 0,0 1,0 0))`` —
+    is fed to ``gbx_st_makevalid``.  The default level ``linework`` nodes the
+    self-intersection into a valid geometry.  Input is an inline WKT string
+    accepted directly by the pyvx UDF (no ``ST_AsBinary`` wrapper needed).
+    Output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_makevalid('POLYGON((0 0,1 1,1 0,0 1,0 0))') AS clean
+"""
+
+
+st_makevalid_sql_example_output = """
++--------+
+|clean   |
++--------+
+|[binary]|
++--------+
+... (WKB binary — repaired geometry; bowtie becomes a valid multi-polygon)
+"""
+
+
+def st_explainvalidity_sql_example():
+    """Diagnose SFS validity as JSON {valid, reason, code, location} (SQL, light pyvx tier).
+
+    A self-intersecting bowtie polygon is diagnosed; the JSON shows
+    ``valid=false``, the GEOS reason string (``Self-intersection[0.5 0.5]``),
+    ``code=10`` (the stable self-intersection SFS violation code), and
+    ``location=POINT(0.5 0.5)`` (the coordinate where the violation occurs).
+    Input is an inline WKT string; output is a JSON STRING.
+    """
+    return """
+SELECT gbx_st_explainvalidity('POLYGON((0 0,1 1,1 0,0 1,0 0))') AS detail
+"""
+
+
+st_explainvalidity_sql_example_output = """
++----------------------------------------------------------------------+
+|detail                                                                |
++----------------------------------------------------------------------+
+|{"valid": false, "reason": "Self-intersection[0.5 0.5]", "code": 10,|
++----------------------------------------------------------------------+
+... (JSON string — {valid, reason, code, location} for SFS validity diagnosis)
+"""

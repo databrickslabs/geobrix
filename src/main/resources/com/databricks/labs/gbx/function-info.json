@@ -1624,7 +1624,7 @@
       ]
     },
     "gbx_st_explainvalidity": {
-      "examples": "",
+      "examples": "Examples:\n      > SELECT gbx_st_explainvalidity('POLYGON((0 0,1 1,1 0,0 1,0 0))') AS detail;",
       "bindings": [
         "sql",
         "python-light"
@@ -1660,7 +1660,7 @@
       ]
     },
     "gbx_st_makevalid": {
-      "examples": "",
+      "examples": "Examples:\n      > SELECT gbx_st_makevalid('POLYGON((0 0,1 1,1 0,0 1,0 0))') AS clean;",
       "bindings": [
         "sql",
         "python-light"

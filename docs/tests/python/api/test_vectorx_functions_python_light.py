@@ -282,3 +282,44 @@ def test_st_split_python_light_example(spark):
     assert len(gc.geoms) == 2, (
         f"Expected 2 pieces from antimeridian split at x=180, got {len(gc.geoms)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Geometry validity family — st_makevalid, st_explainvalidity
+# Light-only (pyvx tier). The autouse fixture already registers pyvx.
+# ---------------------------------------------------------------------------
+
+
+def test_st_makevalid_python_light_example(spark):
+    """st_makevalid returns non-null valid WKB bytes for a bowtie self-intersecting polygon."""
+    import json  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_makevalid_python_light_example(spark)
+    assert result is not None, "st_makevalid should return non-null WKB bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(result)}"
+    assert len(result) > 0, "WKB bytes should be non-empty"
+    from shapely import is_valid  # noqa: PLC0415
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    repaired = wkb_loads(bytes(result))
+    assert is_valid(repaired), (
+        f"st_makevalid output should be a valid geometry, got type={repaired.geom_type}"
+    )
+
+
+def test_st_explainvalidity_python_light_example(spark):
+    """st_explainvalidity returns JSON with valid=false, code=10, non-null location for bowtie."""
+    import json  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_explainvalidity_python_light_example(spark)
+    assert result is not None, "st_explainvalidity should return non-null JSON string"
+    assert isinstance(result, str), f"Expected str (JSON), got {type(result)}"
+    d = json.loads(result)
+    assert d["valid"] is False, "bowtie polygon should be invalid"
+    assert d["code"] == 10, f"self-intersection should map to code 10, got {d['code']}"
+    assert d["location"] is not None, "GEOS should embed location for self-intersection"
+    assert d["location"].startswith("POINT("), f"location should be POINT WKT, got {d['location']!r}"

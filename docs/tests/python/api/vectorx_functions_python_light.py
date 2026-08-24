@@ -496,3 +496,62 @@ st_split_python_light_example_output = """
 +--------+
 ... (WKB binary — GeometryCollection with 2 polygon pieces split at x=180)
 """
+
+
+# ---------------------------------------------------------------------------
+# Geometry validity family — st_makevalid, st_explainvalidity
+# Light-only (pyvx tier). These functions are scalar Python UDFs.
+# Input: WKB bytes (created inline via shapely for self-contained examples).
+# Output: BINARY (st_makevalid) / STRING/JSON (st_explainvalidity).
+# ---------------------------------------------------------------------------
+
+
+def st_makevalid_python_light_example(spark):
+    """Repair an invalid geometry to OGC-SFS validity (light pyvx tier).
+
+    Creates a WKB bowtie self-intersecting polygon inline via shapely and
+    repairs it with ``st_makevalid``.  The default ``linework`` level nodes the
+    self-intersection into a valid multi-polygon.  Returns the repaired WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+
+    bowtie = from_wkt("POLYGON((0 0,1 1,1 0,0 1,0 0))")
+    df = spark.createDataFrame([(to_wkb(bowtie),)], ["geom"])
+    return df.select(vx.st_makevalid("geom").alias("clean")).first()["clean"]
+
+
+st_makevalid_python_light_example_output = """
++--------+
+|clean   |
++--------+
+|[binary]|
++--------+
+... (WKB binary — repaired geometry; bowtie becomes a valid multi-polygon)
+"""
+
+
+def st_explainvalidity_python_light_example(spark):
+    """Diagnose SFS validity as JSON {valid, reason, code, location} (light pyvx tier).
+
+    Creates a WKB bowtie self-intersecting polygon inline and calls
+    ``st_explainvalidity``.  Returns the JSON string with ``valid=false``,
+    the GEOS reason string, ``code=10`` (self-intersection), and
+    ``POINT(0.5 0.5)`` as the location where the violation occurs.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+
+    bowtie = from_wkt("POLYGON((0 0,1 1,1 0,0 1,0 0))")
+    df = spark.createDataFrame([(to_wkb(bowtie),)], ["geom"])
+    return df.select(vx.st_explainvalidity("geom").alias("detail")).first()["detail"]
+
+
+st_explainvalidity_python_light_example_output = """
++----------------------------------------------------------------------+
+|detail                                                                |
++----------------------------------------------------------------------+
+|{"valid": false, "reason": "Self-intersection[0.5 0.5]", "code": 10,|
++----------------------------------------------------------------------+
+... (JSON string — {valid, reason, code, location} for SFS validity diagnosis)
+"""

@@ -1,4 +1,3 @@
-import pytest
 from databricks.labs.gbx import crs_grids
 
 

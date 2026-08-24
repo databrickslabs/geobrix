@@ -1,4 +1,5 @@
 """TDD: verify that light UDF factories embed registered PROJ grid dirs in their closures."""
+
 import pytest
 from pyspark.sql.types import IntegerType
 
@@ -37,7 +38,9 @@ def _closure_consts(fn):
 # ---------------------------------------------------------------------------
 
 
-def test_factory_captures_registered_dirs(spark):  # noqa: ARG001 — activates SparkSession
+def test_factory_captures_registered_dirs(
+    spark,
+):  # noqa: ARG001 — activates SparkSession
     proj_grids.set_registered_dirs(["/Volumes/a/grids"])
     udf = _udf.tile_scalar_udf(core_fn=lambda ds: 1, return_type=IntegerType())
     assert ("/Volumes/a/grids",) in _closure_consts(udf)

@@ -1,4 +1,5 @@
 import pytest
+
 from databricks.labs.gbx.core import proj_grids
 
 
@@ -10,7 +11,9 @@ def _clear():
 
 
 def test_single_str_is_wrapped():
-    assert proj_grids.set_registered_dirs("/Volumes/a/b/grids") == ["/Volumes/a/b/grids"]
+    assert proj_grids.set_registered_dirs("/Volumes/a/b/grids") == [
+        "/Volumes/a/b/grids"
+    ]
     assert proj_grids.get_registered_dirs() == ["/Volumes/a/b/grids"]
 
 

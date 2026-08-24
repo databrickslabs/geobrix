@@ -62,7 +62,9 @@ def tile_scalar_udf(core_fn: Callable, return_type: DataType):
 
     @pandas_udf(return_type)
     def _udf(raster: pd.Series) -> pd.Series:
-        _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)  # runs on the worker process
+        _env.configure_gdal_env(
+            extra_proj_dirs=_grid_dirs
+        )  # runs on the worker process
         out = []
         # Per-row loop: rasterio MemoryFile open is inherently per-raster; the
         # Arrow batch still crosses the JVM<->Python boundary once per batch.

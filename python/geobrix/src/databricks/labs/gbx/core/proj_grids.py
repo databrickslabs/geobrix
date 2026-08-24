@@ -19,7 +19,9 @@ def _normalize(dirs: Union[str, Sequence[str]]) -> List[str]:
             if not isinstance(d, str):
                 raise TypeError(f"proj grid dir must be a str, got {type(d).__name__}")
         return list(dirs)
-    raise TypeError(f"dirs must be a str or a sequence of str, got {type(dirs).__name__}")
+    raise TypeError(
+        f"dirs must be a str or a sequence of str, got {type(dirs).__name__}"
+    )
 
 
 def _dedupe(dirs: Sequence[str]) -> List[str]:
@@ -32,7 +34,9 @@ def _dedupe(dirs: Sequence[str]) -> List[str]:
     return out
 
 
-def set_registered_dirs(dirs: Union[str, Sequence[str]], *, replace: bool = False) -> List[str]:
+def set_registered_dirs(
+    dirs: Union[str, Sequence[str]], *, replace: bool = False
+) -> List[str]:
     """Accumulate (default) or replace the registered grid dirs; de-dupe, keep order."""
     global _REGISTERED
     incoming = _normalize(dirs)

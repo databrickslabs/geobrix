@@ -72,7 +72,15 @@ run_check_docker() {
     # --check actually matches CI. (Pin in sync with python/geobrix/requirements-ci.txt.)
     docker exec geobrix-dev /bin/bash -c "cd /root/geobrix/python/geobrix && \
         { pip show flake8-pyproject >/dev/null 2>&1 || pip install -q 'flake8-pyproject==1.2.4' --break-system-packages; } && \
-        isort --check-only src test && black --check src test && flake8 src test"
+        isort_exit=0; black_exit=0; flake8_exit=0; \
+        isort --check-only src test || isort_exit=\$?; \
+        black --check src test || black_exit=\$?; \
+        flake8 src test || flake8_exit=\$?; \
+        echo ''; echo 'Lint stage results:'; \
+        [ \$isort_exit -eq 0 ] && echo '  isort: PASS' || echo '  isort: FAIL (exit code: '\$isort_exit')'; \
+        [ \$black_exit -eq 0 ] && echo '  black: PASS' || echo '  black: FAIL (exit code: '\$black_exit')'; \
+        [ \$flake8_exit -eq 0 ] && echo '  flake8: PASS' || echo '  flake8: FAIL (exit code: '\$flake8_exit')'; \
+        [ \$isort_exit -eq 0 ] && [ \$black_exit -eq 0 ] && [ \$flake8_exit -eq 0 ] || exit 1"
 }
 
 run_fix_docker() {
@@ -91,7 +99,15 @@ run_fix_docker() {
     # flake8 honors [tool.flake8] (ignore=E203,E266,E501,W503; max-line-length=88) like CI.
     docker exec geobrix-dev /bin/bash -c "cd /root/geobrix/python/geobrix && \
         { pip show flake8-pyproject >/dev/null 2>&1 || pip install -q 'flake8-pyproject==1.2.4' --break-system-packages; } && \
-        isort src test && black src test && flake8 src test"
+        isort_exit=0; black_exit=0; flake8_exit=0; \
+        isort src test || isort_exit=\$?; \
+        black src test || black_exit=\$?; \
+        flake8 src test || flake8_exit=\$?; \
+        echo ''; echo 'Lint stage results:'; \
+        [ \$isort_exit -eq 0 ] && echo '  isort: PASS' || echo '  isort: FAIL (exit code: '\$isort_exit')'; \
+        [ \$black_exit -eq 0 ] && echo '  black: PASS' || echo '  black: FAIL (exit code: '\$black_exit')'; \
+        [ \$flake8_exit -eq 0 ] && echo '  flake8: PASS' || echo '  flake8: FAIL (exit code: '\$flake8_exit')'; \
+        [ \$isort_exit -eq 0 ] && [ \$black_exit -eq 0 ] && [ \$flake8_exit -eq 0 ] || exit 1"
 }
 
 if [ "$MODE" = "fix" ]; then

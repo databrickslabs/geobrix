@@ -309,9 +309,12 @@ def _registrar_groups() -> List[_register.Group]:
     def _reg_gbx_st_transformcrs(s):
         from databricks.labs.gbx.core import proj_grids
         from databricks.labs.gbx.pyrx import _env
+
         from . import _crs as _c
 
-        _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
+        _grid_dirs = tuple(
+            proj_grids.get_registered_dirs()
+        )  # captured at build → pickled
 
         def _transformcrs_udf(geom, target_crs, source_crs=None):
             _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)

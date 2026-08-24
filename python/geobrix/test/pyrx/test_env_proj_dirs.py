@@ -1,5 +1,7 @@
 import os
+
 import pytest
+
 from databricks.labs.gbx.pyrx import _env
 
 
@@ -36,6 +38,7 @@ def test_empty_list_is_noop(_isolated_env):
 
 def test_none_reads_registry(monkeypatch, _isolated_env):
     from databricks.labs.gbx.core import proj_grids
+
     monkeypatch.setattr(proj_grids, "get_registered_dirs", lambda: ["/Volumes/reg"])
     _env.configure_gdal_env()  # None → read registry
     assert os.environ["PROJ_DATA"] == "/Volumes/reg:/bundled/proj"

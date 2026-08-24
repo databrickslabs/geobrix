@@ -118,7 +118,9 @@ def _registrar_groups() -> List[_register.Group]:
         from databricks.labs.gbx.core import proj_grids
 
         _grid_dirs = tuple(proj_grids.get_registered_dirs())
-        s.udf.register("gbx_rst_to_webmercator", _build_to_webmercator_sql_udf(_grid_dirs))
+        s.udf.register(
+            "gbx_rst_to_webmercator", _build_to_webmercator_sql_udf(_grid_dirs)
+        )
 
     def _reg_clip(s):
         from databricks.labs.gbx.core import proj_grids
@@ -1547,7 +1549,11 @@ def _build_transform_v2_udf(grid_dirs):
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _transform_bytes(tile, target_srid)
         return _shaped_result_row(
-            new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+            new_bytes,
+            _tile_cellid(tile),
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
         )
 
     return _udf
@@ -1634,7 +1640,11 @@ def _build_to_webmercator_v2_udf(grid_dirs):
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _to_webmercator_bytes(tile, resampling)
         return _shaped_result_row(
-            new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+            new_bytes,
+            _tile_cellid(tile),
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
         )
 
     return _udf
@@ -2037,7 +2047,9 @@ def _build_uf_clip(grid_dirs):
             if geom is None:
                 return None
             with ot._open(tile, file_ref=file_ref) as ds:
-                new_bytes = edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
+                new_bytes = edit.clip_to_geom(
+                    ds, geom, bool(all_touched), geom_crs=clip_crs
+                )
             if new_bytes is None:
                 return None
             return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
@@ -2052,13 +2064,25 @@ def _build_clip_v2_udf(grid_dirs):
     from databricks.labs.gbx.pyrx import _env
 
     @f.udf(V2_TILE_SCHEMA)
-    def _udf(tile, geom_wkb, all_touched, clip_crs, virtualize_dir, virtualize_prefix, materialize):
+    def _udf(
+        tile,
+        geom_wkb,
+        all_touched,
+        clip_crs,
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    ):
         if _tile_is_empty(tile) or geom_wkb is None:
             return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
         return _shaped_result_row(
-            new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+            new_bytes,
+            _tile_cellid(tile),
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
         )
 
     return _udf
@@ -2466,7 +2490,9 @@ def _build_uf_transformcrs(grid_dirs):
         new_bytes = _transformcrs_bytes(tile, crs_value, file_ref=file_ref)
         if new_bytes is None:
             return None
-        return VirtualTile(cellid=_tile_cellid(tile), raster=new_bytes, metadata={}).to_row()
+        return VirtualTile(
+            cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
+        ).to_row()
 
     return _udf
 
@@ -2481,7 +2507,9 @@ def _build_transformcrs_sql_udf(grid_dirs):
             return None
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
         new_bytes = _transformcrs_bytes(tile, crs_value)
-        return VirtualTile(cellid=_tile_cellid(tile), raster=new_bytes, metadata={}).to_row()
+        return VirtualTile(
+            cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
+        ).to_row()
 
     return _udf
 

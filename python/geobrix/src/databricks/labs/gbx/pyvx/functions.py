@@ -636,7 +636,8 @@ def st_makevalid(geom: ColLike, level: ColLike = None) -> Column:
 
     Args:
         geom:  BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
-        level: Repair strategy: ``'linework'`` (default) or ``'structure'``.
+        level: Repair strategy: ``'linework'`` (default), ``'structure'``, or
+               ``'ogc'`` (OGC topology repair only, no ring-orientation normalization).
                ``'cleaning'`` / ``'full'`` are reserved for a later release.
 
     Returns:

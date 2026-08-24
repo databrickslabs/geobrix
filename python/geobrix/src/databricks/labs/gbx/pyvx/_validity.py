@@ -2,14 +2,21 @@
 
 Single-geometry OGC-SFS validity: repair (``st_makevalid``) and diagnose
 (``explain_validity``). WKB in/out, CRS preserved (never reprojected). See
-docs/docs/api/geometry-validity-antimeridian.mdx.
+docs/docs/api/geometry-validity.mdx.
 """
 
 import json
 import re
 from typing import Optional
 
-from shapely import get_srid, is_valid_reason, make_valid, orient_polygons, set_srid, to_wkb
+from shapely import (
+    get_srid,
+    is_valid_reason,
+    make_valid,
+    orient_polygons,
+    set_srid,
+    to_wkb,
+)
 
 from ._geom import parse_geom
 

@@ -48,7 +48,7 @@ dev = [
 ]
 test = [
     "pytest>=7.0",
-    "shapely>=2.0.0",
+    "shapely>=2.1.0",
     "rasterio>=1.3.0",
     "numpy>=1.24.0",
     # pyvx (light VectorX / MVT) tests use mapbox-vector-tile as the decode
@@ -64,7 +64,7 @@ test = [
 # (classic DBR 19+) instead.
 light-base = [
     "rasterio>=1.3.0",
-    "shapely>=2.0.0",
+    "shapely>=2.1.0",
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "pyarrow>=11.0.0",

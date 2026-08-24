@@ -1,19 +1,22 @@
 import json
 
 import pytest
-from shapely import from_wkt, is_ccw, is_valid, set_srid, get_srid
-from shapely import from_wkb
+from shapely import from_wkb, from_wkt, get_srid, is_ccw, is_valid, set_srid
 
 from databricks.labs.gbx.pyvx import _validity as v
 
 # GEOS-verified corpus (shapely 2.1.2 / GEOS 3.13.1):
 # reason strings embed location as "Reason[x y]".
-BOWTIE = "POLYGON((0 0,1 1,1 0,0 1,0 0))"                      # Self-intersection[0.5 0.5]
-HOLE_OUT = "POLYGON((0 0,0 3,3 3,3 0,0 0),(5 5,5 6,6 5,5 5))"  # Hole lies outside shell[5 5]
-NESTED = "POLYGON((0 0,0 10,10 10,10 0,0 0),(1 1,1 9,9 9,9 1,1 1),(2 2,2 8,8 8,8 2,2 2))"
+BOWTIE = "POLYGON((0 0,1 1,1 0,0 1,0 0))"  # Self-intersection[0.5 0.5]
+HOLE_OUT = (
+    "POLYGON((0 0,0 3,3 3,3 0,0 0),(5 5,5 6,6 5,5 5))"  # Hole lies outside shell[5 5]
+)
+NESTED = (
+    "POLYGON((0 0,0 10,10 10,10 0,0 0),(1 1,1 9,9 9,9 1,1 1),(2 2,2 8,8 8,8 2,2 2))"
+)
 #  ^ Holes are nested[2 2]
-TOOFEW = "POLYGON((0 0,1 1,0 0))"                               # Too few points in geometry component[0 0]
-VALID = "POLYGON((0 0,0 1,1 1,1 0,0 0))"                        # Valid Geometry
+TOOFEW = "POLYGON((0 0,1 1,0 0))"  # Too few points in geometry component[0 0]
+VALID = "POLYGON((0 0,0 1,1 1,1 0,0 0))"  # Valid Geometry
 
 # Extended corpus — full GEOS single-geometry validity-reason taxonomy.
 #
@@ -27,7 +30,9 @@ VALID = "POLYGON((0 0,0 1,1 1,1 0,0 0))"                        # Valid Geometry
 #       "Self-intersection" before the duplicate-ring check fires.
 #       Mapping kept; not testable via a plain polygon+duplicate-holes WKT.
 
-RING_SELF_INTERSECT = "POLYGON((0 0,2 2,4 0,4 4,2 2,0 4,0 0))"  # Ring Self-intersection[2 2]
+RING_SELF_INTERSECT = (
+    "POLYGON((0 0,2 2,4 0,4 4,2 2,0 4,0 0))"  # Ring Self-intersection[2 2]
+)
 INTERIOR_DISCONNECTED = (
     "POLYGON((0 0,0 10,10 10,10 0,0 0),(0 5,5 10,10 5,5 0,0 5))"
     # Interior is disconnected[10 5]: diamond hole touches all 4 sides of the
@@ -82,7 +87,7 @@ def test_makevalid_rejects_full_level():
 
 def test_makevalid_preserves_srid():
     g = set_srid(from_wkt(BOWTIE), 4326)
-    out = v.st_makevalid(g.wkb if False else v_to_ewkb(g))  # see helper below
+    out = v.st_makevalid(v_to_ewkb(g))
     assert get_srid(from_wkb(out)) == 4326
 
 
@@ -210,7 +215,7 @@ def test_explain_duplicate_holes_actual_geos_reason():
     assert d["location"] is not None
 
 
-def test_explain_structural_reason_null_location_when_absent():
+def test_explain_toofew_maps_structural_code():
     # "Too few points in geometry component" (code 1).
     # GEOS 3.13.1 embeds a location in this reason string; the test asserts
     # code maps correctly and the JSON is well-formed.

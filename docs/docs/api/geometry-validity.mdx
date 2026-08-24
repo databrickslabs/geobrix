@@ -189,6 +189,7 @@ The `code` field in `gbx_st_explainvalidity` output maps the GEOS reason prefix 
 | `1` | Too few points in geometry component | Ring has fewer than 4 points |
 | `2` | Invalid coordinate | Non-finite coordinate (NaN / Inf) |
 | `3` | Ring not closed | First and last ring vertices differ |
+| `4` | Repeated point | Consecutive duplicate vertices in a ring. Current GEOS (3.13.1) does not flag this as invalid — the code is mapped for completeness but no current GEOS version emits this reason |
 | `10` | Self-intersection | Shell or hole edges cross each other |
 | `11` | Ring Self-intersection | A ring touches itself at a vertex (bowtie) |
 | `20` | Hole lies outside shell | A hole is not contained within its outer ring |

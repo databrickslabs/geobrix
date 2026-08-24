@@ -99,11 +99,16 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     override def beforeAll(): Unit = {
         // Resolve the committed fixture dir. Prefer the on-cluster /Volumes path (the
-        // documented registered-grid location, mounted in the dev container); fall back
-        // to the repo checkout so the test does not depend on the mount.
+        // documented registered-grid location) and the dev-container mount; finally fall
+        // back to the working-dir-relative repo checkout so the test does not depend on a
+        // mount — this is what resolves the committed fixture on a CI runner (checkout at
+        // ${user.dir}) or a plain host checkout.
         val candidates = Seq(
           "/Volumes/main/geobrix_samples/geobrix-examples/proj-grids",
-          "/root/geobrix/sample-data/Volumes/main/geobrix_samples/geobrix-examples/proj-grids"
+          "/root/geobrix/sample-data/Volumes/main/geobrix_samples/geobrix-examples/proj-grids",
+          new java.io.File(
+            "sample-data/Volumes/main/geobrix_samples/geobrix-examples/proj-grids"
+          ).getAbsolutePath
         )
         gridDir = candidates.find(d => Files.isRegularFile(Paths.get(d, "synthetic.gsb")))
             .getOrElse(candidates.head)

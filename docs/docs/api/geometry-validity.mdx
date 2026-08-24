@@ -31,7 +31,7 @@ GeoBrix fills those gaps with two light-tier functions:
 
 Understanding which tool catches which invalidity class matters for the conditional-repair pattern.
 
-| Invalidity class | `ST_IsValid` | Shapely `is_valid` | `gbx_st_explainvalidity` / `gbx_st_makevalid` |
+| Invalidity class | `ST_IsValid`<br/>(product) | Shapely `is_valid` | `gbx_st_explainvalidity` / `gbx_st_makevalid` |
 |---|---|---|---|
 | Self-touching ring (bowtie at vertex) | Flags invalid | Flags invalid | Diagnoses + repairs |
 | Self-intersecting shell (edge crossing) | Flags invalid | Flags invalid | Diagnoses + repairs |

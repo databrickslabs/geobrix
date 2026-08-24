@@ -6,7 +6,7 @@ collide with any cluster-level GDAL installed by the heavyweight init script.
 """
 
 import os
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 
 def _bundled_gdal_data() -> Optional[str]:
@@ -41,19 +41,43 @@ def _bundled_proj_data() -> Optional[str]:
         return None
 
 
-def configure_gdal_env() -> None:
-    """Idempotently set GDAL_DATA / PROJ_DATA from rasterio's bundled data.
+def _prepend_unique(base: str, extra: Sequence[str]) -> str:
+    """Colon-join `extra` dirs ahead of `base`, de-duped, preserving order."""
+    parts = []
+    for d in list(extra) + ([base] if base else []):
+        for seg in d.split(os.pathsep) if d else []:
+            if seg and seg not in parts:
+                parts.append(seg)
+    return os.pathsep.join(parts)
 
-    Existing values are respected (never overwritten).
+
+def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
+    """Idempotently set GDAL_DATA / PROJ_DATA, prepending custom grid dirs.
+
+    extra_proj_dirs:
+      - None  -> read the driver-side registry (correct only on the driver).
+      - list  -> use exactly these (what worker UDF closures pass); [] = none.
+    Custom dirs are prepended ahead of the bundled PROJ data so user grids win.
     """
     if not os.environ.get("GDAL_DATA"):
         p = _bundled_gdal_data()
         if p:
             os.environ["GDAL_DATA"] = p
-    if not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
+
+    if extra_proj_dirs is None:
+        from databricks.labs.gbx.core import proj_grids
+        extra_proj_dirs = proj_grids.get_registered_dirs()
+
+    base = os.environ.get("PROJ_DATA") or os.environ.get("PROJ_LIB") or ""
+    if not base:
         p = _bundled_proj_data()
         if p:
-            os.environ["PROJ_DATA"] = p
+            base = p
+
+    if extra_proj_dirs:
+        os.environ["PROJ_DATA"] = _prepend_unique(base, extra_proj_dirs)
+    elif base and not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
+        os.environ["PROJ_DATA"] = base
 
 
 def assert_rasterio_available() -> Tuple[str, str]:

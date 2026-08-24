@@ -40,6 +40,8 @@ PYTHON_ROOT = REPO_ROOT / "python/geobrix/src"
 # requirement; they still require a Python binding and a function-info.json entry. Issue #34.
 PYTHON_REGISTERED = {
     "gbx_rst_fromfile",
+    "gbx_st_explainvalidity",
+    "gbx_st_makevalid",
     "gbx_st_shiftlongitude",
     "gbx_st_split",
     "gbx_st_wrapx",

@@ -1623,6 +1623,13 @@
         "scala"
       ]
     },
+    "gbx_st_explainvalidity": {
+      "examples": "",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
     "gbx_st_interpolateelevationbbox": {
       "examples": "Examples:\n      > SELECT t.elevation_point FROM tin_survey LATERAL VIEW gbx_st_interpolateelevationbbox(pts, bl, 0, 0, 'NONENCROACHING', 0, 0, 10, 10, 3, 3, 0, 'constrained') t AS elevation_point;",
       "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode]",
@@ -1650,6 +1657,13 @@
         "python-light",
         "python-heavy",
         "scala"
+      ]
+    },
+    "gbx_st_makevalid": {
+      "examples": "",
+      "bindings": [
+        "sql",
+        "python-light"
       ]
     },
     "gbx_st_setcrs": {

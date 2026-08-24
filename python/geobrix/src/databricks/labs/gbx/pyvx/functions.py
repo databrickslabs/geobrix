@@ -350,6 +350,26 @@ def _registrar_groups() -> List[_register.Group]:
         "gbx_st_wrapx": _reg_gbx_st_wrapx,
         "gbx_st_split": _reg_gbx_st_split,
     }
+
+    def _reg_gbx_st_makevalid(s):
+        from . import _validity as _v
+
+        def _makevalid_udf(geom, level=None):
+            return _v._udf_st_makevalid(geom, level)
+
+        s.udf.register("gbx_st_makevalid", _makevalid_udf, BinaryType())
+
+    def _reg_gbx_st_explainvalidity(s):
+        from . import _validity as _v
+
+        s.udf.register(
+            "gbx_st_explainvalidity", _v._udf_st_explainvalidity, StringType()
+        )
+
+    validity = {
+        "gbx_st_makevalid": _reg_gbx_st_makevalid,
+        "gbx_st_explainvalidity": _reg_gbx_st_explainvalidity,
+    }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
         (lambda: _env.assert_legacy_available(), legacy),
@@ -357,6 +377,7 @@ def _registrar_groups() -> List[_register.Group]:
         (lambda: None, pmtiles),
         (lambda: _env.assert_crs_available(), crs),
         (lambda: True, antimeridian),
+        (lambda: True, validity),
     ]
 
 
@@ -608,3 +629,33 @@ def st_split(input_geom: ColLike, blade_geom: ColLike) -> Column:
         BINARY column: EWKB GEOMETRYCOLLECTION of the split pieces.
     """
     return f.call_function("gbx_st_split", _col(input_geom), _col(blade_geom))
+
+
+def st_makevalid(geom: ColLike, level: ColLike = None) -> Column:
+    """Repair a geometry to OGC-SFS validity (SQL surface, BINARY output).
+
+    Args:
+        geom:  BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        level: Repair strategy: ``'linework'`` (default) or ``'structure'``.
+               ``'cleaning'`` / ``'full'`` are reserved for a later release.
+
+    Returns:
+        BINARY column: EWKB repaired geometry, or NULL when input is NULL.
+    """
+    if level is None:
+        return f.call_function("gbx_st_makevalid", _col(geom))
+    return f.call_function("gbx_st_makevalid", _col(geom), _col(level))
+
+
+def st_explainvalidity(geom: ColLike) -> Column:
+    """Diagnose SFS validity: JSON ``{valid, reason, code, location}`` (STRING).
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+
+    Returns:
+        STRING column: JSON object with keys ``valid`` (bool), ``reason`` (str),
+        ``code`` (int or null — stable GeoBrix reason code), ``location``
+        (WKT POINT or null — GEOS-reported violation site). NULL when input is NULL.
+    """
+    return f.call_function("gbx_st_explainvalidity", _col(geom))

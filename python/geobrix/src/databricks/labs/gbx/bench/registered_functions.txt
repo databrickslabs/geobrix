@@ -184,3 +184,5 @@ gbx_st_transformcrs
 gbx_st_shiftlongitude
 gbx_st_split
 gbx_st_wrapx
+gbx_st_explainvalidity
+gbx_st_makevalid

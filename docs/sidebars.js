@@ -125,7 +125,16 @@ const sidebars = {
             'api/raster-sampling',
           ],
         },
-        { type: 'doc', id: 'api/vectorx-functions', label: 'VectorX' },
+        {
+          type: 'category',
+          label: 'VectorX',
+          collapsed: true,
+          link: { type: 'doc', id: 'api/vectorx-functions' },
+          items: [
+            'api/geometry-validity-antimeridian',
+            // 'api/shapely-distributed' reserved (separate follow-on task)
+          ],
+        },
         { type: 'doc', id: 'api/gridx-functions', label: 'GridX' },
         {
           type: 'category',

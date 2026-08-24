@@ -16,11 +16,12 @@ import VectorXIcon from '../../../resources/images/brand/VectorX.png';
 
 # <img src={VectorXIcon} alt="VectorX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
 
-VectorX augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, and legacy-geometry migration helpers. As of v0.4.0 it covers:
+VectorX augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, and legacy-geometry migration helpers. As of v0.5.0 it covers:
 
 - **Vector tile encoding** — `gbx_st_asmvt` aggregator + `gbx_st_asmvt_pyramid` generator for publishing Mapbox Vector Tile (MVT) layers, available in **both** the lightweight (`pyvx`) and heavyweight (`vectorx`) tiers
 - **TIN surface modeling** — `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` for Delaunay triangulation and grid elevation interpolation from Z-valued points, in **both** tiers (with a `constrained`/`conforming` mode selector)
 - **CRS strings** — `gbx_st_crs`, `gbx_st_setcrs`, and `gbx_st_transformcrs` for reading, stamping, and reprojecting a geometry's coordinate reference system by **CRS string** (ESRI codes, WKT, PROJ4 — not just an EPSG integer), in **both** tiers
+- **Antimeridian handling** — `gbx_st_shiftlongitude`, `gbx_st_wrapx`, and `gbx_st_split` for normalizing geometries that cross the 180° antimeridian, **lightweight tier only** (`pyvx`)
 - **OGR-based vector readers** — Shapefile, GeoJSON, GeoPackage, FileGDB (heavyweight only)
 - **Legacy Mosaic conversion** — `gbx_st_legacyaswkb` for migrating geometries written by DBLabs Mosaic, in **both** tiers
 
@@ -43,6 +44,9 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 | `st_setcrs` | Supported | Supported |
 | `st_transformcrs` | Supported | Supported |
 | `st_legacyaswkb` | Supported | Supported |
+| `st_shiftlongitude` | Supported | — |
+| `st_wrapx` | Supported | — |
+| `st_split` | Supported | — |
 
 ---
 
@@ -609,9 +613,89 @@ A scalar function in **both** tiers (same registered name, same output bytes), s
 
 ---
 
+## Antimeridian handling
+
+These three functions are distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster. They are **lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian) for the full composition pattern.
+
+### st_shiftlongitude
+
+<Tier light/>
+
+Shifts all longitude (x) coordinates of a geometry from `[-180, 180]` space into `[0, 360]` space by adding 360 to any negative x value. Use this as the first step when normalizing a geometry that crosses the 180° antimeridian: after shifting, the crossing polygon becomes contiguous around x=180 and can be cleanly split there.
+
+**Signature:** `gbx_st_shiftlongitude(geom)`
+
+**Parameters:**
+- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
+
+**Returns:** `BINARY` — WKB with all negative x coordinates shifted by +360.
+
+See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian).
+
+<FunctionExamples
+  name="st_shiftlongitude"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+### st_wrapx
+
+<Tier light/>
+
+Wraps x coordinates that exceed a threshold back by a fixed offset. The primary use is the reverse of `gbx_st_shiftlongitude`: after splitting at x=180, apply `gbx_st_wrapx(geom, 180, -360)` to the eastern pieces to move them from `[180, 360]` back into `[-180, 0]`. Apply only to the pieces where `ST_XMax(piece) > 180` — wrapping the western piece's shared 180° edge would produce a malformed geometry.
+
+**Signature:** `gbx_st_wrapx(geom, wrap_x_origin, wrap_direction)`
+
+**Parameters:**
+- `geom` — Geometry. Accepts WKB/EWKB/WKT/EWKT.
+- `wrap_x_origin` (`DOUBLE`) — x threshold above which wrapping is applied (typically `180`).
+- `wrap_direction` (`DOUBLE`) — offset to add to coordinates that exceed the threshold (typically `-360`).
+
+**Returns:** `BINARY` — WKB with qualifying x coordinates shifted by `wrap_direction`.
+
+See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian).
+
+<FunctionExamples
+  name="st_wrapx"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+### st_split
+
+<Tier light/>
+
+Splits a geometry by a blade geometry, returning a `GEOMETRYCOLLECTION` containing all resulting pieces. The primary use is cutting an antimeridian-crossing polygon at the 180° meridian: pass the polygon (already shifted into `[0, 360]` space by `gbx_st_shiftlongitude`) and the blade `'LINESTRING(180 -90, 180 90)'`.
+
+**Signature:** `gbx_st_split(geom, blade)`
+
+**Parameters:**
+- `geom` — Geometry to split. Accepts WKB/EWKB/WKT/EWKT.
+- `blade` — Cutting geometry. Accepts WKB/EWKB/WKT/EWKT.
+
+**Returns:** `BINARY` — WKB `GEOMETRYCOLLECTION` of the resulting pieces.
+
+See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian).
+
+<FunctionExamples
+  name="st_split"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
 ## Next Steps
 
 - [Quick Start](../quick-start) — Register and use VectorX with the legacy example
+- [Geometry Validity & Antimeridian](./geometry-validity-antimeridian) — antimeridian composition pattern with full example
 - [Choosing an Execution Tier](./execution-tiers) — lightweight vs heavyweight comparison
 - [PMTiles Function Reference](./pmtiles-functions) — Aggregate MVT tiles into a single `.pmtiles` archive
 - [PMTiles Writer](../writers/pmtiles) — DataSource for streaming large pyramids to a single `.pmtiles` file

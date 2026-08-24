@@ -1,0 +1,62 @@
+---
+sidebar_position: 8
+title: Geometry Validity & Antimeridian
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
+
+# Geometry Validity & Antimeridian
+
+VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
+
+:::note Lightweight tier only
+The functions on this page are available in the **lightweight (`pyvx`) tier**. Register pyvx before using them in SQL or Python:
+```python
+from databricks.labs.gbx.pyvx import functions as vx
+vx.register(spark)
+```
+:::
+
+## Antimeridian crossing
+
+Geometries that cross the 180° antimeridian (the international date line) are a recurring problem in global datasets: a polygon whose vertices span from 170°E to 170°W appears as a 340°-wide shape in standard `[-180, 180]` longitude space, breaks bounding-box calculations, and confuses most spatial engines that expect well-behaved planar coordinates.
+
+GeoBrix provides three composable functions — `gbx_st_shiftlongitude`, `gbx_st_split`, and `gbx_st_wrapx` — that together normalize such geometries into a clean `MULTIPOLYGON` with one piece on each side of the antimeridian. These functions assume geographic coordinates in **EPSG:4326** (degrees latitude/longitude).
+
+### Composition pattern
+
+The full pattern runs four steps:
+
+1. **Shift** the polygon from `[-180, 180]` into `[0, 360]` longitude space with `gbx_st_shiftlongitude`. This makes a crossing polygon contiguous — its western vertices (e.g. −170°) move to 190°, and the entire shape now sits around the 180° line without any coordinate-wrap artefacts.
+2. **Split** the contiguous polygon at the 180° meridian with `gbx_st_split`. The result is a `GEOMETRYCOLLECTION` containing two separate pieces.
+3. **Explode** the collection into individual rows with the built-in `ST_Dump`.
+4. **Wrap only the eastern pieces** back into `[-180, 0]` with `gbx_st_wrapx`. The conditional `CASE WHEN ST_XMax(piece) > 180` is essential: the eastern piece (all x ≥ 180) needs wrapping; the western piece (all x ≤ 180) is already in standard longitude range and must not be touched. Applying `gbx_st_wrapx` uniformly to both pieces would shift the western piece's 180° shared edge to −180°, producing a 350°-wide polygon instead of a clean 10° strip.
+
+The final `ST_Union` / `ST_Multi` reassembles the normalized pieces into a `MULTIPOLYGON`.
+
+### WKB ↔ GEOMETRY bridge
+
+GeoBrix functions operate on `BINARY` (WKB/EWKB). The built-in product functions (`ST_Dump`, `ST_XMax`, `ST_Union`, `ST_Multi`, `ST_AsText`) operate on the product's `GEOMETRY` type. Where the two meet, bridge with:
+
+- `ST_GeomFromWKB(wkb_column)` — converts GeoBrix BINARY output to a product `GEOMETRY` value
+- `ST_AsBinary(geometry_column)` — converts a product `GEOMETRY` value back to BINARY for GeoBrix input
+
+The pattern below shows both bridges in context.
+
+### Example
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="antimeridian_pattern_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="antimeridian_pattern_sql_example_output"
+/>
+
+---
+
+## Geometry validity
+
+Coming soon — see the roadmap.

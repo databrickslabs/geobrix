@@ -1,7 +1,6 @@
-import numpy as np
 from shapely import from_wkb, get_parts, get_srid, set_srid, to_wkb
-from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, Polygon
-from shapely.geometry.base import BaseGeometry
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
+
 from databricks.labs.gbx.pyvx import _antimeridian as am
 
 
@@ -17,7 +16,9 @@ def test_st_shiftlongitude_leaves_positive_x_untouched():
 
 
 def test_st_shiftlongitude_preserves_srid():
-    out = am.st_shiftlongitude(to_wkb(set_srid(Point(-170.0, 10.0), 4326), include_srid=True))
+    out = am.st_shiftlongitude(
+        to_wkb(set_srid(Point(-170.0, 10.0), 4326), include_srid=True)
+    )
     assert get_srid(from_wkb(out)) == 4326
 
 
@@ -39,7 +40,9 @@ def test_st_wrapx_positive_direction_wraps_low_x_forward():
 
 
 def test_st_wrapx_preserves_srid_and_none():
-    out = am.st_wrapx(to_wkb(set_srid(Point(190.0, 10.0), 4326), include_srid=True), 180.0, -360.0)
+    out = am.st_wrapx(
+        to_wkb(set_srid(Point(190.0, 10.0), 4326), include_srid=True), 180.0, -360.0
+    )
     assert get_srid(from_wkb(out)) == 4326
     assert am.st_wrapx(None, 180.0, -360.0) is None
 
@@ -65,10 +68,12 @@ def test_st_split_polygon_by_meridian_yields_two_parts():
 
 
 def test_st_split_multipolygon_decomposes_each_part():
-    mp = MultiPolygon([
-        Polygon([(170, -10), (190, -10), (190, 10), (170, 10)]),
-        Polygon([(170, 20), (190, 20), (190, 40), (170, 40)]),
-    ])
+    mp = MultiPolygon(
+        [
+            Polygon([(170, -10), (190, -10), (190, 10), (170, 10)]),
+            Polygon([(170, 20), (190, 20), (190, 40), (170, 40)]),
+        ]
+    )
     parts = _split_parts(am.st_split(to_wkb(mp), to_wkb(_MERIDIAN)))
     assert len(parts) == 4  # each of the 2 polygons split in two
 

@@ -4,6 +4,7 @@ Pure-shapely coordinate operations that reproduce the PostGIS antimeridian-split
 pattern. WKB in/out, CRS preserved (never reprojected). See
 docs/docs/api/geometry-validity-antimeridian.mdx.
 """
+
 from typing import Optional
 
 import numpy as np

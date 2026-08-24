@@ -331,7 +331,9 @@ def _registrar_groups() -> List[_register.Group]:
     def _reg_gbx_st_shiftlongitude(s):
         from . import _antimeridian as _am
 
-        s.udf.register("gbx_st_shiftlongitude", _am._udf_st_shiftlongitude, BinaryType())
+        s.udf.register(
+            "gbx_st_shiftlongitude", _am._udf_st_shiftlongitude, BinaryType()
+        )
 
     def _reg_gbx_st_wrapx(s):
         from . import _antimeridian as _am
@@ -587,7 +589,9 @@ def st_wrapx(geom: ColLike, wrap_x_origin: ColLike, wrap_direction: ColLike) -> 
     Returns:
         BINARY column: EWKB geometry with wrapped X coordinates.
     """
-    return f.call_function("gbx_st_wrapx", _col(geom), _col(wrap_x_origin), _col(wrap_direction))
+    return f.call_function(
+        "gbx_st_wrapx", _col(geom), _col(wrap_x_origin), _col(wrap_direction)
+    )
 
 
 def st_split(input_geom: ColLike, blade_geom: ColLike) -> Column:

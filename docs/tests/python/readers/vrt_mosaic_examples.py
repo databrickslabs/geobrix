@@ -17,7 +17,6 @@ import tempfile
 from path_config import SAMPLE_DATA_BASE
 
 SAMPLE_RASTER_SINGLE = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
-SAMPLE_RASTER_LONDON = f"{SAMPLE_DATA_BASE}/london/sentinel2/london_sentinel2_red.tif"
 
 # ---------------------------------------------------------------------------
 # Display constants (payload rendered in docs via raw-loader)
@@ -412,7 +411,7 @@ def _write_gb_source(out_dir: str) -> str:
     """Create a 200×200, 100 m/px, EPSG:27700 synthetic raster near London.
 
     Upper-left at E=530 000, N=180 000; spans 20 km × 20 km — four 10-km BNG
-    cells and sixteen 1-km BNG cells at most. Always within the GB EPSG:27700
+    cells and 400 1-km BNG cells. Always within the GB EPSG:27700
     envelope. BNG mosaic tests use this helper to avoid depending on a
     projection chain from an external CRS (e.g. EPSG:32630) which requires
     datum-shift grids that may not be present in the test environment.

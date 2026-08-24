@@ -554,16 +554,23 @@ def _check_h3_incompatible_opts(
 
 def _check_bng_incompatible_opts(
     grid_system: str,
+    opts: Dict[str, object],
     grid_min: Optional[int],
     grid_max: Optional[int],
     grid_step: Optional[int],
 ) -> None:
     """Raise ``ValueError`` for options that are not supported with bng.
 
+    BNG is cell-based (like quadbin), so downsampleFactor is not applicable.
     BNG resolution pyramids are deferred to a follow-on release.
     """
     if grid_system != "bng":
         return
+    if opts.get("downsampleFactor") is not None:
+        raise ValueError(
+            "downsampleFactor is not supported with gridSystem='bng'; "
+            "bng mosaic uses cell-based resolution, not pixel downsampling."
+        )
     for _name, _val in (
         ("gridMinResolution", grid_min),
         ("gridMaxResolution", grid_max),
@@ -703,7 +710,7 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
     # Resolution pyramid + downsampleFactor are deferred for quadbin/bng.
     _check_quadbin_incompatible_opts(grid_system, opts, grid_min, grid_max, grid_step)
     _check_h3_incompatible_opts(grid_system, grid_min, grid_max, grid_step)
-    _check_bng_incompatible_opts(grid_system, grid_min, grid_max, grid_step)
+    _check_bng_incompatible_opts(grid_system, opts, grid_min, grid_max, grid_step)
 
     return MosaicOptions(
         grid_system=grid_system,

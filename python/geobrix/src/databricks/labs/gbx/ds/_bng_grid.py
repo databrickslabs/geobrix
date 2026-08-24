@@ -13,7 +13,7 @@ from databricks.labs.gbx.pygx import _bng
 BngCell = namedtuple("BngCell", "cellid west south east north")
 
 
-def bng_cells_for_bounds(bounds_27700, resolution: int) -> list:
+def bng_cells_for_bounds(bounds_27700, resolution: int) -> list[BngCell]:
     """BNG cells covering *bounds_27700* = (west, south, east, north) in EPSG:27700 metres.
 
     *resolution* is a BNG int index (already resolved via _bng.get_resolution). Returns
@@ -35,9 +35,10 @@ def bng_cells_for_bounds(bounds_27700, resolution: int) -> list:
             cid = _bng.point_to_cell_id(x + size / 2.0, y + size / 2.0, resolution)
             if cid not in seen:
                 seen.add(cid)
-                geom = _bng.cell_id_to_geometry(cid)  # EPSG:27700 square polygon
-                cw, cs, ce, cn = geom.bounds
-                cells.append(BngCell(_bng.format(cid), cw, cs, ce, cn))
+                if _bng.is_valid(cid):
+                    geom = _bng.cell_id_to_geometry(cid)  # EPSG:27700 square polygon
+                    cw, cs, ce, cn = geom.bounds
+                    cells.append(BngCell(_bng.format(cid), cw, cs, ce, cn))
             x += size
         y += size
     return cells

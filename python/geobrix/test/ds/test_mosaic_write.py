@@ -27,6 +27,10 @@ Coverage:
     18. Interior pixels match a reference rasterio.warp.reproject (allclose, not
         byte-equal since nearest resampling and windowed source may vary slightly).
 
+  BNG (per-cell reproject, EPSG:27700):
+    20. gridSystem=bng → ≥1 mini-COGs in EPSG:27700, each tagged
+        GBX_CELLID (BNG string id) and GBX_GRIDSYSTEM=bng.
+
 Run (in Docker):
     bash scripts/commands/gbx-test-python.sh \
         --path python/geobrix/test/ds/test_mosaic_write.py \

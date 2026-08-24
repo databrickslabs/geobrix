@@ -51,6 +51,35 @@ def _prepend_unique(base: str, extra: Sequence[str]) -> str:
     return os.pathsep.join(parts)
 
 
+def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
+    """Add custom grid dirs to pyproj's PROJ search path (best-effort, idempotent).
+
+    Setting ``PROJ_DATA`` in the environment is enough for the GDAL/rasterio raster
+    path, but NOT for pyproj — the light vector transform engine. pyproj resolves and
+    caches its PROJ data dir at import and installs it on the proj context explicitly,
+    so a ``PROJ_DATA`` env var changed *afterwards* is ignored for grids loaded through
+    a pyproj ``Transformer``. Registering the dirs via ``pyproj.datadir`` is what makes
+    an in-process transform actually find a user grid.
+
+    Dirs are APPENDED (never prepended): pyproj's own data dir stays first so proj.db
+    resolution is untouched, and PROJ searches grid files across all search paths
+    regardless of order (grid filenames are unique, so there is no override contest).
+    Only fires when a dir is genuinely new, so repeated per-row calls are cheap.
+    """
+    try:
+        from pyproj.datadir import get_data_dir, set_data_dir
+    except Exception:
+        return
+    try:
+        current = get_data_dir() or ""
+    except Exception:
+        return
+    parts = [p for p in current.split(os.pathsep) if p]
+    added = [d for d in extra_proj_dirs if d and d not in parts]
+    if added:
+        set_data_dir(os.pathsep.join(parts + added))
+
+
 def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
     """Idempotently set GDAL_DATA / PROJ_DATA, prepending custom grid dirs.
 
@@ -58,6 +87,8 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
       - None  -> read the driver-side registry (correct only on the driver).
       - list  -> use exactly these (what worker UDF closures pass); [] = none.
     Custom dirs are prepended ahead of the bundled PROJ data so user grids win.
+    Registered dirs are also pushed into pyproj's search path so the light vector
+    (pyproj) transform path finds them — the env var alone does not reach pyproj.
     """
     if not os.environ.get("GDAL_DATA"):
         p = _bundled_gdal_data()
@@ -66,6 +97,7 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
 
     if extra_proj_dirs is None:
         from databricks.labs.gbx.core import proj_grids
+
         extra_proj_dirs = proj_grids.get_registered_dirs()
 
     base = os.environ.get("PROJ_DATA") or os.environ.get("PROJ_LIB") or ""
@@ -76,6 +108,7 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
 
     if extra_proj_dirs:
         os.environ["PROJ_DATA"] = _prepend_unique(base, extra_proj_dirs)
+        _register_pyproj_search_dirs(extra_proj_dirs)
     elif base and not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
         os.environ["PROJ_DATA"] = base
 

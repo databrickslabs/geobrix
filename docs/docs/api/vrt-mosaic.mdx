@@ -166,7 +166,9 @@ BNG-indexed spatial join workflows and analytical pipelines that operate on BNG
 cell identifiers.
 
 BNG is valid over **Great Britain only** (EPSG:27700, approximately
-E 0–700 km, N 0–1300 km). Sources outside this envelope yield no cells.
+E 0–700 km, N 0–1300 km). A source outside this envelope produces no meaningful
+cells — its reprojected coverage is empty, so every candidate tile is all-nodata
+and pruned.
 
 <CodeFromTest code={vrtExamples} language="python" functionName="VRT_BNG"
   source="docs/tests/python/readers/vrt_mosaic_examples.py"

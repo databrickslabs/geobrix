@@ -7,7 +7,10 @@ docs/docs/api/geometry-validity-antimeridian.mdx.
 from typing import Optional
 
 import numpy as np
-from shapely import get_srid, set_srid, to_wkb
+from shapely import get_parts, get_srid, set_srid, to_wkb
+from shapely.geometry import GeometryCollection
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import split as _shapely_split
 from shapely.ops import transform
 
 from ._geom import parse_geom
@@ -70,3 +73,26 @@ def _udf_st_wrapx(geom, wrap_x_origin, wrap_direction) -> Optional[bytes]:
     if wrap_x_origin is None or wrap_direction is None:
         return None
     return st_wrapx(geom, wrap_x_origin, wrap_direction)
+
+
+def st_split(input_geom, blade_geom) -> Optional[bytes]:
+    """Split input_geom by blade_geom; return a GEOMETRYCOLLECTION (PostGIS ST_Split).
+
+    MULTI inputs are decomposed (each part split, results recollected) — pure
+    shapely, no second engine.
+    """
+    g = parse_geom(input_geom)
+    blade = parse_geom(blade_geom)
+    if g is None or blade is None:
+        return None
+    srid = get_srid(g)
+    parts = list(get_parts(g)) if g.geom_type.startswith("Multi") else [g]
+    pieces: list[BaseGeometry] = []
+    for part in parts:
+        pieces.extend(get_parts(_shapely_split(part, blade)))
+    return _finish(GeometryCollection(pieces), srid)
+
+
+def _udf_st_split(input_geom, blade_geom) -> Optional[bytes]:
+    """SQL UDF callable for gbx_st_split (BINARY return)."""
+    return st_split(input_geom, blade_geom)

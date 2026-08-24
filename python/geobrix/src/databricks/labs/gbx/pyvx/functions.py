@@ -338,10 +338,15 @@ def _registrar_groups() -> List[_register.Group]:
 
         s.udf.register("gbx_st_wrapx", _am._udf_st_wrapx, BinaryType())
 
+    def _reg_gbx_st_split(s):
+        from . import _antimeridian as _am
+
+        s.udf.register("gbx_st_split", _am._udf_st_split, BinaryType())
+
     antimeridian = {
         "gbx_st_shiftlongitude": _reg_gbx_st_shiftlongitude,
         "gbx_st_wrapx": _reg_gbx_st_wrapx,
-        # gbx_st_split added in Task 3
+        "gbx_st_split": _reg_gbx_st_split,
     }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
@@ -583,3 +588,19 @@ def st_wrapx(geom: ColLike, wrap_x_origin: ColLike, wrap_direction: ColLike) -> 
         BINARY column: EWKB geometry with wrapped X coordinates.
     """
     return f.call_function("gbx_st_wrapx", _col(geom), _col(wrap_x_origin), _col(wrap_direction))
+
+
+def st_split(input_geom: ColLike, blade_geom: ColLike) -> Column:
+    """Split a geometry by a blade; returns a GEOMETRYCOLLECTION (BINARY).
+
+    MULTI inputs are decomposed — each part split individually, all pieces
+    recollected into a single GEOMETRYCOLLECTION (pure shapely, no second engine).
+
+    Args:
+        input_geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        blade_geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) blade geometry.
+
+    Returns:
+        BINARY column: EWKB GEOMETRYCOLLECTION of the split pieces.
+    """
+    return f.call_function("gbx_st_split", _col(input_geom), _col(blade_geom))

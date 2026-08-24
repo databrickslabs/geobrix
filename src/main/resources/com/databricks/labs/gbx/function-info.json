@@ -1662,6 +1662,20 @@
         "scala"
       ]
     },
+    "gbx_st_shiftlongitude": {
+      "examples": "Examples:\n      > SELECT gbx_st_shiftlongitude('POLYGON((-170 -10, -150 -10, -150 10, -170 10, -170 -10))') AS shifted;",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_split": {
+      "examples": "Examples:\n      > SELECT gbx_st_split('POLYGON((170 -10, 190 -10, 190 10, 170 10, 170 -10))', 'LINESTRING(180 -90, 180 90)') AS pieces;",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
     "gbx_st_transformcrs": {
       "examples": "Examples:\n      > SELECT gbx_st_transformcrs(geom, 'EPSG:32633') AS utm33n FROM vector_geoms;",
       "usage_args": "geom, target_crs, [source_crs]",
@@ -1680,6 +1694,13 @@
         "python-light",
         "python-heavy",
         "scala"
+      ]
+    },
+    "gbx_st_wrapx": {
+      "examples": "Examples:\n      > SELECT gbx_st_wrapx('POINT(190 10)', 180, -360) AS wrapped;",
+      "bindings": [
+        "sql",
+        "python-light"
       ]
     },
     "_package_pmtiles": "--- pmtiles ---",

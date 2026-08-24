@@ -181,3 +181,6 @@ gbx_pmtiles_agg
 gbx_st_crs
 gbx_st_setcrs
 gbx_st_transformcrs
+gbx_st_shiftlongitude
+gbx_st_split
+gbx_st_wrapx

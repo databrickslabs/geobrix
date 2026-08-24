@@ -385,15 +385,18 @@ def test_bng_gridsystem_accepted_string_key():
 
 def test_bng_rejects_metres_as_int():
     import pytest
+
     with pytest.raises(ValueError, match="resolution"):
         parse_mosaic_options({"gridSystem": "bng", "gridResolution": "1000"})
 
 
 def test_bng_rejects_pyramid_options():
     import pytest
+
     with pytest.raises(ValueError, match="pyramid"):
-        parse_mosaic_options({"gridSystem": "bng", "gridResolution": "3",
-                              "gridMinResolution": "2"})
+        parse_mosaic_options(
+            {"gridSystem": "bng", "gridResolution": "3", "gridMinResolution": "2"}
+        )
 
 
 def test_bng_downsamplefactor_errors():

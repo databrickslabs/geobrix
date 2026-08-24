@@ -787,7 +787,9 @@ def test_bng_round_trip(spark, tmp_path):
     src_path = _write_gb_source_27700(tmp_path)
     out_dir = str(tmp_path / "mosaic_bng")
 
-    vrt_path = _write_mosaic_bng_spark(spark, src_path, out_dir, resolution=_BNG_RESOLUTION)
+    vrt_path = _write_mosaic_bng_spark(
+        spark, src_path, out_dir, resolution=_BNG_RESOLUTION
+    )
 
     # ── Count member mini-COG cells ────────────────────────────────────────────
     member_paths = _member_bng_cell_paths(out_dir)
@@ -821,7 +823,7 @@ def test_bng_round_trip(spark, tmp_path):
         assert isinstance(
             cellid_str, str
         ), f"cellid must be a string, got {type(cellid_str)}"
-        assert len(cellid_str) > 0, f"cellid is an empty string"
+        assert len(cellid_str) > 0, "cellid is an empty string"
 
         # (b) gridSystem tag
         assert metadata.get("gridSystem") == "bng", (

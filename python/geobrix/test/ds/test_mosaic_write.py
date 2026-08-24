@@ -1231,9 +1231,7 @@ def _write_gb_source_27700(tmp_path) -> str:
 def test_write_mosaic_bng_tags_and_crs(tmp_path):
     """gridSystem=bng → ≥1 mini-COGs in EPSG:27700, tagged GBX_CELLID + GBX_GRIDSYSTEM=bng."""
     src = _write_gb_source_27700(tmp_path)
-    opts = parse_mosaic_options(
-        {"gridSystem": "bng", "gridResolution": "10km"}
-    )
+    opts = parse_mosaic_options({"gridSystem": "bng", "gridResolution": "10km"})
     out_dir = str(tmp_path / "bng_out")
     w = _make_writer(out_dir, mosaic_opts=opts)
     msg = w.write(iter([{"path": src}]))
@@ -1243,13 +1241,13 @@ def test_write_mosaic_bng_tags_and_crs(tmp_path):
 
     for m in members:
         with rasterio.open(m) as ds:
-            assert ds.crs.to_epsg() == 27700, (
-                f"{os.path.basename(m)}: expected EPSG:27700, got {ds.crs}"
-            )
+            assert (
+                ds.crs.to_epsg() == 27700
+            ), f"{os.path.basename(m)}: expected EPSG:27700, got {ds.crs}"
             tags = ds.tags()
-            assert tags.get("GBX_GRIDSYSTEM") == "bng", (
-                f"{os.path.basename(m)}: expected GBX_GRIDSYSTEM=bng, got {tags}"
-            )
-            assert tags.get("GBX_CELLID"), (
-                f"{os.path.basename(m)}: GBX_CELLID missing or empty; got {tags}"
-            )
+            assert (
+                tags.get("GBX_GRIDSYSTEM") == "bng"
+            ), f"{os.path.basename(m)}: expected GBX_GRIDSYSTEM=bng, got {tags}"
+            assert tags.get(
+                "GBX_CELLID"
+            ), f"{os.path.basename(m)}: GBX_CELLID missing or empty; got {tags}"

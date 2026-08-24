@@ -5,6 +5,7 @@ cell whose EPSG:27700 extent intersects the source bounds — by direct grid ite
 (BNG is a regular square grid). Cellids are bit-identical to rst_bng_tessellate: they
 come from pygx._bng.point_to_cell_id + format.
 """
+
 import math
 from collections import namedtuple
 

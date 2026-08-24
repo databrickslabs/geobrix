@@ -1,4 +1,4 @@
-from databricks.labs.gbx.ds._bng_grid import BngCell, bng_cells_for_bounds
+from databricks.labs.gbx.ds._bng_grid import bng_cells_for_bounds
 from databricks.labs.gbx.pygx import _bng
 
 
@@ -71,20 +71,22 @@ def test_bng_out_of_gb_bbox_emits_only_valid_cells():
     cells = bng_cells_for_bounds(bounds, res)
     for c in cells:
         cid_int = _bng.parse(c.cellid)
-        assert _bng.is_valid(cid_int), (
-            f"emitted cell {c.cellid!r} from out-of-GB bbox failed is_valid"
-        )
+        assert _bng.is_valid(
+            cid_int
+        ), f"emitted cell {c.cellid!r} from out-of-GB bbox failed is_valid"
 
 
 def test_bng_partial_out_of_gb_bbox_emits_only_valid_cells():
     """A bbox straddling the western edge of the GB envelope emits only is_valid cells."""
-    res = _bng.get_resolution("100km")  # coarse resolution so we cross the boundary clearly
+    res = _bng.get_resolution(
+        "100km"
+    )  # coarse resolution so we cross the boundary clearly
     # This bbox straddles x=0 (the western edge of the BNG envelope).
     # Any cell whose encoding produces invalid letter indices is filtered.
     bounds = (-150000.0, 0.0, 200000.0, 200000.0)
     cells = bng_cells_for_bounds(bounds, res)
     for c in cells:
         cid_int = _bng.parse(c.cellid)
-        assert _bng.is_valid(cid_int), (
-            f"emitted cell {c.cellid!r} from partial-out-of-GB bbox failed is_valid"
-        )
+        assert _bng.is_valid(
+            cid_int
+        ), f"emitted cell {c.cellid!r} from partial-out-of-GB bbox failed is_valid"

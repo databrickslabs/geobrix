@@ -988,6 +988,12 @@ def test_h3_hex_clip_sets_outside_nodata(tmp_path, _write_src_fn):
             transform=ds.transform,
             out_shape=data.shape,
             invert=False,
+            # Match the writer's clip semantics (cog_writer uses all_touched=True to
+            # keep boundary-touching pixels, so abutting hexes overlap ~1px and the VRT
+            # composite closes seams). "Outside" here must therefore mean "not touched
+            # by the hex" — center-based masking (all_touched=False) would flag the
+            # retained boundary band as outside and spuriously fail.
+            all_touched=True,
         )
 
     # Every pixel outside the hex must equal nodata.

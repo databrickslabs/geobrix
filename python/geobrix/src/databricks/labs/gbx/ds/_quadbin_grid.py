@@ -23,7 +23,7 @@ _WGS84 = "EPSG:4326"
 _WEBMERC = "EPSG:3857"
 
 
-def quadbin_cells_for_bounds(bounds_4326, resolution: int) -> list:
+def quadbin_cells_for_bounds(bounds_4326, resolution: int) -> list[QuadbinCell]:
     """Return the quadbin cells overlapping *bounds_4326* at *resolution*.
 
     Args:

@@ -463,7 +463,7 @@ def _parse_bool(value, default: bool) -> bool:
 def _parse_grid_resolution(grid_system: str, opts: Dict[str, object]) -> Optional[int]:
     """Parse and validate ``gridResolution`` from *opts*.
 
-    - Required for ``gridSystem='quadbin'``; raises if absent.
+    - Required for ``gridSystem='quadbin'`` or ``gridSystem='h3'``; raises if absent.
     - Must be absent for ``gridSystem='none'``; raises if present.
     """
     grid_res_raw = opts.get("gridResolution")
@@ -1217,6 +1217,10 @@ class CogGbxWriter(DataSourceWriter):
                         src_win = src.window(*src_bounds)
                         src_win = src_win.intersection(src_full_window)
                     except Exception:
+                        _logger.debug(
+                            "Cell geometry degenerate or out of bounds; skipping cell.",
+                            exc_info=True,
+                        )
                         continue  # degenerate geometry — skip cell
 
                     if src_win.width <= 0 or src_win.height <= 0:

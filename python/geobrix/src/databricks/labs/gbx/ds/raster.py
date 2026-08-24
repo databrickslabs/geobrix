@@ -931,7 +931,10 @@ def _read_gbx_member_tags(member_path: str) -> dict:
             if "GBX_GRIDSYSTEM" in raw:
                 tags_out["gridSystem"] = raw["GBX_GRIDSYSTEM"]
     except Exception:
-        pass  # unreadable or non-rasterio member → no tags (safe default)
+        logger.warning(
+            f"Could not read metadata from member {member_path!r}; treating as untagged.",
+            exc_info=True,
+        )  # unreadable or non-rasterio member → no tags (safe default)
     return tags_out
 
 

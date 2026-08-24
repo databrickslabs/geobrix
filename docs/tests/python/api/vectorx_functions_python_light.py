@@ -441,7 +441,7 @@ def st_wrapx_python_light_example(spark):
 
     Creates a WKB POINT(190, 10) inline — a coordinate in [0,360] longitude
     space — and wraps it back into [-180,180] using ``wrap_x_origin=180`` and
-    ``wrap_direction=-360``.  Any x > 180 is shifted by -360, so x=190 becomes
+    ``wrap_direction=-360``.  Any x ≥ 180 is shifted by -360, so x=190 becomes
     x=-170.  Returns the wrapped WKB bytes.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415

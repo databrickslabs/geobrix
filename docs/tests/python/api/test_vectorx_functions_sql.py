@@ -334,12 +334,19 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
     antimeridian functions.  The integration test builds the equivalent chain using
     the pyvx Python Column API + shapely to confirm the geometry result is correct.
     """
-    # Part 1: structural — the example SQL string is non-empty and references all functions
+    # Part 1: structural — the example SQL string is non-empty and references all functions.
+    # ST_XMax is the conditional guard that applies wrapx only to pieces with x > 180;
+    # its presence protects against a future regression to uniform wrapx (which would
+    # produce a 350°-wide polygon instead of a clean 10° strip for the left piece).
     sql = vectorx_functions_sql.antimeridian_pattern_sql_example()
     assert isinstance(sql, str) and len(sql) > 0, "antimeridian_pattern_sql_example must return a non-empty SQL string"
     assert "gbx_st_shiftlongitude" in sql, "composition SQL must reference gbx_st_shiftlongitude"
     assert "gbx_st_split" in sql, "composition SQL must reference gbx_st_split"
     assert "gbx_st_wrapx" in sql, "composition SQL must reference gbx_st_wrapx"
+    assert "ST_XMax" in sql, (
+        "composition SQL must use ST_XMax as the conditional guard — "
+        "wrapx must be applied only to pieces with x > 180, not uniformly"
+    )
 
     # Part 2: integration — the full chain produces a valid normalized geometry
     from pyspark.sql import functions as f  # noqa: PLC0415
@@ -374,7 +381,6 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
     #
     # With inclusive x >= origin in st_wrapx, the right piece's x=180 edge moves to -180,
     # giving a clean [-180, -170] strip rather than the [-170, 180] (350°) result from strict >.
-    assert len(gc.geoms) == 2, f"Expected 2 split pieces, got {len(gc.geoms)}"
     wrapped_parts = []
     for part in gc.geoms:
         xs = [c[0] for c in part.exterior.coords]

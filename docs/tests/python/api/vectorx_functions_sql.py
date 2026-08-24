@@ -283,7 +283,7 @@ def st_wrapx_sql_example():
     """Wrap X coordinates back into [-180,180] (SQL, light pyvx tier).
 
     POINT(190, 10) is in [0,360] longitude space; ``wrap_x_origin=180`` with
-    ``wrap_direction=-360`` maps any x > 180 back by -360, yielding POINT(-170, 10).
+    ``wrap_direction=-360`` maps any x ≥ 180 back by -360, yielding POINT(-170, 10).
     Inline WKT string input — no ST_AsBinary wrapper needed.  Output is BINARY (WKB).
     """
     return """
@@ -331,26 +331,36 @@ def antimeridian_pattern_sql_example():
     most spatial engines without normalization.  The input polygon straddles the
     180° antimeridian in standard [-180,180] space: vertices at 170°E and 170°W
     (-170°).  This pattern runs on Databricks Runtime 17.3+ where the built-in
-    ``ST_Dump``/``ST_Union``/``ST_Multi`` functions are available:
+    ``ST_Dump``/``ST_XMax``/``ST_Union``/``ST_Multi`` functions are available:
 
     1. ``gbx_st_shiftlongitude`` — shift [-180,180] → [0,360] so the polygon
        becomes contiguous (x ∈ [170, 190]) and cuttable at x=180.
     2. ``gbx_st_split`` — cut at the 180° meridian into a GeometryCollection.
     3. ``ST_Dump`` — explode the collection into individual polygon rows.
-    4. ``gbx_st_wrapx`` — wrap the western piece (x > 180) back to [-180, 0].
+    4. ``CASE WHEN ST_XMax(piece) > 180 THEN gbx_st_wrapx(…) ELSE ST_AsBinary(piece) END``
+       — wrap only the eastern piece (x ≥ 180) back to [-180, 0]; leave the
+       western piece (all x ≤ 180) unchanged.  Applying wrapx uniformly would
+       move the western piece's x=180 edge to x=-180, producing a 350°-wide
+       polygon instead of a clean 10° strip.
     5. ``ST_Union`` / ``ST_Multi`` — reassemble into a clean MULTIPOLYGON.
     """
     return """
 WITH raw AS (
   SELECT 'POLYGON((170 -10, -170 -10, -170 10, 170 10, 170 -10))' AS geom
 ),
+pieces AS (
+  SELECT (ST_Dump(ST_GeomFromWKB(
+           gbx_st_split(gbx_st_shiftlongitude(geom),
+                        'LINESTRING(180 -90, 180 90)')))).geom AS piece
+  FROM raw
+),
 parts AS (
-  SELECT gbx_st_wrapx(
-           ST_AsBinary((ST_Dump(ST_GeomFromWKB(
-             gbx_st_split(gbx_st_shiftlongitude(geom),
-                          'LINESTRING(180 -90, 180 90)')))).geom),
-           180, -360) AS geom
-  FROM raw)
+  SELECT CASE
+           WHEN ST_XMax(piece) > 180
+             THEN gbx_st_wrapx(ST_AsBinary(piece), 180, -360)
+           ELSE ST_AsBinary(piece)
+         END AS geom
+  FROM pieces)
 SELECT ST_AsText(ST_Multi(ST_Union(ST_GeomFromWKB(geom)))) AS normalized FROM parts;
 """
 

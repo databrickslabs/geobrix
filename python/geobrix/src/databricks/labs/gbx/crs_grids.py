@@ -1,4 +1,10 @@
-"""Public helper: register custom PROJ grid-shift directories (both tiers)."""
+"""Public helper: register custom PROJ grid-shift directories.
+
+Volume-hosted grid files are a *lightweight-tier* capability. The heavyweight tier
+reads grid files directly from each worker's local filesystem and cannot read them
+from a Unity Catalog Volume (the same reason ``rst_fromfile`` is lightweight-only),
+so on the heavyweight tier grids must live on a cluster-local path.
+"""
 
 import importlib
 import os
@@ -8,6 +14,9 @@ from typing import List, Sequence, Union
 from databricks.labs.gbx.core import proj_grids
 
 _GRID_SUFFIXES = (".gsb", ".tif", ".gtx", ".gsa")  # NTv2 / PROJ geoid / NADCON-ish
+# A grid dir under a Unity Catalog Volume is unreadable by heavyweight-tier workers
+# (they open grid files directly, not through the credentialed UC connector).
+_VOLUME_PREFIXES = ("/Volumes/", "dbfs:/Volumes/", "/dbfs/Volumes/")
 
 
 def _warn_if_unusable(d: str) -> None:
@@ -52,6 +61,27 @@ def _reregister_active_light_tiers(spark) -> None:
             mod.register(spark)
 
 
+def _warn_heavy_volume_grids(result) -> None:
+    """Warn when the heavy tier is active but grids live on a Volume it cannot read.
+
+    Heavyweight-tier workers open grid files directly on their local filesystem and
+    cannot read a Unity Catalog Volume, so a Volume-hosted grid silently fails to load
+    on executors (transforms return NULL). Surface it at registration time instead.
+    """
+    vol_dirs = [d for d in result if str(d).startswith(_VOLUME_PREFIXES)]
+    if vol_dirs:
+        warnings.warn(
+            "register_proj_grids: the heavyweight tier reads grid files directly from "
+            "each worker's local disk and cannot read them from a Unity Catalog Volume "
+            f"({', '.join(vol_dirs)}) — grid-referencing transforms will return NULL on "
+            "the heavyweight tier. Stage the grid files to a cluster-local path (e.g. via "
+            "a cluster init script) and register that path instead; Volume-hosted grids "
+            "are supported on the lightweight tier.",
+            UserWarning,
+            stacklevel=4,
+        )
+
+
 def _apply_heavy(spark, result) -> None:
     """Set the heavy-tier JVM grid registry if a JVM is present (best-effort)."""
     jvm = getattr(spark, "_jvm", None)
@@ -61,7 +91,9 @@ def _apply_heavy(spark, result) -> None:
         reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
         reg.set(list(result), True)  # push the full de-duped set (idempotent replace)
     except Exception:
-        pass  # heavy classes absent (light-only session) → no-op
+        return  # heavy classes absent (light-only session) → no-op
+    # Heavy tier IS active: warn if any registered dir is a Volume executors can't read.
+    _warn_heavy_volume_grids(result)
 
 
 def register_proj_grids(
@@ -70,8 +102,13 @@ def register_proj_grids(
     *,
     replace: bool = False,
 ) -> List[str]:
-    """Register one or more Volume dirs of PROJ grid-shift files so CRS transforms
-    on both tiers find them. See the spec for the session-start contract."""
+    """Register one or more dirs of PROJ grid-shift files so CRS transforms find them.
+
+    Volume-hosted grids work on the lightweight tier (every worker reads them via the
+    credentialed UC connector). On the heavyweight tier, register a cluster-local path
+    instead — a Volume path warns because heavy workers cannot read it. See the
+    session-start contract in the docs.
+    """
     result = proj_grids.set_registered_dirs(dirs, replace=replace)
     for d in (dirs if not isinstance(dirs, str) else [dirs]):
         _warn_if_unusable(d)

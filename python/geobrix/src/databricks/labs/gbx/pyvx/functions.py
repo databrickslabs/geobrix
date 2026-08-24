@@ -333,9 +333,15 @@ def _registrar_groups() -> List[_register.Group]:
 
         s.udf.register("gbx_st_shiftlongitude", _am._udf_st_shiftlongitude, BinaryType())
 
+    def _reg_gbx_st_wrapx(s):
+        from . import _antimeridian as _am
+
+        s.udf.register("gbx_st_wrapx", _am._udf_st_wrapx, BinaryType())
+
     antimeridian = {
         "gbx_st_shiftlongitude": _reg_gbx_st_shiftlongitude,
-        # gbx_st_wrapx, gbx_st_split added in Tasks 2-3
+        "gbx_st_wrapx": _reg_gbx_st_wrapx,
+        # gbx_st_split added in Task 3
     }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
@@ -559,3 +565,21 @@ def st_transformcrs(
 def st_shiftlongitude(geom: ColLike) -> Column:
     """Shift longitude from [-180,180] to [0,360] (SQL surface, BINARY output)."""
     return f.call_function("gbx_st_shiftlongitude", _col(geom))
+
+
+def st_wrapx(geom: ColLike, wrap_x_origin: ColLike, wrap_direction: ColLike) -> Column:
+    """Wrap X coordinates around an origin by a direction (SQL surface, BINARY output).
+
+    PostGIS ST_WrapX semantics: wrap_direction < 0 moves coordinates with
+    x > wrap_x_origin by wrap_direction; wrap_direction > 0 moves coordinates
+    with x < wrap_x_origin by wrap_direction.
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        wrap_x_origin: X threshold value (numeric literal or column).
+        wrap_direction: Amount to shift qualifying coordinates (numeric literal or column).
+
+    Returns:
+        BINARY column: EWKB geometry with wrapped X coordinates.
+    """
+    return f.call_function("gbx_st_wrapx", _col(geom), _col(wrap_x_origin), _col(wrap_direction))

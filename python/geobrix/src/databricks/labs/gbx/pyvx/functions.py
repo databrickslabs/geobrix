@@ -327,12 +327,23 @@ def _registrar_groups() -> List[_register.Group]:
         "gbx_st_setcrs": _reg_gbx_st_setcrs,
         "gbx_st_transformcrs": _reg_gbx_st_transformcrs,
     }
+
+    def _reg_gbx_st_shiftlongitude(s):
+        from . import _antimeridian as _am
+
+        s.udf.register("gbx_st_shiftlongitude", _am._udf_st_shiftlongitude, BinaryType())
+
+    antimeridian = {
+        "gbx_st_shiftlongitude": _reg_gbx_st_shiftlongitude,
+        # gbx_st_wrapx, gbx_st_split added in Tasks 2-3
+    }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
         (lambda: _env.assert_legacy_available(), legacy),
         (lambda: _env.assert_tin_available(), tin),
         (lambda: None, pmtiles),
         (lambda: _env.assert_crs_available(), crs),
+        (lambda: True, antimeridian),
     ]
 
 
@@ -543,3 +554,8 @@ def st_transformcrs(
     return f.call_function(
         "gbx_st_transformcrs", _col(geom), _crs_col(target_crs), _crs_col(source_crs)
     )
+
+
+def st_shiftlongitude(geom: ColLike) -> Column:
+    """Shift longitude from [-180,180] to [0,360] (SQL surface, BINARY output)."""
+    return f.call_function("gbx_st_shiftlongitude", _col(geom))

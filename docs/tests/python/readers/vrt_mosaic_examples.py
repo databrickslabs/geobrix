@@ -17,6 +17,7 @@ import tempfile
 from path_config import SAMPLE_DATA_BASE
 
 SAMPLE_RASTER_SINGLE = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
+SAMPLE_RASTER_LONDON = f"{SAMPLE_DATA_BASE}/london/sentinel2/london_sentinel2_red.tif"
 
 # ---------------------------------------------------------------------------
 # Display constants (payload rendered in docs via raw-loader)
@@ -113,6 +114,42 @@ raster_cells = df.select(
 # Equi-join: any h3-indexed analytics table joins on cellid —
 # the cellid is a plain string key, compatible with h3.str_to_int and similar.
 analytics = spark.table("catalog.schema.h3_metrics")  # h3-indexed DataFrame
+result = raster_cells.join(analytics, on="cellid", how="inner")"""
+
+VRT_BNG = r"""from databricks.labs.gbx.ds.register import register
+from pyspark.sql.functions import col
+
+register(spark)
+
+# Write a BNG mosaic: each source is reprojected to EPSG:27700 and split into
+# one mini-COG per overlapping BNG cell at the chosen resolution.
+# BNG is valid over Great Britain only (EPSG:27700 extent).
+sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw/")
+(
+    sources
+    .write.format("cog_gbx")
+    .option("gridSystem", "bng")      # cell-aligned to the BNG grid (EPSG:27700)
+    .option("gridResolution", "1km")  # BNG: integer index ±1..±6 or string key
+    .mode("overwrite")
+    .save("/Volumes/catalog/schema/volume/mosaic_bng/")
+)
+
+# Read back: one virtual tile per BNG cell
+df = spark.read.format("raster_gbx").load(
+    "/Volumes/catalog/schema/volume/mosaic_bng/mosaic.vrt"
+)
+
+# tile.metadata carries the BNG cell id and grid system tag
+raster_cells = df.select(
+    col("tile.path").alias("member"),
+    col("tile.metadata")["cellid"].alias("cellid"),
+    col("tile.metadata")["gridSystem"].alias("gridSystem"),
+)
+
+# Equi-join: any BNG-indexed analytics table joins on cellid —
+# the cellid is a standard BNG string (e.g. "SU1234"), compatible with
+# gbx_bng_* functions and any BNG-indexed dataset.
+analytics = spark.table("catalog.schema.bng_metrics")  # BNG-indexed DataFrame
 result = raster_cells.join(analytics, on="cellid", how="inner")"""
 
 VRT_MINT = r"""from databricks.labs.gbx.ds._mosaic import mint_vrt
@@ -366,6 +403,126 @@ def vrt_h3_mosaic(spark, src_path=None):
         for r in result_rows:
             assert r["gridSystem"] == "h3", (
                 f"joined row must carry gridSystem='h3', got {r['gridSystem']!r}"
+            )
+
+    return True
+
+
+def _write_gb_source(out_dir: str) -> str:
+    """Create a 200×200, 100 m/px, EPSG:27700 synthetic raster near London.
+
+    Upper-left at E=530 000, N=180 000; spans 20 km × 20 km — four 10-km BNG
+    cells and sixteen 1-km BNG cells at most. Always within the GB EPSG:27700
+    envelope. BNG mosaic tests use this helper to avoid depending on a
+    projection chain from an external CRS (e.g. EPSG:32630) which requires
+    datum-shift grids that may not be present in the test environment.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    src_path = os.path.join(out_dir, "src_bng", "source_gb.tif")
+    os.makedirs(os.path.dirname(src_path), exist_ok=True)
+    w, h = 200, 200
+    data = np.arange(w * h, dtype=np.uint16).reshape(1, h, w) % 60000
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:27700",
+        transform=from_origin(530000.0, 180000.0, 100.0, 100.0),
+    )
+    with rasterio.open(src_path, "w", **profile) as ds:
+        ds.write(data)
+    return src_path
+
+
+def vrt_bng_mosaic(spark, src_path=None):
+    """cog_gbx bng mode writes cell-aligned mini-COGs in EPSG:27700 tagged with BNG cell id."""
+    import rasterio
+    from pyspark.sql.functions import col
+
+    _register(spark)
+
+    with tempfile.TemporaryDirectory() as tmp_root:
+        # BNG requires a GB-envelope source.  Use a synthetic EPSG:27700 raster
+        # near London (E=530 000, N=180 000, 20 km × 20 km) so the test does not
+        # depend on datum-shift grids for an external CRS transform.
+        src = src_path or _write_gb_source(tmp_root)
+        out_dir = os.path.join(tmp_root, "mosaic_bng")
+        os.makedirs(out_dir, exist_ok=True)
+
+        # BNG resolution "1km" (index 3) produces ~16 cells over the 20 km source.
+        (
+            spark.read.format("file_gbx")
+            .load(src)
+            .write.format("cog_gbx")
+            .option("gridSystem", "bng")
+            .option("gridResolution", "1km")
+            .mode("overwrite")
+            .save(out_dir)
+        )
+
+        mosaic_vrt = os.path.join(out_dir, "mosaic.vrt")
+        assert os.path.exists(mosaic_vrt), "bng mosaic mode must write mosaic.vrt"
+
+        cell_tiles = sorted(
+            os.path.join(out_dir, f)
+            for f in os.listdir(out_dir)
+            if f.startswith("cell_") and f.lower().endswith(".tif")
+        )
+        assert len(cell_tiles) >= 1, (
+            f"bng mosaic must produce at least one cell mini-COG, got {len(cell_tiles)}"
+        )
+
+        # Each cell is reprojected to EPSG:27700.
+        with rasterio.open(cell_tiles[0]) as ds:
+            assert ds.crs.to_epsg() == 27700, (
+                f"bng cell must be in EPSG:27700, got {ds.crs}"
+            )
+
+        # raster_gbx expands the VRT into one virtual tile row per BNG cell.
+        df = spark.read.format("raster_gbx").load(mosaic_vrt)
+        assert df.count() == len(cell_tiles), (df.count(), len(cell_tiles))
+
+        # tile.metadata carries cellid (BNG string, e.g. "TQ28") and gridSystem.
+        rows = df.select(
+            col("tile.path").alias("path"),
+            col("tile.metadata")["cellid"].alias("cellid"),
+            col("tile.metadata")["gridSystem"].alias("grid_system"),
+        ).collect()
+
+        for row in rows:
+            assert row["cellid"] is not None, (
+                "cellid must be set in tile.metadata for bng cells"
+            )
+            assert row["grid_system"] == "bng", (
+                f"gridSystem must be 'bng' in tile.metadata, got {row['grid_system']!r}"
+            )
+
+        # Equi-join: a synthetic BNG-indexed DataFrame joins to raster cells on cellid.
+        # Each raster cell gets a matching row in the analytics table; the join on
+        # cellid demonstrates unification of raster and tabular data by BNG cell id.
+        cellids = [row["cellid"] for row in rows]
+        analytics = spark.createDataFrame(
+            [(cid, float(i)) for i, cid in enumerate(cellids)],
+            ["cellid", "value"],
+        )
+        raster_cells = df.select(
+            col("tile.path").alias("member"),
+            col("tile.metadata")["cellid"].alias("cellid"),
+            col("tile.metadata")["gridSystem"].alias("gridSystem"),
+        )
+        result = raster_cells.join(analytics, on="cellid", how="inner")
+        result_rows = result.collect()
+        assert len(result_rows) >= 1, (
+            "equi-join on cellid must produce at least one row"
+        )
+        for r in result_rows:
+            assert r["gridSystem"] == "bng", (
+                f"joined row must carry gridSystem='bng', got {r['gridSystem']!r}"
             )
 
     return True

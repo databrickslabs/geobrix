@@ -63,8 +63,8 @@ tile names, and a re-run produces the same names for the same sources
 | Option | Default | Description |
 |---|---|---|
 | `vrtMosaic` | — | Set `"true"` to activate VRT-mosaic mode. (Supplying `gridSystem` also activates it; one of the two must be present.) |
-| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to EPSG:3857), or `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326, hex-clipped). BNG is planned. |
-| `gridResolution` | — | Grid resolution. Required when `gridSystem="quadbin"` or `gridSystem="h3"`; invalid with `gridSystem="none"`. Quadbin: range `0`–`20`. H3: range `0`–`15`. |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to EPSG:3857), `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326, hex-clipped), or `"bng"` (cell-aligned to the British National Grid, reprojected to EPSG:27700, square cells, Great Britain only). |
+| `gridResolution` | — | Grid resolution. Required when `gridSystem="quadbin"`, `gridSystem="h3"`, or `gridSystem="bng"`; invalid with `gridSystem="none"`. Quadbin: range `0`–`20`. H3: range `0`–`15`. BNG: integer index `±1`–`±6` (1=100 km, 2=10 km, 3=1 km, 4=100 m, 5=10 m, 6=1 m) or string key (e.g. `"1km"`, `"100m"`). |
 | `tileSize` | `"1024"` | Tile edge length in pixels. Tiles are square. The last row and column are clipped to the source boundary. |
 | `overlapPercent` | `"0"` | Tile-edge halo as a percentage of `tileSize`. A value of `5` expands each tile's read window by `ceil(tileSize * 5 / 100)` pixels on every side, clamped to the source bounds. Default 0 — non-overlapping grid. |
 | `mergeStrategy` | `"none"` | How overlapping tiles are blended: `none` (last-write wins), `min`, `max`, `avg`, `first`, or `last`. Relevant only when tiles from different sources overlap spatially. |
@@ -151,6 +151,45 @@ same grid.
 
 :::note
 `tileSize` and `overlapPercent` are not valid with `gridSystem="h3"`.
+Set only `gridSystem` and `gridResolution`.
+:::
+
+---
+
+### BNG (British National Grid) mosaic
+
+When `gridSystem="bng"`, the writer reprojects each source to EPSG:27700 and
+writes one mini-COG per overlapping BNG cell at the requested resolution. Tiles
+are square and aligned to the British National Grid — the same cell boundaries
+used by `gbx_bng_*` functions. This makes the output directly compatible with
+BNG-indexed spatial join workflows and analytical pipelines that operate on BNG
+cell identifiers.
+
+BNG is valid over **Great Britain only** (EPSG:27700, approximately
+E 0–700 km, N 0–1300 km). Sources outside this envelope yield no cells.
+
+<CodeFromTest code={vrtExamples} language="python" functionName="VRT_BNG"
+  source="docs/tests/python/readers/vrt_mosaic_examples.py"
+  testFile="docs/tests/python/readers/test_vrt_mosaic_examples.py" />
+
+Cell tiles are named `cell_<discriminator>_<cellid>.tif` and the VRT index is
+written as `mosaic.vrt` alongside them. The `<discriminator>` is the same stable
+source-namespaced token used in native, quadbin, and h3 modes, so two sources in
+the same write never collide.
+
+When `raster_gbx` expands the VRT, each row's `tile.metadata` carries:
+
+- `tile.metadata["cellid"]` — the BNG cell id (string, e.g. `"SU1234"`)
+- `tile.metadata["gridSystem"]` — `"bng"`
+
+These fields are absent on native (`gridSystem="none"`) tiles.
+
+The `cellid` value is a standard BNG string compatible with `gbx_bng_*` functions.
+Join the expanded mosaic rows to a tabular BNG-indexed DataFrame on `cellid` to
+unify raster pixel statistics with non-raster data sharing the same grid.
+
+:::note
+`tileSize` and `overlapPercent` are not valid with `gridSystem="bng"`.
 Set only `gridSystem` and `gridResolution`.
 :::
 
@@ -301,11 +340,10 @@ model and guidance on routing large files.
 
 ## Upcoming
 
-BNG grid-aligned mosaics are planned — tiles aligned to BNG cells and tagged
-with a cell identifier for spatial joins and data unification. In-notebook
-windowed rendering of a VRT mosaic is also on the roadmap. Pyramid options
-(`gridMinResolution`, `gridMaxResolution`, `gridStepResolution`) are accepted
-by the parser but raise a clear error until their grid-system support lands.
+In-notebook windowed rendering of a VRT mosaic is on the roadmap. Pyramid
+options (`gridMinResolution`, `gridMaxResolution`, `gridStepResolution`) are
+accepted by the parser but raise a clear error until their grid-system support
+lands.
 
 ---
 

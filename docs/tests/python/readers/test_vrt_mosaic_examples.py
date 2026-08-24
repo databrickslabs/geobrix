@@ -29,6 +29,11 @@ def test_vrt_h3_mosaic(spark):
     ex.vrt_h3_mosaic(spark)
 
 
+def test_vrt_bng_mosaic(spark):
+    """cog_gbx bng mode writes cell mini-COGs in EPSG:27700 with cellid metadata and equi-join."""
+    ex.vrt_bng_mosaic(spark)
+
+
 def test_vrt_mint_windowed(spark):
     """mint_vrt builds a transient VRT for a windowed rasterio read across members."""
     ex.vrt_mint_windowed(spark)

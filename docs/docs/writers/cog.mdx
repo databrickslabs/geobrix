@@ -35,8 +35,9 @@ can tile each source into bounded mini-COGs and optionally emit a portable
 `mosaic.vrt` index over them — so a source too large to hold in a single COG
 (or in per-task memory) is split into pieces every `rst_*` function can process
 independently. The tile grid can be native pixel-based (`gridSystem="none"`,
-default) or quadbin cell-aligned (`gridSystem="quadbin"`). The VRT index is
-optional (`writeVrt="false"` writes tiles only).
+default), quadbin cell-aligned (`gridSystem="quadbin"`), BNG cell-aligned
+(`gridSystem="bng"`, Great Britain only), or h3 cell-aligned (`gridSystem="h3"`).
+The VRT index is optional (`writeVrt="false"` writes tiles only).
 See [Mosaic mode](#mosaic-mode) below for the writer options, and the
 [VRT & Mosaics](../api/vrt-mosaic) reference for the full pattern.
 
@@ -171,8 +172,9 @@ independent choices:
 - **Tile grid (`gridSystem`)** — how tiles are aligned on disk and (for DGGS
   grids) tagged with a cell identifier. `"none"` (native pixel tiling, the
   default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to
-  EPSG:3857), or `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326,
-  hex-clipped). BNG is planned.
+  EPSG:3857), `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326,
+  hex-clipped), or `"bng"` (cell-aligned to the British National Grid,
+  reprojected to EPSG:27700, Great Britain only).
 - **VRT index (`writeVrt`)** — whether to emit a `mosaic.vrt` index alongside
   the tiles. Defaults to `"true"`. Set `"false"` to write tiles only (build the
   index later with `mint_vrt`, or enumerate tiles directly).
@@ -200,8 +202,8 @@ These options apply when `vrtMosaic="true"`. All the COG encoding options above
 | Option | Default | Description |
 |--------|---------|-------------|
 | `vrtMosaic` | — | Set `"true"` to activate mosaic mode. (Supplying `gridSystem` also activates it; one of the two must be present.) |
-| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to EPSG:3857), or `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326, hex-clipped). BNG is planned. |
-| `gridResolution` | — | Grid resolution. Required when `gridSystem="quadbin"` or `gridSystem="h3"`; invalid with `gridSystem="none"`. Quadbin: range `0`–`20`. H3: range `0`–`15`. |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to EPSG:3857), `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326, hex-clipped), or `"bng"` (cell-aligned to the British National Grid, reprojected to EPSG:27700, Great Britain only). |
+| `gridResolution` | — | Grid resolution. Required when `gridSystem="quadbin"`, `gridSystem="h3"`, or `gridSystem="bng"`; invalid with `gridSystem="none"`. Quadbin: range `0`–`20`. H3: range `0`–`15`. BNG: integer index `±1`–`±6` or string key (e.g. `"1km"`, `"100m"`). |
 | `tileSize` | `"1024"` | Tile edge length in pixels (square tiles). The last row and column are clipped to the source boundary. Valid only with `gridSystem="none"`. |
 | `overlapPercent` | `"0"` | Tile-edge halo as a percent of `tileSize` (e.g. `5` adds `ceil(tileSize·5/100)` px on each side, clamped to source bounds). Valid only with `gridSystem="none"`. |
 | `mergeStrategy` | `"none"` | How spatially overlapping tiles from different sources blend: `none` (last-write wins), `min`, `max`, `avg`, `first`, `last`. |

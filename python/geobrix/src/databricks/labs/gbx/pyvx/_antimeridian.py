@@ -47,9 +47,14 @@ def _udf_st_shiftlongitude(geom) -> Optional[bytes]:
 def st_wrapx(geom, wrap_x_origin, wrap_direction) -> Optional[bytes]:
     """Wrap X coordinates on one side of wrap_x_origin by wrap_direction.
 
-    PostGIS ST_WrapX semantics: wrap_direction < 0 moves coordinates with
-    x > wrap_x_origin by wrap_direction; wrap_direction > 0 moves coordinates
-    with x < wrap_x_origin by wrap_direction.
+    PostGIS ST_WrapX semantics (inclusive boundaries):
+    - wrap_direction < 0: move coordinates with x >= wrap_x_origin by wrap_direction.
+    - wrap_direction > 0: move coordinates with x <= wrap_x_origin by wrap_direction.
+
+    Inclusive comparison is required so that the shared boundary edge produced by
+    ``st_split`` (where both pieces touch exactly at x == wrap_x_origin) is moved
+    with its piece.  Without inclusivity, the split edge stays at the origin,
+    causing the two wrapped pieces to merge on union instead of separating cleanly.
     """
     g = parse_geom(geom)
     if g is None:
@@ -61,9 +66,9 @@ def st_wrapx(geom, wrap_x_origin, wrap_direction) -> Optional[bytes]:
     def _wrap(x, y, z=None):
         x = np.asarray(x, dtype=float)
         if move < 0:
-            x = np.where(x > origin, x + move, x)
+            x = np.where(x >= origin, x + move, x)
         else:
-            x = np.where(x < origin, x + move, x)
+            x = np.where(x <= origin, x + move, x)
         return (x, y) if z is None else (x, y, z)
 
     return _finish(transform(_wrap, g), srid)

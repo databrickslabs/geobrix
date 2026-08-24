@@ -367,29 +367,50 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
     assert gc.geom_type == "GeometryCollection", f"Expected GeometryCollection, got {gc.geom_type}"
     assert len(gc.geoms) == 2, f"Expected 2 split pieces, got {len(gc.geoms)}"
 
-    # wrap each piece back to [-180,180] and union into a MultiPolygon
+    # wrap only the "right" piece (which has some x > 180 after shift) back to [-180, 0].
+    # The "left" piece (all x <= 180) is already in [-180, 180] and should not be wrapped —
+    # if wrapx were applied to the left piece its x=180 boundary would move to -180, turning
+    # a 10° strip into a 350°-wide polygon.
+    #
+    # With inclusive x >= origin in st_wrapx, the right piece's x=180 edge moves to -180,
+    # giving a clean [-180, -170] strip rather than the [-170, 180] (350°) result from strict >.
+    assert len(gc.geoms) == 2, f"Expected 2 split pieces, got {len(gc.geoms)}"
     wrapped_parts = []
     for part in gc.geoms:
-        wrap_row = (
-            spark.createDataFrame([(part.wkb,)], ["geom"])
-            .select(vx.st_wrapx("geom", f.lit(180.0), f.lit(-360.0)).alias("w"))
-            .first()
-        )
-        assert wrap_row["w"] is not None, "st_wrapx returned None for a split piece"
-        wrapped_parts.append(wkb_loads(bytes(wrap_row["w"])))
+        xs = [c[0] for c in part.exterior.coords]
+        if max(xs) > 180:
+            # This piece has vertices beyond 180°; wrap them back to [-180, 0].
+            wrap_row = (
+                spark.createDataFrame([(part.wkb,)], ["geom"])
+                .select(vx.st_wrapx("geom", f.lit(180.0), f.lit(-360.0)).alias("w"))
+                .first()
+            )
+            assert wrap_row["w"] is not None, "st_wrapx returned None for right piece"
+            wrapped_parts.append(wkb_loads(bytes(wrap_row["w"])))
+        else:
+            # Left piece: already in [-180, 180]; leave as-is.
+            wrapped_parts.append(part)
 
+    # Two non-touching polygons on opposite sides of the antimeridian.
+    assert len(wrapped_parts) == 2, f"Expected 2 wrapped pieces, got {len(wrapped_parts)}"
     normalized = unary_union(wrapped_parts)
-    assert normalized.geom_type in ("MultiPolygon", "Polygon"), (
-        f"Expected Polygon or MultiPolygon after union, got {normalized.geom_type}"
+    assert normalized.geom_type == "MultiPolygon", (
+        f"Expected MultiPolygon (two clean halves), got {normalized.geom_type}. "
+        f"Bounds: {[p.bounds for p in wrapped_parts]}"
     )
-    assert not normalized.is_empty, "Normalized geometry should not be empty"
-    bounds = normalized.bounds  # (minx, miny, maxx, maxy)
-    # After wrapping, all x should be within [-180, 180].
-    # Note: st_wrapx uses strict x > origin (not >=), so the shared split edge
-    # at x=180 stays at 180 — hence maxx == 180, not < 180.
-    assert bounds[0] >= -180, f"minx should be >= -180: {bounds}"
-    assert bounds[2] <= 180, f"maxx should be <= 180: {bounds}"
-    # The wrap moved the western piece (originally x > 180) to negative x,
-    # so the result should span both negative and positive x.
-    assert bounds[0] < 0, f"Expected some negative x after wrapping: {bounds}"
-    assert bounds[2] > 0, f"Expected some positive x (eastern piece): {bounds}"
+    geoms = list(normalized.geoms)
+    assert len(geoms) == 2, f"Expected 2 sub-geometries, got {len(geoms)}"
+    # Each piece should be entirely within [-180, 180].
+    for g in geoms:
+        assert g.bounds[0] >= -180 and g.bounds[2] <= 180, (
+            f"Piece out of [-180,180]: {g.bounds}"
+        )
+    # Pieces are on opposite sides of the antimeridian:
+    # eastern half ≈ [170, 180], western half ≈ [-180, -170].
+    piece_minx = sorted(g.bounds[0] for g in geoms)
+    assert piece_minx[0] == pytest.approx(-180.0, abs=1e-9), (
+        f"Western piece minx should be -180, got {piece_minx[0]}"
+    )
+    assert piece_minx[1] == pytest.approx(170.0, abs=1e-9), (
+        f"Eastern piece minx should be 170, got {piece_minx[1]}"
+    )

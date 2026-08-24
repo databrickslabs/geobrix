@@ -47,6 +47,21 @@ def test_st_wrapx_preserves_srid_and_none():
     assert am.st_wrapx(None, 180.0, -360.0) is None
 
 
+def test_st_wrapx_inclusive_negative_direction_moves_x_at_origin():
+    # Boundary point x == origin MUST move with direction < 0.
+    # ST_WrapX(POINT(180 10), 180, -360) -> POINT(-180 10)
+    # (x==180 is the split edge; it must land at -180, not stay at 180)
+    g = from_wkb(am.st_wrapx(to_wkb(Point(180.0, 10.0)), 180.0, -360.0))
+    assert (g.x, g.y) == (-180.0, 10.0)
+
+
+def test_st_wrapx_inclusive_positive_direction_moves_x_at_origin():
+    # Boundary point x == origin MUST move with direction > 0.
+    # ST_WrapX(POINT(0 10), 0, 360) -> POINT(360 10)
+    g = from_wkb(am.st_wrapx(to_wkb(Point(0.0, 10.0)), 0.0, 360.0))
+    assert (g.x, g.y) == (360.0, 10.0)
+
+
 # ---------------------------------------------------------------------------
 # st_split acceptance corpus (Task 3)
 # ---------------------------------------------------------------------------

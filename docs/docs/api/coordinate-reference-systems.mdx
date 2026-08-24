@@ -196,7 +196,7 @@ gbx.register_proj_grids(spark, "/Volumes/<catalog>/<schema>/proj-grids", replace
 
 ### Session-start contract
 
-`register_proj_grids` must be called **before** any transform that needs the grid. Transforms defined and run after the call see the grids on every worker — including workers that scale up later, because the directory list is embedded in the UDF closures (lightweight tier) and in each query plan (heavyweight tier). Transforms already planned before the call do not pick up new directories retroactively.
+Call `register_proj_grids` once at the start of your session, before running transforms. Every transform after that — including on workers that join later in the session — finds the registered grids. Transforms already defined before the call are not updated retroactively.
 
 :::warning Mitigates silent accuracy loss
 If a grid file is not found, PROJ falls back to a lower-accuracy transform and continues without raising — the reprojection "works" but can be off by metres. `register_proj_grids` warns loudly when a directory does not exist or contains no recognizable grid file, so accuracy problems surface at registration time rather than silently at transform time.

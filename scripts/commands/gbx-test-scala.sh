@@ -16,6 +16,7 @@ show_help() {
     echo -e "  ${GREEN}--suite <pattern>${NC}       Run specific test suite (single pattern)"
     echo -e "  ${GREEN}--suites <list>${NC}        Run specific test suites (comma-separated class/package patterns)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
+    echo -e "  ${GREEN}--tags-to-exclude <tag>${NC}  Override tagsToExclude (use NoOpExcludeSentinel to un-exclude a tag)"
     echo -e "  ${GREEN}--verbose${NC}              Increase Maven verbosity (-X flag)"
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
@@ -29,6 +30,8 @@ show_help() {
     echo -e "  ${YELLOW}gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'${NC}"
     echo -e "  ${YELLOW}gbx:test:scala --suites '...SpatialRefOpsTest,...GTiff_DataSourceTest'${NC}"
     echo -e "  ${YELLOW}gbx:test:scala --log scala-tests.log --verbose${NC}"
+    echo -e "  ${YELLOW}# Run RequiresProjIsolation tests in isolation:${NC}"
+    echo -e "  ${YELLOW}gbx:test:scala --suite 'com.databricks.labs.gbx.rasterx.RST_TransformCrsGridSpec' --tags-to-exclude com.databricks.labs.gbx.bench.NoOpExcludeSentinel${NC}"
     echo ""
 }
 
@@ -37,6 +40,7 @@ SUITE_PATTERN=""
 LOG_PATH=""
 VERBOSE=""
 BY_PACKAGE=false
+TAGS_TO_EXCLUDE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -50,6 +54,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --suites)
             SUITE_PATTERN="$2"
+            shift 2
+            ;;
+        --tags-to-exclude)
+            TAGS_TO_EXCLUDE="$2"
             shift 2
             ;;
         --log)
@@ -117,6 +125,10 @@ else
     else
         echo -e "${CYAN}🎯 Running all Scala unit tests (src/test/scala; excludes docs)${NC}"
         MVN_CMD="$MVN_CMD -Dsuites='com.databricks.labs.gbx.*'"
+    fi
+
+    if [ -n "$TAGS_TO_EXCLUDE" ]; then
+        MVN_CMD="$MVN_CMD -DtagsToExclude='$TAGS_TO_EXCLUDE'"
     fi
 
     if [ -n "$VERBOSE" ]; then

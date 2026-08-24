@@ -1,5 +1,6 @@
 """Public helper: register custom PROJ grid-shift directories (both tiers)."""
 
+import importlib
 import os
 import warnings
 from typing import List, Sequence, Union
@@ -21,7 +22,9 @@ def _warn_if_unusable(d: str) -> None:
     try:
         has_grid = any(f.lower().endswith(_GRID_SUFFIXES) for f in os.listdir(d))
     except OSError:
-        has_grid = True  # unreadable now (e.g. Volume eventual-consistency); don't cry wolf
+        has_grid = (
+            True  # unreadable now (e.g. Volume eventual-consistency); don't cry wolf
+        )
     if not has_grid:
         warnings.warn(
             f"register_proj_grids: '{d}' contains no recognizable grid file "
@@ -42,7 +45,6 @@ def _reregister_active_light_tiers(spark) -> None:
         "databricks.labs.gbx.pygx.functions",
     ):
         try:
-            import importlib
             mod = importlib.import_module(modname)
         except Exception:
             continue

@@ -52,8 +52,14 @@
           suite carries (`-DtagsToExclude=...NoOpExcludeSentinel`) — an EMPTY
           override makes the scalatest plugin emit `-l ''`, which ScalaTest
           rejects, so a non-empty no-op tag is used instead.
+
+          `com.databricks.labs.gbx.bench.RequiresProjIsolation` tags the two
+          transform-layer tests in RST_TransformCrsGridSpec that need a fresh JVM:
+          PROJ freezes its grid-lookup cache process-globally on first use, so
+          these tests only produce a meaningful result in an isolated JVM (via
+          `-Dsuites=<single spec>` + the NoOpExcludeSentinel override).
         -->
-        <tagsToExclude>com.databricks.labs.gbx.bench.OnDemand</tagsToExclude>
+        <tagsToExclude>com.databricks.labs.gbx.bench.OnDemand,com.databricks.labs.gbx.bench.RequiresProjIsolation</tagsToExclude>
         <gbx.bench.corpus></gbx.bench.corpus>
         <gbx.bench.out></gbx.bench.out>
         <gbx.bench.functions></gbx.bench.functions>

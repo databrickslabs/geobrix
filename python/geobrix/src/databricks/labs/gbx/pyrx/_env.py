@@ -42,7 +42,7 @@ def _bundled_proj_data() -> Optional[str]:
 
 
 def _prepend_unique(base: str, extra: Sequence[str]) -> str:
-    """Colon-join `extra` dirs ahead of `base`, de-duped, preserving order."""
+    """os.pathsep-join `extra` dirs ahead of `base`, de-duped, preserving order."""
     parts = []
     for d in list(extra) + ([base] if base else []):
         for seg in d.split(os.pathsep) if d else []:

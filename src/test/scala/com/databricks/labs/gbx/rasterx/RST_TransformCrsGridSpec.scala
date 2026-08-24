@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx
 
+import com.databricks.labs.gbx.bench.RequiresProjIsolation
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.operations.{ProjGridRegistry, SpatialRefOps}
 import com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs
@@ -212,7 +213,7 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
         gdal.GetConfigOption("PROJ_LIB") should include(gridDir)
     }
 
-    test("heavy vector ST_TransformCrs applies the grid — cross-tier parity with light") {
+    test("heavy vector ST_TransformCrs applies the grid — cross-tier parity with light", RequiresProjIsolation) {
         val g = gf.createPoint(new Coordinate(PT_LON, PT_LAT)) // plain WKB, no SRID
         val result = ST_TransformCrs.eval(
           JTS.toWKB(g),
@@ -229,7 +230,7 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
         out.getCoordinate.getY shouldBe (EXPECT_LAT +- 1e-6)
     }
 
-    test("heavy raster RST_TransformCrs consults the registered grid (RED unfindable, GREEN registered)") {
+    test("heavy raster RST_TransformCrs consults the registered grid (RED unfindable, GREEN registered)", RequiresProjIsolation) {
         // RED: a CRS naming a grid NOT on the registered path cannot be resolved -> no output,
         // so no shift is fabricated.
         warpNorthEdgeLat(UNREG_CRS) shouldBe None

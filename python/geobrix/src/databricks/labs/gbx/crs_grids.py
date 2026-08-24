@@ -50,6 +50,18 @@ def _reregister_active_light_tiers(spark) -> None:
             mod.register(spark)
 
 
+def _apply_heavy(spark, result) -> None:
+    """Set the heavy-tier JVM grid registry if a JVM is present (best-effort)."""
+    jvm = getattr(spark, "_jvm", None)
+    if jvm is None:
+        return
+    try:
+        reg = jvm.com.databricks.labs.gbx.operations.ProjGridRegistry
+        reg.set(list(result), True)  # push the full de-duped set (idempotent replace)
+    except Exception:
+        pass  # heavy classes absent (light-only session) → no-op
+
+
 def register_proj_grids(
     spark,
     dirs: Union[str, Sequence[str]],
@@ -62,5 +74,5 @@ def register_proj_grids(
     for d in (dirs if not isinstance(dirs, str) else [dirs]):
         _warn_if_unusable(d)
     _reregister_active_light_tiers(spark)
-    # Heavy wiring added in Task 9.
+    _apply_heavy(spark, result)
     return result

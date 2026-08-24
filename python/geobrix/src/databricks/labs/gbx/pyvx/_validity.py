@@ -9,11 +9,11 @@ import json
 import re
 from typing import Optional
 
-from shapely import get_srid, is_valid_reason, make_valid, set_srid, to_wkb
+from shapely import get_srid, is_valid_reason, make_valid, orient_polygons, set_srid, to_wkb
 
 from ._geom import parse_geom
 
-_LEVELS = ("structure", "linework")
+_LEVELS = ("structure", "linework", "ogc")
 
 # GEOS reason prefix (SFS violation category) -> stable GeoBrix code.
 # structural 1-9, self-intersection 10-19, ring-continuity 20-29; unmapped -> None.
@@ -22,6 +22,9 @@ _REASON_CODE = {
     "Too few points in geometry component": 1,
     "Invalid coordinate": 2,
     "Ring not closed": 3,
+    # "Repeated point" maps to 4 for completeness; GEOS 3.13.1 does not flag
+    # consecutive duplicate ring points as invalid (they produce "Valid Geometry").
+    "Repeated point": 4,
     "Self-intersection": 10,
     "Ring Self-intersection": 11,
     "Hole lies outside shell": 20,
@@ -42,7 +45,17 @@ def _finish(g, srid: int) -> bytes:
 
 
 def st_makevalid(geom, level="linework") -> Optional[bytes]:
-    """Repair a geometry to OGC-SFS validity (shapely make_valid). BINARY out."""
+    """Repair a geometry to OGC-SFS validity (shapely make_valid). BINARY out.
+
+    level="linework" (default) / "structure": topology repair followed by
+        orient_polygons(exterior_cw=False) — exterior CCW, holes CW — so the
+        result passes the product's stricter ST_IsValid gate (which enforces
+        ring orientation in addition to OGC topology). This is the
+        product-validity default.
+    level="ogc": topology repair only (make_valid method="linework"), NO orient.
+        OGC-valid but orientation-agnostic — opt-in for callers that do not
+        need the product ring-orientation guarantee.
+    """
     g = parse_geom(geom)
     if g is None:
         return None
@@ -53,7 +66,13 @@ def st_makevalid(geom, level="linework") -> Optional[bytes]:
             f"('full'/'cleaning' arrive in a later release); got {level!r}"
         )
     srid = get_srid(g)
-    return _finish(make_valid(g, method=lv, keep_collapsed=True), srid)
+    if lv == "ogc":
+        repaired = make_valid(g, method="linework", keep_collapsed=True)
+    else:
+        repaired = orient_polygons(
+            make_valid(g, method=lv, keep_collapsed=True), exterior_cw=False
+        )
+    return _finish(repaired, srid)
 
 
 def explain_validity(geom) -> Optional[str]:

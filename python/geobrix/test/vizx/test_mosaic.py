@@ -230,6 +230,21 @@ def test_plot_mosaic_show_cells_draws_outlines(tmp_path):
     assert len(ax.patches) == len(cells)  # one polygon per cell
 
 
+def test_plot_mosaic_show_cells_preserves_frame(tmp_path):
+    """show_cells must not autoscale the view past the image extent (hex outlines
+    reach beyond the data, so adding them as patches would pad the frame with
+    whitespace unless the limits are restored)."""
+    plt.close("all")
+    vrt, _ = _build_h3_mosaic(tmp_path)
+    plot_mosaic(vrt, max_pixels=256, debug_mode=0)
+    base_x, base_y = plt.gcf().axes[0].get_xlim(), plt.gcf().axes[0].get_ylim()
+    plt.close("all")
+    plot_mosaic(vrt, show_cells=True, max_pixels=256, debug_mode=0)
+    ax = plt.gcf().axes[0]
+    assert ax.get_xlim() == pytest.approx(base_x)
+    assert ax.get_ylim() == pytest.approx(base_y)
+
+
 def test_plot_mosaic_show_cells_non_h3_raises(tmp_path):
     plt.close("all")
     vrt = _build_native_mosaic(tmp_path)  # no grid tags

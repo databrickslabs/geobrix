@@ -360,10 +360,14 @@ def test_vrt_multiband_source(tmp_path):
     tree = ET.parse(vrt_path)
     bands = [el for el in tree.getroot() if el.tag == "VRTRasterBand"]
     assert len(bands) == 3, f"expected 3 VRTRasterBand elements, got {len(bands)}"
-    # Each band should have ≥ 1 SimpleSource
+    # Each band should have >= 1 ComplexSource (ComplexSource — not SimpleSource — so a
+    # source's nodata is skipped during compositing; see _build_mosaic_vrt seam fix).
     for band in bands:
-        sources = list(band.iter("SimpleSource"))
-        assert sources, f"VRTRasterBand band={band.get('band')} has no SimpleSource"
+        sources = list(band.iter("ComplexSource"))
+        assert sources, f"VRTRasterBand band={band.get('band')} has no ComplexSource"
+        assert not list(
+            band.iter("SimpleSource")
+        ), "must be ComplexSource, not SimpleSource"
 
 
 def test_vrt_multiband_nodata_on_every_band(tmp_path):
@@ -384,6 +388,16 @@ def test_vrt_multiband_nodata_on_every_band(tmp_path):
         nd = band.find("NoDataValue")
         assert nd is not None, f"band {band.get('band')} missing NoDataValue"
         assert float(nd.text) == 0.0, f"band {band.get('band')} nodata != 0.0"
+        # Every ComplexSource must carry a <NODATA> so overlapping tiles' nodata is
+        # skipped during compositing (the interior-seam fix). Without it, an
+        # overlapping tile's nodata overwrites a neighbour's data -> holes.
+        sources = list(band.iter("ComplexSource"))
+        assert sources, f"band {band.get('band')} has no ComplexSource"
+        for s in sources:
+            snd = s.find("NODATA")
+            assert (
+                snd is not None and float(snd.text) == 0.0
+            ), f"band {band.get('band')} ComplexSource missing NODATA=0.0"
 
 
 # ---------------------------------------------------------------------------

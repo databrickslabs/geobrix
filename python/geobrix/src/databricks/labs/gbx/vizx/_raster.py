@@ -771,6 +771,11 @@ def _overlay_h3_cells(ax, vrt_path, crs):
 
         reproj = get_transformer("EPSG:4326", crs)
 
+    # Preserve the image (data-envelope) extent: hex outlines reach the full hex
+    # vertices — including fringe cells beyond the data — so adding them as patches
+    # would let matplotlib autoscale the view outward and pad the frame with
+    # whitespace. Capture the limits imshow set, draw, then restore them.
+    xlim, ylim = ax.get_xlim(), ax.get_ylim()
     for member in _parse_vrt_members(vrt_path):
         cellid = _read_gbx_member_tags(member).get("cellid")
         if not cellid:
@@ -792,6 +797,10 @@ def _overlay_h3_cells(ax, vrt_path, crs):
                 linewidth=0.6,
             )
         )
+    # Restore the image extent so the overlay never changes the framing (same view
+    # as show_cells=False); hex outlines beyond the envelope are simply clipped.
+    ax.set_xlim(xlim)
+    ax.set_ylim(ylim)
 
 
 def _resolve_vrt_path(vrt):

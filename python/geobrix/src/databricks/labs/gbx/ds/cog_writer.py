@@ -362,7 +362,13 @@ def _build_mosaic_vrt(
                 fn_text = meta["path"]
                 rel_attr = "0"
 
-            src_el = ET.SubElement(band_el, "SimpleSource")
+            # ComplexSource (not SimpleSource): with a <NODATA> child GDAL SKIPS
+            # source pixels equal to nodata when compositing. Hex mini-COGs are
+            # bbox tiles whose corners (outside the hexagon) are nodata and whose
+            # bboxes OVERLAP neighbours; SimpleSource copies those nodata corners
+            # over a neighbour's real data → interior holes/seams. ComplexSource
+            # makes nodata transparent so the neighbour's data shows through.
+            src_el = ET.SubElement(band_el, "ComplexSource")
             fn_el = ET.SubElement(src_el, "SourceFilename", {"relativeToVRT": rel_attr})
             fn_el.text = fn_text
             ET.SubElement(src_el, "SourceBand").text = str(band_idx)
@@ -386,6 +392,9 @@ def _build_mosaic_vrt(
                     "ySize": str(tile_h),
                 },
             )
+            # Skip this tile's nodata pixels when compositing (transparent overlap).
+            if band_nodata is not None:
+                ET.SubElement(src_el, "NODATA").text = repr(float(band_nodata))
 
     # ── Step 5: write XML to disk ──────────────────────────────────────────
     tree = ET.ElementTree(root)
@@ -1442,6 +1451,14 @@ class CogGbxWriter(DataSourceWriter):
                         transform=dst_transform,
                         out_shape=(cell_h, cell_w),
                         invert=False,  # True = outside polygon
+                        # all_touched: keep every pixel the hexagon TOUCHES (not just
+                        # center-inside). Each cell reprojects on its own grid, so with
+                        # center-based masking the misaligned grids drop a thin band of
+                        # boundary pixels on BOTH sides of a shared edge → honeycomb
+                        # nodata seams between abutting hexes. Touch-based masking makes
+                        # neighbours overlap ~1px at edges so the VRT composite closes
+                        # the seams (the intended full-hex-overlap behaviour).
+                        all_touched=True,
                     )
                     for b in range(count):
                         dst_data[b][outside_mask] = out_nodata

@@ -615,7 +615,7 @@ A scalar function in **both** tiers (same registered name, same output bytes), s
 
 ## Antimeridian handling
 
-These three functions are distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster. They are **lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian) for the full composition pattern.
+These three functions are distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster. They are **lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Antimeridian](./antimeridian) for the full composition pattern.
 
 ### st_shiftlongitude
 
@@ -630,7 +630,7 @@ Shifts all longitude (x) coordinates of a geometry from `[-180, 180]` space into
 
 **Returns:** `BINARY` — WKB with all negative x coordinates shifted by +360.
 
-See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian).
+See [Antimeridian](./antimeridian).
 
 <FunctionExamples
   name="st_shiftlongitude"
@@ -656,7 +656,7 @@ Wraps x coordinates that exceed a threshold back by a fixed offset. The primary 
 
 **Returns:** `BINARY` — WKB with qualifying x coordinates shifted by `wrap_direction`.
 
-See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian).
+See [Antimeridian](./antimeridian).
 
 <FunctionExamples
   name="st_wrapx"
@@ -681,7 +681,7 @@ Splits a geometry by a blade geometry, returning a `GEOMETRYCOLLECTION` containi
 
 **Returns:** `BINARY` — WKB `GEOMETRYCOLLECTION` of the resulting pieces.
 
-See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian).
+See [Antimeridian](./antimeridian).
 
 <FunctionExamples
   name="st_split"
@@ -695,7 +695,8 @@ See [Geometry Validity & Antimeridian](./geometry-validity-antimeridian).
 ## Next Steps
 
 - [Quick Start](../quick-start) — Register and use VectorX with the legacy example
-- [Geometry Validity & Antimeridian](./geometry-validity-antimeridian) — antimeridian composition pattern with full example
+- [Geometry Validity](./geometry-validity) — diagnose and repair OGC-invalid geometries with `gbx_st_explainvalidity` and `gbx_st_makevalid`
+- [Antimeridian](./antimeridian) — antimeridian composition pattern with full example
 - [Choosing an Execution Tier](./execution-tiers) — lightweight vs heavyweight comparison
 - [PMTiles Function Reference](./pmtiles-functions) — Aggregate MVT tiles into a single `.pmtiles` archive
 - [PMTiles Writer](../writers/pmtiles) — DataSource for streaming large pyramids to a single `.pmtiles` file

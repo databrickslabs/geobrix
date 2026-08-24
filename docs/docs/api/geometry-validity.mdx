@@ -1,6 +1,6 @@
 ---
 sidebar_position: 8
-title: Geometry Validity & Antimeridian
+title: Geometry Validity
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
@@ -8,7 +8,7 @@ import Tier from '@site/src/components/Tier';
 import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
 import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
 
-# Geometry Validity & Antimeridian
+# Geometry Validity
 
 VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
 
@@ -20,47 +20,6 @@ vx.register(spark)
 ```
 :::
 
-## Antimeridian crossing
-
-Geometries that cross the 180° antimeridian (the international date line) are a recurring problem in global datasets: a polygon whose vertices span from 170°E to 170°W appears as a 340°-wide shape in standard `[-180, 180]` longitude space, breaks bounding-box calculations, and confuses most spatial engines that expect well-behaved planar coordinates.
-
-GeoBrix provides three composable functions — `gbx_st_shiftlongitude`, `gbx_st_split`, and `gbx_st_wrapx` — that together normalize such geometries into a clean `MULTIPOLYGON` with one piece on each side of the antimeridian. These functions assume geographic coordinates in **EPSG:4326** (degrees latitude/longitude).
-
-### Composition pattern
-
-The full pattern runs four steps:
-
-1. **Shift** the polygon from `[-180, 180]` into `[0, 360]` longitude space with `gbx_st_shiftlongitude`. This makes a crossing polygon contiguous — its western vertices (e.g. −170°) move to 190°, and the entire shape now sits around the 180° line without any coordinate-wrap artefacts.
-2. **Split** the contiguous polygon at the 180° meridian with `gbx_st_split`. The result is a `GEOMETRYCOLLECTION` containing two separate pieces.
-3. **Explode** the collection into individual rows with the built-in `ST_Dump`.
-4. **Wrap only the eastern pieces** back into `[-180, 0]` with `gbx_st_wrapx`. The conditional `CASE WHEN ST_XMax(piece) > 180` is essential: the eastern piece (all x ≥ 180) needs wrapping; the western piece (all x ≤ 180) is already in standard longitude range and must not be touched. Applying `gbx_st_wrapx` uniformly to both pieces would shift the western piece's 180° shared edge to −180°, producing a 350°-wide polygon instead of a clean 10° strip.
-
-The final `ST_Union` / `ST_Multi` reassembles the normalized pieces into a `MULTIPOLYGON`.
-
-### WKB ↔ GEOMETRY bridge
-
-GeoBrix functions operate on `BINARY` (WKB/EWKB). The built-in product functions (`ST_Dump`, `ST_XMax`, `ST_Union`, `ST_Multi`, `ST_AsText`) operate on the product's `GEOMETRY` type. Where the two meet, bridge with:
-
-- `ST_GeomFromWKB(wkb_column)` — converts GeoBrix BINARY output to a product `GEOMETRY` value
-- `ST_AsBinary(geometry_column)` — converts a product `GEOMETRY` value back to BINARY for GeoBrix input
-
-The pattern below shows both bridges in context.
-
-### Example
-
-<CodeFromTest
-  code={vectorxSqlCode}
-  functionName="antimeridian_pattern_sql_example"
-  language="sql"
-  source="docs/tests/python/api/vectorx_functions_sql.py"
-  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
-  outputConstant="antimeridian_pattern_sql_example_output"
-/>
-
----
-
-## Geometry validity
-
 The **OGC Simple Features Specification (SFS)** defines what makes a geometry valid: every ring must be closed, holes must lie inside their outer boundary, no ring may properly self-intersect, every ring must have at least four points, and coordinates must be finite. Databricks Runtime's `ST_IsValid` checks these rules and returns a boolean. What it does not provide is the *why*, the *where*, or the *fix* — and at scale, a single malformed geometry can fail a worker or a shuffle.
 
 GeoBrix fills those gaps with two light-tier functions:
@@ -68,7 +27,7 @@ GeoBrix fills those gaps with two light-tier functions:
 - **`gbx_st_explainvalidity`** — *diagnose*: returns a JSON string with the SFS violation class, a stable code, and the coordinate where the violation occurs.
 - **`gbx_st_makevalid`** — *repair*: returns a valid geometry, preserving the original CRS.
 
-### ST_IsValid vs Shapely vs GeoBrix
+## ST_IsValid vs Shapely vs GeoBrix
 
 Understanding which tool catches which invalidity class matters for the conditional-repair pattern.
 
@@ -87,7 +46,7 @@ Understanding which tool catches which invalidity class matters for the conditio
 
 **Key takeaway:** `ST_IsValid` is the *stricter* check. It enforces OGC ring orientation (outer ring counter-clockwise, holes clockwise) in addition to all topological rules. Shapely's `is_valid` ignores orientation — a geometry can pass Shapely's validity test and fail `ST_IsValid`. The default `gbx_st_makevalid` repair (`level='linework'` or `'structure'`) applies `orient_polygons` after topology repair, so output passes `ST_IsValid`'s stricter gate.
 
-### Conditional repair workflow
+## Conditional repair workflow
 
 At scale, you want to *gate* repairs and diagnostics: run `ST_IsValid` as a cheap per-row boolean first, then pass only the flagged rows to `gbx_st_makevalid` or `gbx_st_explainvalidity`. Calling either function on every row (including already-valid ones) wastes compute.
 
@@ -136,7 +95,7 @@ FROM t
 WHERE NOT ST_IsValid(geom);
 ```
 
-### gbx_st_makevalid
+## gbx_st_makevalid
 
 <Tier light/>
 
@@ -171,7 +130,7 @@ Repairs a geometry to OGC-SFS validity. Uses GEOS `make_valid` under the hood (v
   outputConstant="st_makevalid_python_light_example_output"
 />
 
-### gbx_st_explainvalidity
+## gbx_st_explainvalidity
 
 <Tier light/>
 
@@ -213,14 +172,14 @@ Returns `NULL` for null or unparseable input.
   outputConstant="st_explainvalidity_python_light_example_output"
 />
 
-### Tier availability
+## Tier availability
 
 | Function | Lightweight (`pyvx`) | Heavyweight (`vectorx`) |
 |---|---|---|
 | `gbx_st_makevalid` | Supported | — |
 | `gbx_st_explainvalidity` | Supported | — |
 
-### Invalidity reason codes
+## Invalidity reason codes
 
 The `code` field in `gbx_st_explainvalidity` output maps the GEOS reason prefix to a stable integer. Use these codes in `GROUP BY` queries to count violations by class.
 

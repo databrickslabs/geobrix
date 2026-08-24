@@ -131,7 +131,8 @@ const sidebars = {
           collapsed: true,
           link: { type: 'doc', id: 'api/vectorx-functions' },
           items: [
-            'api/geometry-validity-antimeridian',
+            'api/geometry-validity',
+            'api/antimeridian',
             // 'api/shapely-distributed' — reserved for the Shapely Distributed page
           ],
         },

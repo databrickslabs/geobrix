@@ -578,8 +578,8 @@ def st_wrapx(geom: ColLike, wrap_x_origin: ColLike, wrap_direction: ColLike) -> 
     """Wrap X coordinates around an origin by a direction (SQL surface, BINARY output).
 
     PostGIS ST_WrapX semantics: wrap_direction < 0 moves coordinates with
-    x > wrap_x_origin by wrap_direction; wrap_direction > 0 moves coordinates
-    with x < wrap_x_origin by wrap_direction.
+    x >= wrap_x_origin by wrap_direction; wrap_direction > 0 moves coordinates
+    with x <= wrap_x_origin by wrap_direction.
 
     Args:
         geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.

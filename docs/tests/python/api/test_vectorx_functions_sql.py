@@ -53,7 +53,7 @@ def vectorx_registered(spark):
 
     vx.register(spark)
     legacy_vx.register(spark)
-    pyvx.register(spark)
+    pyvx.register(spark, only=["gbx_st_shiftlongitude", "gbx_st_wrapx", "gbx_st_split"])
     create_setup_views_vectorx_heavy(spark)
     yield spark
 

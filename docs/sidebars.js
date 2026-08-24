@@ -132,7 +132,7 @@ const sidebars = {
           link: { type: 'doc', id: 'api/vectorx-functions' },
           items: [
             'api/geometry-validity-antimeridian',
-            // 'api/shapely-distributed' reserved (separate follow-on task)
+            // 'api/shapely-distributed' — reserved for the Shapely Distributed page
           ],
         },
         { type: 'doc', id: 'api/gridx-functions', label: 'GridX' },

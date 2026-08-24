@@ -1187,3 +1187,65 @@ def test_h3_normal_resolution_proceeds(tmp_path, _write_src_fn):
     _write_mosaic_for_test(src_path, out_dir, opts)
     tifs = glob.glob(os.path.join(out_dir, "cell_*.tif"))
     assert len(tifs) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Fixtures / helpers shared by BNG tests
+# ---------------------------------------------------------------------------
+
+
+def _write_gb_source_27700(tmp_path) -> str:
+    """200×200 raster, 100 m pixels, EPSG:27700 (BNG), near London.
+
+    Upper-left at E=530000, N=180000; covers 20 km × 20 km.
+    At gridResolution='10km' (BNG res 2, 10 km cells), this spans ~4 cells,
+    all within the GB EPSG:27700 envelope.
+    """
+    path = str(tmp_path / "src_bng" / "source_bng.tif")
+    w, h = 200, 200
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:27700",
+        transform=from_origin(530000.0, 180000.0, 100.0, 100.0),
+    )
+    data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# 20. BNG write: tagged, EPSG:27700 mini-COGs
+# ---------------------------------------------------------------------------
+
+
+def test_write_mosaic_bng_tags_and_crs(tmp_path):
+    """gridSystem=bng → ≥1 mini-COGs in EPSG:27700, tagged GBX_CELLID + GBX_GRIDSYSTEM=bng."""
+    src = _write_gb_source_27700(tmp_path)
+    opts = parse_mosaic_options(
+        {"gridSystem": "bng", "gridResolution": "10km"}
+    )
+    out_dir = str(tmp_path / "bng_out")
+    w = _make_writer(out_dir, mosaic_opts=opts)
+    msg = w.write(iter([{"path": src}]))
+
+    members = [p for p in msg.paths if p.endswith(".tif")]
+    assert members, "expected BNG mini-COG members"
+
+    for m in members:
+        with rasterio.open(m) as ds:
+            assert ds.crs.to_epsg() == 27700, (
+                f"{os.path.basename(m)}: expected EPSG:27700, got {ds.crs}"
+            )
+            tags = ds.tags()
+            assert tags.get("GBX_GRIDSYSTEM") == "bng", (
+                f"{os.path.basename(m)}: expected GBX_GRIDSYSTEM=bng, got {tags}"
+            )
+            assert tags.get("GBX_CELLID"), (
+                f"{os.path.basename(m)}: GBX_CELLID missing or empty; got {tags}"
+            )

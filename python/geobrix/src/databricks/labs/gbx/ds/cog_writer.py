@@ -1006,6 +1006,8 @@ class CogGbxWriter(DataSourceWriter):
             return self._write_mosaic_quadbin(iterator)
         if self.mosaic_opts.grid_system == "h3":
             return self._write_mosaic_h3(iterator)
+        if self.mosaic_opts.grid_system == "bng":
+            return self._write_mosaic_bng(iterator)
         import numpy as np
         import rasterio
         from rasterio.io import MemoryFile
@@ -1529,6 +1531,192 @@ class CogGbxWriter(DataSourceWriter):
                             dst_ds.update_tags(
                                 GBX_CELLID=cell.cellid,
                                 GBX_GRIDSYSTEM="h3",
+                            )
+                        window_bytes = mf.read()
+
+                    self._bytes_to_cog(window_bytes, out_path)
+                    written.append(out_path)
+
+        return CogCommitMessage(paths=written)
+
+    def _write_mosaic_bng(self, iterator: Iterator) -> WriterCommitMessage:
+        """BNG mosaic-mode write: one mini-COG per overlapping BNG cell.
+
+        For each source path row:
+
+        1. Compute the source bounds in EPSG:27700.
+        2. Enumerate overlapping BNG cells via
+           :func:`~databricks.labs.gbx.ds._bng_grid.bng_cells_for_bounds`.
+        3. For each cell:
+
+           a. Compute the destination grid (CRS=EPSG:27700) from the cell's
+              west/south/east/north extent at the source's native GSD in 27700.
+           b. Find the intersecting source window; read only those pixels.
+           c. Reproject with ``Resampling.nearest`` (analytical default).
+           d. Route decoded destination size through ``materialize_decision``
+              (Serverless per-task cap guard).
+           e. Skip if all-nodata (``pruneEmpty``).
+           f. Write a mini-COG tagged with ``GBX_CELLID`` (BNG string id) and
+              ``GBX_GRIDSYSTEM="bng"``.
+
+        No hex-clip is applied (BNG cells are square; the full bbox is the tile).
+        Nodata is inherited from the source (no derived sentinel).
+
+        Output:  ``<out_dir>/cell_<disc>_<cellid>.tif``
+
+        Returns
+        -------
+        :class:`CogCommitMessage`
+            Written paths in ``msg.paths``; ``pending_paths`` is always empty.
+        """
+        import numpy as np
+        import rasterio
+        from rasterio.crs import CRS
+        from rasterio.io import MemoryFile
+        from rasterio.transform import from_bounds as transform_from_bounds
+        from rasterio.warp import (
+            Resampling,
+            calculate_default_transform,
+            reproject,
+            transform_bounds,
+        )
+        from rasterio.windows import Window
+
+        from databricks.labs.gbx.ds._bng_grid import bng_cells_for_bounds
+        from databricks.labs.gbx.pyrx.core import compression as _comp
+
+        opts = self.mosaic_opts
+        prune_empty = opts.prune_empty
+        dst_crs = CRS.from_epsg(27700)
+
+        os.makedirs(self.out_dir, exist_ok=True)
+        written: List[str] = []
+
+        for row in iterator:
+            src_path = _listing.to_local_path(str(row["path"]))
+            srcdisc = _source_discriminator(src_path)
+
+            with rasterio.open(src_path) as src:
+                count = src.count
+                out_dtype = src.dtypes[0]
+                src_nodata = src.nodata
+                src_full_window = Window(0, 0, src.width, src.height)
+
+                # Source bounds in EPSG:27700 for cell enumeration.
+                bounds_27700 = transform_bounds(src.crs, "EPSG:27700", *src.bounds)
+
+                # Native pixel size in EPSG:27700 (metres/pixel) — used to size all
+                # destination grids consistently (one calculate_default_transform per source).
+                native_tf, _, _ = calculate_default_transform(
+                    src.crs, dst_crs, src.width, src.height, *src.bounds
+                )
+                native_px = abs(native_tf.a)  # metres/pixel in EPSG:27700
+
+                cells = bng_cells_for_bounds(bounds_27700, opts.grid_resolution)
+
+                for cell in cells:
+                    out_name = f"cell_{srcdisc}_{cell.cellid}.tif"
+                    out_path = os.path.join(self.out_dir, out_name)
+
+                    if self.cog_skip_if_exists and os.path.exists(out_path):
+                        written.append(out_path)
+                        continue
+
+                    # ── Destination grid (cell-aligned, EPSG:27700) ───────────
+                    cell_w = max(1, int(round((cell.east - cell.west) / native_px)))
+                    cell_h = max(1, int(round((cell.north - cell.south) / native_px)))
+                    dst_transform = transform_from_bounds(
+                        cell.west, cell.south, cell.east, cell.north, cell_w, cell_h
+                    )
+
+                    # ── Serverless cap gate ───────────────────────────────────
+                    decoded_size = (
+                        count * cell_w * cell_h * np.dtype(out_dtype).itemsize
+                    )
+                    decision = materialize_decision(
+                        decoded_size, "cog_write", cap_bytes=self._cap
+                    )
+                    if decision in ("error", "driver"):
+                        size_mib = decoded_size // (1024**2)
+                        raise StageTooLargeError(
+                            f"BNG cell {cell.cellid!r} at gridResolution="
+                            f"{opts.grid_resolution} decodes to {size_mib} MiB, "
+                            f"over the per-task memory cap; use a finer gridResolution."
+                        )
+
+                    # ── Find source window that overlaps this cell ────────────
+                    try:
+                        src_bounds = transform_bounds(
+                            dst_crs,
+                            src.crs,
+                            cell.west,
+                            cell.south,
+                            cell.east,
+                            cell.north,
+                        )
+                        src_win = src.window(*src_bounds)
+                        src_win = src_win.intersection(src_full_window)
+                    except Exception:
+                        _logger.debug(
+                            "BNG cell geometry degenerate or out of bounds; skipping.",
+                            exc_info=True,
+                        )
+                        continue  # degenerate geometry — skip cell
+
+                    if src_win.width <= 0 or src_win.height <= 0:
+                        continue  # cell does not overlap source
+
+                    # ── Reproject source window → cell's 27700 extent ────────
+                    src_data = src.read(window=src_win)
+                    src_win_transform = src.window_transform(src_win)
+
+                    fill = (
+                        src_nodata
+                        if src_nodata is not None
+                        else (
+                            0 if np.issubdtype(np.dtype(out_dtype), np.integer) else 0.0
+                        )
+                    )
+                    dst_data = np.full((count, cell_h, cell_w), fill, dtype=out_dtype)
+                    reproject(
+                        source=src_data,
+                        destination=dst_data,
+                        src_transform=src_win_transform,
+                        src_crs=src.crs,
+                        dst_transform=dst_transform,
+                        dst_crs=dst_crs,
+                        resampling=Resampling.nearest,
+                        src_nodata=src_nodata,
+                        dst_nodata=src_nodata,
+                    )
+
+                    # ── pruneEmpty ────────────────────────────────────────────
+                    if prune_empty and _is_all_nodata(dst_data, src_nodata):
+                        continue
+
+                    # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
+                    profile = {
+                        "driver": "GTiff",
+                        "height": cell_h,
+                        "width": cell_w,
+                        "count": count,
+                        "dtype": out_dtype,
+                        "crs": dst_crs,
+                        "transform": dst_transform,
+                    }
+                    if src_nodata is not None:
+                        profile["nodata"] = src_nodata
+                    profile.update(
+                        _comp.creation_opts(
+                            out_dtype, decoded_bytes=decoded_size, compress="auto"
+                        )
+                    )
+                    with MemoryFile() as mf:
+                        with mf.open(**profile) as dst_ds:
+                            dst_ds.write(dst_data)
+                            dst_ds.update_tags(
+                                GBX_CELLID=str(cell.cellid),
+                                GBX_GRIDSYSTEM="bng",
                             )
                         window_bytes = mf.read()
 

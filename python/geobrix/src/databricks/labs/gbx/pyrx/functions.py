@@ -99,6 +99,38 @@ def _registrar_groups() -> List[_register.Group]:
 
     entries["gbx_pmtiles_agg"] = _reg_pmtiles
 
+    # Override warp/clip SQL UDFs with fresh per-register factory builds so that
+    # registered PROJ grid dirs are captured at registration time rather than at
+    # module-import time (module-level singletons can't capture post-import dirs).
+    def _reg_transformcrs(s):
+        from databricks.labs.gbx.core import proj_grids
+
+        _grid_dirs = tuple(proj_grids.get_registered_dirs())
+        s.udf.register("gbx_rst_transformcrs", _build_transformcrs_sql_udf(_grid_dirs))
+
+    def _reg_transform(s):
+        from databricks.labs.gbx.core import proj_grids
+
+        _grid_dirs = tuple(proj_grids.get_registered_dirs())
+        s.udf.register("gbx_rst_transform", _build_transform_sql_udf(_grid_dirs))
+
+    def _reg_to_webmercator(s):
+        from databricks.labs.gbx.core import proj_grids
+
+        _grid_dirs = tuple(proj_grids.get_registered_dirs())
+        s.udf.register("gbx_rst_to_webmercator", _build_to_webmercator_sql_udf(_grid_dirs))
+
+    def _reg_clip(s):
+        from databricks.labs.gbx.core import proj_grids
+
+        _grid_dirs = tuple(proj_grids.get_registered_dirs())
+        s.udf.register("gbx_rst_clip", _build_clip_sql_udf(_grid_dirs))
+
+    entries["gbx_rst_transformcrs"] = _reg_transformcrs
+    entries["gbx_rst_transform"] = _reg_transform
+    entries["gbx_rst_to_webmercator"] = _reg_to_webmercator
+    entries["gbx_rst_clip"] = _reg_clip
+
     def _guard():
         from databricks.labs.gbx.pyrx import _env
 
@@ -1487,6 +1519,55 @@ def _uf_transform(tile, file_ref, target_srid):
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
+def _build_uf_transform(grid_dirs):
+    """FILE-aware transform UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, file_ref, target_srid):
+        if _tile_is_empty(tile):
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _transform_bytes(tile, target_srid, file_ref=file_ref)
+        if new_bytes is None:
+            return None
+        return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+    return _udf
+
+
+def _build_transform_v2_udf(grid_dirs):
+    """Force-output transform UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, target_srid, virtualize_dir, virtualize_prefix, materialize):
+        if _tile_is_empty(tile):
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _transform_bytes(tile, target_srid)
+        return _shaped_result_row(
+            new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+        )
+
+    return _udf
+
+
+def _build_transform_sql_udf(grid_dirs):
+    """SQL-registered (no file_ref) transform UDF factory: captures grid_dirs."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, target_srid):
+        if _tile_is_empty(tile):
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _transform_bytes(tile, target_srid)
+        return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+    return _udf
+
+
 def _to_webmercator_bytes(tile, resampling, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
@@ -1525,6 +1606,55 @@ def _uf_to_webmercator(tile, file_ref, resampling):
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
+def _build_uf_to_webmercator(grid_dirs):
+    """FILE-aware to_webmercator UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, file_ref, resampling):
+        if _tile_is_empty(tile):
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _to_webmercator_bytes(tile, resampling, file_ref=file_ref)
+        if new_bytes is None:
+            return None
+        return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+    return _udf
+
+
+def _build_to_webmercator_v2_udf(grid_dirs):
+    """Force-output to_webmercator UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, resampling, virtualize_dir, virtualize_prefix, materialize):
+        if _tile_is_empty(tile):
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _to_webmercator_bytes(tile, resampling)
+        return _shaped_result_row(
+            new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+        )
+
+    return _udf
+
+
+def _build_to_webmercator_sql_udf(grid_dirs):
+    """SQL-registered (no file_ref) to_webmercator UDF factory: captures grid_dirs."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, resampling):
+        if _tile_is_empty(tile):
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _to_webmercator_bytes(tile, resampling)
+        return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+    return _udf
+
+
 def rst_transform(
     tile: ColLike,
     srid: ColLike,
@@ -1544,9 +1674,12 @@ def rst_transform(
     result to a durable path and returns a light virtual tile; ``materialize=True``
     forces raster bytes (mutually exclusive with ``virtualize_dir``).
     """
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
-        return _transform_v2_udf(
+        return _build_transform_v2_udf(_grid_dirs)(
             _col(tile),
             _col(srid),
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
@@ -1554,7 +1687,7 @@ def rst_transform(
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     tc = _col(tile)
-    return _uf_transform(tc, file_ref_arg(tc), _col(srid))
+    return _build_uf_transform(_grid_dirs)(tc, file_ref_arg(tc), _col(srid))
 
 
 def rst_to_webmercator(
@@ -1570,12 +1703,15 @@ def rst_to_webmercator(
     result to a durable path and returns a light virtual tile; ``materialize=True``
     forces raster bytes (mutually exclusive with ``virtualize_dir``).
     """
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())
     resampling_col = (
         f.lit(resampling) if isinstance(resampling, str) else _col(resampling)
     )
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
-        return _to_webmercator_v2_udf(
+        return _build_to_webmercator_v2_udf(_grid_dirs)(
             _col(tile),
             resampling_col,
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
@@ -1583,7 +1719,7 @@ def rst_to_webmercator(
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     tc = _col(tile)
-    return _uf_to_webmercator(tc, file_ref_arg(tc), resampling_col)
+    return _build_uf_to_webmercator(_grid_dirs)(tc, file_ref_arg(tc), resampling_col)
 
 
 # --- Tier 1c: tile-returning resample UDFs ----------------------------------
@@ -1885,6 +2021,66 @@ def _uf_clip(tile, file_ref, geom_wkb, all_touched, clip_crs):
         return None
 
 
+def _build_uf_clip(grid_dirs):
+    """FILE-aware clip UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, file_ref, geom_wkb, all_touched, clip_crs):
+        if _tile_is_empty(tile) or geom_wkb is None:
+            return None
+        try:
+            from databricks.labs.gbx._geom import parse_geom
+
+            _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+            geom = parse_geom(geom_wkb)
+            if geom is None:
+                return None
+            with ot._open(tile, file_ref=file_ref) as ds:
+                new_bytes = edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
+            if new_bytes is None:
+                return None
+            return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+        except Exception:  # noqa: BLE001
+            return None
+
+    return _udf
+
+
+def _build_clip_v2_udf(grid_dirs):
+    """Force-output clip UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, geom_wkb, all_touched, clip_crs, virtualize_dir, virtualize_prefix, materialize):
+        if _tile_is_empty(tile) or geom_wkb is None:
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
+        return _shaped_result_row(
+            new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+        )
+
+    return _udf
+
+
+def _build_clip_sql_udf(grid_dirs):
+    """SQL-registered (no file_ref) clip UDF factory: captures grid_dirs."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, geom_wkb, all_touched, clip_crs=None):
+        if _tile_is_empty(tile) or geom_wkb is None:
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
+        if new_bytes is None:
+            return None
+        return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+    return _udf
+
+
 def _update_type_bytes(tile, new_type, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
@@ -2008,10 +2204,13 @@ def rst_clip(
     ``materialize=True`` are mutually exclusive. When neither is set the SQL
     registered signature is used unchanged (materialized tile struct).
     """
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())
     crs_col = f.lit(clip_crs) if clip_crs is not None else f.lit(None)
     if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
         _validate_force_output(virtualize_dir, materialize)
-        return _clip_v2_udf(
+        return _build_clip_v2_udf(_grid_dirs)(
             _col(tile),
             _col(geom),
             _col(cutline_all_touched),
@@ -2023,7 +2222,7 @@ def rst_clip(
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
     tc = _col(tile)
-    return _uf_clip(
+    return _build_uf_clip(_grid_dirs)(
         tc, file_ref_arg(tc), _col(geom), _col(cutline_all_touched), crs_col
     )
 
@@ -2253,6 +2452,38 @@ def _uf_transformcrs(tile, file_ref, crs_value):
     return VirtualTile(
         cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
     ).to_row()
+
+
+def _build_uf_transformcrs(grid_dirs):
+    """FILE-aware transformcrs UDF factory: captures grid_dirs at build time → pickled."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, file_ref, crs_value):
+        if _tile_is_empty(tile) or crs_value is None:
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _transformcrs_bytes(tile, crs_value, file_ref=file_ref)
+        if new_bytes is None:
+            return None
+        return VirtualTile(cellid=_tile_cellid(tile), raster=new_bytes, metadata={}).to_row()
+
+    return _udf
+
+
+def _build_transformcrs_sql_udf(grid_dirs):
+    """SQL-registered (no file_ref) transformcrs UDF factory: captures grid_dirs."""
+    from databricks.labs.gbx.pyrx import _env
+
+    @f.udf(V2_TILE_SCHEMA)
+    def _udf(tile, crs_value):
+        if _tile_is_empty(tile) or crs_value is None:
+            return None
+        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+        new_bytes = _transformcrs_bytes(tile, crs_value)
+        return VirtualTile(cellid=_tile_cellid(tile), raster=new_bytes, metadata={}).to_row()
+
+    return _udf
 
 
 def _band_bytes(tile, band_index):
@@ -2660,10 +2891,12 @@ def rst_transformcrs(
     Returns:
         Tile reprojected to the target CRS.
     """
+    from databricks.labs.gbx.core import proj_grids
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())
     tc = _col(tile)
-    return _uf_transformcrs(tc, file_ref_arg(tc), _crs_col(crs))
+    return _build_uf_transformcrs(_grid_dirs)(tc, file_ref_arg(tc), _crs_col(crs))
 
 
 def rst_band(

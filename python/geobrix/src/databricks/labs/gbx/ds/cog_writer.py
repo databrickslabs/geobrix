@@ -66,7 +66,7 @@ import re
 import shutil
 import tempfile
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
@@ -463,10 +463,28 @@ def _parse_bool(value, default: bool) -> bool:
 def _parse_grid_resolution(grid_system: str, opts: Dict[str, object]) -> Optional[int]:
     """Parse and validate ``gridResolution`` from *opts*.
 
-    - Required for ``gridSystem='quadbin'`` or ``gridSystem='h3'``; raises if absent.
+    - Required for ``gridSystem='bng'``, ``'quadbin'``, or ``'h3'``; raises if absent.
     - Must be absent for ``gridSystem='none'``; raises if present.
+    - For bng: accepts an integer index (±1..±6) or a string key (e.g. ``'1km'``);
+      rejects metres-as-int (e.g. 1000) via ``pygx._bng.get_resolution``.
     """
     grid_res_raw = opts.get("gridResolution")
+    if grid_system == "bng":
+        if grid_res_raw is None:
+            raise ValueError(
+                "gridResolution is required when gridSystem='bng'; "
+                "supply an integer resolution index (1–6) or a string key "
+                "(e.g. '1km', '100m')."
+            )
+        from databricks.labs.gbx.pygx._bng import get_resolution
+
+        # Spark options arrive as strings; try int conversion first so "3" → 3.
+        # Non-numeric strings (e.g. "1km") stay as-is for the key lookup.
+        try:
+            _res: Any = int(grid_res_raw)
+        except (ValueError, TypeError):
+            _res = grid_res_raw
+        return get_resolution(_res)
     if grid_system in ("quadbin", "h3"):
         if grid_res_raw is None:
             raise ValueError(
@@ -534,6 +552,30 @@ def _check_h3_incompatible_opts(
             )
 
 
+def _check_bng_incompatible_opts(
+    grid_system: str,
+    grid_min: Optional[int],
+    grid_max: Optional[int],
+    grid_step: Optional[int],
+) -> None:
+    """Raise ``ValueError`` for options that are not supported with bng.
+
+    BNG resolution pyramids are deferred to a follow-on release.
+    """
+    if grid_system != "bng":
+        return
+    for _name, _val in (
+        ("gridMinResolution", grid_min),
+        ("gridMaxResolution", grid_max),
+        ("gridStepResolution", grid_step),
+    ):
+        if _val is not None:
+            raise ValueError(
+                f"{_name}: DGGS resolution pyramid not yet implemented "
+                f"(deferred to a follow-on release)."
+            )
+
+
 def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
     """Parse and validate mosaic-mode options from a raw options mapping.
 
@@ -576,13 +618,6 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
         raise ValueError(
             f"gridSystem={grid_system!r} is not a recognised value; "
             f"must be one of {sorted(_VALID_GRID_SYSTEMS)}"
-        )
-
-    # quadbin and h3 are supported; bng is deferred to a later release.
-    if grid_system in _DGGS_SYSTEMS and grid_system not in ("quadbin", "h3"):
-        raise ValueError(
-            f"gridSystem={grid_system!r} is not yet supported; "
-            f"available values: 'none', 'quadbin', 'h3'."
         )
 
     is_dggs = grid_system in _DGGS_SYSTEMS
@@ -665,9 +700,10 @@ def parse_mosaic_options(opts: Dict[str, object]) -> Optional[MosaicOptions]:
                 f"(quadbin, bng, h3); got gridSystem={grid_system!r}"
             )
 
-    # Resolution pyramid + downsampleFactor are deferred for quadbin.
+    # Resolution pyramid + downsampleFactor are deferred for quadbin/bng.
     _check_quadbin_incompatible_opts(grid_system, opts, grid_min, grid_max, grid_step)
     _check_h3_incompatible_opts(grid_system, grid_min, grid_max, grid_step)
+    _check_bng_incompatible_opts(grid_system, grid_min, grid_max, grid_step)
 
     return MosaicOptions(
         grid_system=grid_system,

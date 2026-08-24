@@ -168,12 +168,6 @@ def test_quadbin_raises_not_supported():
         _parse(gridSystem="quadbin")
 
 
-def test_bng_raises_not_supported():
-    """gridSystem='bng' → ValueError (not supported in this release)."""
-    with pytest.raises(ValueError, match="bng"):
-        _parse(gridSystem="bng")
-
-
 def test_quadbin_error_message_has_no_internal_phase_wording():
     """ValueError message for DGGS must not mention 'Phase B' or similar internal terms."""
     with pytest.raises(ValueError) as exc_info:
@@ -315,15 +309,6 @@ def test_quadbin_pyramid_options_deferred():
         )
 
 
-def test_bng_still_phase_c():
-    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
-
-    with pytest.raises(ValueError, match="not yet"):
-        parse_mosaic_options(
-            {"vrtMosaic": "true", "gridSystem": "bng", "gridResolution": "5"}
-        )
-
-
 # ── h3 acceptance (Task 2) ───────────────────────────────────────────────────
 
 
@@ -383,12 +368,29 @@ def test_h3_pyramid_options_deferred():
         parse_mosaic_options({**base, "gridMinResolution": "5"})
 
 
-def test_bng_still_not_supported():
+# ── bng acceptance (Task 2) ──────────────────────────────────────────────────
+
+
+def test_bng_gridsystem_accepted_int_index():
+    opts = parse_mosaic_options({"gridSystem": "bng", "gridResolution": "3"})
+    assert opts.grid_system == "bng"
+    assert opts.grid_resolution == 3  # 1km
+
+
+def test_bng_gridsystem_accepted_string_key():
+    opts = parse_mosaic_options({"gridSystem": "bng", "gridResolution": "1km"})
+    assert opts.grid_system == "bng"
+    assert opts.grid_resolution == 3
+
+
+def test_bng_rejects_metres_as_int():
     import pytest
+    with pytest.raises(ValueError):
+        parse_mosaic_options({"gridSystem": "bng", "gridResolution": "1000"})
 
-    from databricks.labs.gbx.ds.cog_writer import parse_mosaic_options
 
-    with pytest.raises(ValueError, match="not yet supported"):
-        parse_mosaic_options(
-            {"vrtMosaic": "true", "gridSystem": "bng", "gridResolution": "3"}
-        )
+def test_bng_rejects_pyramid_options():
+    import pytest
+    with pytest.raises(ValueError, match="pyramid"):
+        parse_mosaic_options({"gridSystem": "bng", "gridResolution": "3",
+                              "gridMinResolution": "2"})

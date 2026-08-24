@@ -704,3 +704,139 @@ def test_h3_materialized_vrt_cellid(spark, tmp_path):
             f"row {i}: tile.metadata['gridSystem'] expected 'h3', "
             f"got {metadata.get('gridSystem')!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# BNG round-trip helpers
+# ---------------------------------------------------------------------------
+
+# "10km" (BNG integer index 2) gives ~4 cells over the 20 km × 20 km fixture —
+# analogous to quadbin resolution 12 (2+ cells) over the same source area.
+_BNG_RESOLUTION = "10km"
+
+
+def _write_gb_source_27700(tmp_path) -> str:
+    """200×200 raster, 100 m pixels, EPSG:27700 (BNG), near London.
+
+    Upper-left at E=530000, N=180000; covers 20 km × 20 km.
+    At _BNG_RESOLUTION='10km' (BNG index 2), this spans ~4 cells, all within
+    the GB EPSG:27700 envelope.
+    """
+    path = str(tmp_path / "src_bng" / "source_bng.tif")
+    w, h = 200, 200
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:27700",
+        transform=from_origin(530000.0, 180000.0, 100.0, 100.0),
+    )
+    data = np.arange(w * h, dtype=np.uint16).reshape(1, h, w) % np.iinfo(np.uint16).max
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+    return path
+
+
+def _write_mosaic_bng_spark(
+    spark, src_path: str, out_dir: str, resolution: str = _BNG_RESOLUTION
+) -> str:
+    """Write *src_path* as a BNG mosaic via the full Spark cog_gbx DataSource.
+
+    Options: ``vrtMosaic=true``, ``gridSystem=bng``, ``gridResolution=<resolution>``.
+    Returns the path to the written ``mosaic.vrt``.
+    """
+    spark.dataSource.register(CogGbxDataSource)
+    df = spark.createDataFrame([{"path": src_path}], schema=_path_schema())
+    (
+        df.write.format("cog_gbx")
+        .option("vrtMosaic", "true")
+        .option("gridSystem", "bng")
+        .option("gridResolution", resolution)
+        .mode("overwrite")
+        .save(out_dir)
+    )
+    vrt_path = os.path.join(out_dir, "mosaic.vrt")
+    assert os.path.exists(vrt_path), f"mosaic.vrt not produced at {vrt_path}"
+    return vrt_path
+
+
+def _member_bng_cell_paths(out_dir: str):
+    """Return sorted list of BNG mini-COG cell paths in *out_dir*."""
+    return sorted(glob.glob(os.path.join(out_dir, "cell_*.tif")))
+
+
+# ---------------------------------------------------------------------------
+# Test 8: BNG prepare → expand → rst_avg + cellid / gridSystem
+#
+# Full BNG mosaic write (cog_gbx) → read (raster_gbx VRT expansion) →
+# rst_avg + metadata assertions.
+#
+# Asserts:
+#   (a) row count == member cell count
+#   (b) every tile has a non-empty BNG string cellid AND gridSystem="bng"
+#   (c) members are written in EPSG:27700
+#   (d) rst_avg is non-null on at least one tile (pixels decoded)
+# ---------------------------------------------------------------------------
+
+
+def test_bng_round_trip(spark, tmp_path):
+    """End-to-end BNG mosaic: cog_gbx write → raster_gbx expand → metadata + rst_avg."""
+    src_path = _write_gb_source_27700(tmp_path)
+    out_dir = str(tmp_path / "mosaic_bng")
+
+    vrt_path = _write_mosaic_bng_spark(spark, src_path, out_dir, resolution=_BNG_RESOLUTION)
+
+    # ── Count member mini-COG cells ────────────────────────────────────────────
+    member_paths = _member_bng_cell_paths(out_dir)
+    n_members = len(member_paths)
+    assert n_members >= 1, "no BNG mini-COG cells found after mosaic write"
+
+    # ── Read the mosaic VRT: one row per member cell ───────────────────────────
+    spark.dataSource.register(RasterGbxDataSource)
+    df = spark.read.format("raster_gbx").load(vrt_path)
+
+    count = df.count()
+    assert (
+        count == n_members
+    ), f"VRT expansion produced {count} rows, expected {n_members} (one per member cell)"
+
+    # ── Per-row: non-empty BNG string cellid + gridSystem="bng" + rst_avg ──────
+    rows = df.select(
+        col("tile.metadata").alias("metadata"),
+        rst_avg(col("tile")).alias("avg"),
+    ).collect()
+
+    assert len(rows) == n_members, f"select/collect length mismatch: {len(rows)}"
+
+    for row in rows:
+        metadata = row["metadata"]
+        assert metadata is not None, "tile.metadata is None"
+
+        # (b) non-empty BNG string cellid
+        assert "cellid" in metadata, f"tile.metadata missing 'cellid': {metadata}"
+        cellid_str = metadata["cellid"]
+        assert isinstance(
+            cellid_str, str
+        ), f"cellid must be a string, got {type(cellid_str)}"
+        assert len(cellid_str) > 0, f"cellid is an empty string"
+
+        # (b) gridSystem tag
+        assert metadata.get("gridSystem") == "bng", (
+            f"tile.metadata['gridSystem'] expected 'bng', "
+            f"got {metadata.get('gridSystem')!r}"
+        )
+
+    # (d) at least one row has a non-null rst_avg (pixels decoded)
+    assert any(
+        row["avg"] is not None for row in rows
+    ), "all rst_avg returned None for BNG cells; expected non-null for at least one"
+
+    # ── (c) Member CRS must be EPSG:27700 ─────────────────────────────────────
+    for path in member_paths:
+        with rasterio.open(path) as cell_ds:
+            assert (
+                cell_ds.crs.to_epsg() == 27700
+            ), f"BNG cell tile must be EPSG:27700, got {cell_ds.crs}"

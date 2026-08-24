@@ -31,12 +31,20 @@ def _bundled_proj_data() -> Optional[str]:
     """Return rasterio's bundled PROJ data dir, or None.
 
     rasterio._env.PROJDataFinder().search() returns a single directory string.
+    Verify that proj.db exists in the directory to avoid setting PROJ_DATA to an
+    invalid path that would shadow PROJ's default search paths.
     """
     try:
         from rasterio._env import PROJDataFinder
 
         path = PROJDataFinder().search()
-        return path if path and os.path.isdir(path) else None
+        if (
+            path
+            and os.path.isdir(path)
+            and os.path.exists(os.path.join(path, "proj.db"))
+        ):
+            return path
+        return None
     except Exception:
         return None
 

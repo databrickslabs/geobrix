@@ -1,7 +1,10 @@
 package com.databricks.labs.gbx.vectorx
 
+import com.databricks.labs.gbx.expressions.ExpressionConfigExpr
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.vectorx.expressions.{ST_TransformCrs, ST_TransformCrs3}
 import com.databricks.labs.gbx.vectorx.jts.JTS
+import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
@@ -144,6 +147,61 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
         a.getSRID shouldBe b.getSRID
         a.getCoordinate.getX shouldBe (b.getCoordinate.getX +- 1e-9)
         a.getCoordinate.getY shouldBe (b.getCoordinate.getY +- 1e-9)
+    }
+
+    // ------------------------------------------------------------------
+    // GDAL/PROJ config wiring: the heavy vector transform must inject an
+    // ExpressionConfigExpr child so the executor runs GDALManager.init (which
+    // prepends registered custom PROJ grid dirs) BEFORE the OGR/OSR transform.
+    // A session using ONLY gbx_st_transformcrs otherwise never triggers GDAL
+    // init and a grid-requiring CRS silently fails (see RST_TransformCrsGridSpec).
+    // Structured at the wiring level (children + builder arity) because the PROJ
+    // grid cache is process-global in a shared test JVM.
+    // ------------------------------------------------------------------
+
+    test("gbx_st_transformcrs 2-arg: injects an ExpressionConfigExpr child (config reaches executors)") {
+        val expr = ST_TransformCrs(Literal("g"), Literal("EPSG:4326"))
+        expr.children should have size 3
+        expr.children.count(_.isInstanceOf[ExpressionConfigExpr]) shouldBe 1
+        // The injected config is the trailing child; the two user args come first.
+        expr.children.last shouldBe a[ExpressionConfigExpr]
+    }
+
+    test("gbx_st_transformcrs 3-arg: injects an ExpressionConfigExpr child (config reaches executors)") {
+        val expr = ST_TransformCrs3(Literal("g"), Literal("EPSG:4326"), Literal("EPSG:27700"))
+        expr.children should have size 4
+        expr.children.count(_.isInstanceOf[ExpressionConfigExpr]) shouldBe 1
+        expr.children.last shouldBe a[ExpressionConfigExpr]
+    }
+
+    test("gbx_st_transformcrs builder: user SQL arity is unchanged (2 -> ST_TransformCrs, 3 -> ST_TransformCrs3)") {
+        // Arity-safety guard: the injected config child must NOT leak into the user-facing
+        // arity. The builder still accepts exactly 2 or 3 user args and rejects others.
+        val two = ST_TransformCrs.builder()(Seq(Literal("g"), Literal("EPSG:4326")))
+        two shouldBe a[ST_TransformCrs]
+
+        val three = ST_TransformCrs.builder()(Seq(Literal("g"), Literal("EPSG:4326"), Literal("EPSG:27700")))
+        three shouldBe a[ST_TransformCrs3]
+
+        an[IllegalArgumentException] should be thrownBy
+            ST_TransformCrs.builder()(Seq(Literal("g")))
+        an[IllegalArgumentException] should be thrownBy
+            ST_TransformCrs.builder()(Seq(Literal("g"), Literal("a"), Literal("b"), Literal("c")))
+    }
+
+    test("gbx_st_transformcrs: withNewChildrenInternal keeps the injected config child (no arity drift)") {
+        // Catalyst rewrites (e.g. constant folding of the user args) call withNewChildrenInternal
+        // with the CURRENT children (which include the injected config). copy(...) must re-derive
+        // the config via `children`, keeping exactly one ExpressionConfigExpr and the same size.
+        val expr = ST_TransformCrs(Literal("g"), Literal("EPSG:4326"))
+        val rebuilt = expr.withNewChildrenInternal(expr.children.toIndexedSeq)
+        rebuilt.children should have size 3
+        rebuilt.children.count(_.isInstanceOf[ExpressionConfigExpr]) shouldBe 1
+
+        val expr3 = ST_TransformCrs3(Literal("g"), Literal("EPSG:4326"), Literal("EPSG:27700"))
+        val rebuilt3 = expr3.withNewChildrenInternal(expr3.children.toIndexedSeq)
+        rebuilt3.children should have size 4
+        rebuilt3.children.count(_.isInstanceOf[ExpressionConfigExpr]) shouldBe 1
     }
 
     test("gbx_st_transformcrs: PROJ4 target clears the SRID via SQL (authority-less)") {

@@ -1,8 +1,9 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
-import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.operations.SpatialRefOps
 import com.databricks.labs.gbx.operations.SpatialRefOps.CrsInfo
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx.expressions.CrsExpressionUtil.CrsOutcome
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -22,30 +23,45 @@ import scala.util.control.NonFatal
   *
   * Returns BINARY regardless of the geometry input encoding — see [[ST_TransformCrs]]
   * for why the SQL surface pins one return type while the Scala core stays
-  * medium-preserving. */
+  * medium-preserving.
+  *
+  * GDAL/PROJ config child — [[ExpressionConfigExpr]] is injected as a trailing, non-user
+  * child (mirroring the raster expressions, e.g.
+  * [[com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs]]). Its base64-serialized
+  * [[ExpressionConfig]] carries the driver-registered custom PROJ grid dirs
+  * (`spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS`, folded by [[ExpressionConfig.apply]] from
+  * `ProjGridRegistry`) to executors. `evalSqlWithConf` runs `GDALManager.init` with it so the
+  * in-JVM PROJ search path is extended before the OGR/OSR transform — otherwise a session that
+  * uses ONLY heavy vector `gbx_st_transformcrs` (no raster, no OGR reader) never triggers GDAL
+  * init and a grid-requiring CRS silently fails. The child is auto-injected by `children` and
+  * re-injected on `withNewChildrenInternal`, so it never appears in the user-facing SQL arity
+  * (still `geom, target_crs`). */
 case class ST_TransformCrs(geom: Expression, targetCrs: Expression) extends InvokedExpression {
-    override def children: Seq[Expression] = Seq(geom, targetCrs)
+    override def children: Seq[Expression] = Seq(geom, targetCrs, ExpressionConfigExpr())
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = ST_TransformCrs.name
-    override def replacement: Expression = invoke(ST_TransformCrs, methodName = "evalSql")
-    override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType)
+    override def replacement: Expression = invoke(ST_TransformCrs, methodName = "evalSqlWithConf")
+    override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType, StringType)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
 }
 
-/** 3-arg form: explicit ``sourceCrs`` fallback for plain (SRID-less) inputs. */
+/** 3-arg form: explicit ``sourceCrs`` fallback for plain (SRID-less) inputs.
+  *
+  * Carries the same injected [[ExpressionConfigExpr]] trailing child as [[ST_TransformCrs]]
+  * (see its scaladoc); user SQL arity stays `geom, target_crs, source_crs`. */
 case class ST_TransformCrs3(
     geom: Expression,
     targetCrs: Expression,
     sourceCrs: Expression
 ) extends InvokedExpression {
-    override def children: Seq[Expression] = Seq(geom, targetCrs, sourceCrs)
+    override def children: Seq[Expression] = Seq(geom, targetCrs, sourceCrs, ExpressionConfigExpr())
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = ST_TransformCrs.name
-    override def replacement: Expression = invoke(ST_TransformCrs3, methodName = "evalSql")
-    override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType, StringType)
+    override def replacement: Expression = invoke(ST_TransformCrs3, methodName = "evalSqlWithConf")
+    override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType, StringType, StringType)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 }
@@ -94,6 +110,19 @@ object ST_TransformCrs extends WithExpressionInfo {
     def evalSql(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Array[Byte] =
         CrsExpressionUtil.encodeBinary(TransformCrsCore(geom, targetCrs, sourceCrs))
 
+    /** SQL invoke target for the 2-arg case class [[ST_TransformCrs]]: applies the executor
+      * GDAL/PROJ config (from the injected [[ExpressionConfigExpr]] child) BEFORE the transform,
+      * then delegates to the 2-arg [[evalSql]]. `GDALManager.init` is idempotent per JVM and
+      * `configureGDAL` prepends any registered custom PROJ grid dirs to the in-JVM PROJ search
+      * path, so a grid-requiring CRS resolves even when nothing else in the session initialized
+      * GDAL. Mirrors [[com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs]]'s
+      * `eval(row, crs, conf)`. `conf` is the base64 config literal — never user-supplied, never
+      * null (propagateNull short-circuits before this runs). */
+    def evalSqlWithConf(geom: Any, targetCrs: UTF8String, conf: UTF8String): Array[Byte] = {
+        GDALManager.init(ExpressionConfig.fromB64(conf.toString))
+        evalSql(geom, targetCrs)
+    }
+
     override def name: String = "gbx_st_transformcrs"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
@@ -121,6 +150,17 @@ object ST_TransformCrs3 extends WithExpressionInfo {
       * a second copy on this object would be dead code that could silently drift from it. */
     def evalSql(geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String): Array[Byte] =
         CrsExpressionUtil.encodeBinary(TransformCrsCore(geom, targetCrs, sourceCrs))
+
+    /** SQL invoke target for the 3-arg case class [[ST_TransformCrs3]]: applies the executor
+      * GDAL/PROJ config (from the injected [[ExpressionConfigExpr]] child) BEFORE the transform,
+      * then delegates to [[evalSql]]. See [[ST_TransformCrs.evalSqlWithConf]] for the rationale.
+      * `conf` is the trailing base64 config literal (never user-supplied). */
+    def evalSqlWithConf(
+        geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String, conf: UTF8String
+    ): Array[Byte] = {
+        GDALManager.init(ExpressionConfig.fromB64(conf.toString))
+        evalSql(geom, targetCrs, sourceCrs)
+    }
 
     override def name: String = "gbx_st_transformcrs"
 

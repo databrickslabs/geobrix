@@ -400,3 +400,99 @@ st_legacyaswkb_python_light_example_output = """
 +--------+
 ... (WKB binary)
 """
+
+
+# ---------------------------------------------------------------------------
+# Antimeridian family — st_shiftlongitude, st_wrapx, st_split
+# Light-only (pyvx tier).  These functions are pure-Python UDFs — they have
+# no heavyweight Scala equivalent and no JAR dependency.
+# Input: WKB BINARY (created here via shapely.to_wkb for self-contained examples).
+# Output: WKB BINARY.
+# ---------------------------------------------------------------------------
+
+
+def st_shiftlongitude_python_light_example(spark):
+    """Shift longitude from [-180,180] to [0,360] (light pyvx tier).
+
+    Creates a WKB POINT(-170, 10) inline via shapely and passes it through
+    ``st_shiftlongitude``.  Negative x coordinates are moved by +360, so
+    x=-170 becomes x=190.  Returns the shifted WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import Point  # noqa: PLC0415
+
+    df = spark.createDataFrame([(to_wkb(Point(-170.0, 10.0)),)], ["geom"])
+    return df.select(vx.st_shiftlongitude("geom").alias("shifted")).first()["shifted"]
+
+
+st_shiftlongitude_python_light_example_output = """
++--------+
+|shifted |
++--------+
+|[binary]|
++--------+
+... (WKB binary — POINT(190.0, 10.0): x shifted from -170 to 190)
+"""
+
+
+def st_wrapx_python_light_example(spark):
+    """Wrap X coordinates back into [-180,180] (light pyvx tier).
+
+    Creates a WKB POINT(190, 10) inline — a coordinate in [0,360] longitude
+    space — and wraps it back into [-180,180] using ``wrap_x_origin=180`` and
+    ``wrap_direction=-360``.  Any x > 180 is shifted by -360, so x=190 becomes
+    x=-170.  Returns the wrapped WKB bytes.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import Point  # noqa: PLC0415
+
+    df = spark.createDataFrame([(to_wkb(Point(190.0, 10.0)),)], ["geom"])
+    return df.select(
+        vx.st_wrapx("geom", f.lit(180.0), f.lit(-360.0)).alias("wrapped")
+    ).first()["wrapped"]
+
+
+st_wrapx_python_light_example_output = """
++--------+
+|wrapped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — POINT(-170.0, 10.0): x=190 wrapped back by -360)
+"""
+
+
+def st_split_python_light_example(spark):
+    """Split a polygon by the 180° meridian; returns a GEOMETRYCOLLECTION (light pyvx tier).
+
+    Creates a WKB polygon that straddles the antimeridian (x range 170 to 190)
+    and a WKB blade linestring at x=180.  The split returns a two-piece
+    GeometryCollection — one polygon on each side of the cut.  Returns the
+    GeometryCollection WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import LineString, Polygon  # noqa: PLC0415
+
+    input_poly = Polygon([(170, -10), (190, -10), (190, 10), (170, 10), (170, -10)])
+    blade_line = LineString([(180, -90), (180, 90)])
+    df = spark.createDataFrame(
+        [(to_wkb(input_poly), to_wkb(blade_line))],
+        ["input_geom", "blade_geom"],
+    )
+    return df.select(
+        vx.st_split("input_geom", "blade_geom").alias("pieces")
+    ).first()["pieces"]
+
+
+st_split_python_light_example_output = """
++--------+
+|pieces  |
++--------+
+|[binary]|
++--------+
+... (WKB binary — GeometryCollection with 2 polygon pieces split at x=180)
+"""

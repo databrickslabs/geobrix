@@ -246,3 +246,120 @@ st_transformcrs_sql_example_output = """
 +--------+
 ... (EWKB binary — POINT(13, 42) reprojected from EPSG:4326 to EPSG:32633)
 """
+
+
+# ---------------------------------------------------------------------------
+# Antimeridian family — st_shiftlongitude, st_wrapx, st_split
+# Light-only (pyvx tier); register pyvx before running these SQL examples.
+# All three functions accept WKT/EWKT strings or WKB binary input.
+# ---------------------------------------------------------------------------
+
+
+def st_shiftlongitude_sql_example():
+    """Shift longitude from [-180,180] to [0,360] (SQL, light pyvx tier).
+
+    Demonstrates shifting a polygon near the western antimeridian from
+    negative-longitude space into [0,360] space, making it contiguous for
+    splitting at x=180.  Inline WKT string input — no ST_GeomFromText wrapper
+    needed because ``gbx_st_shiftlongitude`` accepts WKT/EWKT strings directly.
+    Output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_shiftlongitude('POLYGON((-170 -10, -150 -10, -150 10, -170 10, -170 -10))') AS shifted
+"""
+
+
+st_shiftlongitude_sql_example_output = """
++--------+
+|shifted |
++--------+
+|[binary]|
++--------+
+... (WKB binary — polygon in [0,360] longitude space, x coordinates shifted to [190,210])
+"""
+
+
+def st_wrapx_sql_example():
+    """Wrap X coordinates back into [-180,180] (SQL, light pyvx tier).
+
+    POINT(190, 10) is in [0,360] longitude space; ``wrap_x_origin=180`` with
+    ``wrap_direction=-360`` maps any x > 180 back by -360, yielding POINT(-170, 10).
+    Inline WKT string input — no ST_AsBinary wrapper needed.  Output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_wrapx('POINT(190 10)', 180, -360) AS wrapped
+"""
+
+
+st_wrapx_sql_example_output = """
++--------+
+|wrapped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — POINT(-170, 10): x=190 wrapped back by -360)
+"""
+
+
+def st_split_sql_example():
+    """Split a polygon by the 180° meridian; returns a GEOMETRYCOLLECTION (SQL, light pyvx tier).
+
+    The input polygon straddles the antimeridian (x range 170 to 190); the
+    blade is the 180° meridian linestring.  Both inputs are inline WKT strings.
+    Output is BINARY (WKB) representing a two-piece GeometryCollection — one
+    polygon on each side of the cut.
+    """
+    return """
+SELECT gbx_st_split('POLYGON((170 -10, 190 -10, 190 10, 170 10, 170 -10))', 'LINESTRING(180 -90, 180 90)') AS pieces
+"""
+
+
+st_split_sql_example_output = """
++--------+
+|pieces  |
++--------+
+|[binary]|
++--------+
+... (WKB binary — GeometryCollection with 2 polygon pieces split at x=180)
+"""
+
+
+def antimeridian_pattern_sql_example():
+    """Full antimeridian-normalization pattern: shift → split → dump → wrap → union (SQL).
+
+    Antimeridian-crossing polygons cannot be directly aggregated or compared by
+    most spatial engines without normalization.  The input polygon straddles the
+    180° antimeridian in standard [-180,180] space: vertices at 170°E and 170°W
+    (-170°).  This pattern runs on Databricks Runtime 17.3+ where the built-in
+    ``ST_Dump``/``ST_Union``/``ST_Multi`` functions are available:
+
+    1. ``gbx_st_shiftlongitude`` — shift [-180,180] → [0,360] so the polygon
+       becomes contiguous (x ∈ [170, 190]) and cuttable at x=180.
+    2. ``gbx_st_split`` — cut at the 180° meridian into a GeometryCollection.
+    3. ``ST_Dump`` — explode the collection into individual polygon rows.
+    4. ``gbx_st_wrapx`` — wrap the western piece (x > 180) back to [-180, 0].
+    5. ``ST_Union`` / ``ST_Multi`` — reassemble into a clean MULTIPOLYGON.
+    """
+    return """
+WITH raw AS (
+  SELECT 'POLYGON((170 -10, -170 -10, -170 10, 170 10, 170 -10))' AS geom
+),
+parts AS (
+  SELECT gbx_st_wrapx(
+           ST_AsBinary((ST_Dump(ST_GeomFromWKB(
+             gbx_st_split(gbx_st_shiftlongitude(geom),
+                          'LINESTRING(180 -90, 180 90)')))).geom),
+           180, -360) AS geom
+  FROM raw)
+SELECT ST_AsText(ST_Multi(ST_Union(ST_GeomFromWKB(geom)))) AS normalized FROM parts;
+"""
+
+
+antimeridian_pattern_sql_example_output = """
++--------------------+
+|normalized          |
++--------------------+
+|MULTIPOLYGON (...)  |
++--------------------+
+... (WKT — two polygons, one on each side of the 180° antimeridian)
+"""

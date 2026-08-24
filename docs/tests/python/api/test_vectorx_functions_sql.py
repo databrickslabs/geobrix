@@ -30,18 +30,30 @@ def _statement(sql: str) -> str:
 def vectorx_registered(spark):
     """Register VectorX SQL functions and create the shared fixture views.
 
-    Registers both the main ``vectorx`` package (TIN, MVT, CRS functions) and the
-    ``vectorx.jts.legacy`` package (``gbx_st_legacyaswkb``), then creates the four
-    canonical fixture views used by the SQL examples on this page.
+    Registers:
+    - ``vectorx`` (heavy tier): TIN, MVT, CRS functions
+    - ``vectorx.jts.legacy`` (heavy tier): ``gbx_st_legacyaswkb``
+    - ``pyvx`` (light tier): light-only functions including the antimeridian
+      family (``gbx_st_shiftlongitude``, ``gbx_st_wrapx``, ``gbx_st_split``)
+
+    The light registration must come after the heavy registration so the last
+    write to the SQL function registry wins; both tiers register the same
+    ``gbx_st_*`` SQL names, and pyvx's scalar UDFs override the heavy
+    expressions for the light-only antimeridian functions (which have no heavy
+    counterpart).
+
+    Also creates the four canonical fixture views used by the SQL examples.
     """
     from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
     from databricks.labs.gbx.vectorx.jts.legacy import (
         functions as legacy_vx,
     )  # noqa: PLC0415
+    from databricks.labs.gbx.pyvx import functions as pyvx  # noqa: PLC0415
     from ._fixtures import create_setup_views_vectorx_heavy  # noqa: PLC0415
 
     vx.register(spark)
     legacy_vx.register(spark)
+    pyvx.register(spark)
     create_setup_views_vectorx_heavy(spark)
     yield spark
 
@@ -236,3 +248,148 @@ def test_st_legacyaswkb_sql_example(vectorx_registered):
     assert (
         geom.geom_type == "Point"
     ), f"Expected Point geometry type, got {geom.geom_type}"
+
+
+# ---------------------------------------------------------------------------
+# Antimeridian family — st_shiftlongitude, st_wrapx, st_split
+# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
+# All three tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# strings directly via parse_geom, so no ST_AsBinary/ST_GeomFromText wrapper
+# is needed in these Docker-executable examples.
+# ---------------------------------------------------------------------------
+
+
+def test_st_shiftlongitude_sql_example(vectorx_registered):
+    """Run the ``gbx_st_shiftlongitude`` SQL example; assert BINARY output with shifted coords.
+
+    Input: POLYGON with x in [-170, -150].  After shift all x are moved +360
+    into [190, 210] (positive [0,360] space).
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_shiftlongitude_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["shifted"] is not None, "st_shiftlongitude should return non-null WKB bytes"
+    assert isinstance(
+        row["shifted"], (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(row['shifted'])}"
+    assert len(row["shifted"]) > 0, "WKB bytes should be non-empty"
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    geom = wkb_loads(bytes(row["shifted"]))
+    xs = [c[0] for c in geom.exterior.coords]
+    assert all(x >= 0 for x in xs), (
+        f"All x coords should be >= 0 after shift (x in [0,360]), got: {xs}"
+    )
+
+
+def test_st_wrapx_sql_example(vectorx_registered):
+    """Run the ``gbx_st_wrapx`` SQL example; assert POINT(-170,10) for POINT(190,10) input.
+
+    wrap_x_origin=180, wrap_direction=-360: any x > 180 is shifted by -360.
+    x=190 → x=-170.
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_wrapx_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["wrapped"] is not None, "st_wrapx should return non-null WKB bytes"
+    assert isinstance(
+        row["wrapped"], (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(row['wrapped'])}"
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    geom = wkb_loads(bytes(row["wrapped"]))
+    assert abs(geom.x - (-170.0)) < 1e-9, f"Expected x=-170, got {geom.x}"
+    assert abs(geom.y - 10.0) < 1e-9, f"Expected y=10, got {geom.y}"
+
+
+def test_st_split_sql_example(vectorx_registered):
+    """Run the ``gbx_st_split`` SQL example; assert a 2-piece GeometryCollection.
+
+    A polygon spanning x=[170,190] is split by the 180° meridian (x=180).
+    The result is a GeometryCollection with exactly 2 polygon pieces.
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_split_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["pieces"] is not None, "st_split should return non-null WKB bytes"
+    assert isinstance(
+        row["pieces"], (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(row['pieces'])}"
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    gc = wkb_loads(bytes(row["pieces"]))
+    assert gc.geom_type == "GeometryCollection", (
+        f"Expected GeometryCollection, got {gc.geom_type}"
+    )
+    assert len(gc.geoms) == 2, f"Expected 2 pieces from antimeridian split, got {len(gc.geoms)}"
+
+
+def test_antimeridian_pattern_sql_example(vectorx_registered):
+    """Validate the antimeridian composition SQL string is well-formed (structural test)
+    and verify the full shift→split→wrap→union chain returns a MultiPolygon (integration test).
+
+    The composition SQL uses Databricks built-ins (ST_Dump, ST_Union, ST_Multi,
+    ST_GeomFromWKB) that are available on DBR 17.3+ but not in vanilla Spark.
+    The structural test checks the SQL string is non-empty and references all three
+    antimeridian functions.  The integration test builds the equivalent chain using
+    the pyvx Python Column API + shapely to confirm the geometry result is correct.
+    """
+    # Part 1: structural — the example SQL string is non-empty and references all functions
+    sql = vectorx_functions_sql.antimeridian_pattern_sql_example()
+    assert isinstance(sql, str) and len(sql) > 0, "antimeridian_pattern_sql_example must return a non-empty SQL string"
+    assert "gbx_st_shiftlongitude" in sql, "composition SQL must reference gbx_st_shiftlongitude"
+    assert "gbx_st_split" in sql, "composition SQL must reference gbx_st_split"
+    assert "gbx_st_wrapx" in sql, "composition SQL must reference gbx_st_wrapx"
+
+    # Part 2: integration — the full chain produces a valid normalized geometry
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+    from shapely.ops import unary_union  # noqa: PLC0415
+
+    spark = vectorx_registered
+
+    # shift → split: antimeridian-crossing polygon in [-180,180] space.
+    # Vertices at 170°E and 170°W (-170°) — crosses the antimeridian.
+    # shiftlongitude moves x=-170 → 190, making it contiguous at [170, 190]
+    # so the split at x=180 divides it cleanly into two 10° pieces.
+    df = spark.createDataFrame(
+        [("POLYGON((170 -10, -170 -10, -170 10, 170 10, 170 -10))",)], ["geom"]
+    )
+    split_row = df.select(
+        vx.st_split(
+            vx.st_shiftlongitude("geom"),
+            f.lit("LINESTRING(180 -90, 180 90)"),
+        ).alias("split_geom")
+    ).first()
+    assert split_row["split_geom"] is not None, "shift→split chain returned None"
+    gc = wkb_loads(bytes(split_row["split_geom"]))
+    assert gc.geom_type == "GeometryCollection", f"Expected GeometryCollection, got {gc.geom_type}"
+    assert len(gc.geoms) == 2, f"Expected 2 split pieces, got {len(gc.geoms)}"
+
+    # wrap each piece back to [-180,180] and union into a MultiPolygon
+    wrapped_parts = []
+    for part in gc.geoms:
+        wrap_row = (
+            spark.createDataFrame([(part.wkb,)], ["geom"])
+            .select(vx.st_wrapx("geom", f.lit(180.0), f.lit(-360.0)).alias("w"))
+            .first()
+        )
+        assert wrap_row["w"] is not None, "st_wrapx returned None for a split piece"
+        wrapped_parts.append(wkb_loads(bytes(wrap_row["w"])))
+
+    normalized = unary_union(wrapped_parts)
+    assert normalized.geom_type in ("MultiPolygon", "Polygon"), (
+        f"Expected Polygon or MultiPolygon after union, got {normalized.geom_type}"
+    )
+    assert not normalized.is_empty, "Normalized geometry should not be empty"
+    bounds = normalized.bounds  # (minx, miny, maxx, maxy)
+    # After wrapping, all x should be within [-180, 180].
+    # Note: st_wrapx uses strict x > origin (not >=), so the shared split edge
+    # at x=180 stays at 180 — hence maxx == 180, not < 180.
+    assert bounds[0] >= -180, f"minx should be >= -180: {bounds}"
+    assert bounds[2] <= 180, f"maxx should be <= 180: {bounds}"
+    # The wrap moved the western piece (originally x > 180) to negative x,
+    # so the result should span both negative and positive x.
+    assert bounds[0] < 0, f"Expected some negative x after wrapping: {bounds}"
+    assert bounds[2] > 0, f"Expected some positive x (eastern piece): {bounds}"

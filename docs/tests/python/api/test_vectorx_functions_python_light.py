@@ -227,3 +227,58 @@ def test_st_legacyaswkb_python_light_example(spark):
     assert (
         geom.geom_type == "Point"
     ), f"Expected Point geometry type, got {geom.geom_type}"
+
+
+# ---------------------------------------------------------------------------
+# Antimeridian family — st_shiftlongitude, st_wrapx, st_split
+# Light-only (pyvx tier). The autouse fixture above already registers pyvx.
+# ---------------------------------------------------------------------------
+
+
+def test_st_shiftlongitude_python_light_example(spark):
+    """st_shiftlongitude shifts POINT(-170, 10) to POINT(190, 10) (x += 360)."""
+    assert light_examples is not None
+    result = light_examples.st_shiftlongitude_python_light_example(spark)
+    assert result is not None, "st_shiftlongitude should return non-null WKB bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(result)}"
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    geom = wkb_loads(bytes(result))
+    assert abs(geom.x - 190.0) < 1e-9, f"Expected x=190.0 after shift, got {geom.x}"
+    assert abs(geom.y - 10.0) < 1e-9, f"Expected y=10.0 unchanged, got {geom.y}"
+
+
+def test_st_wrapx_python_light_example(spark):
+    """st_wrapx wraps POINT(190, 10) back to POINT(-170, 10) with origin=180, direction=-360."""
+    assert light_examples is not None
+    result = light_examples.st_wrapx_python_light_example(spark)
+    assert result is not None, "st_wrapx should return non-null WKB bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(result)}"
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    geom = wkb_loads(bytes(result))
+    assert abs(geom.x - (-170.0)) < 1e-9, f"Expected x=-170.0 after wrap, got {geom.x}"
+    assert abs(geom.y - 10.0) < 1e-9, f"Expected y=10.0 unchanged, got {geom.y}"
+
+
+def test_st_split_python_light_example(spark):
+    """st_split returns a 2-piece GeometryCollection when splitting an antimeridian polygon."""
+    assert light_examples is not None
+    result = light_examples.st_split_python_light_example(spark)
+    assert result is not None, "st_split should return non-null WKB bytes"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected bytes (WKB binary), got {type(result)}"
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    gc = wkb_loads(bytes(result))
+    assert gc.geom_type == "GeometryCollection", (
+        f"Expected GeometryCollection, got {gc.geom_type}"
+    )
+    assert len(gc.geoms) == 2, (
+        f"Expected 2 pieces from antimeridian split at x=180, got {len(gc.geoms)}"
+    )

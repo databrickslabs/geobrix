@@ -840,6 +840,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     if spark is None:
         spark = SparkSession.builder.getOrCreate()
     _register.run_groups(_registrar_groups(), spark, only)
+    globals()["_gbx_registered"] = True
 
 
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------

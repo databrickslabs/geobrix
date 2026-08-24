@@ -128,6 +128,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     if spark is None:
         spark = SparkSession.builder.getOrCreate()
     _register.run_groups(_registrar_groups(), spark, only)
+    globals()["_gbx_registered"] = True
 
 
 # --- Virtual-aware tile helpers (Increment 4) -------------------------------
@@ -238,15 +239,17 @@ def _shaped_result_row(
 # core accessor math is never touched.
 def _header_accessor_udf(core_fn, return_type):
     """Struct-accepting header-only accessor UDF (open_header, no pixel read)."""
+    from databricks.labs.gbx.core import proj_grids
+    from databricks.labs.gbx.pyrx import _env
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @f.udf(return_type)
     def _udf(tile):
         if _tile_is_empty(tile):
             return None
         try:
-            from databricks.labs.gbx.pyrx import _env
-
-            _env.configure_gdal_env()
+            _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot.open_header(tile) as ds:
                 return core_fn(ds)
         except Exception:  # noqa: BLE001
@@ -257,15 +260,17 @@ def _header_accessor_udf(core_fn, return_type):
 
 def _pixel_accessor_udf(core_fn, return_type):
     """Struct-accepting pixel accessor UDF (_open, materialises the window)."""
+    from databricks.labs.gbx.core import proj_grids
+    from databricks.labs.gbx.pyrx import _env
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @f.udf(return_type)
     def _udf(tile):
         if _tile_is_empty(tile):
             return None
         try:
-            from databricks.labs.gbx.pyrx import _env
-
-            _env.configure_gdal_env()
+            _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot._open(tile) as ds:
                 return core_fn(ds)
         except Exception:  # noqa: BLE001
@@ -285,15 +290,17 @@ def _header_accessor_udf_file(core_fn, return_type):
     Calls open_header(tile, file_ref=file_ref) internally.  When file_ref is
     None the open_header front-door falls back to the plain-path read path.
     """
+    from databricks.labs.gbx.core import proj_grids
+    from databricks.labs.gbx.pyrx import _env
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @f.udf(return_type)
     def _udf(tile, file_ref):
         if _tile_is_empty(tile):
             return None
         try:
-            from databricks.labs.gbx.pyrx import _env
-
-            _env.configure_gdal_env()
+            _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot.open_header(tile, file_ref=file_ref) as ds:
                 return core_fn(ds)
         except Exception:  # noqa: BLE001
@@ -309,15 +316,17 @@ def _pixel_accessor_udf_file(core_fn, return_type):
     Calls _open(tile, file_ref=file_ref) internally.  When file_ref is None
     the _open front-door falls back to the plain-path read path.
     """
+    from databricks.labs.gbx.core import proj_grids
+    from databricks.labs.gbx.pyrx import _env
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @f.udf(return_type)
     def _udf(tile, file_ref):
         if _tile_is_empty(tile):
             return None
         try:
-            from databricks.labs.gbx.pyrx import _env
-
-            _env.configure_gdal_env()
+            _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
             with ot._open(tile, file_ref=file_ref) as ds:
                 return core_fn(ds)
         except Exception:  # noqa: BLE001

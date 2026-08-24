@@ -307,9 +307,17 @@ def _registrar_groups() -> List[_register.Group]:
         s.udf.register("gbx_st_setcrs", _c._udf_st_setcrs, BinaryType())
 
     def _reg_gbx_st_transformcrs(s):
+        from databricks.labs.gbx.core import proj_grids
+        from databricks.labs.gbx.pyrx import _env
         from . import _crs as _c
 
-        s.udf.register("gbx_st_transformcrs", _c._udf_st_transformcrs, BinaryType())
+        _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
+
+        def _transformcrs_udf(geom, target_crs, source_crs=None):
+            _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
+            return _c._udf_st_transformcrs(geom, target_crs, source_crs)
+
+        s.udf.register("gbx_st_transformcrs", _transformcrs_udf, BinaryType())
 
     crs = {
         "gbx_st_crs": _reg_gbx_st_crs,
@@ -339,6 +347,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     if spark is None:
         spark = SparkSession.builder.getOrCreate()
     _register.run_groups(_registrar_groups(), spark, only)
+    globals()["_gbx_registered"] = True
 
 
 def st_asmvt_pyramid(

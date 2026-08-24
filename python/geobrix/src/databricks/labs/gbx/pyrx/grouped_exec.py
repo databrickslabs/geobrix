@@ -269,10 +269,14 @@ def grouped_tile_map(
     # Compute Connect-aware sizing on the driver; capture in the closure.
     _stream_max, _lru_max, _lru_count = _connect_aware_lru_sizing(_driver_spark)
 
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
+
     def _map(pdf_iter):
         from . import _env
 
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
         _ctx = _OpenerContext(stream_max_bytes=_stream_max)
         lru = OpenResourceLRU(
             opener=_ctx.open,

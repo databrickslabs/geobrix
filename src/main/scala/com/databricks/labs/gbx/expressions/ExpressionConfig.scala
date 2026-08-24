@@ -49,12 +49,22 @@ case class ExpressionConfig(
 
 object ExpressionConfig {
 
-    /** Build config from the given Spark session (driver-side). */
+    /** Build config from the given Spark session (driver-side).
+      *
+      * Merges [[com.databricks.labs.gbx.operations.ProjGridRegistry]] dirs under the synthetic
+      * key `spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS` (colon-joined) so that executors
+      * receive them via the serialized ExpressionConfig and GDALManager can prepend them to the
+      * PROJ search path at init time.  The key uses the `spark.databricks.labs.gbx.gdal.`
+      * prefix so it travels with the rest of the GDAL config; GDALManager's generic config loop
+      * explicitly skips it to avoid setting a bogus GDAL option.
+      */
     def apply(spark: SparkSession): ExpressionConfig = {
-        new ExpressionConfig(
-          spark.conf.getAll,
-          new SerializableConfiguration(spark.sessionState.newHadoopConf())
-        )
+        val base = spark.conf.getAll
+        val gridDirs = com.databricks.labs.gbx.operations.ProjGridRegistry.get
+        val merged =
+          if (gridDirs.isEmpty) base
+          else base + ("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS" -> gridDirs.mkString(":"))
+        new ExpressionConfig(merged, new SerializableConfiguration(spark.sessionState.newHadoopConf()))
     }
 
     /** Deserialize from base64 (used on executors). */

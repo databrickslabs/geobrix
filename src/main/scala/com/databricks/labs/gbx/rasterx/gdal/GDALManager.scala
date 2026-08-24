@@ -107,16 +107,36 @@ object GDALManager extends Logging {
             gdal.GetDriverByName(shortName)
         }
 
-    /** Apply ExpressionConfig to GDAL options for this process. */
+    /** Apply ExpressionConfig to GDAL options for this process.
+      *
+      * The synthetic key `spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS` (populated by
+      * [[com.databricks.labs.gbx.expressions.ExpressionConfig.apply]] from
+      * [[com.databricks.labs.gbx.operations.ProjGridRegistry]]) is handled separately:
+      * it is EXCLUDED from the generic SetConfigOption loop (which would produce a bogus
+      * `PROJ_GRID_DIRS` GDAL option) and instead used to PREPEND to `PROJ_DATA`/`PROJ_LIB`
+      * so the in-JVM GDAL PROJ search path is extended.
+      *
+      * `gdal.Warp()` in [[com.databricks.labs.gbx.rasterx.operator.GDALWarp]] is the in-JVM
+      * GDAL Java API — not a subprocess — so SetConfigOption("PROJ_DATA", …) reaches it
+      * directly; no child-process environment patching is needed for the warp/transform path.
+      */
     def configureGDAL(config: ExpressionConfig): Unit = {
         val CPL_TMPDIR = config.configs.getOrElse("cpl_tmpdir", "/tmp/gdal")
         val GDAL_PAM_PROXY_DIR = config.configs.getOrElse("gdal_pam_proxy_dir", "/tmp/gdal/pam")
         configureGDAL(CPL_TMPDIR, GDAL_PAM_PROXY_DIR)
+        // Apply GDAL config options; skip PROJ_GRID_DIRS (synthetic GeoBrix key, handled below).
         config.getGDALConfig.foreach { case (key, value) =>
             val gdalKey = key
                 .stripPrefix("spark.databricks.labs.gbx.gdal.")
                 .stripPrefix("spark.gdal.")
-            gdal.SetConfigOption(gdalKey, value)
+            if (gdalKey != "PROJ_GRID_DIRS") gdal.SetConfigOption(gdalKey, value)
+        }
+        // Prepend user-supplied PROJ grid dirs to the in-JVM PROJ search path.
+        config.configs.get("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS").foreach { dirs =>
+            val existing = Option(gdal.GetConfigOption("PROJ_DATA")).getOrElse("/usr/share/proj")
+            val prepended = (dirs.split(":").toSeq :+ existing).distinct.mkString(":")
+            gdal.SetConfigOption("PROJ_DATA", prepended)
+            gdal.SetConfigOption("PROJ_LIB", prepended) // legacy alias PROJ still honors
         }
     }
 

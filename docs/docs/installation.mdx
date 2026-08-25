@@ -16,15 +16,19 @@ GeoBrix offers two execution tiers with different installation paths. See [Choos
 
 GeoBrix supports both current Databricks Runtime LTS releases:
 
-| DBR LTS | Ubuntu | Spark | Python | Scala | Java | Serverless env | GeoBrix |
-|---|---|---|---|---|---|---|---|
-| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | **5+** (Py 3.12) | ✅ Supported |
-| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | **5+** (Py 3.12) | ✅ Supported |
-| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | (n/a yet) | ✅ Supported (light tier) |
+| DBR LTS | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
+|---|---|---|---|---|---|---|
+| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
+| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
+| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported (light tier) |
 
 A **single wheel + single JAR** runs on both 17.3 and 18 LTS: Scala 2.13.16 matches both runtimes, the JAR is compiled to Java-17 bytecode so it loads on both JVMs, and Spark is a `provided` dependency.
 
-The **Serverless env** column is the minimum [Serverless environment version](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/five) for the lightweight tier: **version 5+** provides Python 3.12, which the `[light]` dependencies require (Python ≥ 3.11). Older environment versions (Python 3.10) can't install `geobrix[light]`. Release notes for env v5: [AWS](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/five) · [Azure](https://learn.microsoft.com/azure/databricks/release-notes/serverless/environment-version/five) · [GCP](https://docs.databricks.com/gcp/en/release-notes/serverless/environment-version/five).
+GeoBrix Light is **Serverless-first** — the `[light]` extra targets the latest Serverless environment (**currently v6** in GeoBrix 0.5.0). Serverless is a single moving target, so it is a version note rather than a table row.
+
+:::tip GeoBrix 0.5.x requires Serverless environment v6
+**GeoBrix 0.5.x on Serverless requires the v6 environment.** Set your Serverless environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job.
+:::
 
 :::note DBR 19 LTS — heavy tier coming soon
 **DBR 19 LTS** (Ubuntu 26.04) is now supported by the **lightweight** tier. The **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so heavyweight on DBR 19 requires a GDAL rebuild for the new base image — not yet available.
@@ -33,23 +37,22 @@ The **Serverless env** column is the minimum [Serverless environment version](ht
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight (pure-Python)">
 
-:::note GeoBrix Light and Databricks runtimes
-**GeoBrix Light defaults to Databricks Serverless environments (currently environment v5).**
+:::note GeoBrix Light is Serverless-first
+**GeoBrix Light targets the latest Serverless environment** — `[light]` = currently Serverless v6 in GeoBrix 0.5.0.
 On Serverless, `%pip install geobrix[light]` installs cleanly — no further configuration needed.
 
-**On a classic DBR cluster, additional dependencies must be accounted for** — each classic DBR
-generation ships a different immutable base (`protobuf`/`grpcio-status`, `idna`,
-`typing_extensions`, …), so the default `[light]` extra can conflict there. On DBR 19 in
-particular, installing `geobrix[light]` triggers a protobuf conflict that causes hangs and
-kernel crashes. On classic compute, use the extra that matches your runtime from the table below.
+**`[light]` tracks the current Serverless environment per release:** v6 is current for 0.5.0; an older `light` wheel continues working on a newer Serverless environment but may miss dependency improvements; `[light]` advances with each new Serverless environment version.
+
+**On a classic DBR cluster, use the extra that matches your runtime** — each DBR generation ships a different immutable base (`protobuf`/`grpcio-status`, `idna`, `typing_extensions`, …), so the Serverless-tuned `[light]` extra conflicts there. Use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]` as appropriate.
 
 | Runtime | Install command | Full feature set |
 |---|---|---|
-| Serverless (env v5+) | `%pip install "geobrix[light] @ file:///Volumes/…"` | `geobrix[light_all]` |
-| Classic DBR 17.3–18.x | `%pip install "geobrix[light] @ file:///Volumes/…"` | `geobrix[light_all]` |
-| Classic DBR 19+ | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | `geobrix[light_dbr19_all]` |
+| Serverless | `%pip install "geobrix[light] @ file:///Volumes/…"` | `geobrix[light_all]` |
+| Classic DBR 17.3 | `%pip install "geobrix[light_dbr17] @ file:///Volumes/…"` | `geobrix[light_dbr17_all]` |
+| Classic DBR 18 | `%pip install "geobrix[light_dbr18] @ file:///Volumes/…"` | `geobrix[light_dbr18_all]` |
+| Classic DBR 19 | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | `geobrix[light_dbr19_all]` |
 
-*(Full feature set = `[light/_dbr19]` + `[stac]` + `[vizx]` + `[overture]` in one install. `[databricks]` is added separately if needed.)*
+*(Full feature set = `[light/_dbrN]` + `[stac]` + `[vizx]` + `[overture]` in one install. `[databricks]` is added separately if needed.)*
 
 The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
 the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting
@@ -68,24 +71,14 @@ The wheel ships as a **GitHub release artifact** for GeoBrix 0.4.0+ — it is **
 %pip install "geobrix[light] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
 ```
 
-:::warning Serverless install requirements
-- **Use the quoted `geobrix[light] @ file://…` form.** Install with the **PEP 508
-  named form above**, wrapped in quotes as a single argument. Do **not** put the
-  extra on the path (`'/Volumes/…/geobrix-<version>-py3-none-any.whl[light]'`): on
-  **Serverless**, `%pip` writes the requirement to a file *including the
-  surrounding quotes*, so pip reads `[light]` as part of the filename and fails
-  with *"Expected package name at the start of dependency specifier."* The named
-  form installs cleanly on **Serverless**, standard/shared, and ARM.
-- **Use environment version 5+ (Python 3.11+).** Set the notebook/job
-  **environment version to 5 or later** (Python 3.12). The `[light]` dependencies
-  — notably `rio-tiler` (≥ 9) — require **Python ≥ 3.11**, so older default
-  Serverless environments (Python 3.10) cannot resolve them and the install fails
-  with *"Could not find a version that satisfies the requirement rio-tiler…"*. Set
-  it in the **Environment** side panel, or with `environment_version: "5"` on a
-  serverless job task. Release notes:
-  [AWS](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/five)
-  · [Azure](https://learn.microsoft.com/azure/databricks/release-notes/serverless/environment-version/five)
-  · [GCP](https://docs.databricks.com/gcp/en/release-notes/serverless/environment-version/five).
+:::warning Serverless install form
+**Use the quoted `geobrix[light] @ file://…` form.** Install with the **PEP 508
+named form above**, wrapped in quotes as a single argument. Do **not** put the
+extra on the path (`'/Volumes/…/geobrix-<version>-py3-none-any.whl[light]'`): on
+**Serverless**, `%pip` writes the requirement to a file *including the
+surrounding quotes*, so pip reads `[light]` as part of the filename and fails
+with *"Expected package name at the start of dependency specifier."* The named
+form installs cleanly on **Serverless**, standard/shared, and ARM.
 :::
 
 Then import the package(s) you need and (optionally) register their SQL functions. Each light package exposes the same `functions` / `register(spark)` pattern:

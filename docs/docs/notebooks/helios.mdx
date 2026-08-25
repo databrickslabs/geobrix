@@ -77,7 +77,7 @@ The notebooks ship with `INTERACTIVE_PLOTS = False` so the committed `.ipynb` re
 
 ## Prerequisites
 
-- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The lightweight default runs on Serverless (set Environment to version 5+); the heavyweight option requires a classic x86 cluster.
+- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The lightweight default runs on Serverless (set Environment to version 6); the heavyweight option requires a classic x86 cluster.
 - **GeoBrix 0.4.0.** `config_nb.ipynb` `%pip`-installs `geobrix[light,stac,vizx,overture]` from a staged Volume wheel using the 2-step pattern (force-reinstall `--no-deps` first, then with the extras). For the heavyweight option, flip *option-2* in `config_nb.ipynb` and attach the GeoBrix JAR + GDAL init script to the cluster.
 - **Unity Catalog.** Edit `config_nb.ipynb` to set `catalog_name` and `schema_name`. A Volume named `data` must already exist under `<catalog>/<schema>` — the notebooks create sub-directories inside it but will not create the Volume itself.
 - **Network access.** NB01 reads Overture Maps via `OvertureClient`; NB02 fetches NAIP via `NaipDownloader` and NB03 fetches 3DEP via `DemDownloader`, both from Planetary Computer STAC (online-only — no offline fallback). Classic cluster outbound internet is sufficient; Serverless has it by default.

@@ -10,7 +10,7 @@ title: STAC Client
 Where a single-node STAC script serializes search requests and downloads, `StacClient` fans both operations out across the Spark cluster — one task per AOI row (search) and one task per asset (download). On Serverless, parallelism is controlled via `partitions=` and `DataFrame.repartition()`, with no `spark.conf.set` calls.
 
 :::info Opt-in extra
-`StacClient` requires `geobrix[light,stac]`. The `[stac]` extra pulls in `pystac-client`, `planetary-computer`, `tenacity`, and `requests`. Serverless environment version 5 (Python 3.12) is required.
+`StacClient` requires `geobrix[light,stac]`. The `[stac]` extra pulls in `pystac-client`, `planetary-computer`, `tenacity`, and `requests`. Serverless environment version 6 (Python 3.12) is required.
 :::
 
 ## Ready-made downloaders

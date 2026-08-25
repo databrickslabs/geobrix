@@ -47,15 +47,15 @@ All SQL functions register with a `gbx_` prefix (e.g. `gbx_rst_clip`, `gbx_bng_c
 
 GeoBrix supports both current Databricks Runtime LTS releases:
 
-| DBR LTS | Ubuntu | Spark | Python | Scala | Java | Serverless env | GeoBrix |
-|---|---|---|---|---|---|---|---|
-| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | **5+** (Py 3.12) | ✅ Supported |
-| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | **5+** (Py 3.12) | ✅ Supported |
-| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | (n/a yet) | ✅ Supported (light tier) |
+| DBR LTS | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
+|---|---|---|---|---|---|---|
+| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
+| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
+| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported (light tier) |
 
 A **single wheel + single JAR** runs on both 17.3 and 18 LTS: Scala 2.13.16 matches both runtimes, the JAR is compiled to Java-17 bytecode so it loads on both JVMs, and Spark is a `provided` dependency.
 
-The **Serverless env** column is the minimum Serverless environment version for the lightweight tier: **version 5+** provides Python 3.12, which the `[light]` dependencies require (Python ≥ 3.11). Older environment versions (Python 3.10) can't install `geobrix[light]`. Env v5 release notes: [AWS](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/five) · [Azure](https://learn.microsoft.com/azure/databricks/release-notes/serverless/environment-version/five) · [GCP](https://docs.databricks.com/gcp/en/release-notes/serverless/environment-version/five).
+GeoBrix Light is **Serverless-first** — the `[light]` extra targets the latest Serverless environment (**currently v6** in GeoBrix 0.5.0). On classic clusters, use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]` to match the runtime. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation?tier=lightweight) for the full extras table.
 
 > **DBR 19 LTS** (Ubuntu 26.04) is now supported by the **lightweight** tier (✅ in the table above). The **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so heavyweight on DBR 19 requires a GDAL rebuild for the new base image — not yet available.
 

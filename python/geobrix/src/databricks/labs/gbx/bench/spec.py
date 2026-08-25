@@ -22,6 +22,7 @@ import shapely.wkb
 from pyspark.sql import functions as F
 
 from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.pyvx import functions as pyvx
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
@@ -380,6 +381,17 @@ _TESSELLATE_LIGHT = (_PYRX + "tessellate.py", _PYRX + "edit.py")
 # H3 rasterize aggregator (cellid,value rows -> one tile, pixel-centroid burn).
 # Light burn math + gridspec port live in core/cellraster.py.
 _CELLRASTER_LIGHT = (_PYRX + "cellraster.py",)
+
+# VectorX (pyvx/vectorx) source paths for light and heavy tiers.
+_PYVX = "python/geobrix/src/databricks/labs/gbx/pyvx/"
+_VECTORX = "src/main/scala/com/databricks/labs/gbx/vectorx/expressions/"
+# Light-only CRS, antimeridian, validity, cleaning, and coverage functions.
+_PYVX_CRS_LIGHT = (_PYVX + "_crs.py",)
+_PYVX_ANTIMERIDIAN_LIGHT = (_PYVX + "_antimeridian.py",)
+_PYVX_VALIDITY_LIGHT = (_PYVX + "_validity.py",)
+_PYVX_CLEANING_LIGHT = (_PYVX + "_cleaning.py",)
+_PYVX_COVERAGE_LIGHT = (_PYVX + "_coverage.py",)
+_PYVX_MVT_LIGHT = (_PYVX + "_mvt.py", _PYVX + "_serde.py")
 
 # --- rst_h3_rasterize_agg: fixed deterministic cell set + EXPLICIT grid --------
 # PARITY CONTRACT (must stay byte-for-byte in sync with the Scala BenchDispatch
@@ -2957,6 +2969,300 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core=False,
     ),
+    # --- VectorX (pyvx/vectorx) functions ---
+    # Already-benched ST functions (MVT, TIN families).
+    "st_asmvt": FnSpec(
+        "st_asmvt",
+        "gbx_st_asmvt",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_asmvt(col, F.lit(None), F.lit(None)),  # Placeholder attrs/layer
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        fingerprint_kind="vector",
+        input_kind="tile",
+        sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvt.scala",),
+    ),
+    "st_legacyaswkb": FnSpec(
+        "st_legacyaswkb",
+        "gbx_st_legacyaswkb",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_legacyaswkb(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=(_PYVX + "_legacy.py", "src/main/scala/com/databricks/labs/gbx/vectorx/jts/legacy/expressions/ST_LegacyAsWKB.scala"),
+    ),
+    "st_triangulate": FnSpec(
+        "st_triangulate",
+        "gbx_st_triangulate",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_triangulate(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only (UDTF)
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=(_PYVX + "_tin.py", _VECTORX + "ST_Triangulate.scala"),
+    ),
+    "st_interpolateelevationgeom": FnSpec(
+        "st_interpolateelevationgeom",
+        "gbx_st_interpolateelevationgeom",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_interpolateelevationgeom(col, F.lit(None)),  # Placeholder points
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=(_PYVX + "_tin.py", _VECTORX + "ST_InterpolateElevationGeom.scala"),
+    ),
+    "st_interpolateelevationbbox": FnSpec(
+        "st_interpolateelevationbbox",
+        "gbx_st_interpolateelevationbbox",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_interpolateelevationbbox(col, F.lit(None)),  # Placeholder points
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=(_PYVX + "_tin.py", _VECTORX + "ST_InterpolateElevationBBox.scala"),
+    ),
+    # 16 new vector function benchmarks: 1 heavy+light (asmvt_pyramid), 15 light-only
+    # (CRS, antimeridian, validity, cleaning, coverage families).
+    "st_asmvt_pyramid": FnSpec(
+        "st_asmvt_pyramid",
+        "gbx_st_asmvt_pyramid",
+        "vector",
+        ("spark-path",),  # Spark-path only (UDTF); no pure-core
+        {"min_z": 0, "max_z": 14, "layer_name": "features"},
+        col_fn=lambda col, a: pyvx.st_asmvt_pyramid(
+            col, a["min_z"], a["max_z"], a["layer_name"]
+        ),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path-only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvtPyramid.scala",),
+    ),
+    # --- CRS Functions (Light-Only) ---
+    "st_crs": FnSpec(
+        "st_crs",
+        "gbx_st_crs",
+        "vector",
+        ("pure-core",),  # Header accessor, no spark-path needed
+        {},
+        core_fn=lambda ds, a: None,  # Timing-only placeholder
+        col_fn=lambda col, a: None,  # Placeholder; pure-core only
+        core=True,
+        fingerprint=False,  # Timing-only
+        input_kind="tile",
+        virtual_disposition="deferred",  # Header-only, no pixel read
+        sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_Crs.scala",),
+    ),
+    "st_setcrs": FnSpec(
+        "st_setcrs",
+        "gbx_st_setcrs",
+        "vector",
+        ("pure-core", "spark-path"),
+        {"srid": 4326},  # Default WGS84
+        core_fn=lambda col, a: None,  # Placeholder for pure-core
+        col_fn=lambda col, a: pyvx.st_setcrs(col, F.lit(a["srid"])),
+        core=True,
+        fingerprint=True,
+        input_kind="tile",
+        virtual_disposition="deferred",  # Header edit only
+        sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_SetCrs.scala",),
+    ),
+    "st_transformcrs": FnSpec(
+        "st_transformcrs",
+        "gbx_st_transformcrs",
+        "vector",
+        ("pure-core", "spark-path"),
+        {"source_crs": "EPSG:4326", "target_crs": "EPSG:3857"},
+        core_fn=lambda col, a: None,  # Placeholder for pure-core
+        col_fn=lambda col, a: pyvx.st_transformcrs(
+            col, F.lit(a["target_crs"]), F.lit(a["source_crs"])
+        ),
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        virtual_disposition="materialized",  # Full WKB transform
+        sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_TransformCrs.scala",),
+    ),
+    # --- Antimeridian Functions (Light-Only) ---
+    "st_shiftlongitude": FnSpec(
+        "st_shiftlongitude",
+        "gbx_st_shiftlongitude",
+        "vector",
+        ("spark-path",),
+        {"shift": 180},
+        col_fn=lambda col, a: pyvx.st_shiftlongitude(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_ANTIMERIDIAN_LIGHT,
+    ),
+    "st_split": FnSpec(
+        "st_split",
+        "gbx_st_split",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_split(col, F.lit(None)),  # Placeholder blade
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_ANTIMERIDIAN_LIGHT,
+    ),
+    "st_wrapx": FnSpec(
+        "st_wrapx",
+        "gbx_st_wrapx",
+        "vector",
+        ("spark-path",),
+        {"wrap_x_origin": 180, "wrap_direction": -180},
+        col_fn=lambda col, a: pyvx.st_wrapx(
+            col, F.lit(a["wrap_x_origin"]), F.lit(a["wrap_direction"])
+        ),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_ANTIMERIDIAN_LIGHT,
+    ),
+    # --- Validity Functions (Light-Only) ---
+    "st_explainvalidity": FnSpec(
+        "st_explainvalidity",
+        "gbx_st_explainvalidity",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_explainvalidity(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=False,  # Timing-only; text output
+        input_kind="tile",
+        sources=_PYVX_VALIDITY_LIGHT,
+    ),
+    "st_makevalid": FnSpec(
+        "st_makevalid",
+        "gbx_st_makevalid",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_makevalid(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_VALIDITY_LIGHT,
+    ),
+    # --- Cleaning Functions (Light-Only) ---
+    "st_node": FnSpec(
+        "st_node",
+        "gbx_st_node",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_node(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_CLEANING_LIGHT,
+    ),
+    "st_reduceprecision": FnSpec(
+        "st_reduceprecision",
+        "gbx_st_reduceprecision",
+        "vector",
+        ("spark-path",),
+        {"grid_size": 0.0001},
+        col_fn=lambda col, a: pyvx.st_reduceprecision(col, F.lit(a["grid_size"])),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_CLEANING_LIGHT,
+    ),
+    "st_removerepeatedpoints": FnSpec(
+        "st_removerepeatedpoints",
+        "gbx_st_removerepeatedpoints",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_removerepeatedpoints(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_CLEANING_LIGHT,
+    ),
+    "st_simplifypreservetopology": FnSpec(
+        "st_simplifypreservetopology",
+        "gbx_st_simplifypreservetopology",
+        "vector",
+        ("spark-path",),
+        {"tolerance": 0.001},
+        col_fn=lambda col, a: pyvx.st_simplifypreservetopology(col, F.lit(a["tolerance"])),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_CLEANING_LIGHT,
+    ),
+    "st_snap": FnSpec(
+        "st_snap",
+        "gbx_st_snap",
+        "vector",
+        ("spark-path",),
+        {"tolerance": 0.0001},  # Reference WKB generated per-call
+        col_fn=lambda col, a: pyvx.st_snap(
+            col, F.lit(shapely.geometry.box(-1, -1, 1, 1).wkb), F.lit(a["tolerance"])
+        ),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_CLEANING_LIGHT,
+    ),
+    # --- Coverage Functions (Light-Only) ---
+    "st_coverageisvalid": FnSpec(
+        "st_coverageisvalid",
+        "gbx_st_coverageisvalid",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_coverageisvalid(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=False,  # Timing-only; boolean result
+        input_kind="tile",
+        sources=_PYVX_COVERAGE_LIGHT,
+    ),
+    "st_coverageinvalidedges": FnSpec(
+        "st_coverageinvalidedges",
+        "gbx_st_coverageinvalidedges",
+        "vector",
+        ("spark-path",),
+        {},
+        col_fn=lambda col, a: pyvx.st_coverageinvalidedges(col),
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        core=False,
+        fingerprint=True,
+        input_kind="tile",
+        sources=_PYVX_COVERAGE_LIGHT,
+    ),
 }
 
 # Maps each tile-aggregator FnSpec to the bench.synth recipe whose tiles form its
@@ -3036,7 +3342,7 @@ def select(
 
 
 def registered_rst() -> "frozenset[str]":
-    """Canonical registered rst_* function names (the 107) from registered_functions.txt."""
+    """Canonical registered rst_* and st_* function names from registered_functions.txt."""
     from pathlib import Path
 
     # resolve repo root robustly from this file's location
@@ -3068,7 +3374,7 @@ def registered_rst() -> "frozenset[str]":
         if not s or s.startswith("#"):
             continue
         s = s[4:] if s.startswith("gbx_") else s
-        if s.startswith("rst_"):
+        if s.startswith("rst_") or s.startswith("st_"):
             names.add(s)
     return frozenset(names)
 

@@ -113,7 +113,7 @@ def main() -> int:
             w.files.upload(volume_path, _fh, overwrite=True)
         try:
             remote_metadata = w.files.get_metadata(volume_path)
-            remote_size = remote_metadata.size
+            remote_size = remote_metadata.content_length
             if remote_size != local_size:
                 print(
                     f"Error: upload verification failed. Local size: {local_size}, "

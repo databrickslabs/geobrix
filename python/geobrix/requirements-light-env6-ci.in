@@ -24,7 +24,8 @@ wheel==0.45.1
 
 # --- runtime: pyspark local mode + pandas_udf (Arrow) ---
 # base pyspark pulls neither pandas nor pyarrow; pandas_udf needs both.
-# numpy / pandas / pyarrow pinned to DBR 17.3 installed versions:
+# numpy / pandas / pyarrow versions are shared across DBR regimes (same values in DBR 19 /
+# Serverless env 6; see DBR 17.3 release notes for provenance):
 # https://docs.databricks.com/aws/en/release-notes/runtime/17.3lts#installed-python-libraries
 pyspark==4.0.0
 numpy==2.1.3
@@ -41,7 +42,7 @@ shapely==2.1.2
 defusedxml==0.7.1
 
 # --- band math: focal filters / convolution (scipy.ndimage) + map-algebra (numexpr) ---
-# scipy pinned to the DBR 17.3 installed version. numexpr is NOT in DBR's
+# scipy pinned to the DBR 19 / Serverless env 6 installed version. numexpr is NOT in DBR's
 # library set, so it is pinned independently (safe math-expression evaluator for
 # rst_mapalgebra — no arbitrary-code exec).
 scipy==1.15.1

@@ -59,7 +59,7 @@ show_help() {
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --log helios.log${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
     echo -e "    ${YELLOW}--notebook 'notebooks/examples/helios/01. Vector Engine (MVT).ipynb' \\${NC}"
-    echo -e "    ${YELLOW}--extras light${NC}"
+    echo -e "    ${YELLOW}--extras light_env6${NC}"
     echo ""
 }
 

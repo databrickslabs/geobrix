@@ -13,10 +13,10 @@ Usage examples:
     --dir notebooks/examples/helios \\
     --extra-deps rich
 
-  # Run a single notebook with only the light extra:
+  # Run a single notebook with only the light_env6 extra:
   python run_notebooks_serverless.py \\
     --notebook notebooks/examples/helios/01\\ Vector\\ Engine\\(MVT\\).ipynb \\
-    --extras light
+    --extras light_env6
 
   # Explicit workspace folder:
   python run_notebooks_serverless.py \\

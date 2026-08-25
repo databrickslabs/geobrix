@@ -39,8 +39,8 @@ and `--extra-deps rich`.
 # Run all four Helios notebooks on Serverless (default)
 bash scripts/commands/gbx-test-notebooks-serverless.sh
 
-# Run a single notebook with only the light extra
+# Run a single notebook with only the light_env6 extra
 bash scripts/commands/gbx-test-notebooks-serverless.sh \
   --notebook 'notebooks/examples/helios/01. Vector Engine (MVT).ipynb' \
-  --extras light
+  --extras light_env6
 ```

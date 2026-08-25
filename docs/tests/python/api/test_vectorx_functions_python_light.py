@@ -402,3 +402,66 @@ def test_st_snap_python_light_example(spark):
     assert any(abs(y) < 1e-9 for _, y in geom.coords), (
         f"Expected at least one snapped vertex at y=0, got coords: {list(geom.coords)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Coverage validity family — st_coverageisvalid, st_coverageinvalidedges,
+#                             coverage_simplify
+# Light-only (pyvx tier). First two are grouped-agg Column wrappers; third
+# is a Python-API DataFrame helper (no SQL form).
+# ---------------------------------------------------------------------------
+
+
+def test_st_coverageisvalid_python_light_example(spark):
+    """st_coverageisvalid returns True for two adjacent squares sharing a clean edge."""
+    assert light_examples is not None
+    result = light_examples.st_coverageisvalid_python_light_example(spark)
+    assert result is True, (
+        f"Adjacent squares sharing a clean edge should be a valid coverage, got {result!r}"
+    )
+
+
+def test_st_coverageinvalidedges_python_light_example(spark):
+    """st_coverageinvalidedges returns non-empty WKB bytes for overlapping squares."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_coverageinvalidedges_python_light_example(spark)
+    assert result is not None, "Overlapping coverage should return non-null bad_edges"
+    assert isinstance(result, (bytes, bytearray)), (
+        f"Expected bytes (WKB/EWKB), got {type(result)}"
+    )
+    assert len(result) > 0, "bad_edges WKB bytes should be non-empty"
+    geom = wkb_loads(bytes(result))
+    assert not geom.is_empty, "Invalid edges geometry should be non-empty for overlapping polygons"
+
+
+def test_coverage_simplify_python_light_example(spark):
+    """coverage_simplify returns 2 simplified WKB bytes (N→N) with near-collinear vertex dropped.
+
+    Input: 2 adjacent polygons each with a near-collinear vertex (0.001 deviation) on
+    their outer boundary.  coverage_simplify(tolerance=0.1) drops these vertices while
+    keeping the shared edge intact.  Asserts: 2 output rows, all non-null WKB, each output
+    polygon has fewer vertices than the 5-vertex input (near-collinear vertex removed).
+    """
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+    from shapely import is_valid  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.coverage_simplify_python_light_example(spark)
+    assert isinstance(result, list), f"Expected list of WKB bytes, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 output rows (N→N), got {len(result)}"
+    for i, wkb_bytes in enumerate(result):
+        assert wkb_bytes is not None, f"Row {i}: coverage_simplify returned None"
+        assert isinstance(wkb_bytes, (bytes, bytearray)), (
+            f"Row {i}: Expected bytes (WKB binary), got {type(wkb_bytes)}"
+        )
+        assert len(wkb_bytes) > 0, f"Row {i}: WKB bytes should be non-empty"
+        geom = wkb_loads(bytes(wkb_bytes))
+        assert is_valid(geom), f"Row {i}: simplified geometry should be valid"
+        # Input polygon has 5 unique vertices (ring closes back to first = 6 coords).
+        # After dropping the near-collinear vertex, expect 4 unique = 5 coords.
+        assert len(geom.exterior.coords) <= 5, (
+            f"Row {i}: near-collinear vertex should have been dropped "
+            f"(expected ≤5 coords, got {len(geom.exterior.coords)})"
+        )

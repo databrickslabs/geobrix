@@ -1,5 +1,5 @@
 ---
-sidebar_position: 9
+sidebar_position: 10
 title: Geometry Cleaning
 ---
 
@@ -168,6 +168,8 @@ Node a geometry's linework: split at all self-intersections and pairwise interse
 <Tier light/>
 
 Snap `geom`'s vertices onto `reference` where within `tolerance`. Any vertex in `geom` that lies within `tolerance` distance of a vertex or edge in `reference` is moved onto that nearest point. This is useful for aligning features from different sources that should share boundaries but don't quite meet due to digitizing differences or floating-point noise.
+
+This function is complementary to the product's `ST_ClosestPoint(g1, g2)`, which returns the single exact point on `g1` nearest to `g2` (Euclidean, 2D, no tolerance gate). Use `gbx_st_snap` to bulk-align a geometry's vertices to a reference within a tolerance; use `ST_ClosestPoint` when you need one exact nearest or projected point — for example, to project a vertex that falls outside the snap tolerance onto the reference.
 
 **Signature:** `gbx_st_snap(geom, reference, tolerance)`
 

@@ -1613,6 +1613,20 @@
         "scala"
       ]
     },
+    "gbx_st_coverageinvalidedges": {
+      "examples": "Examples:\n      > SELECT cov_id, gbx_st_coverageinvalidedges(geom, 0.0) AS bad_edges FROM coverage_overlap GROUP BY cov_id;",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_coverageisvalid": {
+      "examples": "Examples:\n      > SELECT cov_id, gbx_st_coverageisvalid(geom, 0.0) AS is_valid FROM coverage_parcels GROUP BY cov_id;",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
     "gbx_st_crs": {
       "examples": "Examples:\n      > SELECT gbx_st_crs(geom) AS crs FROM vector_geoms;",
       "usage_args": "geom",

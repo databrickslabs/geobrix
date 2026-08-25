@@ -272,6 +272,8 @@ These functions are Arrow-backed `pandas_udf(BinaryType())` aggregators used ins
 | SQL name | Python name | Aggregation |
 |---|---|---|
 | `gbx_st_asmvt` | `st_asmvt` | Encode a group of tile-local features into one MVT protobuf blob |
+| `gbx_st_coverageisvalid` | `st_coverageisvalid` | BOOLEAN — is this polygon group a valid coverage? (no overlaps; no gaps narrower than `gap_width`) |
+| `gbx_st_coverageinvalidedges` | `st_coverageinvalidedges` | BINARY — union of the boundary segments that violate the coverage; empty geometry when clean |
 
 **GridX (pygx)**
 

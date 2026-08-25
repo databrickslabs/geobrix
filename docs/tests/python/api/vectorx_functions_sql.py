@@ -366,11 +366,11 @@ SELECT ST_AsText(ST_Multi(ST_Union(ST_GeomFromWKB(geom)))) AS normalized FROM pa
 
 
 antimeridian_pattern_sql_example_output = """
-+--------------------+
-|normalized          |
-+--------------------+
-|MULTIPOLYGON (...)  |
-+--------------------+
++------------------+
+|normalized        |
++------------------+
+|MULTIPOLYGON (...)|
++------------------+
 ... (WKT — two polygons, one on each side of the 180° antimeridian)
 """
 
@@ -428,11 +428,11 @@ SELECT gbx_st_explainvalidity('POLYGON((0 0,1 1,1 0,0 1,0 0))') AS detail
 
 
 st_explainvalidity_sql_example_output = """
-+----------------------------------------------------------------------+
-|detail                                                                |
-+----------------------------------------------------------------------+
++--------------------------------------------------------------------+
+|detail                                                              |
++--------------------------------------------------------------------+
 |{"valid": false, "reason": "Self-intersection[0.5 0.5]", "code": 10,|
-+----------------------------------------------------------------------+
++--------------------------------------------------------------------+
 ... (JSON string — {valid, reason, code, location} for SFS validity diagnosis)
 """
 
@@ -462,11 +462,11 @@ SELECT gbx_st_simplifypreservetopology('POLYGON((0 0,0 5,0.001 8,0 10,10 10,10 0
 
 
 st_simplifypreservetopology_sql_example_output = """
-+--------+
++----------+
 |simplified|
-+--------+
-|[binary]|
-+--------+
++----------+
+|[binary]  |
++----------+
 ... (WKB binary — simplified polygon with near-collinear vertex removed, topology preserved)
 """
 
@@ -561,4 +561,74 @@ st_snap_sql_example_output = """
 |[binary]|
 +--------+
 ... (WKB binary — linestring with near-miss vertices snapped onto the reference at y=0)
+"""
+
+
+# ---------------------------------------------------------------------------
+# Coverage validity family — st_coverageisvalid, st_coverageinvalidedges
+# Light-only (pyvx tier). Both are grouped-aggregate SQL UDFs requiring GROUP BY.
+# gap_width is REQUIRED in SQL (no SQL-level default — always pass it explicitly).
+# Views: ``coverage_parcels`` (valid coverage) / ``coverage_overlap`` (invalid).
+# Output: BOOLEAN (coverageisvalid), BINARY EWKB (coverageinvalidedges).
+# Input: WKT string column (accepted via parse_geom); WKB/EWKB/EWKT also valid.
+# NOTE: examples use only gbx_st_* — no product ST_* because the doc-test Spark
+# session is vanilla Spark 4.0.0 with no DBR spatial built-ins.
+# ---------------------------------------------------------------------------
+
+
+def st_coverageisvalid_sql_example():
+    """Check whether a polygon set forms a valid coverage (SQL, light pyvx tier).
+
+    Two adjacent unit squares sharing the edge x=5 —
+    ``POLYGON((0 0,5 0,5 5,0 5,0 0))`` and ``POLYGON((5 0,10 0,10 5,5 5,5 0))``
+    — form a valid planar coverage: their interiors do not overlap and they share
+    a clean edge.  Aggregated with ``GROUP BY cov_id``,
+    ``gbx_st_coverageisvalid(geom, 0.0)`` returns ``true``.
+
+    ``gap_width=0.0`` means no sliver gaps are tolerated; overlaps are always
+    invalid regardless of ``gap_width``.  Input is a WKT string column;
+    the function accepts WKB/EWKB/WKT/EWKT.  Returns BOOLEAN.
+    """
+    return """
+SELECT cov_id, gbx_st_coverageisvalid(geom, 0.0) AS is_valid
+FROM coverage_parcels
+GROUP BY cov_id
+"""
+
+
+st_coverageisvalid_sql_example_output = """
++------+--------+
+|cov_id|is_valid|
++------+--------+
+|1     |true    |
++------+--------+
+... (BOOLEAN — true when the polygon group has no overlaps and no slivers narrower than gap_width)
+"""
+
+
+def st_coverageinvalidedges_sql_example():
+    """Return the union of a coverage's invalid edge segments (SQL, light pyvx tier).
+
+    Two overlapping squares — ``POLYGON((0 0,6 0,6 6,0 6,0 0))`` and
+    ``POLYGON((4 4,10 4,10 10,4 10,4 4))`` — form an invalid coverage because
+    their interiors overlap in the region [4,6]×[4,6].
+    ``gbx_st_coverageinvalidedges(geom, 0.0)`` aggregates the group and returns
+    BINARY (WKB/EWKB): the union of the boundary segments that violate the
+    coverage.  An empty geometry is returned when the coverage is clean.
+    ``gap_width=0.0`` (no sliver tolerance); input accepts WKB/EWKB/WKT/EWKT.
+    """
+    return """
+SELECT cov_id, gbx_st_coverageinvalidedges(geom, 0.0) AS bad_edges
+FROM coverage_overlap
+GROUP BY cov_id
+"""
+
+
+st_coverageinvalidedges_sql_example_output = """
++------+---------+
+|cov_id|bad_edges|
++------+---------+
+|1     |[binary] |
++------+---------+
+... (BINARY — union of the invalid edge segments; empty geometry when the coverage is clean)
 """

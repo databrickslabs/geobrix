@@ -132,6 +132,7 @@ const sidebars = {
           link: { type: 'doc', id: 'api/vectorx-functions' },
           items: [
             'api/geometry-validity',
+            'api/coverage-validity',
             'api/geometry-cleaning',
             'api/antimeridian',
             // 'api/shapely-distributed' — reserved for the Shapely Distributed page

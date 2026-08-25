@@ -702,3 +702,141 @@ st_snap_python_light_example_output = """
 +--------+
 ... (WKB binary — linestring with near-miss vertices snapped onto the reference at y=0)
 """
+
+
+# ---------------------------------------------------------------------------
+# Coverage validity family — coverage_simplify
+# Light-only (pyvx tier). Python-API helper (no SQL form).
+# Topology-preserving simplification of a whole coverage. N rows in → N rows out;
+# all input columns preserved; simplified geometry written to out_col (BINARY).
+# The shared edge between adjacent polygons is preserved exactly in both outputs.
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Coverage validity family (SQL-registered aggs) — st_coverageisvalid,
+#                                                   st_coverageinvalidedges
+# Light-only (pyvx tier). Both are grouped-aggregate Column wrappers invoked
+# via groupBy().agg(), identical API shape to st_asmvt.
+# ---------------------------------------------------------------------------
+
+
+def st_coverageisvalid_python_light_example(spark):
+    """Check polygon-coverage validity via grouped-agg Column wrapper (light pyvx tier).
+
+    Builds two adjacent unit squares sharing the edge x=5 in coverage group
+    ``cov_id=1``.  Uses shapely ``box`` (alias for ``from_shapely_bounds``) to
+    produce WKB bytes for each polygon, creates a two-row DataFrame, and calls
+    ``vx.st_coverageisvalid("geom", 0.0)`` inside ``groupBy().agg()``.
+    The two squares do not overlap and share a clean edge → ``is_valid = True``.
+    ``gap_width=0.0`` detects only overlaps (no gap tolerance).
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import box  # noqa: PLC0415
+
+    left = box(0.0, 0.0, 5.0, 5.0)
+    right = box(5.0, 0.0, 10.0, 5.0)
+    df = spark.createDataFrame(
+        [
+            (1, to_wkb(left)),
+            (1, to_wkb(right)),
+        ],
+        ["cov_id", "geom"],
+    )
+    result = df.groupBy("cov_id").agg(
+        vx.st_coverageisvalid("geom", 0.0).alias("is_valid")
+    )
+    return result.first()["is_valid"]
+
+
+st_coverageisvalid_python_light_example_output = """
++------+--------+
+|cov_id|is_valid|
++------+--------+
+|     1|    true|
++------+--------+
+... (BOOLEAN — true: the two adjacent squares share a clean edge with no overlap)
+"""
+
+
+def st_coverageinvalidedges_python_light_example(spark):
+    """Return invalid edge segments of an overlapping coverage (light pyvx tier).
+
+    Builds two overlapping squares in coverage group ``cov_id=1``: polygon 1
+    covers [0,6]×[0,6] and polygon 2 covers [4,10]×[4,10], overlapping in
+    [4,6]×[4,6].  ``vx.st_coverageinvalidedges("geom", 0.0)`` aggregates the
+    group and returns the BINARY union of the boundary segments that violate
+    the coverage.  Returns non-empty BINARY (WKB/EWKB) because of the overlap.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import box  # noqa: PLC0415
+
+    poly1 = box(0.0, 0.0, 6.0, 6.0)
+    poly2 = box(4.0, 4.0, 10.0, 10.0)
+    df = spark.createDataFrame(
+        [
+            (1, to_wkb(poly1)),
+            (1, to_wkb(poly2)),
+        ],
+        ["cov_id", "geom"],
+    )
+    result = df.groupBy("cov_id").agg(
+        vx.st_coverageinvalidedges("geom", 0.0).alias("bad_edges")
+    )
+    return result.first()["bad_edges"]
+
+
+st_coverageinvalidedges_python_light_example_output = """
++------+---------+
+|cov_id|bad_edges|
++------+---------+
+|     1|[binary] |
++------+---------+
+... (BINARY — union of the invalid edge segments; non-empty because the two squares overlap)
+"""
+
+
+def coverage_simplify_python_light_example(spark):
+    """Topology-preserving coverage simplification (light pyvx tier, Python-API only).
+
+    Builds a two-polygon coverage where each polygon has one near-collinear vertex
+    on its outer boundary (not on the shared edge):
+
+    - left:  ``POLYGON((0 0, 2.5 0.001, 5 0, 5 5, 0 5, 0 0))`` — vertex (2.5, 0.001)
+             deviates 0.001 units from the bottom edge, within the 0.1 tolerance.
+    - right: ``POLYGON((5 0, 7.5 0.001, 10 0, 10 5, 5 5, 5 0))`` — same pattern.
+
+    Both polygons share the edge from (5, 0) to (5, 5).  After
+    ``coverage_simplify(tolerance=0.1)`` the near-collinear vertices are dropped
+    from each outer boundary while the shared edge is preserved exactly — the two
+    simplified polygons still meet at x=5.  Returns the list of simplified WKB bytes
+    (2 rows in, 2 rows out).
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+
+    left = from_wkt("POLYGON((0 0, 2.5 0.001, 5 0, 5 5, 0 5, 0 0))")
+    right = from_wkt("POLYGON((5 0, 7.5 0.001, 10 0, 10 5, 5 5, 5 0))")
+    df = spark.createDataFrame(
+        [
+            (1, to_wkb(left)),
+            (1, to_wkb(right)),
+        ],
+        ["cov_id", "geom"],
+    )
+    result = vx.coverage_simplify(df, "cov_id", "geom", 0.1)
+    rows = result.collect()
+    return [row["geom_simplified"] for row in rows]
+
+
+coverage_simplify_python_light_example_output = """
++------+--------+----------------+
+|cov_id|    geom|geom_simplified |
++------+--------+----------------+
+|     1|[binary]|       [binary] |
+|     1|[binary]|       [binary] |
++------+--------+----------------+
+... (BINARY — 2 rows in, 2 rows out; near-collinear vertices dropped, shared edge preserved)
+"""

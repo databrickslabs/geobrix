@@ -22,6 +22,7 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 - **TIN surface modeling** — `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` for Delaunay triangulation and grid elevation interpolation from Z-valued points, in **both** tiers (with a `constrained`/`conforming` mode selector)
 - **CRS strings** — `gbx_st_crs`, `gbx_st_setcrs`, and `gbx_st_transformcrs` for reading, stamping, and reprojecting a geometry's coordinate reference system by **CRS string** (ESRI codes, WKT, PROJ4 — not just an EPSG integer), in **both** tiers
 - **Geometry validity** — `gbx_st_makevalid` and `gbx_st_explainvalidity` for repairing and diagnosing OGC-invalid geometries, **lightweight tier only** (`pyvx`)
+- **Coverage validity** — `gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges` (SQL grouped-aggregates), and `coverage_simplify` (Python-API helper) for validating and simplifying polygon coverages, **lightweight tier only** (`pyvx`)
 - **Geometry cleaning** — `gbx_st_simplifypreservetopology`, `gbx_st_removerepeatedpoints`, `gbx_st_reduceprecision`, `gbx_st_node`, and `gbx_st_snap` for topology-safe simplification, vertex deduplication, precision reduction, linework noding, and feature snapping, **lightweight tier only** (`pyvx`)
 - **Antimeridian handling** — `gbx_st_shiftlongitude`, `gbx_st_wrapx`, and `gbx_st_split` for normalizing geometries that cross the 180° antimeridian, **lightweight tier only** (`pyvx`)
 - **OGR-based vector readers** — Shapefile, GeoJSON, GeoPackage, FileGDB (heavyweight only)
@@ -48,6 +49,9 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 | `st_legacyaswkb` | Supported | Supported |
 | `st_makevalid` | Supported | — |
 | `st_explainvalidity` | Supported | — |
+| `st_coverageisvalid` | Supported | — |
+| `st_coverageinvalidedges` | Supported | — |
+| `coverage_simplify` | Supported (Python API) | — |
 | `st_simplifypreservetopology` | Supported | — |
 | `st_removerepeatedpoints` | Supported | — |
 | `st_reduceprecision` | Supported | — |
@@ -644,6 +648,91 @@ See [Geometry Validity](./geometry-validity).
 
 ---
 
+## Coverage validity
+
+Distributed shapely helpers — grouped-aggregate SQL UDFs and a Python DataFrame helper — for validating and simplifying polygon **coverages** (sets of polygons that share edges and together partition a region). **Lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Coverage Validity](./coverage-validity) for the `gap_width` semantics, scale-ceiling notes, and the comparison with per-geometry validity.
+
+### st_coverageisvalid
+
+<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
+
+Returns `true` when the polygon group forms a valid coverage — no overlaps; no gaps thinner than `gap_width`. Use with `GROUP BY` to identify which coverage groups pass.
+
+**Signature:** `gbx_st_coverageisvalid(geom, gap_width)`
+
+**Parameters:**
+- `geom` — Geometry column. Accepts WKB/EWKB/WKT/EWKT. All members must be polygon types.
+- `gap_width` (`DOUBLE`, **required**) — Gap tolerance. Overlaps always invalid; gaps narrower than this are also flagged. Pass `0.0` to detect only overlaps.
+
+**Returns:** `BOOLEAN`. `NULL` when the group is empty.
+
+See [Coverage Validity](./coverage-validity).
+
+<FunctionExamples
+  name="st_coverageisvalid"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+/>
+
+---
+
+### st_coverageinvalidedges
+
+<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
+
+Returns the union of the boundary segments that violate the coverage as `BINARY` (WKB/EWKB). Empty geometry when the coverage is clean; non-empty when overlaps or slivers exist. Use the output geometry to highlight problem zones on a map.
+
+**Signature:** `gbx_st_coverageinvalidedges(geom, gap_width)`
+
+**Parameters:**
+- `geom` — Geometry column. Accepts WKB/EWKB/WKT/EWKT. All members must be polygon types.
+- `gap_width` (`DOUBLE`, **required**) — Gap tolerance. Same semantics as `gbx_st_coverageisvalid`.
+
+**Returns:** `BINARY` — WKB/EWKB union of invalid edge segments. Empty geometry when clean. `NULL` when the group is empty.
+
+See [Coverage Validity](./coverage-validity).
+
+<FunctionExamples
+  name="st_coverageinvalidedges"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+/>
+
+---
+
+### coverage_simplify
+
+<Tier light/>
+
+**Python-API only — no SQL form.** Topology-preserving simplification of a whole coverage. Unlike per-row simplification (`gbx_st_simplifypreservetopology`), this helper simplifies the coverage as a unit so shared edges stay aligned in both adjacent polygons after simplification.
+
+**Signature:** `vx.coverage_simplify(df, group_col, geom_col, tolerance, simplify_boundary=True, out_col="geom_simplified")`
+
+**Parameters:**
+- `df` — Input Spark DataFrame.
+- `group_col` — Column name defining coverage groups (e.g. `"admin_level"`).
+- `geom_col` — Column name of the geometry (WKB/EWKB/WKT/EWKT).
+- `tolerance` (`float`) — Simplification tolerance in coordinate units.
+- `simplify_boundary` (`bool`, default `True`) — Whether to simplify the outer boundary.
+- `out_col` (`str`, default `"geom_simplified"`) — Output column name.
+
+**Returns:** A Spark DataFrame — same rows, all original columns, plus `out_col` (`BINARY`). N→N.
+
+```python
+from databricks.labs.gbx.pyvx import functions as vx
+vx.register(spark)
+
+simplified_df = vx.coverage_simplify(
+    df, group_col="admin_level", geom_col="geom_wkb", tolerance=50.0
+)
+```
+
+See [Coverage Validity](./coverage-validity#coverage_simplify-python-api).
+
+---
+
 ## Geometry cleaning
 
 Distributed shapely helpers — shapely/GEOS operations running as Python UDFs — for improving the quality of **already-valid** geometries. If your geometry is invalid, repair it first with `gbx_st_makevalid`, then clean it. **Lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Geometry Cleaning](./geometry-cleaning) for usage guidance and the comparison with the product's built-in simplify.
@@ -752,6 +841,8 @@ See [Geometry Cleaning](./geometry-cleaning).
 <Tier light/>
 
 Snaps `geom`'s vertices onto `reference` where within `tolerance`. Any vertex in `geom` that lies within `tolerance` distance of a vertex or edge in `reference` is moved onto that nearest point. Useful for aligning features from different sources that should share boundaries but don't quite meet due to digitizing differences or floating-point noise.
+
+Complements the product's `ST_ClosestPoint` (exact nearest point, no tolerance gate).
 
 **Signature:** `gbx_st_snap(geom, reference, tolerance)`
 
@@ -887,6 +978,7 @@ A scalar function in **both** tiers (same registered name, same output bytes), s
 
 - [Quick Start](../quick-start) — Register and use VectorX with the legacy example
 - [Geometry Validity](./geometry-validity) — diagnose and repair OGC-invalid geometries with `gbx_st_explainvalidity` and `gbx_st_makevalid`
+- [Coverage Validity](./coverage-validity) — validate and simplify polygon coverages with `gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges`, and `coverage_simplify`
 - [Geometry Cleaning](./geometry-cleaning) — topology-safe simplification, vertex deduplication, precision reduction, linework noding, and feature snapping
 - [Antimeridian](./antimeridian) — antimeridian composition pattern with full example
 - [Choosing an Execution Tier](./execution-tiers) — lightweight vs heavyweight comparison

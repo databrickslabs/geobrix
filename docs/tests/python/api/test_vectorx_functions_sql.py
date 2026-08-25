@@ -66,6 +66,8 @@ def vectorx_registered(spark):
             "gbx_st_reduceprecision",
             "gbx_st_node",
             "gbx_st_snap",
+            "gbx_st_coverageisvalid",
+            "gbx_st_coverageinvalidedges",
         ],
     )
     create_setup_views_vectorx_heavy(spark)
@@ -596,3 +598,48 @@ def test_st_snap_sql_example(vectorx_registered):
     assert any(abs(y) < 1e-9 for _, y in geom.coords), (
         f"Expected at least one snapped vertex at y=0, got coords: {list(geom.coords)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Coverage validity family — st_coverageisvalid, st_coverageinvalidedges
+# These are light-only (pyvx tier) grouped-aggregate SQL UDFs registered in
+# the fixture above.  Both tests use the coverage_parcels / coverage_overlap
+# fixture views created by create_setup_views_vectorx_heavy.
+# ---------------------------------------------------------------------------
+
+
+def test_coverageisvalid_sql_example(vectorx_registered):
+    """Run the gbx_st_coverageisvalid SQL example; assert true for the valid-coverage fixture.
+
+    The ``coverage_parcels`` view has two adjacent squares sharing the edge x=5 in
+    cov_id=1.  No overlaps, no gaps → the coverage is valid → ``is_valid`` must be True.
+    """
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_coverageisvalid_sql_example()
+    result = spark.sql(_statement(sql)).collect()
+    assert len(result) == 1, f"Expected 1 group row (cov_id=1), got {len(result)}"
+    row = result[0]
+    assert row["is_valid"] is True, (
+        f"Adjacent squares sharing an edge should form a valid coverage, got is_valid={row['is_valid']!r}"
+    )
+
+
+def test_coverageinvalidedges_sql_example(vectorx_registered):
+    """Run the gbx_st_coverageinvalidedges SQL example; assert non-empty BINARY for overlapping coverage.
+
+    The ``coverage_overlap`` view has two overlapping squares in cov_id=1.
+    The overlap zone [4,6]×[4,6] yields invalid boundary segments → non-empty BINARY output.
+    """
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_coverageinvalidedges_sql_example()
+    result = spark.sql(_statement(sql)).collect()
+    assert len(result) == 1, f"Expected 1 group row (cov_id=1), got {len(result)}"
+    row = result[0]
+    bad_edges = row["bad_edges"]
+    assert bad_edges is not None, "Overlapping coverage should return non-null bad_edges"
+    assert isinstance(bad_edges, (bytes, bytearray)), f"Expected bytes (WKB/EWKB), got {type(bad_edges)}"
+    assert len(bad_edges) > 0, "bad_edges WKB bytes should be non-empty"
+    geom = wkb_loads(bytes(bad_edges), hex=False)
+    assert not geom.is_empty, "Invalid edges geometry should be non-empty for overlapping polygons"

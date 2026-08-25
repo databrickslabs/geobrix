@@ -739,19 +739,70 @@ _SETUP_VIEWS_VECTORX_LIGHT = {
     "mvt_features": mvt_features_df,
     "vector_geoms": geom_ewkt_df,
     "legacy_geoms": legacy_geom_df,
+    "coverage_parcels": lambda spark: coverage_parcels_df(spark),
+    "coverage_overlap": lambda spark: coverage_overlap_df(spark),
 }
 _SETUP_VIEWS_VECTORX_HEAVY = {
     "tin_survey": tin_df_heavy,
     "mvt_features": mvt_features_df_heavy,
     "vector_geoms": geom_ewkt_df_heavy,
     "legacy_geoms": legacy_geom_df_heavy,
+    "coverage_parcels": lambda spark: coverage_parcels_df(spark),
+    "coverage_overlap": lambda spark: coverage_overlap_df(spark),
 }
 
 
-def create_setup_views_vectorx_light(spark):
-    """Create the four light-tier VectorX Setup views. Idempotent (createOrReplace).
+# ---------------------------------------------------------------------------
+# Coverage validity fixture builders
+# Two views used by the coverage SQL examples.
+# ``coverage_parcels`` — valid coverage (2 adjacent squares sharing an edge).
+# ``coverage_overlap`` — invalid coverage (2 overlapping squares).
+# Both views have schema (cov_id INT, geom STRING).
+# ---------------------------------------------------------------------------
 
-    Views: ``tin_survey``, ``mvt_features``, ``vector_geoms``, ``legacy_geoms``.
+
+def coverage_parcels_df(spark):
+    """Two-row DataFrame forming a *valid* planar coverage.
+
+    Two adjacent unit squares sharing the edge x=5:
+    - polygon 1: [0,5]×[0,5]
+    - polygon 2: [5,10]×[0,5]
+    Both belong to ``cov_id=1`` so a GROUP BY collects them as one group.
+    Expected result: ``gbx_st_coverageisvalid(..., 0.0)`` → ``true``.
+    """
+    return spark.createDataFrame(
+        [
+            (1, "POLYGON((0 0, 5 0, 5 5, 0 5, 0 0))"),
+            (1, "POLYGON((5 0, 10 0, 10 5, 5 5, 5 0))"),
+        ],
+        ["cov_id", "geom"],
+    )
+
+
+def coverage_overlap_df(spark):
+    """Two-row DataFrame forming an *invalid* coverage (overlapping polygons).
+
+    Two squares that overlap in a 2×2 region [4,6]×[4,6]:
+    - polygon 1: [0,6]×[0,6]
+    - polygon 2: [4,10]×[4,10]
+    Both belong to ``cov_id=1``.
+    Expected result: ``gbx_st_coverageinvalidedges(..., 0.0)`` → non-empty BINARY
+    (the boundary segments in the overlap zone).
+    """
+    return spark.createDataFrame(
+        [
+            (1, "POLYGON((0 0, 6 0, 6 6, 0 6, 0 0))"),
+            (1, "POLYGON((4 4, 10 4, 10 10, 4 10, 4 4))"),
+        ],
+        ["cov_id", "geom"],
+    )
+
+
+def create_setup_views_vectorx_light(spark):
+    """Create the six light-tier VectorX Setup views. Idempotent (createOrReplace).
+
+    Views: ``tin_survey``, ``mvt_features``, ``vector_geoms``, ``legacy_geoms``,
+    ``coverage_parcels``, ``coverage_overlap``.
     Register pyvx *before* calling this so SQL examples can use ``gbx_st_*``.
     """
     for view, builder in _SETUP_VIEWS_VECTORX_LIGHT.items():

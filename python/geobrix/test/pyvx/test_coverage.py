@@ -10,9 +10,9 @@ def _wkb(g, srid=0):
 
 
 # --- fixtures -------------------------------------------------------------
-A = [box(0, 0, 1, 1), box(1, 0, 2, 1)]              # valid: share edge x=1
-OVERLAP = [box(0, 0, 1, 1), box(0.9, 0, 1.9, 1)]    # invalid: overlap in x∈[0.9,1]
-GAP = [box(0, 0, 1, 1), box(1.05, 0, 2.05, 1)]      # 0.05-wide gap between them
+A = [box(0, 0, 1, 1), box(1, 0, 2, 1)]  # valid: share edge x=1
+OVERLAP = [box(0, 0, 1, 1), box(0.9, 0, 1.9, 1)]  # invalid: overlap in x∈[0.9,1]
+GAP = [box(0, 0, 1, 1), box(1.05, 0, 2.05, 1)]  # 0.05-wide gap between them
 
 
 def test_coverage_is_valid_true_on_shared_edge():
@@ -94,8 +94,8 @@ def test_coverage_simplify_pdf_n_to_n_and_preserves_columns():
         {"cov_id": ["c", "c"], "name": ["p0", "p1"], "geom": [_wkb(g) for g in A]}
     )
     out = cov.coverage_simplify_pdf(pdf, "geom", 0.0, True, "geom_simplified")
-    assert len(out) == 2                                   # N→N
-    assert list(out["name"]) == ["p0", "p1"]               # columns + order preserved
+    assert len(out) == 2  # N→N
+    assert list(out["name"]) == ["p0", "p1"]  # columns + order preserved
     assert "geom_simplified" in out.columns
     assert all(from_wkb(b).is_valid for b in out["geom_simplified"])
 
@@ -111,7 +111,7 @@ def test_coverage_simplify_pdf_preserves_shared_edge():
     out = cov.coverage_simplify_pdf(pdf, "geom", 0.1, True, "geom_simplified")
     g0, g1 = [from_wkb(b) for b in out["geom_simplified"]]
     n_after = len(g0.exterior.coords) + len(g1.exterior.coords)
-    assert n_after < n_before                               # collinear vertices removed
+    assert n_after < n_before  # collinear vertices removed
     assert g0.touches(g1) or g0.intersection(g1).length > 0  # shared boundary intact
 
 

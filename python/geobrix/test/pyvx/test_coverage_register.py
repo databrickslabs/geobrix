@@ -31,7 +31,9 @@ def test_coverageisvalid_sql(spark):
 
     vx.register(spark, only=["gbx_st_coverageisvalid"])
     rows = [("c", to_wkb(box(0, 0, 1, 1))), ("c", to_wkb(box(1, 0, 2, 1)))]
-    spark.createDataFrame(rows, "cov_id string, geom binary").createOrReplaceTempView("cov")
+    spark.createDataFrame(rows, "cov_id string, geom binary").createOrReplaceTempView(
+        "cov"
+    )
     r = spark.sql(
         "SELECT gbx_st_coverageisvalid(geom, 0.0) AS ok FROM cov GROUP BY cov_id"
     ).collect()

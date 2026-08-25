@@ -2,8 +2,12 @@
 # Covers: light_env5, light_dbr17, light_dbr18 — all alias geobrix[light_dbr17], the
 # canonical pb5 extra.  The protobuf-6 lock (env 6 / DBR 19) is requirements-light-env6-ci.in.
 #
-# Consumed by .github/actions/pyrx_build via the env5 CI job:
+# NOT currently CI-consumed. CI's pyrx_build action installs only the protobuf-6
+# lock (requirements-light-env6-ci.txt); there is no env5 CI job today, so the
+# protobuf-5 regime (light_env5 / light_dbr17 / light_dbr18) is not CI-gated. This
+# lock is generated for regime parity and local/manual verification:
 #   pip install --require-hashes -r python/geobrix/requirements-light-env5-ci.txt
+# Gating pb5 in CI would need a second pyrx_build step against this lock (backlog).
 #
 # Regenerate the hash-pinned lock alongside any edit:
 #   cd python/geobrix

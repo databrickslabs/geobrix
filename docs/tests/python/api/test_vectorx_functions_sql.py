@@ -61,6 +61,11 @@ def vectorx_registered(spark):
             "gbx_st_split",
             "gbx_st_makevalid",
             "gbx_st_explainvalidity",
+            "gbx_st_simplifypreservetopology",
+            "gbx_st_removerepeatedpoints",
+            "gbx_st_reduceprecision",
+            "gbx_st_node",
+            "gbx_st_snap",
         ],
     )
     create_setup_views_vectorx_heavy(spark)
@@ -483,4 +488,111 @@ def test_antimeridian_pattern_sql_example(vectorx_registered):
     )
     assert piece_minx[1] == pytest.approx(170.0, abs=1e-9), (
         f"Eastern piece minx should be 170, got {piece_minx[1]}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Geometry cleaning family — st_simplifypreservetopology, st_removerepeatedpoints,
+#                            st_reduceprecision, st_node, st_snap
+# These are light-only (pyvx tier) SQL UDFs registered in the fixture above.
+# All tests use inline WKT string inputs; pyvx functions accept WKT/EWKT
+# directly via parse_geom, so no ST_AsBinary wrapper is needed.
+# ---------------------------------------------------------------------------
+
+
+def test_st_simplifypreservetopology_sql_example(vectorx_registered):
+    """Run the gbx_st_simplifypreservetopology SQL example; assert valid simplified polygon.
+
+    Input: near-collinear polygon with 7 vertices. Tolerance=1.0 drops the near-collinear
+    vertex; topology-preserving ensures the polygon is not collapsed or split.
+    """
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+    from shapely import is_valid  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_simplifypreservetopology_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["simplified"] is not None, "st_simplifypreservetopology should return non-null WKB"
+    assert isinstance(row["simplified"], (bytes, bytearray)), f"Expected bytes, got {type(row['simplified'])}"
+    assert len(row["simplified"]) > 0, "WKB bytes should be non-empty"
+    geom = wkb_loads(bytes(row["simplified"]))
+    assert geom.geom_type == "Polygon", f"Expected Polygon (topology preserved), got {geom.geom_type}"
+    assert is_valid(geom), "Simplified polygon should be valid"
+    assert len(geom.exterior.coords) < 7, "Near-collinear vertex should have been dropped"
+
+
+def test_st_removerepeatedpoints_sql_example(vectorx_registered):
+    """Run the gbx_st_removerepeatedpoints SQL example; assert duplicate consecutive vertices removed.
+
+    Input: LINESTRING(0 0,0 0,1 1,1 1,2 2) — 5 coords with 2 pairs of exact duplicates.
+    Default tolerance=0.0 removes only exact duplicates, leaving LINESTRING(0 0,1 1,2 2).
+    """
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_removerepeatedpoints_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["deduped"] is not None, "st_removerepeatedpoints should return non-null WKB"
+    assert isinstance(row["deduped"], (bytes, bytearray)), f"Expected bytes, got {type(row['deduped'])}"
+    geom = wkb_loads(bytes(row["deduped"]))
+    assert list(geom.coords) == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)], (
+        f"Expected LINESTRING(0 0,1 1,2 2) after dedup, got {list(geom.coords)}"
+    )
+
+
+def test_st_reduceprecision_sql_example(vectorx_registered):
+    """Run the gbx_st_reduceprecision SQL example; assert POINT(1.0, 6.0) for grid_size=1.0.
+
+    POINT(1.234, 5.678) snapped to grid 1.0: x=1.234->1.0, y=5.678->6.0 (nearest grid lines).
+    """
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_reduceprecision_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["snapped"] is not None, "st_reduceprecision should return non-null WKB"
+    assert isinstance(row["snapped"], (bytes, bytearray)), f"Expected bytes, got {type(row['snapped'])}"
+    geom = wkb_loads(bytes(row["snapped"]))
+    assert abs(geom.x - 1.0) < 1e-9, f"Expected x=1.0 after snap-to-grid, got {geom.x}"
+    assert abs(geom.y - 6.0) < 1e-9, f"Expected y=6.0 after snap-to-grid, got {geom.y}"
+
+
+def test_st_node_sql_example(vectorx_registered):
+    """Run the gbx_st_node SQL example; assert self-intersecting linework is noded.
+
+    Input: figure-eight LINESTRING(0 0,10 10,0 10,10 0) self-intersects at (5, 5).
+    After noding the result is a MultiLineString (or LineString) with no self-intersections.
+    """
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+    from shapely import is_valid  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_node_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["noded"] is not None, "st_node should return non-null WKB"
+    assert isinstance(row["noded"], (bytes, bytearray)), f"Expected bytes, got {type(row['noded'])}"
+    geom = wkb_loads(bytes(row["noded"]))
+    assert geom.geom_type in ("MultiLineString", "LineString"), (
+        f"Expected MultiLineString or LineString after noding, got {geom.geom_type}"
+    )
+    assert is_valid(geom), "Noded geometry should be valid"
+
+
+def test_st_snap_sql_example(vectorx_registered):
+    """Run the gbx_st_snap SQL example; assert near-miss vertices snap onto the reference.
+
+    Input geom: LINESTRING(0 0.4,10 0.4) — 0.4 units above reference.
+    Reference: LINESTRING(0 0,10 0). Tolerance=0.5 > 0.4, so endpoints snap onto reference.
+    At least one vertex in the result should have y ≈ 0.
+    """
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    spark = vectorx_registered
+    sql = vectorx_functions_sql.st_snap_sql_example()
+    row = spark.sql(_statement(sql)).first()
+    assert row["snapped"] is not None, "st_snap should return non-null WKB"
+    assert isinstance(row["snapped"], (bytes, bytearray)), f"Expected bytes, got {type(row['snapped'])}"
+    geom = wkb_loads(bytes(row["snapped"]))
+    assert any(abs(y) < 1e-9 for _, y in geom.coords), (
+        f"Expected at least one snapped vertex at y=0, got coords: {list(geom.coords)}"
     )

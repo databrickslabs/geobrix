@@ -56,12 +56,13 @@ At scale, you want to *gate* repairs and diagnostics: run `ST_IsValid` as a chea
 2. **Repair flagged rows** — `gbx_st_makevalid` rewrites only the invalid rows; valid rows pass through unchanged.
 3. **Diagnose systematically** — `gbx_st_explainvalidity` on the flagged rows, then `GROUP BY` the reason `code` to find systemic invalidity classes. Using `gbx_st_explainvalidity` as a per-row validity test is wasteful; `ST_IsValid` is the right boolean gate.
 
-The following patterns run on Databricks Runtime where `ST_IsValid` is a built-in:
+The following patterns run on Databricks Runtime where `ST_IsValid` is a built-in. `ST_IsValid` operates on the built-in `GEOMETRY` type, while GeoBrix functions consume and return `BINARY` (WKB/EWKB) — so the `geom` column is coerced with `ST_GeomFromEWKB(geom)` before the gate:
 
 ```sql
--- Repair only the rows that need it
+-- Repair only the rows that need it.
+-- ST_GeomFromEWKB coerces GeoBrix BINARY (EWKB) to the built-in GEOMETRY type ST_IsValid requires.
 SELECT CASE
-         WHEN NOT ST_IsValid(geom) THEN gbx_st_makevalid(geom)
+         WHEN NOT ST_IsValid(ST_GeomFromEWKB(geom)) THEN gbx_st_makevalid(geom)
          ELSE geom
        END AS clean
 FROM t;
@@ -71,7 +72,7 @@ FROM t;
 -- Diagnose flagged rows: which SFS rules are being violated?
 SELECT geom, gbx_st_explainvalidity(geom) AS detail
 FROM t
-WHERE NOT ST_IsValid(geom);
+WHERE NOT ST_IsValid(ST_GeomFromEWKB(geom));
 ```
 
 ```sql
@@ -80,7 +81,7 @@ SELECT
   json_tuple(gbx_st_explainvalidity(geom), 'code', 'reason') AS (code, reason),
   COUNT(*) AS n
 FROM t
-WHERE NOT ST_IsValid(geom)
+WHERE NOT ST_IsValid(ST_GeomFromEWKB(geom))
 GROUP BY code, reason
 ORDER BY n DESC;
 ```
@@ -92,7 +93,7 @@ SELECT
   gbx_st_explainvalidity(geom) AS detail,
   gbx_st_makevalid(geom) AS clean
 FROM t
-WHERE NOT ST_IsValid(geom);
+WHERE NOT ST_IsValid(ST_GeomFromEWKB(geom));
 ```
 
 ## gbx_st_makevalid

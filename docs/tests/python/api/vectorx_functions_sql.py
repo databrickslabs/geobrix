@@ -435,3 +435,130 @@ st_explainvalidity_sql_example_output = """
 +----------------------------------------------------------------------+
 ... (JSON string — {valid, reason, code, location} for SFS validity diagnosis)
 """
+
+
+# ---------------------------------------------------------------------------
+# Geometry cleaning family — st_simplifypreservetopology, st_removerepeatedpoints,
+#                            st_reduceprecision, st_node, st_snap
+# Light-only (pyvx tier). All 5 are pure-Python UDFs — no JAR dependency.
+# Input: inline WKT string (accepted by pyvx parse_geom via gbx UDFs).
+# Output: BINARY (WKB). Examples use only gbx_st_* — no product ST_* because
+# the doc-test Spark session is vanilla Spark 4.0.0 with no DBR spatial built-ins.
+# ---------------------------------------------------------------------------
+
+
+def st_simplifypreservetopology_sql_example():
+    """Simplify a polygon while preserving topology (SQL, light pyvx tier).
+
+    A near-collinear polygon with an extra near-collinear vertex on its left edge —
+    ``POLYGON((0 0,0 5,0.001 8,0 10,10 10,10 0,0 0))`` — is simplified with a
+    tolerance of 1.0.  The topology-preserving Douglas-Peucker algorithm drops the
+    near-collinear vertex (0.001, 8) without collapsing or splitting the polygon.
+    Input is an inline WKT string; output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_simplifypreservetopology('POLYGON((0 0,0 5,0.001 8,0 10,10 10,10 0,0 0))', 1.0) AS simplified
+"""
+
+
+st_simplifypreservetopology_sql_example_output = """
++--------+
+|simplified|
++--------+
+|[binary]|
++--------+
+... (WKB binary — simplified polygon with near-collinear vertex removed, topology preserved)
+"""
+
+
+def st_removerepeatedpoints_sql_example():
+    """Remove consecutive duplicate vertices from a linestring (SQL, light pyvx tier).
+
+    A linestring with repeated coordinates — ``LINESTRING(0 0,0 0,1 1,1 1,2 2)`` —
+    has its duplicate consecutive vertices removed.  The default ``tolerance=0.0``
+    removes only exact duplicates; a positive tolerance also removes near-duplicates
+    within that distance.  Input is an inline WKT string; output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_removerepeatedpoints('LINESTRING(0 0,0 0,1 1,1 1,2 2)') AS deduped
+"""
+
+
+st_removerepeatedpoints_sql_example_output = """
++--------+
+|deduped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — linestring with duplicate consecutive vertices removed: LINESTRING(0 0,1 1,2 2))
+"""
+
+
+def st_reduceprecision_sql_example():
+    """Snap coordinates to a precision grid (SQL, light pyvx tier).
+
+    ``POINT(1.234 5.678)`` is snapped to a grid of size 1.0 — each coordinate
+    is rounded to the nearest integer grid line.  Also known as snap-to-grid
+    (``ST_SnapToGrid`` in PostGIS).  Uses ``mode="valid_output"`` so the result
+    remains valid.  Input is an inline WKT string; output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_reduceprecision('POINT(1.234 5.678)', 1.0) AS snapped
+"""
+
+
+st_reduceprecision_sql_example_output = """
++--------+
+|snapped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — POINT(1.0, 6.0): coordinates snapped to nearest 1.0 grid lines)
+"""
+
+
+def st_node_sql_example():
+    """Node linework: split at all self-intersections (SQL, light pyvx tier).
+
+    A self-intersecting figure-eight linestring — ``LINESTRING(0 0,10 10,0 10,10 0)``
+    — crosses itself at (5, 5).  ``gbx_st_node`` splits the linework at every
+    intersection and returns a ``MultiLineString`` with each resulting segment as a
+    separate sub-line.  Input is an inline WKT string; output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_node('LINESTRING(0 0,10 10,0 10,10 0)') AS noded
+"""
+
+
+st_node_sql_example_output = """
++--------+
+|noded   |
++--------+
+|[binary]|
++--------+
+... (WKB binary — MultiLineString: figure-eight split into clean segments at the self-intersection)
+"""
+
+
+def st_snap_sql_example():
+    """Snap geometry vertices onto a reference within a tolerance (SQL, light pyvx tier).
+
+    A linestring that misses a reference line by 0.4 units —
+    ``LINESTRING(0 0.4,10 0.4)`` — is snapped onto the reference
+    ``LINESTRING(0 0,10 0)`` with a tolerance of 0.5.  The near-miss vertices
+    (y=0.4) snap onto the reference (y=0), aligning the two geometries.
+    Both inputs are inline WKT strings; output is BINARY (WKB).
+    """
+    return """
+SELECT gbx_st_snap('LINESTRING(0 0.4,10 0.4)', 'LINESTRING(0 0,10 0)', 0.5) AS snapped
+"""
+
+
+st_snap_sql_example_output = """
++--------+
+|snapped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — linestring with near-miss vertices snapped onto the reference at y=0)
+"""

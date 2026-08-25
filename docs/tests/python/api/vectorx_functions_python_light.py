@@ -555,3 +555,150 @@ st_explainvalidity_python_light_example_output = """
 +----------------------------------------------------------------------+
 ... (JSON string — {valid, reason, code, location} for SFS validity diagnosis)
 """
+
+
+# ---------------------------------------------------------------------------
+# Geometry cleaning family — st_simplifypreservetopology, st_removerepeatedpoints,
+#                            st_reduceprecision, st_node, st_snap
+# Light-only (pyvx tier). These functions are pure-Python scalar UDFs.
+# Input: WKT strings or WKB bytes. Output: BINARY (WKB).
+# ---------------------------------------------------------------------------
+
+
+def st_simplifypreservetopology_python_light_example(spark):
+    """Simplify a polygon while preserving topology (light pyvx tier).
+
+    Creates an inline near-collinear polygon and simplifies it with tolerance=1.0.
+    The topology-preserving Douglas-Peucker algorithm drops the near-collinear
+    vertex without collapsing or splitting the polygon.  Returns the simplified
+    WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    geom = from_wkt("POLYGON((0 0,0 5,0.001 8,0 10,10 10,10 0,0 0))")
+    df = spark.createDataFrame([(to_wkb(geom),)], ["geom"])
+    return df.select(
+        vx.st_simplifypreservetopology("geom", f.lit(1.0)).alias("simplified")
+    ).first()["simplified"]
+
+
+st_simplifypreservetopology_python_light_example_output = """
++--------+
+|simplified|
++--------+
+|[binary]|
++--------+
+... (WKB binary — simplified polygon with near-collinear vertex removed, topology preserved)
+"""
+
+
+def st_removerepeatedpoints_python_light_example(spark):
+    """Remove consecutive duplicate vertices from a linestring (light pyvx tier).
+
+    Creates a WKB linestring with repeated consecutive vertices inline and removes
+    the exact duplicates with the default tolerance=0.0.  Returns the deduplicated
+    WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+
+    geom = from_wkt("LINESTRING(0 0,0 0,1 1,1 1,2 2)")
+    df = spark.createDataFrame([(to_wkb(geom),)], ["geom"])
+    return df.select(
+        vx.st_removerepeatedpoints("geom").alias("deduped")
+    ).first()["deduped"]
+
+
+st_removerepeatedpoints_python_light_example_output = """
++--------+
+|deduped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — linestring with duplicate consecutive vertices removed: LINESTRING(0 0,1 1,2 2))
+"""
+
+
+def st_reduceprecision_python_light_example(spark):
+    """Snap coordinates to a precision grid (light pyvx tier).
+
+    Creates a WKB POINT(1.234, 5.678) inline and snaps it to a grid of size 1.0.
+    The coordinates are rounded to the nearest integer grid lines: x=1.234 -> 1.0,
+    y=5.678 -> 6.0.  Returns the snapped WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    geom = from_wkt("POINT(1.234 5.678)")
+    df = spark.createDataFrame([(to_wkb(geom),)], ["geom"])
+    return df.select(
+        vx.st_reduceprecision("geom", f.lit(1.0)).alias("snapped")
+    ).first()["snapped"]
+
+
+st_reduceprecision_python_light_example_output = """
++--------+
+|snapped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — POINT(1.0, 6.0): coordinates snapped to nearest 1.0 grid lines)
+"""
+
+
+def st_node_python_light_example(spark):
+    """Node linework: split at all self-intersections (light pyvx tier).
+
+    Creates a self-intersecting figure-eight linestring inline and nodes it.
+    The self-intersection at (5, 5) is resolved by splitting the linework, returning
+    a MultiLineString with clean non-overlapping segments.  Returns the noded WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+
+    geom = from_wkt("LINESTRING(0 0,10 10,0 10,10 0)")
+    df = spark.createDataFrame([(to_wkb(geom),)], ["geom"])
+    return df.select(vx.st_node("geom").alias("noded")).first()["noded"]
+
+
+st_node_python_light_example_output = """
++--------+
+|noded   |
++--------+
+|[binary]|
++--------+
+... (WKB binary — MultiLineString: figure-eight split into clean segments at the self-intersection)
+"""
+
+
+def st_snap_python_light_example(spark):
+    """Snap geometry vertices onto a reference within a tolerance (light pyvx tier).
+
+    Creates a WKB linestring that misses a reference by 0.4 units and snaps it
+    onto the reference with tolerance=0.5.  The near-miss vertices (y=0.4) snap
+    onto the reference (y=0), aligning the two geometries.  Returns the snapped
+    WKB bytes.
+    """
+    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from shapely import from_wkt, to_wkb  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    geom = from_wkt("LINESTRING(0 0.4,10 0.4)")
+    ref = from_wkt("LINESTRING(0 0,10 0)")
+    df = spark.createDataFrame([(to_wkb(geom), to_wkb(ref))], ["geom", "ref"])
+    return df.select(
+        vx.st_snap("geom", "ref", f.lit(0.5)).alias("snapped")
+    ).first()["snapped"]
+
+
+st_snap_python_light_example_output = """
++--------+
+|snapped |
++--------+
+|[binary]|
++--------+
+... (WKB binary — linestring with near-miss vertices snapped onto the reference at y=0)
+"""

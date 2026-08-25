@@ -133,6 +133,7 @@ const sidebars = {
           items: [
             'api/geometry-validity',
             'api/antimeridian',
+            'api/geometry-cleaning',
             // 'api/shapely-distributed' — reserved for the Shapely Distributed page
           ],
         },

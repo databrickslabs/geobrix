@@ -323,3 +323,82 @@ def test_st_explainvalidity_python_light_example(spark):
     assert d["code"] == 10, f"self-intersection should map to code 10, got {d['code']}"
     assert d["location"] is not None, "GEOS should embed location for self-intersection"
     assert d["location"].startswith("POINT("), f"location should be POINT WKT, got {d['location']!r}"
+
+
+# ---------------------------------------------------------------------------
+# Geometry cleaning family — st_simplifypreservetopology, st_removerepeatedpoints,
+#                            st_reduceprecision, st_node, st_snap
+# Light-only (pyvx tier). The autouse fixture already registers pyvx.
+# ---------------------------------------------------------------------------
+
+
+def test_st_simplifypreservetopology_python_light_example(spark):
+    """st_simplifypreservetopology returns valid simplified WKB with vertex dropped."""
+    from shapely import is_valid  # noqa: PLC0415
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_simplifypreservetopology_python_light_example(spark)
+    assert result is not None, "st_simplifypreservetopology should return non-null WKB bytes"
+    assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
+    geom = wkb_loads(bytes(result))
+    assert geom.geom_type == "Polygon", f"Expected Polygon (topology preserved), got {geom.geom_type}"
+    assert is_valid(geom), "Simplified polygon should be valid"
+    assert len(geom.exterior.coords) < 7, "Near-collinear vertex should have been dropped"
+
+
+def test_st_removerepeatedpoints_python_light_example(spark):
+    """st_removerepeatedpoints removes exact duplicate consecutive vertices."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_removerepeatedpoints_python_light_example(spark)
+    assert result is not None, "st_removerepeatedpoints should return non-null WKB bytes"
+    assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
+    geom = wkb_loads(bytes(result))
+    assert list(geom.coords) == [(0.0, 0.0), (1.0, 1.0), (2.0, 2.0)], (
+        f"Expected LINESTRING(0 0,1 1,2 2) after dedup, got {list(geom.coords)}"
+    )
+
+
+def test_st_reduceprecision_python_light_example(spark):
+    """st_reduceprecision snaps POINT(1.234, 5.678) to POINT(1.0, 6.0) on grid 1.0."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_reduceprecision_python_light_example(spark)
+    assert result is not None, "st_reduceprecision should return non-null WKB bytes"
+    assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
+    geom = wkb_loads(bytes(result))
+    assert abs(geom.x - 1.0) < 1e-9, f"Expected x=1.0 after snap-to-grid, got {geom.x}"
+    assert abs(geom.y - 6.0) < 1e-9, f"Expected y=6.0 after snap-to-grid, got {geom.y}"
+
+
+def test_st_node_python_light_example(spark):
+    """st_node returns valid MultiLineString/LineString after noding a figure-eight."""
+    from shapely import is_valid  # noqa: PLC0415
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_node_python_light_example(spark)
+    assert result is not None, "st_node should return non-null WKB bytes"
+    assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
+    geom = wkb_loads(bytes(result))
+    assert geom.geom_type in ("MultiLineString", "LineString"), (
+        f"Expected MultiLineString or LineString after noding, got {geom.geom_type}"
+    )
+    assert is_valid(geom), "Noded geometry should be valid"
+
+
+def test_st_snap_python_light_example(spark):
+    """st_snap snaps near-miss linestring vertices onto the reference at y=0."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_snap_python_light_example(spark)
+    assert result is not None, "st_snap should return non-null WKB bytes"
+    assert isinstance(result, (bytes, bytearray)), f"Expected bytes (WKB binary), got {type(result)}"
+    geom = wkb_loads(bytes(result))
+    assert any(abs(y) < 1e-9 for _, y in geom.coords), (
+        f"Expected at least one snapped vertex at y=0, got coords: {list(geom.coords)}"
+    )
